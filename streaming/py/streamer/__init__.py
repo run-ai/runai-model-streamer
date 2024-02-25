@@ -19,7 +19,7 @@ dll.fn_runai_request.argtypes = [
     ctypes.c_char_p,
     ctypes.c_size_t,
     ctypes.c_size_t,
-    ctypes.c_char_p,
+    ctypes.c_void_p,
     ctypes.c_uint32,
     ctypes.POINTER(ctypes.c_size_t)
 ]
