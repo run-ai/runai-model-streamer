@@ -1,10 +1,14 @@
+import os
 import ctypes
 
-STREAMER_LIBRARY = "cpp/bazel-bin/streamer/streamer.so"
+DEFAULT_STREAMER_LIBRARY = "cpp/bazel-bin/streamer/streamer.so"
+STREAMER_LIBRARY = os.environ.get("STREAMER_LIBRARY", DEFAULT_STREAMER_LIBRARY)
+
 
 class DLLWrapper:
     def __init__(self, library_path):
         self.lib = ctypes.CDLL(library_path)
+
 
 dll = DLLWrapper(STREAMER_LIBRARY)
 
@@ -21,7 +25,7 @@ dll.fn_runai_request.argtypes = [
     ctypes.c_size_t,
     ctypes.c_void_p,
     ctypes.c_uint32,
-    ctypes.POINTER(ctypes.c_size_t)
+    ctypes.POINTER(ctypes.c_size_t),
 ]
 dll.fn_runai_request.restype = ctypes.c_int
 
