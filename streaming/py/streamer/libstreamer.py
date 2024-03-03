@@ -1,16 +1,17 @@
-from streamer import (dll, t_streamer)
+from streamer import dll, t_streamer
 from typing import List
 import ctypes
 
 SUCCESS_ERROR_CODE = 0
+
 
 def runai_start() -> t_streamer:
     streamer = t_streamer(0)
     error_code = dll.fn_runai_start(ctypes.byref(streamer))
     if error_code != SUCCESS_ERROR_CODE:
         raise Exception(
-                f"Could not open streamer in libstreamer due to: {runai_response_str(error_code)}"
-            )
+            f"Could not open streamer in libstreamer due to: {runai_response_str(error_code)}"
+        )
     return streamer
 
 
@@ -38,8 +39,8 @@ def runai_request(
     )
     if error_code != SUCCESS_ERROR_CODE:
         raise Exception(
-                f"Could not send runai_request to libstreamer due to: {runai_response_str(error_code)}"
-            )
+            f"Could not send runai_request to libstreamer due to: {runai_response_str(error_code)}"
+        )
 
 
 def runai_response(streamer: t_streamer) -> int:
@@ -47,8 +48,8 @@ def runai_response(streamer: t_streamer) -> int:
     error_code = dll.fn_runai_response(streamer, ctypes.byref(value))
     if error_code != SUCCESS_ERROR_CODE:
         raise Exception(
-                f"Could not receive runai_response from libstreamer due to: {runai_response_str(error_code)}"
-            )
+            f"Could not receive runai_response from libstreamer due to: {runai_response_str(error_code)}"
+        )
     return value.value
 
 
