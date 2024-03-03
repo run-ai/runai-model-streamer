@@ -1,7 +1,9 @@
 import os
 import ctypes
 
-DEFAULT_STREAMER_LIBRARY = "cpp/bazel-bin/streamer/streamer.so"
+DEFAULT_STREAMER_LIBRARY = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "lib/libstreamer.so"
+)
 STREAMER_LIBRARY = os.environ.get("STREAMER_LIBRARY", DEFAULT_STREAMER_LIBRARY)
 
 t_streamer = ctypes.c_void_p

@@ -1,3 +1,6 @@
+build:
+	python3 setup.py bdist_wheel
+
 mock:
 	make -C ../cpp build_mock
 
