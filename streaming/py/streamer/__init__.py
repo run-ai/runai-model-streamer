@@ -7,7 +7,6 @@ DEFAULT_STREAMER_LIBRARY = os.path.join(
 STREAMER_LIBRARY = os.environ.get("STREAMER_LIBRARY", DEFAULT_STREAMER_LIBRARY)
 
 t_streamer = ctypes.c_void_p
-t_streamer_p = ctypes.POINTER(ctypes.c_void_p)
 
 
 class DLLWrapper:
@@ -18,7 +17,7 @@ class DLLWrapper:
 dll = DLLWrapper(STREAMER_LIBRARY)
 
 dll.fn_runai_start = dll.lib.runai_start
-dll.fn_runai_start.argtypes = [t_streamer_p]
+dll.fn_runai_start.argtypes = [ctypes.POINTER(t_streamer)]
 dll.fn_runai_start.restype = ctypes.c_int
 
 dll.fn_runai_end = dll.lib.runai_end
