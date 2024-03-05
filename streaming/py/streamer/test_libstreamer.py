@@ -28,7 +28,7 @@ class TestBindings(unittest.TestCase):
 
         # Chunks of text sizes in file content
         items = [10, 9]
-        runai_request(streamer, file_path, 1, 30, buffer, 2, items)
+        runai_request(streamer, file_path, 1, 30, buffer, items)
 
         # Read both file contents
         result = runai_response(streamer)

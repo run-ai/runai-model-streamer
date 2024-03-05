@@ -1,8 +1,9 @@
 from streamer import dll, t_streamer
-from typing import List
+from typing import List, Optional
 import ctypes
 
 SUCCESS_ERROR_CODE = 0
+FINISHED_ERROR_CODE = 1
 
 
 def runai_start() -> t_streamer:
@@ -25,7 +26,6 @@ def runai_request(
     offset: int,
     bytesize: int,
     dst: memoryview,
-    num_sizes: int,
     internal_sizes: List[int],
 ) -> None:
     error_code = dll.fn_runai_request(
@@ -34,8 +34,8 @@ def runai_request(
         offset,
         bytesize,
         dst,
-        num_sizes,
-        (ctypes.c_uint64 * num_sizes)(*internal_sizes),
+        len(internal_sizes),
+        (ctypes.c_uint64 * len(internal_sizes))(*internal_sizes),
     )
     if error_code != SUCCESS_ERROR_CODE:
         raise Exception(
@@ -43,9 +43,12 @@ def runai_request(
         )
 
 
-def runai_response(streamer: t_streamer) -> int:
+def runai_response(streamer: t_streamer) -> Optional[int]:
     value = ctypes.c_uint32()
     error_code = dll.fn_runai_response(streamer, ctypes.byref(value))
+    if error_code == FINISHED_ERROR_CODE:
+        return None
+
     if error_code != SUCCESS_ERROR_CODE:
         raise Exception(
             f"Could not receive runai_response from libstreamer due to: {runai_response_str(error_code)}"
