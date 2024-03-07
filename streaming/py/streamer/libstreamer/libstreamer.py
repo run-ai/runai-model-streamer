@@ -1,4 +1,4 @@
-from streamer import dll, t_streamer
+from libstreamer import dll, t_streamer
 from typing import List, Optional
 import ctypes
 
@@ -28,12 +28,13 @@ def runai_request(
     dst: memoryview,
     internal_sizes: List[int],
 ) -> None:
+    c_dst = (ctypes.c_ubyte * len(dst)).from_buffer(dst)
     error_code = dll.fn_runai_request(
         streamer,
         path.encode("utf-8"),
         offset,
         bytesize,
-        dst,
+        c_dst,
         len(internal_sizes),
         (ctypes.c_uint64 * len(internal_sizes))(*internal_sizes),
     )

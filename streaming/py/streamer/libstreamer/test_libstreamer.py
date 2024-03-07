@@ -4,8 +4,8 @@ import shutil
 import ctypes
 import os
 import mmap
-from streamer import t_streamer
-from streamer.libstreamer import runai_start, runai_request, runai_response
+from streamer.libstreamer import t_streamer
+from streamer.libstreamer.libstreamer import runai_start, runai_request, runai_response
 
 
 class TestBindings(unittest.TestCase):
@@ -19,8 +19,7 @@ class TestBindings(unittest.TestCase):
             file.write("XTest Text1TestText2Test-Text3\n")
 
         size = 30
-        fd = mmap.mmap(-1, size, mmap.MAP_ANONYMOUS | mmap.MAP_PRIVATE)
-        buffer = (ctypes.c_ubyte * size).from_buffer(fd)
+        buffer = mmap.mmap(-1, size, mmap.MAP_ANONYMOUS | mmap.MAP_PRIVATE)
         buffer_ptr = id(buffer)
 
         streamer = runai_start()

@@ -7,5 +7,5 @@ setup(
     name="runai-streamer",
     version=version,
     packages=find_packages(),
-    package_data={"streamer": ["lib/libstreamer.so"]},
+    package_data={"streamer": ["libstreamer/lib/libstreamer.so"]},
 )
