@@ -1,7 +1,7 @@
 import os
 from setuptools import setup, find_packages
 
-version = os.getenv("PACKAGE_VERSION", "0.0.0-devel")
+version = os.getenv("PACKAGE_VERSION", "0.0.0")
 
 setup(
     name="runai-streamer",
