@@ -1,4 +1,4 @@
-from libstreamer import dll, t_streamer
+from streamer.libstreamer import dll, t_streamer
 from typing import List, Optional
 import ctypes
 
