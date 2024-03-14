@@ -2,7 +2,7 @@ import unittest
 import tempfile
 import shutil
 import os
-from streamer.file_streamer.file_streamer import FileStreamer
+from runai_streamer.file_streamer.file_streamer import FileStreamer
 
 
 class TestBindings(unittest.TestCase):

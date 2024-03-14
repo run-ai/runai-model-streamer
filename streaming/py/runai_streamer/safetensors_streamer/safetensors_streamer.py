@@ -1,8 +1,8 @@
 from __future__ import annotations
 from typing import Iterator
 import torch
-from streamer.file_streamer.file_streamer import FileStreamer
-import streamer.safetensors_streamer.safetensors_pytorch as safetensors_pytorch
+from runai_streamer.file_streamer.file_streamer import FileStreamer
+import runai_streamer.safetensors_streamer.safetensors_pytorch as safetensors_pytorch
 
 
 class SafetensorsStreamer:

@@ -6,7 +6,9 @@ LIB = "libstreamer/lib/libstreamer.so"
 
 
 def assert_lib_exists():
-    lib_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "streamer", LIB)
+    lib_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "runai_streamer", LIB
+    )
     if os.path.islink(lib_path):
         target_path = os.path.realpath(lib_path)
         if not os.path.exists(target_path):
@@ -23,5 +25,5 @@ setup(
     name="runai-streamer",
     version=VERSION,
     packages=find_packages(),
-    package_data={"streamer": [LIB]},
+    package_data={"runai_streamer": [LIB]},
 )

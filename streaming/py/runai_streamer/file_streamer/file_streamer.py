@@ -1,5 +1,5 @@
 from typing import List, Iterator
-from streamer.libstreamer.libstreamer import (
+from runai_streamer.libstreamer.libstreamer import (
     runai_start,
     runai_end,
     runai_request,

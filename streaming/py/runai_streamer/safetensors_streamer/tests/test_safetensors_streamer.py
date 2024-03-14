@@ -2,7 +2,7 @@ import unittest
 import torch
 import os
 from safetensors import safe_open
-from streamer.safetensors_streamer.safetensors_streamer import SafetensorsStreamer
+from runai_streamer.safetensors_streamer.safetensors_streamer import SafetensorsStreamer
 
 
 class TestSafetensorsStreamer(unittest.TestCase):

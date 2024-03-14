@@ -4,8 +4,12 @@ import shutil
 import ctypes
 import os
 import mmap
-from streamer.libstreamer import t_streamer
-from streamer.libstreamer.libstreamer import runai_start, runai_request, runai_response
+from runai_streamer.libstreamer import t_streamer
+from runai_streamer.libstreamer.libstreamer import (
+    runai_start,
+    runai_request,
+    runai_response,
+)
 
 
 class TestBindings(unittest.TestCase):
