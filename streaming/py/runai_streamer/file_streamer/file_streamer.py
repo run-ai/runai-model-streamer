@@ -2,6 +2,7 @@ from typing import List, Iterator
 from runai_streamer.libstreamer.libstreamer import (
     runai_start,
     runai_end,
+    runai_read,
     runai_request,
     runai_response,
 )
@@ -16,6 +17,9 @@ class FileStreamer:
         if self.streamer:
             runai_end(self.streamer)
 
+    def read_file(self, path: str, offset: int, dst: memoryview) -> None:
+        runai_read(self.streamer, path, offset, len(dst), dst)
+
     def stream_file(
         self, path: str, offset: int, dst: memoryview, internal_sizes: List[int]
     ) -> None:
@@ -28,7 +32,6 @@ class FileStreamer:
             dst,
             self.internal_sizes,
         )
-        return
 
     def get_chunks(self) -> Iterator:
         if not self.streamer:

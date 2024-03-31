@@ -33,6 +33,17 @@ class TestBindings(unittest.TestCase):
                     id_to_results[id]["expected_text"],
                 )
 
+    def test_runai_read(self):
+        file_content = "MyTensorHelloTest"
+        file_path = os.path.join(self.temp_dir, "runai_read_test.txt")
+        with open(file_path, "w") as file:
+            file.write(file_content)
+        dst = bytearray(len(file_content) - 2)
+
+        with FileStreamer() as fs:
+            fs.read_file(file_path, 2, dst)
+            self.assertEqual(dst.decode("utf-8"), "TensorHelloTest")
+
     def tearDown(self):
         shutil.rmtree(self.temp_dir)
 

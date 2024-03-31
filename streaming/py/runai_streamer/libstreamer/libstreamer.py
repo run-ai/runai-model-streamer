@@ -20,6 +20,27 @@ def runai_end(streamer: t_streamer) -> None:
     return dll.fn_runai_end(streamer)
 
 
+def runai_read(
+    streamer: t_streamer,
+    path: str,
+    offset: int,
+    bytesize: int,
+    dst: memoryview,
+) -> None:
+    c_dst = (ctypes.c_ubyte * len(dst)).from_buffer(dst)
+    error_code = dll.fn_runai_read(
+        streamer,
+        path.encode("utf-8"),
+        offset,
+        bytesize,
+        c_dst,
+    )
+    if error_code != SUCCESS_ERROR_CODE:
+        raise Exception(
+            f"Could not send runai_request to libstreamer due to: {runai_response_str(error_code)}"
+        )
+
+
 def runai_request(
     streamer: t_streamer,
     path: str,

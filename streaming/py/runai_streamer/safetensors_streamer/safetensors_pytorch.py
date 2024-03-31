@@ -3,6 +3,7 @@ import torch
 import struct
 import json
 from typing import List, Tuple
+from runai_streamer.file_streamer.file_streamer import FileStreamer
 
 
 SAFETENSORS_DATA_OFFSETS_KEY = "data_offsets"
@@ -42,13 +43,15 @@ class SafetensorsMetadata:
 
     @staticmethod
     def from_file(filename: str) -> SafetensorsMetadata:
-        with open(filename, "rb") as file:
-            header_size_buffer = file.read(SAFETENSORS_HEADER_BUFFER_SIZE)
+        with FileStreamer() as fs:
+            header_size_buffer = bytearray(SAFETENSORS_HEADER_BUFFER_SIZE)
+            fs.read_file(filename, 0, header_size_buffer)
             header_size = struct.unpack(
                 LITTLE_ENDIAN_LONG_LONG_STRUCT_FORMAT, header_size_buffer
             )[0]
-            header_str = file.read(header_size)
-            metadata = json.loads(header_str)
+            header_buffer = bytearray(header_size)
+            fs.read_file(filename, SAFETENSORS_HEADER_BUFFER_SIZE, header_buffer)
+            metadata = json.loads(header_buffer)
             return SafetensorsMetadata(
                 metadata, header_size + SAFETENSORS_HEADER_BUFFER_SIZE
             )
