@@ -18,7 +18,7 @@ class SafetensorsStreamer:
 
     def stream_file(self, path: str) -> None:
         offset, self.tensors_metadata, tensor_sizes = (
-            safetensors_pytorch.prepare_request(path)
+            safetensors_pytorch.prepare_request(self.file_streamer, path)
         )
         self.dst = bytearray(sum(tensor_sizes))
         self.file_streamer.stream_file(path, offset, self.dst, tensor_sizes)

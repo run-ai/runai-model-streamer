@@ -42,19 +42,18 @@ class SafetensorsMetadata:
         self.tensors_metadata.sort(key=lambda x: x.offsets.start)
 
     @staticmethod
-    def from_file(filename: str) -> SafetensorsMetadata:
-        with FileStreamer() as fs:
-            header_size_buffer = bytearray(SAFETENSORS_HEADER_BUFFER_SIZE)
-            fs.read_file(filename, 0, header_size_buffer)
-            header_size = struct.unpack(
-                LITTLE_ENDIAN_LONG_LONG_STRUCT_FORMAT, header_size_buffer
-            )[0]
-            header_buffer = bytearray(header_size)
-            fs.read_file(filename, SAFETENSORS_HEADER_BUFFER_SIZE, header_buffer)
-            metadata = json.loads(header_buffer)
-            return SafetensorsMetadata(
-                metadata, header_size + SAFETENSORS_HEADER_BUFFER_SIZE
-            )
+    def from_file(fs: FileStreamer, filename: str) -> SafetensorsMetadata:
+        header_size_buffer = bytearray(SAFETENSORS_HEADER_BUFFER_SIZE)
+        fs.read_file(filename, 0, header_size_buffer)
+        header_size = struct.unpack(
+            LITTLE_ENDIAN_LONG_LONG_STRUCT_FORMAT, header_size_buffer
+        )[0]
+        header_buffer = bytearray(header_size)
+        fs.read_file(filename, SAFETENSORS_HEADER_BUFFER_SIZE, header_buffer)
+        metadata = json.loads(header_buffer)
+        return SafetensorsMetadata(
+            metadata, header_size + SAFETENSORS_HEADER_BUFFER_SIZE
+        )
 
 
 class SafetensorMetadata:
@@ -86,8 +85,10 @@ class Offsets:
         return self.end - self.start
 
 
-def prepare_request(path: str) -> Tuple[int, List[SafetensorMetadata], List[int]]:
-    safetensors_metadata = SafetensorsMetadata.from_file(path)
+def prepare_request(
+    fs: FileStreamer, path: str
+) -> Tuple[int, List[SafetensorMetadata], List[int]]:
+    safetensors_metadata = SafetensorsMetadata.from_file(fs, path)
     return (
         safetensors_metadata.offset,
         safetensors_metadata.tensors_metadata,
