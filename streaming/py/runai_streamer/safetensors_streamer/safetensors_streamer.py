@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Iterator
 import torch
+import mmap
 from runai_streamer.file_streamer.file_streamer import FileStreamer
 import runai_streamer.safetensors_streamer.safetensors_pytorch as safetensors_pytorch
 
@@ -20,7 +21,9 @@ class SafetensorsStreamer:
         offset, self.tensors_metadata, tensor_sizes = (
             safetensors_pytorch.prepare_request(self.file_streamer, path)
         )
-        self.dst = bytearray(sum(tensor_sizes))
+        self.dst = mmap.mmap(
+            -1, sum(tensor_sizes), mmap.MAP_ANONYMOUS | mmap.MAP_PRIVATE
+        )
         self.file_streamer.stream_file(path, offset, self.dst, tensor_sizes)
 
     def get_tensors(self) -> Iterator[torch.tensor]:
