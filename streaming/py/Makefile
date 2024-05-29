@@ -9,3 +9,6 @@ mock:
 
 test: mock install_dev_dep
 	STREAMER_LIBRARY="../cpp/bazel-bin/mock/libstreamer-mock.so" python3 -m unittest discover -b runai_streamer
+
+clean:
+	rm -rf build/ dist/ runai_streamer.egg-info/
