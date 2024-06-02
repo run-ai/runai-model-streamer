@@ -2,11 +2,38 @@ import unittest
 import torch
 import os
 from safetensors import safe_open
-from runai_streamer.safetensors_streamer.safetensors_streamer import SafetensorsStreamer
+from runai_streamer.safetensors_streamer.safetensors_streamer import (
+    SafetensorsStreamer,
+    convert_path_if_needed,
+    RUNAI_DIRNAME,
+    RUNAI_DIRNAME_TO_REMOVE,
+)
 
 
 class TestSafetensorsStreamer(unittest.TestCase):
+    def test_convert_path_if_needed_local_path(self):
+        path = "/a/b/c/d.txt"
+        new_path = convert_path_if_needed(path)
+        self.assertEqual(path, new_path)
+
+    def test_convert_path_if_needed_s3(self):
+        path = "/a/b/c/d.txt"
+        os.environ[RUNAI_DIRNAME] = "s3://test-bucket/llama"
+        new_path = convert_path_if_needed(path)
+        self.assertEqual(new_path, "s3://test-bucket/llama/d.txt")
+        os.environ.pop(RUNAI_DIRNAME, None)
+
+    def test_convert_path_if_needed_s3_with_remove(self):
+        path = "/a/b/c/d.txt"
+        os.environ[RUNAI_DIRNAME] = "s3://test-bucket/llama"
+        os.environ[RUNAI_DIRNAME_TO_REMOVE] = "/a/b"
+        new_path = convert_path_if_needed(path)
+        self.assertEqual(new_path, "s3://test-bucket/llama/c/d.txt")
+        os.environ.pop(RUNAI_DIRNAME_TO_REMOVE, None)
+        os.environ.pop(RUNAI_DIRNAME, None)
+
     def test_safetensors_streamer(self):
+        print(os.getenv(RUNAI_DIRNAME))
         file_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "test.safetensors"
         )
