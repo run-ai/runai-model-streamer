@@ -26,5 +26,5 @@ setup(
     version=VERSION,
     packages=find_packages(),
     package_data={"runai_streamer": [LIB]},
-    install_requires=["torch>=2.0.0, <3.0.0"],
+    install_requires=["torch>=2.0.0, <3.0.0", "humanize"],
 )

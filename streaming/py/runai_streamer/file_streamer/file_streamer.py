@@ -1,4 +1,5 @@
 from typing import List, Iterator
+from timeit import default_timer as timer
 from runai_streamer.libstreamer.libstreamer import (
     runai_start,
     runai_end,
@@ -6,14 +7,24 @@ from runai_streamer.libstreamer.libstreamer import (
     runai_request,
     runai_response,
 )
+import humanize
 
 
 class FileStreamer:
     def __enter__(self) -> "FileStreamer":
         self.streamer = runai_start()
+        self.start_time = timer()
+        self.total_size = 0
         return self
 
     def __exit__(self, exc_type: any, exc_value: any, traceback: any) -> None:
+        size = self.total_size
+        elapsed_time = timer() - self.start_time
+        throughput = size / elapsed_time
+        print(
+            f"[RunAI Streamer] Overall time to stream {humanize.naturalsize(size, binary=True)} of all files: {round(elapsed_time, 2)}s, {humanize.naturalsize(throughput, binary=True)}/s",
+            flush=True,
+        )
         if self.streamer:
             runai_end(self.streamer)
 
@@ -24,6 +35,7 @@ class FileStreamer:
         self, path: str, offset: int, dst: memoryview, internal_sizes: List[int]
     ) -> None:
         self.internal_sizes = internal_sizes
+        self.total_size = self.total_size + sum(internal_sizes)
         runai_request(
             self.streamer,
             path,
