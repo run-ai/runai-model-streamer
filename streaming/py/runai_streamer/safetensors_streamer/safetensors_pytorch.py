@@ -38,8 +38,11 @@ class SafetensorsMetadata:
             if name != "__metadata__":
                 tensor_metadata = SafetensorMetadata(name, safetensor_metadata)
                 self.tensors_metadata.append(tensor_metadata)
-                self.tensor_sizes.append(tensor_metadata.get_bytesize())
+
         self.tensors_metadata.sort(key=lambda x: x.offsets.start)
+
+        for tensor_metadata in self.tensors_metadata:
+            self.tensor_sizes.append(tensor_metadata.get_bytesize())
 
     @staticmethod
     def from_file(fs: FileStreamer, filename: str) -> SafetensorsMetadata:
