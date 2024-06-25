@@ -34,13 +34,11 @@ class SafetensorsStreamer:
     def stream_file(self, path: str) -> None:
         path = convert_path_if_needed(path)
 
-        offset, self.tensors_metadata, tensor_sizes = (
-            safetensors_pytorch.prepare_request(self.file_streamer, path)
+        offset, self.tensors_metadata, read_sizes = safetensors_pytorch.prepare_request(
+            self.file_streamer, path
         )
-        self.dst = mmap.mmap(
-            -1, sum(tensor_sizes), mmap.MAP_ANONYMOUS | mmap.MAP_PRIVATE
-        )
-        self.file_streamer.stream_file(path, offset, self.dst, tensor_sizes)
+        self.dst = mmap.mmap(-1, sum(read_sizes), mmap.MAP_ANONYMOUS | mmap.MAP_PRIVATE)
+        self.file_streamer.stream_file(path, offset, self.dst, read_sizes)
 
     def get_tensors(self) -> Iterator[torch.tensor]:
         for index, offset in self.file_streamer.get_chunks():

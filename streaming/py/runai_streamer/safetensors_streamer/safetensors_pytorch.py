@@ -32,7 +32,7 @@ class SafetensorsMetadata:
     def __init__(self, blob: any, offset: int) -> None:
         self.offset = offset
         self.tensors_metadata = []
-        self.tensor_sizes = []
+        self.read_sizes = []
 
         for name, safetensor_metadata in blob.items():
             if name != "__metadata__":
@@ -41,8 +41,13 @@ class SafetensorsMetadata:
 
         self.tensors_metadata.sort(key=lambda x: x.offsets.start)
 
-        for tensor_metadata in self.tensors_metadata:
-            self.tensor_sizes.append(tensor_metadata.get_bytesize())
+        for i in range(len(self.tensors_metadata)):
+            if i < len(self.tensors_metadata) - 1:
+                current_start = self.tensors_metadata[i].offsets.start
+                next_start = self.tensors_metadata[i + 1].offsets.start
+                self.read_sizes.append(next_start - current_start)
+            else:
+                self.read_sizes.append(self.tensors_metadata[i].get_bytesize())
 
     @staticmethod
     def from_file(fs: FileStreamer, filename: str) -> SafetensorsMetadata:
@@ -95,7 +100,7 @@ def prepare_request(
     return (
         safetensors_metadata.offset,
         safetensors_metadata.tensors_metadata,
-        safetensors_metadata.tensor_sizes,
+        safetensors_metadata.read_sizes,
     )
 
 
