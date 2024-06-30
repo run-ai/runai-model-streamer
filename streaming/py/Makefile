@@ -1,8 +1,10 @@
+ARCH := $(shell uname -m)
+
 install_dev_dep:
 	python3 -m pip install -r requirements.dev
 
 build:
-	python3 setup.py bdist_wheel
+	python3 setup.py bdist_wheel --plat-name manylinux1_${ARCH}
 
 mock:
 	make -C ../cpp build_mock
