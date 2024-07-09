@@ -1,3 +1,3 @@
-build
-dist
-runai_streamer.egg-info
+*/build
+*/dist
+*/*.egg-info

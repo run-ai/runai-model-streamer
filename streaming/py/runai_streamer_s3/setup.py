@@ -2,13 +2,11 @@ import os
 from setuptools import setup, find_packages
 
 VERSION = os.getenv("PACKAGE_VERSION", "0.0.0")
-LIB = "libstreamer/lib/libstreamer.so"
+LIB = "libstreamers3.so"
 
 
 def assert_lib_exists():
-    lib_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "runai_streamer", LIB
-    )
+    lib_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), LIB)
     if os.path.islink(lib_path):
         target_path = os.path.realpath(lib_path)
         if not os.path.exists(target_path):
@@ -22,10 +20,9 @@ def assert_lib_exists():
 
 assert_lib_exists()
 setup(
-    name="runai-streamer",
+    name="runai-streamer-s3",
     version=VERSION,
-    license_files=("LICENSE",),
+    license_files=("../LICENSE",),
     packages=find_packages(),
-    package_data={"runai_streamer": [LIB]},
-    install_requires=["torch>=2.0.0, <3.0.0", "humanize"],
+    data_files=[("/runai_streamer/libstreamer/lib/", [LIB])],
 )
