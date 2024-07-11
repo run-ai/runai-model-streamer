@@ -1,5 +1,7 @@
 ARCH := $(shell uname -m)
 
+.PHONY: install_dev_dep build mock test clean
+
 install_dev_dep:
 	python3 -m pip install -r requirements.dev
 

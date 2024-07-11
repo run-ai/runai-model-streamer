@@ -1,3 +1,5 @@
+.PHONY: build test clean
+
 build:
 	make -C runai_streamer build
 	make -C runai_streamer_s3 build
