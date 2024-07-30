@@ -16,7 +16,6 @@ class TestBindings(unittest.TestCase):
         with open(file_path, "w") as file:
             file.write(file_content)
         size = len(file_content) - 2
-        dst = bytearray(size)
 
         request_sizes = [10, 9, 10]
         id_to_results = {
@@ -25,8 +24,8 @@ class TestBindings(unittest.TestCase):
             2: {"expected_offset": 19, "expected_text": "Test-Text3"},
         }
         with FileStreamer() as fs:
-            fs.stream_file(file_path, 1, dst, request_sizes)
-            for id, offset in fs.get_chunks():
+            fs.stream_file(file_path, 1, request_sizes)
+            for id, dst, offset in fs.get_chunks():
                 self.assertEqual(offset, id_to_results[id]["expected_offset"])
                 self.assertEqual(
                     dst[offset : offset + request_sizes[id]].decode("utf-8"),
@@ -38,11 +37,10 @@ class TestBindings(unittest.TestCase):
         file_path = os.path.join(self.temp_dir, "runai_read_test.txt")
         with open(file_path, "w") as file:
             file.write(file_content)
-        dst = bytearray(len(file_content) - 2)
 
         with FileStreamer() as fs:
-            fs.read_file(file_path, 2, dst)
-            self.assertEqual(dst.decode("utf-8"), "TensorHelloTest")
+            dst = fs.read_file(file_path, 2, len(file_content) - 2)
+            self.assertEqual(bytearray(dst).decode("utf-8"), "TensorHelloTest")
 
     def tearDown(self):
         shutil.rmtree(self.temp_dir)

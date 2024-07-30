@@ -8,6 +8,7 @@ from runai_streamer.libstreamer.libstreamer import (
     runai_response,
 )
 import humanize
+import mmap
 
 
 class FileStreamer:
@@ -28,28 +29,36 @@ class FileStreamer:
         if self.streamer:
             runai_end(self.streamer)
 
-    def read_file(self, path: str, offset: int, dst: memoryview) -> None:
-        runai_read(self.streamer, path, offset, len(dst), dst)
+    def read_file(self, path: str, offset: int, len: int) -> memoryview:
+        dst_buffer = mmap.mmap(-1, len, mmap.MAP_ANONYMOUS | mmap.MAP_PRIVATE)
+        runai_read(self.streamer, path, offset, len, dst_buffer)
+        return dst_buffer
 
-    def stream_file(
-        self, path: str, offset: int, dst: memoryview, internal_sizes: List[int]
-    ) -> None:
-        self.internal_sizes = internal_sizes
-        self.total_size = self.total_size + sum(internal_sizes)
+    def stream_file(self, path: str, file_offset: int, chunks: List[int]) -> None:
+        request_size = sum(chunks)
+        self.total_chunks = chunks
+        self.total_size = self.total_size + request_size
+
+        self.dst_buffer = mmap.mmap(
+            -1, request_size, mmap.MAP_ANONYMOUS | mmap.MAP_PRIVATE
+        )
+
         runai_request(
             self.streamer,
             path,
-            offset,
-            len(dst),
-            dst,
-            self.internal_sizes,
+            file_offset,
+            len(self.dst_buffer),
+            self.dst_buffer,
+            self.total_chunks,
         )
 
     def get_chunks(self) -> Iterator:
         if not self.streamer:
             raise ValueError("Streamer not initialized")
-        for _ in range(len(self.internal_sizes)):
-            index = runai_response(self.streamer)
-            if index == None:
+        for _ in range(len(self.total_chunks)):
+            ready_chunk_index = runai_response(self.streamer)
+            if ready_chunk_index == None:
                 return
-            yield index, sum(self.internal_sizes[:index])
+            yield ready_chunk_index, self.dst_buffer, sum(
+                self.total_chunks[:ready_chunk_index]
+            )

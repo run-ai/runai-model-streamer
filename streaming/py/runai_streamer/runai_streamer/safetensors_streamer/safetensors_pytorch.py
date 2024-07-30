@@ -51,14 +51,14 @@ class SafetensorsMetadata:
 
     @staticmethod
     def from_file(fs: FileStreamer, filename: str) -> SafetensorsMetadata:
-        header_size_buffer = bytearray(SAFETENSORS_HEADER_BUFFER_SIZE)
-        fs.read_file(filename, 0, header_size_buffer)
+        header_size_buffer = fs.read_file(filename, 0, SAFETENSORS_HEADER_BUFFER_SIZE)
         header_size = struct.unpack(
             LITTLE_ENDIAN_LONG_LONG_STRUCT_FORMAT, header_size_buffer
         )[0]
-        header_buffer = bytearray(header_size)
-        fs.read_file(filename, SAFETENSORS_HEADER_BUFFER_SIZE, header_buffer)
-        metadata = json.loads(header_buffer)
+        header_buffer = fs.read_file(
+            filename, SAFETENSORS_HEADER_BUFFER_SIZE, header_size
+        )
+        metadata = json.loads(bytearray(header_buffer))
         return SafetensorsMetadata(
             metadata, header_size + SAFETENSORS_HEADER_BUFFER_SIZE
         )
