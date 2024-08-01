@@ -10,3 +10,7 @@ test:
 clean:
 	make -C runai_streamer clean
 	make -C runai_streamer_s3 clean
+
+install:
+	make -C runai_streamer install
+	make -C runai_streamer_s3 install
