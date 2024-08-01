@@ -1,6 +1,6 @@
 ARCH := $(shell uname -m)
 PLATFORM := manylinux2014_${ARCH}
-PACKAGE_VERSION := 0.0.0
+PACKAGE_VERSION ?= 0.0.0
 
 .PHONY: build clean
 

@@ -1,4 +1,4 @@
-from typing import List, Iterator
+from typing import List, Iterator, Tuple, Optional
 from timeit import default_timer as timer
 from runai_streamer.libstreamer.libstreamer import (
     runai_start,
@@ -6,6 +6,9 @@ from runai_streamer.libstreamer.libstreamer import (
     runai_read,
     runai_request,
     runai_response,
+)
+from runai_streamer.file_streamer.requests_iterator import (
+    RequestsIterator,
 )
 import humanize
 import mmap
@@ -35,30 +38,59 @@ class FileStreamer:
         return dst_buffer
 
     def stream_file(self, path: str, file_offset: int, chunks: List[int]) -> None:
-        request_size = sum(chunks)
-        self.total_chunks = chunks
-        self.total_size = self.total_size + request_size
+        self.total_size = self.total_size + sum(chunks)
+        self.path = path
 
-        self.dst_buffer = mmap.mmap(
-            -1, request_size, mmap.MAP_ANONYMOUS | mmap.MAP_PRIVATE
+        self.requests_iterator, buffer_size = RequestsIterator.with_memory_mode(
+            file_offset, chunks
         )
 
+        self.dst_buffer = mmap.mmap(
+            -1, buffer_size, mmap.MAP_ANONYMOUS | mmap.MAP_PRIVATE
+        )
+
+        request = self.requests_iterator.next_request()
+        self.current_request_chunks = request.chunks
         runai_request(
             self.streamer,
-            path,
-            file_offset,
-            len(self.dst_buffer),
+            self.path,
+            request.file_offset,
+            sum(request.chunks),
             self.dst_buffer,
-            self.total_chunks,
+            request.chunks,
         )
 
     def get_chunks(self) -> Iterator:
         if not self.streamer:
             raise ValueError("Streamer not initialized")
-        for _ in range(len(self.total_chunks)):
-            ready_chunk_index = runai_response(self.streamer)
-            if ready_chunk_index == None:
+
+        chunk_index_base = 0
+        while True:
+            for relative_index, buffer, buffer_offset in self.request_ready_chunks():
+                yield chunk_index_base + relative_index, buffer, buffer_offset
+
+            chunk_index_base = self.requests_iterator.current_chunk_index
+            next_request = self.requests_iterator.next_request()
+            if next_request is None:
+                break
+            self.current_request_chunks = next_request.chunks
+            runai_request(
+                self.streamer,
+                self.path,
+                next_request.file_offset,
+                sum(next_request.chunks),
+                self.dst_buffer,
+                next_request.chunks,
+            )
+
+    # This function iterates over indexes of ready chunks.
+    # The indexes are relative to the last request that sent
+    # And need to be translated to global index in the chunks list
+    def request_ready_chunks(self) -> Iterator:
+        for i in range(len(self.current_request_chunks)):
+            relative_index = runai_response(self.streamer)
+            if relative_index == None:
                 return
-            yield ready_chunk_index, self.dst_buffer, sum(
-                self.total_chunks[:ready_chunk_index]
+            yield relative_index, self.dst_buffer, sum(
+                self.current_request_chunks[:relative_index]
             )
