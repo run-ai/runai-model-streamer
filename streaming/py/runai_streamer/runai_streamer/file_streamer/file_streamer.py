@@ -1,4 +1,5 @@
-from typing import List, Iterator, Tuple, Optional
+import os
+from typing import List, Iterator
 from timeit import default_timer as timer
 from runai_streamer.libstreamer.libstreamer import (
     runai_start,
@@ -43,6 +44,10 @@ class FileStreamer:
 
         self.requests_iterator, buffer_size = RequestsIterator.with_memory_mode(
             file_offset, chunks
+        )
+        print(
+            f"[RunAI Streamer] CPU Buffer size: {humanize.naturalsize(buffer_size, binary=True)} for file: {os.path.basename(path)}",
+            flush=True,
         )
 
         self.dst_buffer = mmap.mmap(
