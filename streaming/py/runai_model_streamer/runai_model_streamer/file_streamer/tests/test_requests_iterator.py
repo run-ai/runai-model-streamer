@@ -1,5 +1,5 @@
 import unittest
-from runai_streamer.file_streamer.requests_iterator import (
+from runai_model_streamer.file_streamer.requests_iterator import (
     RequestsIterator,
     MemoryCapMode,
 )

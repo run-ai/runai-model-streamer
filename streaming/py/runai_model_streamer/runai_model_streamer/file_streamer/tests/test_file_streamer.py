@@ -3,8 +3,8 @@ import tempfile
 import shutil
 import os
 from unittest.mock import patch
-from runai_streamer.file_streamer.file_streamer import FileStreamer
-from runai_streamer.file_streamer.requests_iterator import MemoryCapMode
+from runai_model_streamer.file_streamer.file_streamer import FileStreamer
+from runai_model_streamer.file_streamer.requests_iterator import MemoryCapMode
 
 
 class TestBindings(unittest.TestCase):
@@ -44,7 +44,7 @@ class TestBindings(unittest.TestCase):
             dst = fs.read_file(file_path, 2, len(file_content) - 2)
             self.assertEqual(bytearray(dst).decode("utf-8"), "TensorHelloTest")
 
-    @patch("runai_streamer.file_streamer.requests_iterator._get_memory_mode")
+    @patch("runai_model_streamer.file_streamer.requests_iterator._get_memory_mode")
     def test_min_memory_cap(self, mock_get_memory_mode):
         mock_get_memory_mode.return_value = MemoryCapMode.largest_chunk
         file_content = "XTest Text1TestText2Test-Text3\n"
@@ -68,7 +68,7 @@ class TestBindings(unittest.TestCase):
                 )
 
     @patch("os.getenv")
-    @patch("runai_streamer.file_streamer.requests_iterator._get_memory_mode")
+    @patch("runai_model_streamer.file_streamer.requests_iterator._get_memory_mode")
     def test_limited_memory_cap(self, mock_get_memory_mode, mock_getenv):
         mock_get_memory_mode.return_value = MemoryCapMode.limited
         mock_getenv.return_value = 6

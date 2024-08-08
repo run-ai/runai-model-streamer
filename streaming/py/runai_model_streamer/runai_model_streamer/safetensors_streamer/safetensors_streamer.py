@@ -1,10 +1,9 @@
 from __future__ import annotations
 from typing import Iterator
 import torch
-import mmap
 import os
-from runai_streamer.file_streamer.file_streamer import FileStreamer
-import runai_streamer.safetensors_streamer.safetensors_pytorch as safetensors_pytorch
+from runai_model_streamer.file_streamer.file_streamer import FileStreamer
+import runai_model_streamer.safetensors_streamer.safetensors_pytorch as safetensors_pytorch
 
 RUNAI_DIRNAME = "RUNAI_DIRNAME"
 RUNAI_DIRNAME_TO_REMOVE = "RUNAI_DIRNAME_TO_REMOVE"

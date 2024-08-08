@@ -2,7 +2,7 @@ import unittest
 import torch
 import os
 from safetensors import safe_open
-from runai_streamer.safetensors_streamer.safetensors_streamer import (
+from runai_model_streamer.safetensors_streamer.safetensors_streamer import (
     SafetensorsStreamer,
     convert_path_if_needed,
     RUNAI_DIRNAME,

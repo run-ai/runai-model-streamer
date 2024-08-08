@@ -3,7 +3,7 @@ import torch
 import struct
 import json
 from typing import List, Tuple
-from runai_streamer.file_streamer.file_streamer import FileStreamer
+from runai_model_streamer.file_streamer.file_streamer import FileStreamer
 
 
 SAFETENSORS_DATA_OFFSETS_KEY = "data_offsets"

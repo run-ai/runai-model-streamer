@@ -14,10 +14,10 @@ mock:
 	make -C ../../cpp build_mock
 
 test: mock install_dev_dep
-	STREAMER_LIBRARY="../../cpp/bazel-bin/mock/libstreamer-mock.so" python3 -m unittest discover -b runai_streamer
+	STREAMER_LIBRARY="../../cpp/bazel-bin/mock/libstreamer-mock.so" python3 -m unittest discover -b runai_model_streamer
 
 clean:
-	rm -rf build/ dist/ runai_streamer.egg-info/
+	rm -rf build/ dist/ runai_model_streamer.egg-info/
 
 install:
-	pip3 install --force-reinstall dist/runai_streamer-${PACKAGE_VERSION}-py3-none-${PLATFORM}.whl
+	pip3 install --force-reinstall dist/runai_model_streamer-${PACKAGE_VERSION}-py3-none-${PLATFORM}.whl

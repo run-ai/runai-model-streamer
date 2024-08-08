@@ -7,7 +7,7 @@ LIB = "libstreamer/lib/libstreamer.so"
 
 def assert_lib_exists():
     lib_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "runai_streamer", LIB
+        os.path.dirname(os.path.abspath(__file__)), "runai_model_streamer", LIB
     )
     if os.path.islink(lib_path):
         target_path = os.path.realpath(lib_path)
@@ -22,11 +22,11 @@ def assert_lib_exists():
 
 assert_lib_exists()
 setup(
-    name="runai-streamer",
+    name="runai-model-streamer",
     version=VERSION,
     license_files=("../LICENSE",),
     packages=find_packages(),
-    package_data={"runai_streamer": [LIB]},
+    package_data={"runai_model_streamer": [LIB]},
     install_requires=["torch>=2.0.0, <3.0.0", "humanize"],
-    extras_require={"s3": [f"runai_streamer_s3=={VERSION}"]},
+    extras_require={"s3": [f"runai_model_streamer_s3=={VERSION}"]},
 )

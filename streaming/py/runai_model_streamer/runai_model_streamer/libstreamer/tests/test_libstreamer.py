@@ -1,11 +1,9 @@
 import unittest
 import tempfile
 import shutil
-import ctypes
 import os
 import mmap
-from runai_streamer.libstreamer import t_streamer
-from runai_streamer.libstreamer.libstreamer import (
+from runai_model_streamer.libstreamer.libstreamer import (
     runai_start,
     runai_request,
     runai_response,

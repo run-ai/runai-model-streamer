@@ -20,9 +20,9 @@ def assert_lib_exists():
 
 assert_lib_exists()
 setup(
-    name="runai-streamer-s3",
+    name="runai-model-streamer-s3",
     version=VERSION,
     license_files=("../LICENSE",),
     packages=find_packages(),
-    data_files=[("/runai_streamer/libstreamer/lib/", [LIB])],
+    data_files=[("/runai_model_streamer/libstreamer/lib/", [LIB])],
 )

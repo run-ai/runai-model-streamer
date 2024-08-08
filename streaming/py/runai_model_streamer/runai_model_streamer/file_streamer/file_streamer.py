@@ -1,14 +1,14 @@
 import os
 from typing import List, Iterator
 from timeit import default_timer as timer
-from runai_streamer.libstreamer.libstreamer import (
+from runai_model_streamer.libstreamer.libstreamer import (
     runai_start,
     runai_end,
     runai_read,
     runai_request,
     runai_response,
 )
-from runai_streamer.file_streamer.requests_iterator import (
+from runai_model_streamer.file_streamer.requests_iterator import (
     RequestsIterator,
 )
 import humanize

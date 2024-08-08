@@ -1,4 +1,4 @@
-from runai_streamer.libstreamer import dll, t_streamer
+from runai_model_streamer.libstreamer import dll, t_streamer
 from typing import List, Optional
 import ctypes
 
