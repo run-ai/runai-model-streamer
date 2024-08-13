@@ -1,6 +1,6 @@
 ## Installation
 
-Run:ai Model Streamer is a Python package available for installation in PyPi. Installing the streamer is done in your Python project using `pip` or by adding `runai-streamer` to your `requirements.txt` file.
+Run:ai Model Streamer is a Python package available for installation in PyPi. Installing the streamer is done in your Python project using `pip` or by adding `runai-model-streamer` to your `requirements.txt` file.
 
 ### Setup
 
@@ -11,15 +11,15 @@ The Run:ai Streamer comes with precompiled C++ code compatible to run on any Lin
 To install the streamer, run:
 
 ```bash
-pip install runai-streamer
+pip install runai-model-streamer
 ```
 
-> **Note:** To install a specific version of the package, use `runai-streamer==0.3.1`. Visit our PyPi or GitHub repository for the list of available versions.
+> **Note:** To install a specific version of the package, use `runai-model-streamer==0.3.1`. Visit our PyPi or GitHub repository for the list of available versions.
 
 To stream models from object storage, run the following command as well:
 
 ```bash
-pip install runai-streamer[s3]
+pip install runai-model-streamer[s3]
 ```
 
-> **Warning:** Make sure you install the S3 dependency in the same version of your runai-streamer by running `pip install runai-streamer[s3]==0.3.1`.
+> **Warning:** Make sure you install the S3 dependency in the same version of your runai-model-streamer by running `pip install runai-model-streamer[s3]==0.3.1`.
