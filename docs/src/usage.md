@@ -9,7 +9,7 @@ Start streaming models by creating a `SafetensorsStreamer` object that will serv
 If your SafeTensors file resides on a file system, run the following code to load the tensors to the CPU buffer and stream them to the GPU memory:
 
 ```python
-from runai_model_streamer.safetensors_streamer.safetensors_streamer import SafetensorsStreamer
+from runai_model_streamer import SafetensorsStreamer
 
 file_path = "/path/to/file.safetensors"
 
