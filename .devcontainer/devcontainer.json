@@ -1,0 +1,23 @@
+{
+    "name": "RunAI Model Streamer",
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
+    "features": {
+        "ghcr.io/rocker-org/devcontainer-features/apt-packages:1": {
+            "packages": "less,ssh,vim"
+        }
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "bazelbuild.vscode-bazel",
+                "ms-python.black-formatter",
+                "ms-python.vscode-pylance",
+                "ms-python.python",
+                "ms-vscode.cpptools",
+                "ms-vscode.makefile-tools"
+            ]
+        }
+    }
+}
