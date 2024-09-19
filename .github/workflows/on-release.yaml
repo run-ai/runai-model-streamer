@@ -1,0 +1,31 @@
+name: RunAI Model Streamer Library - Resease
+
+on:
+  release:
+    types:
+      - created
+
+jobs:
+  build-and-push:
+    name: Build & Push
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Set PACKAGE_VERSION
+      run: echo "PACKAGE_VERSION=${GITHUB_REF/refs\/tags\//}" >> $GITHUB_ENV
+
+    - name: Build package
+      uses: devcontainers/ci@v0.3
+      with:
+        push: always
+        runCmd: |
+          PACKAGE_VERSION=${{ env.PACKAGE_VERSION }} make build
+
+    - name: Upload As Release Asset
+      uses: softprops/action-gh-release@v1
+      with:
+        files: py/*/dist/*.whl
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
