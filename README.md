@@ -1,6 +1,6 @@
-# RunAI Model Streamer
+# Run:ai Model Streamer
 ## Overview
-The RunAI Model Streamer is a Python SDK designed to facilitate the streaming of tensors from tensors files to GPU memory with concurrency and streaming. It provides an API for loading SafeTensors files and building AI models, allowing loading models seamlessly.
+The Run:ai Model Streamer is a Python SDK designed to facilitate the streaming of tensors from tensors files to GPU memory with concurrency and streaming. It provides an API for loading SafeTensors files and building AI models, allowing loading models seamlessly.
 
 For documentation click [here](docs/README.md)
 
