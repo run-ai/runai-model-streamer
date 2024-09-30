@@ -14,7 +14,7 @@ The following commands should run inside the dev container
 
 **Build**
 ```
-**make build**
+make build
 ```
 
 > [!NOTE]
