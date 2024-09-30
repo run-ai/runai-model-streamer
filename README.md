@@ -1,15 +1,39 @@
+# RunAI Model Streamer
 ## Overview
+The RunAI Model Streamer is a Python SDK designed to facilitate the streaming of tensors from tensors files to GPU memory with concurrency and streaming. It provides an API for loading SafeTensors files and building AI models, allowing loading models seamlessly.
 
-Run:ai Model Streamer is a Python SDK designed to enhance model loading times, supporting several model formats (e.g., SafeTensors) as well as various storage types (network file systems, S3, Disk, etc.).
+For documentation click [here](docs/README.md)
 
-The Streamer uses multiple threads to read tensors concurrently from a file in some file or object storage to a dedicated buffer in the CPU memory. Every tensor is given an identifier that subsequently is used by the application to load the tensor to the GPU memory. This way the application can load tensors from the CPU memory to the GPU memory while other tensors are being read from storage to the CPU memory.
+## Usage
+Our repository is built using devcontainer ([Further reading](https://containers.dev/))
 
-The model streaming utilizes OS-level concurrency to read data from local file systems, remote file systems, or object stores. The package employs a highly performant C++ layer to ensure maximum performance and minimum model load times, which is crucial for auto-scaling inference servers and keeping GPU idle times low. In addition to performance, a Python wrapper provides simple APIs and easy integration into an existing codebase.
+The following commands should run inside the dev container
 
-Currently, the Streamer supports PyTorch applications only.
+> [!NOTE]
+> You can use devcontainer-cli tool ([Further reading](https://github.com/devcontainers/cli)) by installing it, and run every command with the following prefix `devcontainer exec --workspace-folder . [COMMAND]`
 
-## Table of Contents
+**Build**
+```
+**make build**
+```
 
-- [Installation](docs/src/installation.md)
-- [Usage](docs/src/usage.md)
-- [Environment Variables](docs/src/env-vars.md)
+> [!NOTE]
+> We build `libstreamers3.so` and statically link it to libssl, libcrypto, and libcurl. if you would like to use your system libraries by dynamic link to them, run `USE_SYSTEM_LIBS=1 make build`
+
+> [!NOTE]
+> On successful build, the `.whl` file would be at `py/runai_model_streamer/dist/<PACKAGE_FILE>` and `py/runai_model_streamer_s3/dist/<PACKAGE_FILE>`
+
+
+**Run tests**
+```
+make test
+```
+
+**Install locally**
+```
+pip3 install py/runai_model_streamer py/runai_model_streamer_s3
+```
+
+> [!IMPORTANT]
+> In order to the CPP to run, you need to install libcurl4 and libssl1.1_1
+
