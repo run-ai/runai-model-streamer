@@ -1,0 +1,56 @@
+local_repository(name = "cc", path = "../external/cc")
+
+local_repository(name = "elements", path = "../external/elements")
+
+new_local_repository(
+    name = "aws",
+    path = "/usr/local",
+    build_file_content = """
+package(default_visibility = ["//visibility:public"])
+
+# s3 crt dependency diagram: https://docs.aws.amazon.com/sdkref/latest/guide/common-runtime.html
+
+config_setting(
+    name = "dynamic_link",
+    define_values = {
+        "USE_SYSTEM_LIBS": "1",
+    },
+)
+
+cc_library(
+    name = "aws",
+    hdrs = glob(["include/aws/**/*.h"]),
+    includes = ["include"],
+    linkopts = [
+        "-L/usr/local/lib/",
+        "-lpthread -lz",
+        "-l:libaws-cpp-sdk-s3-crt.a",
+        "-l:libaws-cpp-sdk-core.a",
+        "-l:libaws-crt-cpp.a",
+        "-l:libaws-c-mqtt.a",
+        "-l:libaws-c-event-stream.a",
+        "-l:libaws-c-s3.a",
+        "-l:libaws-c-auth.a",
+        "-l:libaws-c-http.a",
+        "-l:libaws-c-io.a",
+        "-l:libs2n.a",
+        "-l:libaws-c-compression.a",
+        "-l:libaws-c-cal.a",
+        "-l:libaws-c-sdkutils.a",
+        "-l:libaws-checksums.a",
+        "-l:libaws-c-common.a",
+        "-ldl -lm -lrt",
+    ] + select({
+        ":dynamic_link": ["-lssl", "-lcrypto", "-lcurl"],
+        "//conditions:default": [
+            "-l:/opt/curl/lib/libcurl.a",
+            "-l:/opt/ssl/lib/libssl.a",
+            "-l:/opt/ssl/lib/libcrypto.a",
+        ],
+    }),
+)
+
+""")
+
+load("//:rules.bzl", "runai_cc_test_dependencies")
+runai_cc_test_dependencies()

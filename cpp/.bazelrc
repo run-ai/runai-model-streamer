@@ -1,0 +1,8 @@
+# use C++17
+build --cxxopt=-std=c++17
+
+# compile with '-fPIC'; this is needed for building in optimized mode (i.e. '-c opt').
+build --force_pic
+
+build --action_env=BAZEL_LINKOPTS=-static-libstdc++
+build --action_env=BAZEL_LINKLIBS=-l%:libstdc++.a
