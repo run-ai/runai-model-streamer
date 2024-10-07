@@ -13,3 +13,4 @@ Currently, the Streamer supports PyTorch applications only.
 - [Installation](src/installation.md)
 - [Usage](src/usage.md)
 - [Environment Variables](src/env-vars.md)
+- [Benchmarks](src/benchmarks.md)

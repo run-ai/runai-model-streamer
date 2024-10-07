@@ -4,6 +4,8 @@ The Run:ai Model Streamer is a Python SDK designed to facilitate the streaming o
 
 For documentation click [here](docs/README.md)
 
+For benchmarks click [here](docs/src/benchmarks.md)
+
 ## Usage
 Our repository is built using devcontainer ([Further reading](https://containers.dev/))
 
