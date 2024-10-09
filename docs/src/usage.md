@@ -31,6 +31,14 @@ To load tensors from object storage, replace the file path in the code above wit
 file_path = "s3://my-bucket/my/file/path.safetensors"
 ```
 
+##### Streaming from S3 compatible storage
+
+To load tensors from S3 compatible object store, define the following environment variables
+
+`RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING=0 RUNAI_STREAMER_S3_ENDPOINT="your_S3_endpoint" AWS_EC2_METADATA_DISABLED=true`
+
+Setting the environment variable `AWS_EC2_METADATA_DISABLED` is needed in order to avoid a delay of few seconds, which happens only when the aws s3 sdk is used for compatible storage as explained [here](https://github.com/aws/aws-sdk-cpp/issues/1410)   
+
 ### CPU Memory Capping
 
 The streamer allocates a buffer on the CPU Memory for storing the tensors before moving them to the GPU Memory. Control the size of the allocated buffer by using the environment variable `RUNAI_STREAMER_MEMORY_LIMIT`.
