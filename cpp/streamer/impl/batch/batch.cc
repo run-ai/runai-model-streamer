@@ -122,22 +122,27 @@ void Batch::read(const Config & config)
     }
 
     auto file_offset = range.start;
+    char * buffer = dst;
+    size_t num_chunks = range.size / config.fs_block_bytesize;
+
     // seek just once because tasks are consecutive within the range
     _reader->seek(file_offset);
-    char * buffer = dst;
 
-    for (const auto & task : tasks)
+    // read task's range in chunks
+    for (size_t i = 0; i < num_chunks; ++i)
     {
-        // read task's range in blocks
-        size_t to_read = task.info.bytesize;
+        _reader->read(config.fs_block_bytesize, buffer);
 
-        _reader->read(to_read, buffer);
-        LOG(SPAM) << "Copied " << to_read << " bytes to " << std::hex << static_cast<void*>(buffer) << " from file offset " << file_offset;
-
-        file_offset += to_read;
-        buffer += to_read;
+        file_offset += config.fs_block_bytesize;
+        buffer += config.fs_block_bytesize;
 
         finished_until(file_offset, common::ResponseCode::Success);
+    }
+
+    if (file_offset < range.end)
+    {
+        _reader->read(range.end - file_offset, buffer);
+        finished_until(range.end, common::ResponseCode::Success);
     }
 
     LOG(DEBUG) << "Finished reading successfuly from file " << path;

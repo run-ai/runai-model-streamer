@@ -259,15 +259,18 @@ TEST(Async, End_Of_File_Error)
     const auto data = utils::random::buffer(chunk_size);
     utils::temp::File file(data);
 
+    size_t num_bulks = chunk_size/bulk_size;
+    size_t successful_bytesize = num_bulks * bulk_size;
     size_t total = 0;
     unsigned expected = 0;
-    while (total < chunk_size && expected < num_chunks)
+
+    while (total < successful_bytesize && expected < num_chunks)
     {
         total += chunks[expected];
         ++expected;
     }
 
-    expected = (total <= chunk_size ? expected : expected - 1);
+    expected = (total <= successful_bytesize ? expected : expected - 1);
 
     Config config(utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
     Streamer streamer(config);
