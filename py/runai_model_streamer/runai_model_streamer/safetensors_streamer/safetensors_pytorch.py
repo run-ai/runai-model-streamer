@@ -25,6 +25,8 @@ safetenors_to_torch_dtype = {
     "I8": torch.int8,
     "U8": torch.uint8,
     "BOOL": torch.bool,
+    "F8_E5M2": torch.float8_e5m2,
+    "F8_E4M3": torch.float8_e4m3fn,
 }
 
 
