@@ -7,6 +7,25 @@ For documentation click [here](docs/README.md)
 For benchmarks click [here](docs/src/benchmarks.md)
 
 ## Usage
+Install the package
+```
+pip install runai_model_streamer
+```
+
+And stream tensors
+```
+from runai_model_streamer import SafetensorsStreamer
+
+file_path = "model.safetensors"
+
+with SafetensorsStreamer() as streamer:
+    streamer.stream_file(file_path)
+    for name, tensor in streamer.get_tensors():
+        gpu_tensor = tensor.to('CUDA:0')
+```
+
+## Development
+
 Our repository is built using devcontainer ([Further reading](https://containers.dev/))
 
 The following commands should run inside the dev container
