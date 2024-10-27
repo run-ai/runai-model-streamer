@@ -1,5 +1,6 @@
 import os
 from typing import List, Iterator
+import numpy as np
 from timeit import default_timer as timer
 from runai_model_streamer.libstreamer.libstreamer import (
     runai_start,
@@ -12,7 +13,6 @@ from runai_model_streamer.file_streamer.requests_iterator import (
     RequestsIterator,
 )
 import humanize
-import mmap
 
 
 class FileStreamer:
@@ -34,7 +34,7 @@ class FileStreamer:
             runai_end(self.streamer)
 
     def read_file(self, path: str, offset: int, len: int) -> memoryview:
-        dst_buffer = mmap.mmap(-1, len, mmap.MAP_ANONYMOUS | mmap.MAP_PRIVATE)
+        dst_buffer = np.empty(len, dtype=np.uint8)
         runai_read(self.streamer, path, offset, len, dst_buffer)
         return dst_buffer
 
@@ -50,9 +50,7 @@ class FileStreamer:
             flush=True,
         )
 
-        self.dst_buffer = mmap.mmap(
-            -1, buffer_size, mmap.MAP_ANONYMOUS | mmap.MAP_PRIVATE
-        )
+        self.dst_buffer = np.empty(buffer_size, dtype=np.uint8)
 
         request = self.requests_iterator.next_request()
         self.current_request_chunks = request.chunks
