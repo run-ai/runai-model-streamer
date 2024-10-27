@@ -1,9 +1,12 @@
 #include "streamer/streamer.h"
 
+#include <unistd.h>
+
 #include <gtest/gtest.h>
 #include <map>
 #include <string>
 #include <vector>
+#include <chrono>
 
 #include "common/response_code/response_code.h"
 
@@ -213,6 +216,34 @@ TEST_F(StreamerTest, S3_Library_Not_Found)
     EXPECT_EQ(runai_response(streamer, &r), static_cast<int>(common::ResponseCode::S3NotSupported));
 
     runai_end(streamer);
+}
+
+TEST_F(StreamerTest, End_Before_Read)
+{
+    auto size = utils::random::number(100000000, 1000000000);
+    const auto data = utils::random::buffer(size);
+    utils::temp::File file(data);
+
+    const auto expected = utils::Fd::read(file.path);
+    EXPECT_EQ(expected.size(), size);
+
+    void * streamer;
+    auto res = runai_start(&streamer);
+    EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
+
+    std::vector<unsigned char> dst(size);
+    std::vector<size_t> sizes;
+    sizes.push_back(size);
+
+    EXPECT_EQ(runai_request(streamer, file.path.c_str(), 0, size, dst.data(), 1, sizes.data()), static_cast<int>(common::ResponseCode::Success));
+
+    ::usleep(utils::random::number(20000));
+
+    const auto start_time = std::chrono::steady_clock::now();
+    runai_end(streamer);
+    const auto time_ = std::chrono::steady_clock::now();
+    const auto duration  = std::chrono::duration_cast<std::chrono::milliseconds>(time_ - start_time);
+    EXPECT_LT(duration.count(), 1000);
 }
 
 }; // namespace runai::llm::streamer
