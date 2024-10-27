@@ -1,5 +1,6 @@
 #include "streamer/impl/streamer/streamer.h"
 
+#include <atomic>
 #include <memory>
 #include <string>
 #include <utility>
@@ -19,9 +20,9 @@ Streamer::Streamer() : Streamer(Config())
 
 Streamer::Streamer(Config config) :
     _config(std::make_shared<Config>(config)),
-    _pool([&](Batch batch)
+    _pool([&](Batch batch, std::atomic<bool> & stopped)
         {
-            batch.execute();
+            batch.execute(stopped);
         }, _config->concurrency)
 {
     LOG(DEBUG) << config;

@@ -1,5 +1,7 @@
 #include "utils/threadpool/threadpool.h"
 
+#include <unistd.h>
+
 #include <gtest/gtest.h>
 #include <atomic>
 
@@ -13,7 +15,7 @@ TEST(Creation, Sanity)
 {
     for (auto size : { 1U, 0U, utils::random::number(2, 100), 100U })
     {
-        ThreadPool<unsigned> pool([](unsigned){}, size);
+        ThreadPool<unsigned> pool([](unsigned, std::atomic<bool> &){}, size);
         (void)pool;
     }
 }
@@ -24,10 +26,10 @@ TEST(Handle, Sanity)
     {
         constexpr auto Options = 1000;
 
-        std::array<std::atomic<unsigned>, Options> counters{};
+        std::array<std::atomic<int>, Options> counters{};
         std::atomic<unsigned> total = 0;
 
-        ThreadPool<unsigned> pool([&](unsigned index)
+        ThreadPool<unsigned> pool([&](unsigned index, std::atomic<bool> & stopped)
             {
                 total++;
                 counters[index]--;
@@ -59,7 +61,7 @@ TEST(Handle, Exception_Thrown_From_Handler)
     {
         std::atomic<unsigned> counter = 0;
 
-        ThreadPool<bool> pool([&](auto _)
+        ThreadPool<bool> pool([&](auto _, std::atomic<bool> & stopped)
             {
                 counter++;
                 throw std::exception();
@@ -75,6 +77,39 @@ TEST(Handle, Exception_Thrown_From_Handler)
         sleep(1);
 
         EXPECT_EQ(count, counter);
+    }
+}
+
+TEST(Handle, Stopped)
+{
+    for (auto size : { 1U, 2U, 10U, utils::random::number(10, 100), 100U })
+    {
+        std::atomic<unsigned> total = 0;
+        const auto count = utils::random::number(5000, 10000);
+
+        {
+            ThreadPool<unsigned> pool([&](auto _, std::atomic<bool> & stopped)
+                {
+                    while (!stopped)
+                    {
+                        ::usleep(utils::random::number(10000));
+                    }
+                    total++;
+                }, size);
+
+            for (unsigned i = 0; i < count; ++i)
+            {
+                pool.push(utils::random::boolean());
+            }
+
+            ::usleep(utils::random::number(100000, 1000000));
+
+            EXPECT_EQ(total, 0);
+        }
+
+        // verify all threads stopped and each thread performed a single task
+
+        EXPECT_EQ(total, size);
     }
 }
 

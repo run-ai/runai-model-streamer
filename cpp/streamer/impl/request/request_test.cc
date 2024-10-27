@@ -17,7 +17,7 @@ TEST(Creation, Sanity)
     std::atomic<unsigned int> finished = 0;
     unsigned retries = 5;
 
-    auto pool = utils::ThreadPool<int>([&](int i)
+    auto pool = utils::ThreadPool<int>([&](int i, std::atomic<bool> &)
     {
         finished += request.finished();
     }, utils::random::number(1, 2 * num_tasks));

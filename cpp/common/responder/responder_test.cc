@@ -67,7 +67,7 @@ TEST(Pop, Wait)
     auto responder = Responder(size);
 
     // create threadpool to push
-    auto pool = utils::ThreadPool<unsigned>([&](unsigned i)
+    auto pool = utils::ThreadPool<unsigned>([&](unsigned i, std::atomic<bool> &)
     {
         responder.push(i);
     }, size);
@@ -111,7 +111,7 @@ TEST(Pop, Error)
         auto responder = Responder(size);
 
         // create threadpool to push
-        auto pool = utils::ThreadPool<int>([&](int i)
+        auto pool = utils::ThreadPool<int>([&](int i, std::atomic<bool> &)
         {
             auto r = Response(rc);
             responder.push(std::move(r));
@@ -150,7 +150,7 @@ TEST(Pop, Unexpected_Responses)
 
     std::atomic<unsigned> completed = 0;
     auto finished = utils::Semaphore(0);
-    auto pool = utils::ThreadPool<unsigned>([&](unsigned i)
+    auto pool = utils::ThreadPool<unsigned>([&](unsigned i, std::atomic<bool> &)
     {
         responder.push(i);
         completed++;

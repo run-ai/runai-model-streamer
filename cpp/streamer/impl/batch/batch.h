@@ -48,7 +48,7 @@ struct Batch
 
     Batch(const std::string & path, std::shared_ptr<common::s3::StorageUri> uri, Range && range, char * dst, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config);
 
-    void execute();
+    void execute(std::atomic<bool> & stopped);
 
     // notify tasks until file offset
     void finished_until(size_t file_offset, common::ResponseCode ret = common::ResponseCode::Success);
@@ -70,8 +70,8 @@ struct Batch
     std::shared_ptr<const Config> config;
 
  private:
-    void read(const Config & config);
-    void async_read(const Config & config);
+    void read(const Config & config, std::atomic<bool> & stopped);
+    void async_read(const Config & config, std::atomic<bool> & stopped);
 
  private:
     // index of first unfinished task
