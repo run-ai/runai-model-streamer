@@ -19,15 +19,7 @@ Responder::Responder(unsigned running) :
 
 Responder::~Responder()
 {
-    try
-    {
-        // wait for all the running requests to finish
-        while (pop().ret != ResponseCode::FinishedError)
-        {}
-    }
-    catch(const std::exception& e)
-    {
-    }
+    LOG(DEBUG) << "Responder shutdown";
 }
 
 // return -1 if there are no running requests
@@ -57,13 +49,15 @@ void Responder::push(Response && response)
     {
         const auto guard = std::unique_lock<std::mutex>(_mutex);
 
+        _successful  = _successful && response.ret == common::ResponseCode::Success;
+
         if (_running)
         {
             LOG(SPAM) << response << " ; " << _running << " running requests";
             _responses.push_back(response);
             --_running;
 
-            if (_running == 0 && _total_bytesize > 0)
+            if (_running == 0 && _successful && _total_bytesize > 100 * 1024 * 1024)
             {
                 const auto throughput = bytes_per_second();
                 std::cout << "Read throughput is " << utils::logging::human_readable_size(throughput) << " per second " << std::endl;

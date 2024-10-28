@@ -58,6 +58,8 @@ struct Responder
 
     std::atomic<size_t> _total_bytesize;
     std::chrono::time_point<std::chrono::steady_clock> _start_time;
+
+    bool _successful = true;
 };
 
 }; // namespace runai::llm::streamer::common

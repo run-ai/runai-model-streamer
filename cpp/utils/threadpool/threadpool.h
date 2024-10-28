@@ -21,7 +21,7 @@ struct Deque
         {
             const auto lock = std::unique_lock<std::mutex>(_mutex);
 
-            ASSERT(!_stopped) << "Pusing a message to an already stopped queue";
+            ASSERT(!_stopped) << "Pushing a message to an already stopped queue";
 
             _deque.push_back(std::move(message));
         }
@@ -52,8 +52,10 @@ struct Deque
         {
             const auto lock = std::unique_lock<std::mutex>(_mutex);
 
-            CHECK(_deque.size() == 0) << "Stopping a `Deque` with unresolved messages";
-
+            if (_deque.size() != 0)
+            {
+                LOG(DEBUG) << "Stopping a `Deque` with unresolved messages";
+            }
             _stopped = true;
         }
 
