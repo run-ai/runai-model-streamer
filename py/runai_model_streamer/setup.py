@@ -27,6 +27,6 @@ setup(
     license_files=("../LICENSE",),
     packages=find_packages(),
     package_data={"runai_model_streamer": [LIB]},
-    install_requires=["torch>=2.0.0, <3.0.0", "humanize"],
+    install_requires=["torch>=2.0.0, <3.0.0", "humanize", "numpy"],
     extras_require={"s3": [f"runai_model_streamer_s3=={VERSION}"]},
 )
