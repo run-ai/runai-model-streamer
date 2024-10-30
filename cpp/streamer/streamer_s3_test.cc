@@ -62,12 +62,13 @@ TEST_F(StreamerTest, Async_Read)
     auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
 
     auto total_size = utils::random::number(100, 10000);
+    const auto num_chunks = utils::random::number(1, 10);
+    EXPECT_LT(num_chunks, total_size);
 
     void * streamer;
     auto res = runai_start(&streamer);
     EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
 
-    const auto num_chunks = utils::random::number(1, 10);
     const auto chunks = utils::random::chunks(total_size, num_chunks);
 
     std::vector<char> dst(total_size);

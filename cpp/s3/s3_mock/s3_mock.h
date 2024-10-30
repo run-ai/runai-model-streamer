@@ -13,6 +13,7 @@ extern "C" common::ResponseCode  runai_async_read_s3_client(void * client, unsig
 extern "C" common::ResponseCode  runai_async_response_s3_client(void * client, unsigned * index /* output parameter */);
 extern "C" void runai_release_s3_clients();
 
+extern "C" void runai_mock_s3_set_response_time_ms(unsigned milliseconds);
 extern "C" int runai_mock_s3_clients();
 
 }; //namespace runai::llm::streamer::common::s3

@@ -178,6 +178,7 @@ TEST(Async, Requests)
 
     // create internal division
     const unsigned num_chunks = utils::random::number(1, 20);
+    EXPECT_LT(num_chunks, size);
     auto chunks = utils::random::chunks(size, num_chunks);
 
     const auto chunk_size = utils::random::number<size_t>(1, 1024);
@@ -225,6 +226,7 @@ TEST(Async, File_Not_Found_Error)
 
     // create internal division
     const unsigned num_chunks = utils::random::number(1, 20);
+    EXPECT_LT(num_chunks, size);
     auto chunks = utils::random::chunks(size, num_chunks);
 
     const auto chunk_size = utils::random::number<size_t>(1, 1024);
@@ -249,6 +251,8 @@ TEST(Async, End_Of_File_Error)
 
     // create internal division
     const unsigned num_chunks = utils::random::number(1, 20);
+    EXPECT_LT(num_chunks, size);
+
     auto chunks = utils::random::chunks(size, num_chunks);
 
     // write data just for the first chunks
@@ -309,6 +313,8 @@ TEST(Async, Zero_Requests_Error)
 
     // create internal division
     const unsigned num_chunks = utils::random::number(1, 20);
+    EXPECT_LT(num_chunks, size);
+
     auto chunks = utils::random::chunks(size, num_chunks);
 
     const auto chunk_size = utils::random::number<size_t>(1, 1024);
@@ -333,6 +339,8 @@ TEST(Async, Zero_Bytes_To_Read_Error)
 
     // create internal division
     const unsigned num_chunks = utils::random::number(1, 20);
+    EXPECT_LT(num_chunks, size);
+
     auto chunks = utils::random::chunks(size, num_chunks);
 
     const auto chunk_size = utils::random::number<size_t>(1, 1024);

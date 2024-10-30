@@ -15,11 +15,13 @@ namespace runai::llm::streamer::impl
 TEST(Batches, Sanity)
 {
     auto size = utils::random::number(1000, 100000);
+    const unsigned num_chunks = utils::random::number(1, 20);
+    EXPECT_LT(num_chunks, size);
+
     const auto data = utils::random::buffer(size);
     utils::temp::File file(data);
 
     // create internal division to divide the file into requests (each request represent a tensor)
-    const unsigned num_chunks = utils::random::number(1, 20);
     auto chunks = utils::random::chunks(size, num_chunks);
 
     const auto chunk_size = utils::random::number<size_t>(1, 1024);
@@ -86,6 +88,8 @@ TEST(Batches, Failed_Reader)
 
     // create internal division
     const unsigned num_chunks = utils::random::number(2, 20);
+    EXPECT_LT(num_chunks, size);
+
     auto chunks = utils::random::chunks(size, num_chunks);
 
     const auto chunk_size = utils::random::number<size_t>(1, 1024);

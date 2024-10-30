@@ -112,8 +112,30 @@ void Batch::execute(std::atomic<bool> & stopped)
 
     if (response_code != common::ResponseCode::Success)
     {
-        LOG(ERROR) << "Failed to read from file " << path << " ; error: " << response_code;
-        finished_until(range.end, response_code);
+        if (response_code != common::ResponseCode::FinishedError)
+        {
+            LOG(ERROR) << "Failed to read from file " << path << " ; error: " << response_code;
+        }
+        else
+        {
+            LOG(DEBUG) << "Terminated reading from file " << path;
+        }
+
+        // Note:
+        // At this point no more tasks are expected to finish, since synchronous reading has ended and for asyncronous reading the thread stopped waiting for finished tasks
+        for (auto & task : tasks)
+        {
+            if (task.finished)
+            {
+                continue;
+            }
+            if (task.request->finished(response_code))
+            {
+                task.finished = true;
+                common::Response response(task.request->index, task.request->ret());
+                responder->push(std::move(response), task.request->bytesize);
+            }
+        }
     }
 }
 
@@ -134,7 +156,8 @@ void Batch::read(const Config & config, std::atomic<bool> & stopped)
     _reader->seek(file_offset);
 
     // read task's range in chunks
-    for (size_t i = 0; i < num_chunks && !stopped; ++i)
+    size_t i = 0;
+    for (; i < num_chunks && !stopped; ++i)
     {
         _reader->read(config.fs_block_bytesize, buffer);
 
@@ -150,20 +173,15 @@ void Batch::read(const Config & config, std::atomic<bool> & stopped)
         finished_until(range.end, common::ResponseCode::Success);
     }
 
-    LOG(DEBUG) << "Finished reading from file " << path << (stopped ? " - interrupted" : " successfully");
+    LOG(DEBUG) << "Finished reading " << i << "/" << num_chunks << " chunks of size " << config.fs_block_bytesize << " from file " << path << (stopped ? " - terminated" : " successfully");
 }
 
 // read the entire range and send notifications for each sub range
 void Batch::async_read(const Config & config, std::atomic<bool> & stopped)
 {
-    if (tasks.empty())
+    if (tasks.empty() || stopped)
     {
-        LOG(DEBUG) << "Empty batch";
-        return;
-    }
-
-    if (stopped)
-    {
+        LOG(DEBUG) << (stopped ? "Terminated" : "Empty batch");
         return;
     }
 
@@ -177,7 +195,7 @@ void Batch::async_read(const Config & config, std::atomic<bool> & stopped)
 
     _reader->async_read(ranges, dst);
 
-    while (true && !stopped)
+    while (!stopped)
     {
         auto r = _reader->async_response();
 
@@ -191,15 +209,16 @@ void Batch::async_read(const Config & config, std::atomic<bool> & stopped)
         {
             LOG(ERROR) << "received out of range index " << r.index << " number of tasks is " << tasks.size();
         }
-        const auto & task = tasks.at(r.index);
+        auto & task = tasks.at(r.index);
         if (task.request->finished(r.ret))
         {
+            task.finished = true;
             common::Response response(task.request->index, task.request->ret());
             responder->push(std::move(response), task.request->bytesize);
         }
     }
 
-    LOG(DEBUG) << "Finished reading from file " << path << (stopped ? " - interrupted" : " successfully");
+    LOG(DEBUG) << "Finished reading from file " << path << (stopped ? " - terminated" : " successfully");
 }
 
 // notify unfinished tasks up to but not including offset end
@@ -214,8 +233,10 @@ void Batch::finished_until(size_t file_offset, common::ResponseCode ret /*= comm
         }
         if (tasks[i].request->finished(ret))
         {
+            tasks[i].finished = true;
             const auto & r = tasks[i].request;
             common::Response response(r->index, r->ret());
+            LOG(INFO) <<"response " << response;
             responder->push(std::move(response), tasks[i].request->bytesize);
         }
     }

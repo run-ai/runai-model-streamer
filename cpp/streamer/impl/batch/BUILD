@@ -18,5 +18,13 @@ runai_cc_test(
             "//streamer/impl/file",
             "//utils/random",
             "//utils/temp/file",
+            "//utils/thread",
+            "//utils/dylib",
+            "//utils/scope_guard",
+            "//s3/s3_mock:libstreamers3.so",
+    ],
+    data = ["//s3/s3_mock:libstreamers3.so"],
+    linkopts = [
+        "-Wl,-rpath,$$ORIGIN/../../../s3/s3_mock",
     ],
 )

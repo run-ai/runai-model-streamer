@@ -27,6 +27,7 @@ struct Task
 
     std::shared_ptr<Request> request;
     Info info;
+    bool finished = false;
 };
 
 std::ostream & operator<<(std::ostream &, const Task &);
