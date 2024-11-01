@@ -22,7 +22,7 @@ assert_lib_exists()
 setup(
     name="runai-model-streamer-s3",
     version=VERSION,
-    license_files=("../LICENSE",),
+    license_files=("LICENSE",),
     packages=find_packages(),
     data_files=[("/runai_model_streamer/libstreamer/lib/", [LIB])],
 )
