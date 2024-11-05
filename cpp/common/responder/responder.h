@@ -35,6 +35,7 @@ struct Responder
     void push(Response && response, size_t bytesize);
 
     void cancel();
+    void stop();
 
     bool finished() const;
 
@@ -55,6 +56,7 @@ struct Responder
     mutable std::mutex _mutex;
 
     bool _canceled = false;
+    bool _stopped = false;
 
     std::atomic<size_t> _total_bytesize;
     std::chrono::time_point<std::chrono::steady_clock> _start_time;

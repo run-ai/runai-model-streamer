@@ -30,7 +30,12 @@ Streamer::Streamer(Config config) :
 
 Streamer::~Streamer()
 {
-    LOG(DEBUG) << "Streamer shutting down";
+    try
+    {
+        LOG(DEBUG) << "Streamer shutting down";
+    }
+    catch(...)
+    {}
 }
 
 common::ResponseCode Streamer::request(const std::string & path, size_t file_offset, size_t bytesize, void * dst)
@@ -104,6 +109,7 @@ void Streamer::create_request(const std::string & path, size_t file_offset, size
         uri = std::make_unique<common::s3::StorageUri>(path);
         if (_s3 == nullptr)
         {
+            _s3_stop = std::make_unique<S3Stop>();
             _s3 = std::make_unique<S3Cleanup>();
         }
     }

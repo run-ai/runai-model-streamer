@@ -13,6 +13,8 @@
 #include "utils/dylib/dylib.h"
 #include "utils/scope_guard/scope_guard.h"
 
+#include "common/s3_wrapper/s3_wrapper.h"
+
 #include "streamer/impl/file/file.h"
 
 namespace runai::llm::streamer::impl
@@ -406,10 +408,11 @@ TEST(Read, Stopped_During_Async_Read)
     // mock S3
     utils::Dylib dylib("libstreamers3.so");
     auto mock_response_time = dylib.dlsym<void(*)(unsigned)>("runai_mock_s3_set_response_time_ms");
+    auto mock_cleanup = dylib.dlsym<void(*)()>("runai_mock_s3_cleanup");
     unsigned delay_ms = 1000;
     mock_response_time(delay_ms);
-    auto guard = utils::ScopeGuard([&mock_response_time](){
-        mock_response_time(0);
+    auto guard = utils::ScopeGuard([&mock_cleanup](){
+        mock_cleanup();
     });
 
     unsigned num_requests = utils::random::number(1, 10);
@@ -469,6 +472,8 @@ TEST(Read, Stopped_During_Async_Read)
     });
 
     ::usleep(utils::random::number(300));
+
+    common::s3::S3ClientWrapper::stop();
     stopped = true;
 
     // collect responses

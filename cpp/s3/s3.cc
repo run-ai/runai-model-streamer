@@ -58,6 +58,18 @@ void runai_release_s3_clients()
     }
 }
 
+void runai_stop_s3_clients()
+{
+    try
+    {
+        S3ClientMgr::stop();
+    }
+    catch(const std::exception & e)
+    {
+        LOG(ERROR) << "Failed to stop all S3 clients";
+    }
+}
+
 common::ResponseCode  runai_async_read_s3_client(void * client, unsigned num_ranges, common::Range * ranges, size_t chunk_bytesize, char * buffer)
 {
     try

@@ -4,6 +4,7 @@
         runai_remove_s3_client;
         runai_async_read_s3_client;
         runai_async_response_s3_client;
+        runai_stop_s3_clients;
         runai_release_s3_clients;
     local: *;
 };

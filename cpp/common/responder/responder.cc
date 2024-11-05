@@ -25,15 +25,21 @@ Responder::~Responder()
 // return -1 if there are no running requests
 Response Responder::pop()
 {
-    if (finished())
+    if (_stopped || finished())
     {
-        LOG(DEBUG) << "responder does not expect any more responses";
+        LOG(DEBUG) << (_stopped ? "responder does not expect any more responses" : "responder stopped");
         return ResponseCode::FinishedError;
     }
 
     _ready.wait();
 
     const auto guard = std::unique_lock<std::mutex>(_mutex);
+
+    if (_stopped)
+    {
+        LOG(DEBUG) << "responder stopped";
+        return ResponseCode::FinishedError;
+    }
 
     ASSERT(!_responses.empty()) << "responder is empty after notification. Current running " << _running;
 
@@ -89,6 +95,21 @@ void Responder::cancel()
 {
     const auto guard = std::unique_lock<std::mutex>(_mutex);
     _canceled = true;
+}
+
+void Responder::stop()
+{
+    {
+        LOG(DEBUG) << "stopping responder";
+        const auto guard = std::unique_lock<std::mutex>(_mutex);
+        _stopped = true;
+        LOG(DEBUG) << "stopped responder";
+    }
+    // wake up blocking waiting threads
+    _ready.post();
+    LOG(DEBUG) << "notified stopped responder";
+
+
 }
 
 size_t Responder::bytes_per_second() const

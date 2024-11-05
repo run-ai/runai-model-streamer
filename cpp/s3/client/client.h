@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <string>
 
@@ -23,11 +24,17 @@ struct S3Client
 
     common::Response async_read_response();
 
+    // Stop sending requests to the object store
+    // Requests that were already sent cannot be cancelled, since the Aws S3CrtClient does not support aborting requests
+    // The S3CrtClient d'tor will wait for response of all teh sent requests, which can take a while
+    void stop();
+
     std::string bucket() const;
 
     void path(const std::string & path);
 
  private:
+    std::atomic<bool> _stop;
     ClientConfiguration _client_config;
     std::unique_ptr<Aws::S3Crt::S3CrtClient> _client;
     const Aws::String _bucket_name;

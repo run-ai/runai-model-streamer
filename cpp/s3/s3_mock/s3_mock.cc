@@ -5,6 +5,7 @@
 #include <map>
 #include <mutex>
 #include <set>
+#include <atomic>
 
 #include "utils/random/random.h"
 #include "utils/logging/logging.h"
@@ -18,13 +19,13 @@ std::map<void *, unsigned> __mock_index;
 std::set<void *> __mock_unused;
 unsigned __mock_response_time_ms = 0;
 std::mutex __mutex;
+std::atomic<bool> __stopped(false);
 
 void runai_mock_s3_set_response_time_ms(unsigned milliseconds)
 {
     const auto guard = std::unique_lock<std::mutex>(__mutex);
     __mock_response_time_ms = milliseconds;
 }
-
 
 void * runai_create_s3_client(const common::s3::StorageUri & uri)
 {
@@ -80,6 +81,12 @@ common::ResponseCode  runai_async_read_s3_client(void * client, unsigned num_ran
         return common::ResponseCode::UnknownError;
     }
 
+    if (__stopped)
+    {
+        LOG(DEBUG) <<"Mock s3 is stopped";
+        return common::ResponseCode::FinishedError;
+    }
+
     auto r = get_response_code(client);
     if (r == common::ResponseCode::Success)
     {
@@ -107,8 +114,19 @@ common::ResponseCode  runai_async_response_s3_client(void * client, unsigned * i
 
     if (__mock_response_time_ms)
     {
-        LOG(DEBUG) << "Sleeping for " << __mock_response_time_ms << " milliseconds";
-        ::usleep(1000 * __mock_response_time_ms);
+        unsigned counter = 100;
+        while (!__stopped && counter > 0)
+        {
+            LOG(DEBUG) << "Sleeping for " << __mock_response_time_ms << " milliseconds";
+            ::usleep(10 * __mock_response_time_ms);
+            --counter;
+        }
+    }
+
+    if (__stopped)
+    {
+        *index = 0;
+        return common::ResponseCode::FinishedError;
     }
 
     auto r = get_response_code(client);
@@ -144,6 +162,18 @@ void runai_release_s3_clients()
         __mock_unused.clear();
         __mock_index.clear();
     }
+}
+
+void runai_stop_s3_clients()
+{
+    __stopped = true;
+    LOG(DEBUG) << "Stopped S3 clients ";
+}
+
+void runai_mock_s3_cleanup()
+{
+    runai_mock_s3_set_response_time_ms(0);
+    __stopped = false;
 }
 
 }; //namespace runai::llm::streamer::common::s3

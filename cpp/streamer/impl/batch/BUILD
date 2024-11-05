@@ -21,6 +21,7 @@ runai_cc_test(
             "//utils/thread",
             "//utils/dylib",
             "//utils/scope_guard",
+            "//common/s3_wrapper",
             "//s3/s3_mock:libstreamers3.so",
     ],
     data = ["//s3/s3_mock:libstreamers3.so"],

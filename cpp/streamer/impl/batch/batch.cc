@@ -92,11 +92,6 @@ void Batch::execute(std::atomic<bool> & stopped)
         {
             async_read(*config, stopped);
         }
-
-        if (stopped)
-        {
-            throw common::Exception(common::ResponseCode::FinishedError);
-        }
     }
     catch(const common::Exception & e)
     {
@@ -125,13 +120,8 @@ void Batch::execute(std::atomic<bool> & stopped)
         // At this point no more tasks are expected to finish, since synchronous reading has ended and for asyncronous reading the thread stopped waiting for finished tasks
         for (auto & task : tasks)
         {
-            if (task.finished)
+            if (task.finished_request(response_code))
             {
-                continue;
-            }
-            if (task.request->finished(response_code))
-            {
-                task.finished = true;
                 common::Response response(task.request->index, task.request->ret());
                 responder->push(std::move(response), task.request->bytesize);
             }
@@ -174,15 +164,25 @@ void Batch::read(const Config & config, std::atomic<bool> & stopped)
     }
 
     LOG(DEBUG) << "Finished reading " << i << "/" << num_chunks << " chunks of size " << config.fs_block_bytesize << " from file " << path << (stopped ? " - terminated" : " successfully");
+
+    if (stopped)
+    {
+        throw common::Exception(common::ResponseCode::FinishedError);
+    }
 }
 
 // read the entire range and send notifications for each sub range
 void Batch::async_read(const Config & config, std::atomic<bool> & stopped)
 {
-    if (tasks.empty() || stopped)
+    if (tasks.empty())
     {
-        LOG(DEBUG) << (stopped ? "Terminated" : "Empty batch");
+        LOG(DEBUG) << "Empty batch";
         return;
+    }
+
+    if (stopped)
+    {
+        throw common::Exception(common::ResponseCode::FinishedError);
     }
 
     std::vector<common::Range> ranges;
@@ -195,13 +195,14 @@ void Batch::async_read(const Config & config, std::atomic<bool> & stopped)
 
     _reader->async_read(ranges, dst);
 
-    while (!stopped)
+    while (true)
     {
         auto r = _reader->async_response();
 
         if (r.ret == common::ResponseCode::FinishedError)
         {
-            break;
+            LOG(DEBUG) << "Finished reading from file " << path << " - terminated";
+            throw common::Exception(common::ResponseCode::FinishedError);
         }
 
         LOG(SPAM) << "Received response index " << r.index;
@@ -210,9 +211,8 @@ void Batch::async_read(const Config & config, std::atomic<bool> & stopped)
             LOG(ERROR) << "received out of range index " << r.index << " number of tasks is " << tasks.size();
         }
         auto & task = tasks.at(r.index);
-        if (task.request->finished(r.ret))
+        if (task.finished_request(r.ret))
         {
-            task.finished = true;
             common::Response response(task.request->index, task.request->ret());
             responder->push(std::move(response), task.request->bytesize);
         }
@@ -231,12 +231,10 @@ void Batch::finished_until(size_t file_offset, common::ResponseCode ret /*= comm
         {
             break;
         }
-        if (tasks[i].request->finished(ret))
+        if (tasks[i].finished_request(ret))
         {
-            tasks[i].finished = true;
             const auto & r = tasks[i].request;
             common::Response response(r->index, r->ret());
-            LOG(INFO) <<"response " << response;
             responder->push(std::move(response), tasks[i].request->bytesize);
         }
     }

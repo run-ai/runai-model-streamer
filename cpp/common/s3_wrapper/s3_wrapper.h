@@ -27,6 +27,11 @@ struct S3ClientWrapper
     ResponseCode async_read(std::vector<Range>& ranges, size_t chunk_bytesize, char * buffer);
     Response async_read_response();
 
+    // stop - stops the responder of each S3 client, in order to notify callers which sent a request and are waiting for a response
+    //        required for stopping the threadpool workers, which are bloking on the client responder
+    static void stop();
+
+    // destroy S3 all clients
     static void shutdown();
 
     static constexpr size_t min_chunk_bytesize = 5 * 1024 * 1024;
