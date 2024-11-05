@@ -174,7 +174,7 @@ void Batch::read(const Config & config, std::atomic<bool> & stopped)
 // read the entire range and send notifications for each sub range
 void Batch::async_read(const Config & config, std::atomic<bool> & stopped)
 {
-    if (tasks.empty() || stopped)
+    if (tasks.empty())
     {
         LOG(DEBUG) << "Empty batch";
         return;
@@ -213,7 +213,6 @@ void Batch::async_read(const Config & config, std::atomic<bool> & stopped)
         auto & task = tasks.at(r.index);
         if (task.finished_request(r.ret))
         {
-            task.finished = true;
             common::Response response(task.request->index, task.request->ret());
             responder->push(std::move(response), task.request->bytesize);
         }
@@ -234,10 +233,8 @@ void Batch::finished_until(size_t file_offset, common::ResponseCode ret /*= comm
         }
         if (tasks[i].finished_request(ret))
         {
-            tasks[i].finished = true;
             const auto & r = tasks[i].request;
             common::Response response(r->index, r->ret());
-            LOG(INFO) <<"response " << response;
             responder->push(std::move(response), tasks[i].request->bytesize);
         }
     }
