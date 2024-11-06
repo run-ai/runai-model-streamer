@@ -100,16 +100,11 @@ void Responder::cancel()
 void Responder::stop()
 {
     {
-        LOG(DEBUG) << "stopping responder";
         const auto guard = std::unique_lock<std::mutex>(_mutex);
         _stopped = true;
-        LOG(DEBUG) << "stopped responder";
     }
     // wake up blocking waiting threads
     _ready.post();
-    LOG(DEBUG) << "notified stopped responder";
-
-
 }
 
 size_t Responder::bytes_per_second() const
