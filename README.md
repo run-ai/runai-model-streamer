@@ -9,7 +9,7 @@ For benchmarks click [here](docs/src/benchmarks.md)
 ## Usage
 Install the package
 ```
-pip install runai_model_streamer
+pip install runai-model-streamer
 ```
 
 And stream tensors
