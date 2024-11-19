@@ -11,6 +11,7 @@ namespace runai::llm::streamer::common
 Responder::Responder(unsigned running) :
     _running(running),
     _ready(0),
+    _stopped(false),
     _total_bytesize(0),
     _start_time(std::chrono::steady_clock::now())
 {
@@ -54,6 +55,12 @@ void Responder::push(Response && response)
 {
     {
         const auto guard = std::unique_lock<std::mutex>(_mutex);
+
+        if (_stopped)
+        {
+            // ignore responses
+            return;
+        }
 
         _successful  = _successful && response.ret == common::ResponseCode::Success;
 

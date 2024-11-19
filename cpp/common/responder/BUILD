@@ -14,6 +14,7 @@ runai_cc_test(
     srcs = ["responder_test.cc"],
     deps = [":responder",
             "//utils/threadpool",
+            "//utils/thread",
             "//utils/random",
     ],
 )

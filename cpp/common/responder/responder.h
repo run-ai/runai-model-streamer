@@ -56,7 +56,7 @@ struct Responder
     mutable std::mutex _mutex;
 
     bool _canceled = false;
-    bool _stopped = false;
+    std::atomic<bool> _stopped;
 
     std::atomic<size_t> _total_bytesize;
     std::chrono::time_point<std::chrono::steady_clock> _start_time;

@@ -6,6 +6,7 @@
 
 #include "utils/random/random.h"
 #include "utils/threadpool/threadpool.h"
+#include "utils/thread/thread.h"
 #include "utils/semaphore/semaphore.h"
 
 namespace runai::llm::streamer::common
@@ -190,6 +191,50 @@ TEST(Pop, Unexpected_Responses)
 
     EXPECT_EQ(success_responses, expected);
     EXPECT_EQ(error_responses, size - expected);
+
+    auto times = utils::random::number(1, 10);
+    for (unsigned i = 0; i < times; ++i)
+    {
+        auto r = responder.pop();
+        EXPECT_EQ(r.ret, ResponseCode::FinishedError);
+    }
+}
+
+TEST(Stop, Sanity)
+{
+    auto size = utils::random::number(1, 100);
+    auto responder = Responder(size);
+
+    // create a thread to wait
+    auto waiting = utils::Thread([&]()
+    {
+        for (unsigned i = 0; i < size; ++i)
+        {
+            auto r = responder.pop();
+            if (r == ResponseCode::FinishedError)
+            {
+                break;
+            }
+            EXPECT_EQ(r.ret, ResponseCode::Success);
+        }
+    });
+
+    // create threadpool to push
+    auto pool = utils::ThreadPool<unsigned>([&](unsigned i, std::atomic<bool> &)
+    {
+        responder.push(i);
+    }, size);
+
+    for (unsigned i = 0; i < size; ++i)
+    {
+        unsigned value = i;
+        usleep(utils::random::number(100));
+        pool.push(std::move(value));
+    }
+
+    // stop the responder
+    usleep(utils::random::number(100 * 1000));
+    responder.stop();
 
     auto times = utils::random::number(1, 10);
     for (unsigned i = 0; i < times; ++i)
