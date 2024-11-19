@@ -3,7 +3,6 @@
 #include <functional>
 #include <thread>
 #include <string>
-#include <atomic>
 
 namespace runai::llm::streamer::utils
 {
