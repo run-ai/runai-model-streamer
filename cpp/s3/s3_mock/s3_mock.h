@@ -11,6 +11,7 @@ extern "C" void * runai_create_s3_client(const common::s3::StorageUri & uri);
 extern "C" void runai_remove_s3_client(void * client);
 extern "C" common::ResponseCode  runai_async_read_s3_client(void * client, unsigned num_ranges, common::Range * ranges, size_t chunk_bytesize, char * buffer);
 extern "C" common::ResponseCode  runai_async_response_s3_client(void * client, unsigned * index /* output parameter */);
+extern "C" common::ResponseCode runai_list_objects_s3_client(void * client, char*** object_keys, size_t * object_count);
 extern "C" void runai_stop_s3_clients();
 extern "C" void runai_release_s3_clients();
 

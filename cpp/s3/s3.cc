@@ -1,4 +1,10 @@
 #include "s3/s3.h"
+
+#include <vector>
+#include <string>
+
+#include "utils/strings/strings.h"
+
 #include "s3/client_mgr/client_mgr.h"
 
 // For connecting to s3 providers other then aws:
@@ -107,6 +113,32 @@ common::ResponseCode runai_async_response_s3_client(void * client, unsigned * in
     {
         LOG(ERROR) << "Caught exception while sending async request";
     }
+    return common::ResponseCode::UnknownError;
+}
+
+common::ResponseCode runai_list_objects_s3_client(void * client, char*** object_keys, size_t * object_count)
+{
+    try
+    {
+        if (!client)
+        {
+            LOG(ERROR) << "Attempt to list objects with null s3 client";
+            return common::ResponseCode::UnknownError;
+        }
+        auto ptr = static_cast<S3Client *>(client);
+        std::vector<std::string> strings;
+        auto response = ptr->list(strings);
+        if (response == common::ResponseCode::Success)
+        {
+            utils::Strings::create_cstring_list(strings, object_keys, object_count);
+        }
+        return response;
+    }
+    catch(const std::exception& e)
+    {
+        LOG(ERROR) << "Caught exception while requesting list of objects";
+    }
+
     return common::ResponseCode::UnknownError;
 }
 

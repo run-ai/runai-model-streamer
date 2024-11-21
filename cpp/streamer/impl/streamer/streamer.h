@@ -47,6 +47,11 @@ struct Streamer
     // returns common::ResponseCode error if failed
     common::Response response();
 
+    // list files or object keys
+    common::ResponseCode list_objects(const std::string & path, char*** object_keys, size_t * object_count);
+    // free list
+    common::ResponseCode static free_list_objects(char** object_keys, size_t object_count);
+
  private:
     void create_request(const std::string & path, size_t offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes);
 

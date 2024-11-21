@@ -19,6 +19,8 @@ runai_cc_test(
         ":s3_wrapper",
         "//s3/s3_mock:libstreamers3.so",
         "//utils/random",
+        "//utils/logging",
+        "//utils/strings",
     ],
     data = ["//s3/s3_mock:libstreamers3.so"],
     linkopts = [

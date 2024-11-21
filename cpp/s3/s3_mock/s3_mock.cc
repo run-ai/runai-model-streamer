@@ -5,7 +5,10 @@
 #include <map>
 #include <mutex>
 #include <set>
+#include <cstring>
+#include <string>
 #include <atomic>
+#include <vector>
 
 #include "utils/random/random.h"
 #include "utils/logging/logging.h"
@@ -174,6 +177,55 @@ void runai_mock_s3_cleanup()
 {
     runai_mock_s3_set_response_time_ms(0);
     __stopped = false;
+}
+
+common::ResponseCode runai_list_objects_s3_client(void * client, char*** object_keys, size_t * object_count)
+{
+    try
+    {
+        if (!client)
+        {
+            LOG(ERROR) << "Attempt to list objects with null s3 client";
+            return common::ResponseCode::UnknownError;
+        }
+
+        auto r = get_response_code(client);
+
+        if (r != common::ResponseCode::Success)
+        {
+            return r;
+        }
+
+        auto size = utils::random::number<size_t>(0, 10);
+        LOG(SPAM) <<"Listing " << size << " objects";
+        std::vector<std::string> strings;
+        for (size_t i = 0; i < size; ++i)
+        {
+            strings.push_back(utils::random::string());
+            LOG(SPAM) << i << " object key " << strings[i];
+        }
+
+        // Allocate memory for the pointers to the strings
+        if (strings.size())
+        {
+            // malloc and free are used here for ctypes (python integration layer)
+            *object_keys = reinterpret_cast<char**>(malloc(strings.size() * sizeof(char*)));
+            for (size_t i = 0; i < strings.size(); ++i)
+            {
+                auto length = strings[i].size() + 1;
+                (*object_keys)[i] = reinterpret_cast<char*>(malloc(length)); // Allocate memory for each string
+                std::strncpy((*object_keys)[i], strings[i].c_str(), length);
+            }
+        }
+        *object_count = strings.size();
+        return r;
+    }
+    catch(const std::exception& e)
+    {
+        LOG(ERROR) << "Caught exception while requesting list of objects";
+    }
+
+    return common::ResponseCode::UnknownError;
 }
 
 }; //namespace runai::llm::streamer::common::s3

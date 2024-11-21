@@ -1,5 +1,6 @@
 
 #include <aws/s3-crt/model/GetObjectRequest.h>
+#include <aws/s3-crt/model/ListObjectsV2Request.h>
 
 #include <algorithm>
 #include <string>
@@ -167,6 +168,50 @@ common::ResponseCode S3Client::async_read(unsigned num_ranges, common::Range * r
     }
 
     return _stop ? common::ResponseCode::FinishedError : common::ResponseCode::Success;
+}
+
+common::ResponseCode S3Client::list(std::vector<std::string> & objects)
+{
+    if (_stop)
+    {
+        return common::ResponseCode::FinishedError;
+    }
+
+    Aws::S3Crt::Model::ListObjectsV2Request request;
+    request.WithBucket(_bucket_name).WithPrefix(_path);
+
+    Aws::String continuation_token; // Used for paginated results
+    bool is_truncated = false;
+
+    do {
+        // Set continuation token if present
+        if (!continuation_token.empty()) {
+            request.SetContinuationToken(continuation_token);
+        }
+
+        // Make the request
+        auto outcome = _client->ListObjectsV2(request);
+
+        if (!outcome.IsSuccess())
+        {
+            const auto & err = outcome.GetError();
+            LOG(ERROR) << "Failed to list objects " << err.GetExceptionName() << ": " << err.GetMessage();
+            return common::ResponseCode::FileAccessError;
+        }
+
+        const auto & result = outcome.GetResult();
+        for (const auto& object : result.GetContents())
+        {
+            LOG(SPAM) << "Object Key: " << object.GetKey() << std::endl;
+            objects.push_back(object.GetKey());
+        }
+
+        // Check if the response is truncated and get the continuation token
+        is_truncated = result.GetIsTruncated();
+        continuation_token = result.GetNextContinuationToken();
+    } while (is_truncated);
+
+    return common::ResponseCode::Success;
 }
 
 std::string S3Client::bucket() const

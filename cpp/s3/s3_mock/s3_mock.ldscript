@@ -7,6 +7,7 @@
         runai_mock_s3_clients;
         runai_stop_s3_clients;
         runai_release_s3_clients;
+        runai_list_objects_s3_client;
         runai_mock_s3_set_response_time_ms;
         runai_mock_s3_cleanup;
     local: *;

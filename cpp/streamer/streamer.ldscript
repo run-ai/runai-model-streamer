@@ -6,5 +6,7 @@
         runai_request;
         runai_response;
         runai_response_str;
+        runai_list_objects;
+        runai_free_list_objects;
     local: *;
 };

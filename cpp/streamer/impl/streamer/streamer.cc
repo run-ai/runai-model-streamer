@@ -4,9 +4,12 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <cstring>
 
 #include "utils/logging/logging.h"
+#include "utils/fd/fd.h"
 #include "utils/scope_guard/scope_guard.h"
+#include "utils/strings/strings.h"
 
 #include "streamer/impl/batches/batches.h"
 #include "common/exception/exception.h"
@@ -148,6 +151,61 @@ common::Response Streamer::response()
     }
 
     return _responder->pop();
+}
+
+// list object keys
+common::ResponseCode Streamer::list_objects(const std::string & path, char*** object_keys, size_t * object_count)
+{
+    std::shared_ptr<common::s3::StorageUri> uri = nullptr;
+    try
+    {
+        uri = std::make_unique<common::s3::StorageUri>(path, common::s3::StorageUri::Type::Path);
+        if (_s3 == nullptr)
+        {
+            _s3_stop = std::make_unique<S3Stop>();
+            _s3 = std::make_unique<S3Cleanup>();
+        }
+    }
+    catch(const std::exception& e)
+    {
+    }
+
+    if (uri.get() != nullptr)
+    {
+        auto s3_client = std::make_shared<common::s3::S3ClientWrapper>(*uri);
+        return s3_client->list_objects(object_keys, object_count);
+    }
+
+    // Not object store
+    auto response_code = common::ResponseCode::Success;
+    try
+    {
+        auto strings = utils::Fd::list(path);
+        utils::Strings::create_cstring_list(strings, object_keys, object_count);
+    }
+    catch(const std::exception& e)
+    {
+        LOG(ERROR) << "failed to list regular files in path " << path;
+        response_code = common::ResponseCode::FileAccessError;
+    }
+
+    return response_code;
+}
+
+// free list of object keys
+common::ResponseCode Streamer::free_list_objects(char** object_keys, size_t object_count)
+{
+    try
+    {
+        utils::Strings::free_cstring_list(object_keys, object_count);
+        return common::ResponseCode::Success;
+    }
+    catch(const std::exception & e)
+    {
+        LOG(ERROR) << "Caught exception while releasing list of objects";
+    }
+
+    return common::ResponseCode::UnknownError;
 }
 
 }; // namespace runai::llm::streamer::impl

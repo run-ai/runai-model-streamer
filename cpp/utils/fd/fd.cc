@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <map>
+#include <filesystem>
 
 #include "utils/logging/logging.h"
 
@@ -250,5 +251,20 @@ void Fd::write(const std::string & path, const std::vector<uint8_t> & data, int 
     ASSERT(fd != -1) << "Failed opening '" << path << "'";
     fd.write(data.data(), data.size());
 }
+
+std::vector<std::string> Fd::list(const std::string & path)
+{
+    std::vector<std::string> strings;
+    for (const auto & entry : std::filesystem::directory_iterator(path))
+    {
+        if (entry.is_regular_file())
+        {
+            strings.push_back(entry.path());
+        }
+    }
+
+    return strings;
+}
+
 
 } // namespace runai::llm::streamer::utils

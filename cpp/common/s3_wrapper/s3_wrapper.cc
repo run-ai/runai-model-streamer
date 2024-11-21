@@ -115,4 +115,11 @@ Response S3ClientWrapper::async_read_response()
     return r;
 }
 
+// list object keys
+common::ResponseCode S3ClientWrapper::list_objects(char*** object_keys, size_t * object_count)
+{
+    static auto _s3_list_objects = _s3_dylib->dlsym<ResponseCode(*)(void*, char***, size_t*)>("runai_list_objects_s3_client");
+    return _s3_list_objects(_s3_client, object_keys, object_count);
+}
+
 }; // namespace runai::llm::streamer::common::s3

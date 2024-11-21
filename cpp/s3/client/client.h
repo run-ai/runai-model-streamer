@@ -3,6 +3,7 @@
 #include <atomic>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "s3/client_configuration/client_configuration.h"
 
@@ -23,6 +24,8 @@ struct S3Client
     common::ResponseCode async_read(unsigned num_ranges, common::Range * ranges, size_t chunk_bytesize, char * buffer);
 
     common::Response async_read_response();
+
+    common::ResponseCode list(std::vector<std::string> & objects);
 
     // Stop sending requests to the object store
     // Requests that were already sent cannot be cancelled, since the Aws S3CrtClient does not support aborting requests
