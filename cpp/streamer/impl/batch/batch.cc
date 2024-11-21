@@ -163,7 +163,7 @@ void Batch::read(const Config & config, std::atomic<bool> & stopped)
         finished_until(range.end, common::ResponseCode::Success);
     }
 
-    LOG(DEBUG) << "Finished reading " << i << "/" << num_chunks << " chunks of size " << config.fs_block_bytesize << " from file " << path << (stopped ? " - terminated" : " successfully");
+    LOG(DEBUG) << "Finished reading " << i << "/" << num_chunks << " chunks from file " << path << (stopped ? " - terminated" : " successfully");
 
     if (stopped)
     {

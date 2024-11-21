@@ -85,6 +85,7 @@ common::ResponseCode S3Client::async_read(unsigned num_ranges, common::Range * r
     }
 
     _responder = std::make_shared<common::Responder>(num_ranges);
+
     Aws::S3Crt::Model::GetObjectRequest request;
     request.SetBucket(_bucket_name);
     request.SetKey(_path);
@@ -181,7 +182,10 @@ void S3Client::path(const std::string & path)
 void S3Client::stop()
 {
     _stop = true;
-    _responder->stop();
+    if (_responder != nullptr)
+    {
+        _responder->stop();
+    }
 }
 
 }; // namespace runai::llm::streamer::impl::s3
