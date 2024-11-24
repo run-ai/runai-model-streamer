@@ -178,6 +178,7 @@ TEST(Async, Requests)
 
     // create internal division
     const unsigned num_chunks = utils::random::number(1, 20);
+    EXPECT_LT(num_chunks, size);
     auto chunks = utils::random::chunks(size, num_chunks);
 
     const auto chunk_size = utils::random::number<size_t>(1, 1024);
@@ -225,6 +226,7 @@ TEST(Async, File_Not_Found_Error)
 
     // create internal division
     const unsigned num_chunks = utils::random::number(1, 20);
+    EXPECT_LT(num_chunks, size);
     auto chunks = utils::random::chunks(size, num_chunks);
 
     const auto chunk_size = utils::random::number<size_t>(1, 1024);
@@ -249,30 +251,35 @@ TEST(Async, End_Of_File_Error)
 
     // create internal division
     const unsigned num_chunks = utils::random::number(1, 20);
+    EXPECT_LT(num_chunks, size);
+
     auto chunks = utils::random::chunks(size, num_chunks);
 
     // write data just for the first chunks
 
     const auto chunk_size = utils::random::number<size_t>(10, size - 1);
-    const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
+    const auto block_size = utils::random::number<size_t>(1, chunk_size);
 
+    LOG(DEBUG) << "writing only " << chunk_size << " bytes";
     const auto data = utils::random::buffer(chunk_size);
     utils::temp::File file(data);
 
-    size_t num_bulks = chunk_size/bulk_size;
-    size_t successful_bytesize = num_bulks * bulk_size;
+    size_t num_blocks = chunk_size/block_size;
+    size_t successful_bytesize = num_blocks * block_size;
     size_t total = 0;
     unsigned expected = 0;
 
     while (total < successful_bytesize && expected < num_chunks)
     {
         total += chunks[expected];
+        if (total > successful_bytesize)
+        {
+            break;
+        }
         ++expected;
     }
 
-    expected = (total <= successful_bytesize ? expected : expected - 1);
-
-    Config config(utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
+    Config config(utils::random::number(1, 20), chunk_size, block_size, false /* do not enforce minimum */);
     Streamer streamer(config);
 
     std::vector<char> dst(size);
@@ -309,6 +316,8 @@ TEST(Async, Zero_Requests_Error)
 
     // create internal division
     const unsigned num_chunks = utils::random::number(1, 20);
+    EXPECT_LT(num_chunks, size);
+
     auto chunks = utils::random::chunks(size, num_chunks);
 
     const auto chunk_size = utils::random::number<size_t>(1, 1024);
@@ -333,6 +342,8 @@ TEST(Async, Zero_Bytes_To_Read_Error)
 
     // create internal division
     const unsigned num_chunks = utils::random::number(1, 20);
+    EXPECT_LT(num_chunks, size);
+
     auto chunks = utils::random::chunks(size, num_chunks);
 
     const auto chunk_size = utils::random::number<size_t>(1, 1024);

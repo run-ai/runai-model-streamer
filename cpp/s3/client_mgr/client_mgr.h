@@ -29,6 +29,9 @@ struct ClientMgr
 
     static void clear();
 
+    // stop all clients
+    static void stop();
+
     // for testing:
     static unsigned size();
     static unsigned unused();
@@ -170,6 +173,20 @@ void ClientMgr<T>::clear()
     mgr._clients.clear();
     mgr._bucket_unused_clients.clear();
     mgr._current_bucket.clear();
+}
+
+template <typename T>
+void ClientMgr<T>::stop()
+{
+    LOG(DEBUG) << "Stopping all S3 clients";
+    auto & mgr = get();
+
+    const auto guard = std::unique_lock<std::mutex>(mgr._mutex);
+
+    for (auto & pair : mgr._clients)
+    {
+        pair.second->stop();
+    }
 }
 
 using S3ClientMgr = ClientMgr<S3Client>;

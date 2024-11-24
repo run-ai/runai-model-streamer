@@ -26,6 +26,13 @@ struct StreamerTest : ::testing::Test
         s3_path("s3://" + utils::random::string() + "/" + utils::random::string())
     {}
 
+    ~StreamerTest()
+    {
+        utils::Dylib dylib("libstreamers3.so");
+        auto mock_cleanup = dylib.dlsym<void(*)()>("runai_mock_s3_cleanup");
+        mock_cleanup();
+    }
+
  protected:
     utils::temp::Env _size;
     utils::temp::Env _chunk_bytesize;
@@ -62,12 +69,13 @@ TEST_F(StreamerTest, Async_Read)
     auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
 
     auto total_size = utils::random::number(100, 10000);
+    const auto num_chunks = utils::random::number(1, 10);
+    EXPECT_LT(num_chunks, total_size);
 
     void * streamer;
     auto res = runai_start(&streamer);
     EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
 
-    const auto num_chunks = utils::random::number(1, 10);
     const auto chunks = utils::random::chunks(total_size, num_chunks);
 
     std::vector<char> dst(total_size);
@@ -104,6 +112,7 @@ TEST_F(StreamerTest, Error)
 {
     utils::Dylib dylib("libstreamers3.so");
     auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
+    auto mock_cleanup = dylib.dlsym<void(*)()>("runai_mock_s3_cleanup");
 
     for (const auto response_code : { common::ResponseCode::FileAccessError, common::ResponseCode::InvalidParameterError })
     {
@@ -122,7 +131,83 @@ TEST_F(StreamerTest, Error)
 
         runai_end(streamer);
         EXPECT_EQ(verify_mock(), 0);
+        mock_cleanup();
     }
+}
+
+TEST_F(StreamerTest, Stop_Before_Async_Read)
+{
+    utils::Dylib dylib("libstreamers3.so");
+    auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
+    auto stop_mock = dylib.dlsym<void(*)(void)>("runai_stop_s3_clients");
+
+    auto total_size = utils::random::number(100, 10000);
+    const auto num_chunks = utils::random::number(1, 10);
+    EXPECT_LT(num_chunks, total_size);
+
+    void * streamer;
+    auto res = runai_start(&streamer);
+    EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
+
+    const auto chunks = utils::random::chunks(total_size, num_chunks);
+
+    std::vector<char> dst(total_size);
+    std::vector<size_t> sizes;
+
+    const auto offset = utils::random::number<size_t>();
+
+    for (unsigned i = 0; i < num_chunks; ++i)
+    {
+        sizes.push_back(chunks[i]);
+    }
+
+    stop_mock();
+    EXPECT_EQ(runai_request(streamer, s3_path.c_str(), offset, total_size, dst.data(), sizes.size(), sizes.data()), static_cast<int>(common::ResponseCode::Success));
+
+    // request was not sent to the S3 server
+    unsigned r;
+    EXPECT_EQ(runai_response(streamer, &r), static_cast<int>(common::ResponseCode::FinishedError));
+
+    runai_end(streamer);
+    EXPECT_EQ(verify_mock(), 0);
+}
+
+TEST_F(StreamerTest, End_During_Async_Read)
+{
+    utils::Dylib dylib("libstreamers3.so");
+    auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
+
+    auto mock_response_time = dylib.dlsym<void(*)(unsigned)>("runai_mock_s3_set_response_time_ms");
+    unsigned delay_ms = 1000;
+    mock_response_time(delay_ms);
+
+    auto total_size = utils::random::number(100, 10000);
+    const auto num_chunks = utils::random::number(1, 10);
+    EXPECT_LT(num_chunks, total_size);
+
+    void * streamer;
+    auto res = runai_start(&streamer);
+    EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
+
+    const auto chunks = utils::random::chunks(total_size, num_chunks);
+
+    std::vector<char> dst(total_size);
+    std::vector<size_t> sizes;
+
+    const auto offset = utils::random::number<size_t>();
+
+    for (unsigned i = 0; i < num_chunks; ++i)
+    {
+        sizes.push_back(chunks[i]);
+    }
+
+    EXPECT_EQ(runai_request(streamer, s3_path.c_str(), offset, total_size, dst.data(), sizes.size(), sizes.data()), static_cast<int>(common::ResponseCode::Success));
+
+    ::usleep(utils::random::number(300));
+
+    runai_end(streamer);
+
+    EXPECT_EQ(verify_mock(), 0);
 }
 
 }; // namespace runai::llm::streamer

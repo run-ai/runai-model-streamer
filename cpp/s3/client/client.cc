@@ -14,6 +14,7 @@ namespace runai::llm::streamer::impl::s3
 {
 
 S3Client::S3Client(const common::s3::StorageUri & uri) :
+    _stop(false),
     _bucket_name(uri.bucket.c_str(), uri.bucket.size()),
     _path(uri.path.c_str(), uri.path.size())
 {
@@ -84,13 +85,14 @@ common::ResponseCode S3Client::async_read(unsigned num_ranges, common::Range * r
     }
 
     _responder = std::make_shared<common::Responder>(num_ranges);
+
     Aws::S3Crt::Model::GetObjectRequest request;
     request.SetBucket(_bucket_name);
     request.SetKey(_path);
 
     char * buffer_ = buffer;
     common::Range * ranges_ = ranges;
-    for (unsigned ir = 0; ir < num_ranges; ++ir)
+    for (unsigned ir = 0; ir < num_ranges && !_stop; ++ir)
     {
         const auto & range_ = *ranges_;
 
@@ -106,7 +108,7 @@ common::ResponseCode S3Client::async_read(unsigned num_ranges, common::Range * r
 
         size_t total_ = range_.size;
         size_t offset_ = range_.start;
-        for (unsigned i = 0; i < size; ++i)
+        for (unsigned i = 0; i < size && !_stop; ++i)
         {
             size_t bytesize_ = (i == size - 1 ? total_ : chunk_bytesize);
 
@@ -164,7 +166,7 @@ common::ResponseCode S3Client::async_read(unsigned num_ranges, common::Range * r
         ranges_++;
     }
 
-    return common::ResponseCode::Success;
+    return _stop ? common::ResponseCode::FinishedError : common::ResponseCode::Success;
 }
 
 std::string S3Client::bucket() const
@@ -175,6 +177,15 @@ std::string S3Client::bucket() const
 void S3Client::path(const std::string & path)
 {
     _path = Aws::String(path.c_str(), path.size());
+}
+
+void S3Client::stop()
+{
+    _stop = true;
+    if (_responder != nullptr)
+    {
+        _responder->stop();
+    }
 }
 
 }; // namespace runai::llm::streamer::impl::s3

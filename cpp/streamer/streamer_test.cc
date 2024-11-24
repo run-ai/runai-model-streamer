@@ -220,12 +220,9 @@ TEST_F(StreamerTest, S3_Library_Not_Found)
 
 TEST_F(StreamerTest, End_Before_Read)
 {
-    auto size = utils::random::number(100000000, 1000000000);
+    auto size = utils::random::number(10000000, 100000000);
     const auto data = utils::random::buffer(size);
     utils::temp::File file(data);
-
-    const auto expected = utils::Fd::read(file.path);
-    EXPECT_EQ(expected.size(), size);
 
     void * streamer;
     auto res = runai_start(&streamer);
@@ -237,7 +234,7 @@ TEST_F(StreamerTest, End_Before_Read)
 
     EXPECT_EQ(runai_request(streamer, file.path.c_str(), 0, size, dst.data(), 1, sizes.data()), static_cast<int>(common::ResponseCode::Success));
 
-    ::usleep(utils::random::number(20000));
+    ::usleep(utils::random::number(400));
 
     const auto start_time = std::chrono::steady_clock::now();
     runai_end(streamer);

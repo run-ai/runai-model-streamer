@@ -37,6 +37,9 @@ extern "C" void runai_remove_s3_client(void * client);
 extern "C" common::ResponseCode  runai_async_read_s3_client(void * client, unsigned num_ranges, common::Range * ranges, size_t chunk_bytesize, char * buffer);
 // wait for asynchronous read response
 extern "C" common::ResponseCode  runai_async_response_s3_client(void * client, unsigned * index /* output parameter */);
+// stop clients
+// Stops the responder of each client, in order to notify callers which sent a request and are waiting for a response
+extern "C" void runai_stop_s3_clients();
 // release clients
 extern "C" void runai_release_s3_clients();
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <utility>
 #include <vector>
 #include <string>
@@ -82,9 +83,10 @@ struct Deque
 template <typename Request>
 struct ThreadPool
 {
-    using Handler = std::function<void(Request &&)>;
+    using Handler = std::function<void(Request &&, std::atomic<bool> &)>;
 
     ThreadPool(const Handler & handler, unsigned size) :
+        stopped(false),
         _handler(handler)
     {
         _threads.reserve(size);
@@ -96,7 +98,9 @@ struct ThreadPool
 
     ~ThreadPool()
     {
-        _deque.stop(_threads.size()); // stop the deque and notify all worker threads
+         // stop the deque and notify all worker threads
+        _deque.stop(_threads.size());
+        stopped = true;
     }
 
     void push(Request && request)
@@ -116,7 +120,7 @@ struct ThreadPool
 
             try
             {
-                pool._handler(std::move(request));
+                pool._handler(std::move(request), pool.stopped);
             }
             catch (...)
             {
@@ -124,6 +128,8 @@ struct ThreadPool
             }
         }
     }
+
+    std::atomic<bool> stopped;
 
  private:
     Handler _handler;

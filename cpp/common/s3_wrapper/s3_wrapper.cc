@@ -24,6 +24,19 @@ void S3ClientWrapper::shutdown()
     }
 }
 
+void S3ClientWrapper::stop()
+{
+    try
+    {
+        std::shared_ptr<utils::Dylib> s3_dylib(open_s3());
+        static auto __stop_s3_clients = s3_dylib->dlsym<void(*)()>("runai_stop_s3_clients");
+        __stop_s3_clients();
+    }
+    catch(...)
+    {
+    }
+}
+
 S3ClientWrapper::S3ClientWrapper(const StorageUri & uri) :
     _s3_dylib(open_s3()),
     _s3_client(create_client(uri))

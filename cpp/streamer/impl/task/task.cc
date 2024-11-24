@@ -21,6 +21,20 @@ Task::Task(std::shared_ptr<Request> request, Info && info) :
     info(info)
 {}
 
+// returns true if the request is completed (i.e. all its tasks were finished)
+bool Task::finished_request(common::ResponseCode ret)
+{
+    if (_finished)
+    {
+        // do nothing
+        return false;
+    }
+
+    _finished = true;
+    return request->finished(ret);
+}
+
+
 std::ostream & operator<<(std::ostream & os, const Task & task)
 {
     os << "task to read " << task.info.bytesize << " bytes from file offset " << task.info.offset << " to " << task.info.end;

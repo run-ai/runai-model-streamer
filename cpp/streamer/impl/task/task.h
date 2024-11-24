@@ -25,8 +25,12 @@ struct Task
     Task(std::shared_ptr<Request> request, Info && info);
     Task(std::shared_ptr<Request> request, size_t offset, size_t bytesize);
 
+    bool finished_request(common::ResponseCode ret);
+
     std::shared_ptr<Request> request;
     Info info;
+ private:
+    bool _finished = false;
 };
 
 std::ostream & operator<<(std::ostream &, const Task &);

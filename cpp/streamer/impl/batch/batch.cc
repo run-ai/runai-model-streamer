@@ -66,7 +66,7 @@ Batch::Batch(const std::string & path, std::shared_ptr<common::s3::StorageUri> u
     LOG(SPAM) << "Batch " << path << " range " << this->range.start << " - " << this->range.end << " ; " << this->tasks.size() << " tasks";
 }
 
-void Batch::execute()
+void Batch::execute(std::atomic<bool> & stopped)
 {
     LOG(DEBUG) << "Start reading from file " << path;
 
@@ -86,11 +86,11 @@ void Batch::execute()
 
         if (_reader->mode == Reader::Mode::Sync)
         {
-            read(*config);
+            read(*config, stopped);
         }
         else
         {
-            async_read(*config);
+            async_read(*config, stopped);
         }
     }
     catch(const common::Exception & e)
@@ -107,13 +107,30 @@ void Batch::execute()
 
     if (response_code != common::ResponseCode::Success)
     {
-        LOG(ERROR) << "Failed to read from file " << path << " ; error: " << response_code;
-        finished_until(range.end, response_code);
+        if (response_code != common::ResponseCode::FinishedError)
+        {
+            LOG(ERROR) << "Failed to read from file " << path << " ; error: " << response_code;
+        }
+        else
+        {
+            LOG(DEBUG) << "Terminated reading from file " << path;
+        }
+
+        // Note:
+        // At this point no more tasks are expected to finish, since synchronous reading has ended and for asyncronous reading the thread stopped waiting for finished tasks
+        for (auto & task : tasks)
+        {
+            if (task.finished_request(response_code))
+            {
+                common::Response response(task.request->index, task.request->ret());
+                responder->push(std::move(response), task.request->bytesize);
+            }
+        }
     }
 }
 
 // read the entire range and send notifications for each sub range
-void Batch::read(const Config & config)
+void Batch::read(const Config & config, std::atomic<bool> & stopped)
 {
     if (tasks.empty())
     {
@@ -129,7 +146,8 @@ void Batch::read(const Config & config)
     _reader->seek(file_offset);
 
     // read task's range in chunks
-    for (size_t i = 0; i < num_chunks; ++i)
+    size_t i = 0;
+    for (; i < num_chunks && !stopped; ++i)
     {
         _reader->read(config.fs_block_bytesize, buffer);
 
@@ -139,22 +157,32 @@ void Batch::read(const Config & config)
         finished_until(file_offset, common::ResponseCode::Success);
     }
 
-    if (file_offset < range.end)
+    if (file_offset < range.end && !stopped)
     {
         _reader->read(range.end - file_offset, buffer);
         finished_until(range.end, common::ResponseCode::Success);
     }
 
-    LOG(DEBUG) << "Finished reading successfuly from file " << path;
+    LOG(DEBUG) << "Finished reading " << i << "/" << num_chunks << " chunks from file " << path << (stopped ? " - terminated" : " successfully");
+
+    if (stopped)
+    {
+        throw common::Exception(common::ResponseCode::FinishedError);
+    }
 }
 
 // read the entire range and send notifications for each sub range
-void Batch::async_read(const Config & config)
+void Batch::async_read(const Config & config, std::atomic<bool> & stopped)
 {
     if (tasks.empty())
     {
         LOG(DEBUG) << "Empty batch";
         return;
+    }
+
+    if (stopped)
+    {
+        throw common::Exception(common::ResponseCode::FinishedError);
     }
 
     std::vector<common::Range> ranges;
@@ -167,14 +195,14 @@ void Batch::async_read(const Config & config)
 
     _reader->async_read(ranges, dst);
 
-    // for testing
     while (true)
     {
         auto r = _reader->async_response();
 
         if (r.ret == common::ResponseCode::FinishedError)
         {
-            break;
+            LOG(DEBUG) << "Finished reading from file " << path << " - terminated";
+            throw common::Exception(common::ResponseCode::FinishedError);
         }
 
         LOG(SPAM) << "Received response index " << r.index;
@@ -182,15 +210,15 @@ void Batch::async_read(const Config & config)
         {
             LOG(ERROR) << "received out of range index " << r.index << " number of tasks is " << tasks.size();
         }
-        const auto & task = tasks.at(r.index);
-        if (task.request->finished(r.ret))
+        auto & task = tasks.at(r.index);
+        if (task.finished_request(r.ret))
         {
             common::Response response(task.request->index, task.request->ret());
             responder->push(std::move(response), task.request->bytesize);
         }
     }
 
-    LOG(DEBUG) << "Finished reading successfuly from file " << path;
+    LOG(DEBUG) << "Finished reading from file " << path << (stopped ? " - terminated" : " successfully");
 }
 
 // notify unfinished tasks up to but not including offset end
@@ -203,7 +231,7 @@ void Batch::finished_until(size_t file_offset, common::ResponseCode ret /*= comm
         {
             break;
         }
-        if (tasks[i].request->finished(ret))
+        if (tasks[i].finished_request(ret))
         {
             const auto & r = tasks[i].request;
             common::Response response(r->index, r->ret());

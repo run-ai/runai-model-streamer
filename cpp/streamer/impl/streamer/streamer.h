@@ -54,6 +54,7 @@ struct Streamer
     std::shared_ptr<const Config> _config;
     std::unique_ptr<S3Cleanup> _s3;
     utils::ThreadPool<Batch> _pool;
+    std::unique_ptr<S3Stop> _s3_stop;
     std::shared_ptr<common::Responder> _responder;
 };
 
