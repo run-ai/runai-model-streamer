@@ -165,4 +165,12 @@ void Batches::handle_request(std::vector<Tasks> & v_tasks, unsigned request_inde
     }
 }
 
+void Batches::set_destination_file(const std::string & path)
+{
+    for (auto & batch : _batches)
+    {
+        batch.dst_path = path;
+    }
+}
+
 }; // namespace runai::llm::streamer::impl

@@ -19,14 +19,17 @@ S3::S3(std::shared_ptr<common::s3::S3ClientWrapper> client, const Config & confi
 
 void S3::seek(size_t offset)
 {
-    LOG(ERROR) << "Not implemented";
-    throw common::Exception(common::ResponseCode::UnknownError);
+    _offset = offset;
 }
 
 void S3::read(size_t bytesize, char * buffer)
 {
-    LOG(ERROR) << "Not implemented";
-    throw common::Exception(common::ResponseCode::UnknownError);
+    auto response_code = _client->read(_offset, bytesize, buffer);
+    if (response_code != common::ResponseCode::Success)
+    {
+        throw common::Exception(response_code);
+    }
+    _offset += bytesize;
 }
 
 void S3::async_read(std::vector<common::Range> & ranges, char * buffer)

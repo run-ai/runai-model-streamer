@@ -27,6 +27,8 @@ struct S3Client
 
     common::ResponseCode list(std::vector<std::string> & objects);
 
+    common::ResponseCode bytesize(size_t * object_bytesize);
+
     // Stop sending requests to the object store
     // Requests that were already sent cannot be cancelled, since the Aws S3CrtClient does not support aborting requests
     // The S3CrtClient d'tor will wait for response of all teh sent requests, which can take a while

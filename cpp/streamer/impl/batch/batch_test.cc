@@ -7,7 +7,6 @@
 #include <set>
 
 #include "utils/logging/logging.h"
-#include "utils/logging/logging.h"
 #include "utils/random/random.h"
 #include "utils/temp/file/file.h"
 #include "utils/thread/thread.h"
@@ -518,6 +517,161 @@ TEST(Read, Stopped_During_Async_Read)
     {
         EXPECT_GT(count_terminated, 0);
     }
+}
+
+TEST(Read_Object_To_File, Sanity)
+{
+    // mock S3
+    utils::Dylib dylib("libstreamers3.so");
+
+    unsigned num_tasks = utils::random::number(1, 10);
+    unsigned num_requests = 1;
+
+    // File range to read
+    const auto start = 0;
+    const auto size = utils::random::number<size_t>(512 * 1024, 1024 * 1024);
+
+    auto range = Range(start, start + size);
+
+    const auto data = utils::random::buffer(start + size);
+    std::string path("s3://" + utils::random::string() + "/" + utils::random::string());
+
+    std::shared_ptr<common::s3::StorageUri> uri;
+    EXPECT_NO_THROW(uri = std::make_shared<common::s3::StorageUri>(path));
+
+    // copy data to s3 object
+    // set object data in mock
+    auto mock_cleanup = dylib.dlsym<void(*)()>("runai_mock_s3_cleanup");
+    auto set_object_data = dylib.dlsym<void(*)(const char *, size_t)>("runai_mock_s3_set_object_data");
+    auto guard = utils::ScopeGuard([&mock_cleanup](){
+        mock_cleanup();
+    });
+    set_object_data(reinterpret_cast<const char *>(data.data()), size);
+
+    const auto chunks = utils::random::chunks(range.size, num_tasks);
+
+    auto responder = std::make_shared<common::Responder>(num_requests);
+
+    const auto chunk_bytesize = utils::random::number<size_t>(1, range.size);
+    const auto config = std::make_shared<Config>(utils::random::number(1, 4), chunk_bytesize, utils::random::number<size_t>(1, chunk_bytesize), false /* do not force minimum chunk size */);
+
+    std::vector<char> dst(size);
+    auto dst_ptr = dst.data();
+
+    // create tasks
+    auto request = std::make_shared<Request>(range.start, utils::random::number(), num_tasks, size);
+
+    size_t offset = start;
+
+    Tasks tasks;
+    for (unsigned i = 0; i < num_tasks; ++i)
+    {
+        // task offset is relative to the beginning of the request offset
+        auto task = Task(request, offset, chunks[i]);
+        offset += chunks[i];
+        tasks.push_back(std::move(task));
+    }
+
+    Batch batch(path, uri, std::move(range), dst_ptr, std::move(tasks), responder, config);
+
+    // destination file path
+    utils::temp::Path dest_path;
+
+    batch.dst_path = dest_path.path;
+
+    std::atomic<bool> stopped(false);
+    EXPECT_NO_THROW(batch.execute(stopped));
+
+    auto r = batch.responder->pop();
+    EXPECT_EQ(r.ret, common::ResponseCode::Success);
+
+    // verify read data
+    auto result = utils::Fd::read(dest_path.path);
+
+    bool mismatch = false;
+    for (size_t i = 0; i < size && !mismatch; ++i)
+    {
+        mismatch = result[i] != data[start + i];
+    }
+    EXPECT_FALSE(mismatch);
+}
+
+TEST(Read_Object_To_File, File_Exists)
+{
+    // mock S3
+    utils::Dylib dylib("libstreamers3.so");
+
+    unsigned num_tasks = utils::random::number(1, 10);
+    unsigned num_requests = 1;
+
+    // File range to read
+    const auto start = 0;
+    const auto size = utils::random::number<size_t>(512 * 1024, 1024 * 1024);
+
+    auto range = Range(start, start + size);
+
+    const auto data = utils::random::buffer(start + size);
+    std::string path("s3://" + utils::random::string() + "/" + utils::random::string());
+
+    std::shared_ptr<common::s3::StorageUri> uri;
+    EXPECT_NO_THROW(uri = std::make_shared<common::s3::StorageUri>(path));
+
+    // copy data to s3 object
+    // set object data in mock
+    auto mock_cleanup = dylib.dlsym<void(*)()>("runai_mock_s3_cleanup");
+    auto set_object_data = dylib.dlsym<void(*)(const char *, size_t)>("runai_mock_s3_set_object_data");
+    auto guard = utils::ScopeGuard([&mock_cleanup](){
+        mock_cleanup();
+    });
+    set_object_data(reinterpret_cast<const char *>(data.data()), size);
+
+    const auto chunks = utils::random::chunks(range.size, num_tasks);
+
+    auto responder = std::make_shared<common::Responder>(num_requests);
+
+    const auto chunk_bytesize = utils::random::number<size_t>(1, range.size);
+    const auto config = std::make_shared<Config>(utils::random::number(1, 4), chunk_bytesize, utils::random::number<size_t>(1, chunk_bytesize), false /* do not force minimum chunk size */);
+
+    std::vector<char> dst(size);
+    auto dst_ptr = dst.data();
+
+    // create tasks
+    auto request = std::make_shared<Request>(range.start, utils::random::number(), num_tasks, size);
+
+    size_t offset = start;
+
+    Tasks tasks;
+    for (unsigned i = 0; i < num_tasks; ++i)
+    {
+        // task offset is relative to the beginning of the request offset
+        auto task = Task(request, offset, chunks[i]);
+        offset += chunks[i];
+        tasks.push_back(std::move(task));
+    }
+
+    Batch batch(path, uri, std::move(range), dst_ptr, std::move(tasks), responder, config);
+
+    // destination file path
+    auto prev = utils::random::buffer(utils::random::number(1, 1000));
+    utils::temp::File dest_file(prev);
+
+    batch.dst_path = dest_file.path;
+
+    std::atomic<bool> stopped(false);
+    EXPECT_NO_THROW(batch.execute(stopped));
+
+    auto r = batch.responder->pop();
+    EXPECT_EQ(r.ret, common::ResponseCode::Success);
+
+    // verify read data
+    auto result = utils::Fd::read(dest_file.path);
+
+    bool mismatch = false;
+    for (size_t i = 0; i < size && !mismatch; ++i)
+    {
+        mismatch = result[i] != data[start + i];
+    }
+    EXPECT_FALSE(mismatch);
 }
 
 }; // namespace runai::llm::streamer::impl

@@ -23,11 +23,22 @@ std::set<void *> __mock_unused;
 unsigned __mock_response_time_ms = 0;
 std::mutex __mutex;
 std::atomic<bool> __stopped(false);
+std::vector<char> __object_data;
 
 void runai_mock_s3_set_response_time_ms(unsigned milliseconds)
 {
     const auto guard = std::unique_lock<std::mutex>(__mutex);
     __mock_response_time_ms = milliseconds;
+}
+
+void runai_mock_s3_set_object_data(const char * data, size_t bytesize)
+{
+    const auto guard = std::unique_lock<std::mutex>(__mutex);
+    __object_data = std::vector<char>(bytesize);
+    if (bytesize)
+    {
+        std::memcpy(__object_data.data(), data, bytesize);
+    }
 }
 
 void * runai_create_s3_client(const common::s3::StorageUri & uri)
@@ -177,6 +188,7 @@ void runai_mock_s3_cleanup()
 {
     runai_mock_s3_set_response_time_ms(0);
     __stopped = false;
+    runai_mock_s3_set_object_data(nullptr, 0);
 }
 
 common::ResponseCode runai_list_objects_s3_client(void * client, char*** object_keys, size_t * object_count)
@@ -226,6 +238,74 @@ common::ResponseCode runai_list_objects_s3_client(void * client, char*** object_
     }
 
     return common::ResponseCode::UnknownError;
+}
+
+common::ResponseCode runai_object_bytesize_s3_client(void * client, size_t * object_bytesize)
+{
+    try
+    {
+        if (!client)
+        {
+            LOG(ERROR) << "Attempt to list objects with null s3 client";
+            return common::ResponseCode::UnknownError;
+        }
+
+        auto r = get_response_code(client);
+
+        if (r != common::ResponseCode::Success)
+        {
+            LOG(ERROR) << "Returning mock error " << r;
+            return r;
+        }
+
+        const auto guard = std::unique_lock<std::mutex>(__mutex);
+
+        *object_bytesize = (__object_data.size() ? __object_data.size() : utils::random::number<size_t>(1, 100000000));
+        LOG(SPAM) << "mock object bytesize " << *object_bytesize;
+
+        return common::ResponseCode::Success;
+    }
+    catch(const std::exception& e)
+    {
+        LOG(ERROR) << "Caught exception while requesting size of object";
+    }
+
+    return common::ResponseCode::UnknownError;
+}
+
+common::ResponseCode runai_read_s3_client(void * client, size_t offset, size_t bytesize, char * buffer)
+{
+    const auto guard = std::unique_lock<std::mutex>(__mutex);
+
+    if (!__mock_clients.count(client) || __mock_unused.count(client))
+    {
+        LOG(ERROR) << "Mock client " << client << " not found or unused";
+        return common::ResponseCode::UnknownError;
+    }
+
+    if (__stopped)
+    {
+        LOG(DEBUG) <<"Mock s3 is stopped";
+        return common::ResponseCode::FinishedError;
+    }
+
+    auto r = get_response_code(client);
+    if (r == common::ResponseCode::Success)
+    {
+        // read from __object_file_path
+
+        try
+        {
+            ASSERT(bytesize <= __object_data.size() - offset) << "Attempt to read out of range";
+            std::memcpy(buffer, __object_data.data() + offset, bytesize);
+        }
+        catch(...)
+        {
+            r = common::ResponseCode::FileAccessError;
+        }
+    }
+
+    return r;
 }
 
 }; //namespace runai::llm::streamer::common::s3

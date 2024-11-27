@@ -71,7 +71,24 @@ common::ResponseCode Streamer::request(const std::string & path, size_t file_off
     return ret;
 }
 
-void Streamer::create_request(const std::string & path, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes)
+Streamer::Destination::Destination(const std::string & fs_path) :
+    mode(Mode::Path),
+    fs_path(fs_path),
+    buffer(nullptr)
+{}
+
+Streamer::Destination::Destination(void * dst) :
+    mode(Mode::Buffer),
+    buffer(dst)
+{
+    if (dst == 0)
+    {
+        LOG(ERROR) << "Destination buffer is null";
+        throw common::Exception(common::ResponseCode::InvalidParameterError);
+    }
+}
+
+void Streamer::create_request(const std::string & path, size_t file_offset, size_t bytesize, const Destination & dst, unsigned num_sizes, size_t * internal_sizes)
 {
     LOG(SPAM) << "Requested to read asynchronously " << bytesize << " bytes from " << path << " offset " << file_offset << " in " << num_sizes << " chunks";
 
@@ -84,12 +101,6 @@ void Streamer::create_request(const std::string & path, size_t file_offset, size
     if (num_sizes == 0 || bytesize == 0)
     {
         LOG(ERROR) << "Total bytes to read is " << bytesize << " but number of sub requests is " << num_sizes;
-        throw common::Exception(common::ResponseCode::InvalidParameterError);
-    }
-
-    if (dst == 0)
-    {
-        LOG(ERROR) << "Destination buffer is null";
         throw common::Exception(common::ResponseCode::InvalidParameterError);
     }
 
@@ -120,12 +131,17 @@ void Streamer::create_request(const std::string & path, size_t file_offset, size
     {
     }
 
-    Batches batches(_config, _responder, path, uri, file_offset, bytesize, dst, num_sizes, internal_sizes);
+    Batches batches(_config, _responder, path, uri, file_offset, bytesize, dst.buffer, num_sizes, internal_sizes);
 
     if (batches.total() != bytesize)
     {
         LOG(ERROR) << "Total bytes to read " << bytesize << " is not equal to the sum of the sub ranges, which is " << batches.total();
         throw common::Exception(common::ResponseCode::InvalidParameterError);
+    }
+
+    if (dst.mode == Destination::Mode::Path)
+    {
+        batches.set_destination_file(dst.fs_path);
     }
 
     // send batches to threadpool
@@ -206,6 +222,60 @@ common::ResponseCode Streamer::free_list_objects(char** object_keys, size_t obje
     }
 
     return common::ResponseCode::UnknownError;
+}
+
+common::ResponseCode Streamer::request(const std::string & s3_path, const std::string & fs_path)
+{
+    // verify destination is not s3 uri
+    std::shared_ptr<common::s3::StorageUri> uri;
+    try
+    {
+        uri = std::make_unique<common::s3::StorageUri>(fs_path);
+    }
+    catch(const std::exception& e)
+    {
+    }
+
+    if (uri != nullptr)
+    {
+        LOG(ERROR) << "Destination file " << fs_path << " cannot be in object store. Streanmer do not support uploading objects to S3";
+        return common::ResponseCode::InvalidParameterError;
+    }
+
+    try
+    {
+        uri = std::make_unique<common::s3::StorageUri>(s3_path);
+        if (_s3 == nullptr)
+        {
+            _s3_stop = std::make_unique<S3Stop>();
+            _s3 = std::make_unique<S3Cleanup>();
+        }
+    }
+    catch(const std::exception& e)
+    {
+    }
+
+    if (uri == nullptr)
+    {
+        LOG(ERROR) << "Source path " << s3_path << " must be s3 uri";
+        return common::ResponseCode::InvalidParameterError;
+    }
+
+    // get object size;
+    size_t bytesize;
+
+    auto s3_client = std::make_shared<common::s3::S3ClientWrapper>(*uri);
+    auto r = s3_client->object_bytesize(&bytesize);
+
+    if (r != common::ResponseCode::Success)
+    {
+        LOG(ERROR) << "Failed to get header of object " << s3_path;
+        return r;
+    }
+
+    Destination dst(fs_path);
+    create_request(s3_path, 0, bytesize, dst, 1, &bytesize);
+    return _responder->pop().ret;
 }
 
 }; // namespace runai::llm::streamer::impl

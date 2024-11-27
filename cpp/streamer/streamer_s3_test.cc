@@ -10,7 +10,9 @@
 #include "utils/logging/logging.h"
 #include "utils/random/random.h"
 #include "utils/dylib/dylib.h"
+#include "utils/fd/fd.h"
 #include "utils/temp/env/env.h"
+#include "utils/temp/file/file.h"
 
 namespace runai::llm::streamer
 {
@@ -133,6 +135,113 @@ TEST_F(StreamerTest, Error)
         EXPECT_EQ(verify_mock(), 0);
         mock_cleanup();
     }
+}
+
+TEST_F(StreamerTest, Read_Object_To_File)
+{
+    utils::Dylib dylib("libstreamers3.so");
+    auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
+
+    const auto size = utils::random::number(100, 1000);
+    const auto data = utils::random::buffer(size);
+
+    auto set_object_data = dylib.dlsym<void(*)(const char *, size_t)>("runai_mock_s3_set_object_data");
+    set_object_data(reinterpret_cast<const char *>(data.data()), size);
+
+    void * streamer;
+    auto res = runai_start(&streamer);
+    EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
+
+    // create destination path
+    const auto prev = utils::random::buffer(size + utils::random::number(1, 100));
+    utils::temp::File dest_file(prev);
+
+    res = runai_read_object_to_file(streamer, s3_path.c_str(), dest_file.path.c_str());
+    EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
+
+    // verify reading
+    // verify read data
+    auto result = utils::Fd::read(dest_file.path);
+
+    bool mismatch = false;
+    for (size_t i = 0; i < size && !mismatch; ++i)
+    {
+        mismatch = result[i] != data[i];
+    }
+    EXPECT_FALSE(mismatch);
+
+    EXPECT_THROW(utils::Fd::read(dest_file.path, size + 1, 1), std::exception);
+
+    runai_end(streamer);
+    EXPECT_EQ(verify_mock(), 0);
+}
+
+TEST_F(StreamerTest, Read_Object_With_Wrong_Size)
+{
+    utils::Dylib dylib("libstreamers3.so");
+    auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
+
+    const auto size = utils::random::number(100, 1000);
+    const auto data = utils::random::buffer(size);
+
+    void * streamer;
+    auto res = runai_start(&streamer);
+    EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
+
+    // create destination path
+    utils::temp::Path dest_path;
+
+    res = runai_read_object_to_file(streamer, s3_path.c_str(), dest_path.path.c_str());
+    EXPECT_EQ(res, static_cast<int>(common::ResponseCode::FileAccessError));
+
+    runai_end(streamer);
+    EXPECT_EQ(verify_mock(), 0);
+}
+
+TEST_F(StreamerTest, Read_Object_With_Wrong_Path)
+{
+    utils::Dylib dylib("libstreamers3.so");
+    auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
+
+    const auto size = utils::random::number(100, 1000);
+    const auto data = utils::random::buffer(size);
+
+    void * streamer;
+    auto res = runai_start(&streamer);
+    EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
+
+    // create destination path
+    utils::temp::Path dest_path;
+
+    const auto bad_path = utils::random::string();
+
+    res = runai_read_object_to_file(streamer, bad_path.c_str(), dest_path.path.c_str());
+    EXPECT_EQ(res, static_cast<int>(common::ResponseCode::InvalidParameterError));
+
+    runai_end(streamer);
+    EXPECT_EQ(verify_mock(), 0);
+}
+
+TEST_F(StreamerTest, Read_Object_Do_Not_Support_S3_Destination)
+{
+    utils::Dylib dylib("libstreamers3.so");
+    auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
+
+    const auto size = utils::random::number(100, 1000);
+    const auto data = utils::random::buffer(size);
+
+    void * streamer;
+    auto res = runai_start(&streamer);
+    EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
+
+    // create destination path
+    const std::string s3_dest_path("s3://" + utils::random::string() + "/" + utils::random::string());
+
+    res = runai_read_object_to_file(streamer, s3_path.c_str(), s3_dest_path.c_str());
+    EXPECT_EQ(res, static_cast<int>(common::ResponseCode::InvalidParameterError));
+
+    runai_end(streamer);
+    EXPECT_EQ(verify_mock(), 0);
 }
 
 TEST_F(StreamerTest, Stop_Before_Async_Read)

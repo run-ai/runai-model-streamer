@@ -1,6 +1,7 @@
 
 #include <aws/s3-crt/model/GetObjectRequest.h>
 #include <aws/s3-crt/model/ListObjectsV2Request.h>
+#include <aws/s3-crt/model/HeadObjectRequest.h>
 
 #include <algorithm>
 #include <string>
@@ -211,6 +212,35 @@ common::ResponseCode S3Client::list(std::vector<std::string> & objects)
         continuation_token = result.GetNextContinuationToken();
     } while (is_truncated);
 
+    return common::ResponseCode::Success;
+}
+
+common::ResponseCode S3Client::bytesize(size_t * object_bytesize)
+{
+    if (_stop)
+    {
+        return common::ResponseCode::FinishedError;
+    }
+
+    // Create a HeadObjectRequest
+    Aws::S3Crt::Model::HeadObjectRequest request;
+    request.SetBucket(_bucket_name);
+    request.SetKey(_path);
+
+    // Send the request
+    auto outcome = _client->HeadObject(request);
+
+    if (outcome.IsSuccess())
+    {
+        // Get the size of the object
+        *object_bytesize = outcome.GetResult().GetContentLength();
+    }
+    else
+    {
+        // Print error message
+        LOG(ERROR) << "Failed to get size of object " << _path << " in bucket " << _bucket_name << " Error: " << outcome.GetError().GetExceptionName() << " - " << outcome.GetError().GetMessage();
+        return common::ResponseCode::FileAccessError;
+    }
     return common::ResponseCode::Success;
 }
 

@@ -60,8 +60,11 @@ struct Batch
     // range in file
     Range range;
 
-    // start offset in destination buffer
+    // destination buffer
     char * dst;
+
+    // optional destination file
+    std::string dst_path;
 
     Tasks tasks;
 
@@ -72,6 +75,7 @@ struct Batch
  private:
     void read(const Config & config, std::atomic<bool> & stopped);
     void async_read(const Config & config, std::atomic<bool> & stopped);
+    void read_to_file(const Config & config, std::atomic<bool> & stopped);
 
  private:
     // index of first unfinished task

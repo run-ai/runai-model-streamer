@@ -38,6 +38,7 @@ struct S3 : Reader
  private:
     std::shared_ptr<common::s3::S3ClientWrapper> _client;
     const Config & _config;
+    size_t _offset;
 };
 
 }; //namespace runai::llm::streamer::impl

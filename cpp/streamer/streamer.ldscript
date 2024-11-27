@@ -8,5 +8,6 @@
         runai_response_str;
         runai_list_objects;
         runai_free_list_objects;
+        runai_read_object_to_file;
     local: *;
 };

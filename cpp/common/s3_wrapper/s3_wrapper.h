@@ -27,9 +27,13 @@ struct S3ClientWrapper
     ResponseCode async_read(std::vector<Range>& ranges, size_t chunk_bytesize, char * buffer);
     Response async_read_response();
 
+    // synchronous read
+    ResponseCode read(size_t offset, size_t bytesize, char * buffer);
+
     // list object keys
     // caller is responsible to free the memory allocated for object_keys
     common::ResponseCode list_objects(char*** object_keys, size_t * object_count);
+    common::ResponseCode object_bytesize(size_t * object_bytesize);
 
     // stop - stops the responder of each S3 client, in order to notify callers which sent a request and are waiting for a response
     //        required for stopping the threadpool workers, which are bloking on the client responder

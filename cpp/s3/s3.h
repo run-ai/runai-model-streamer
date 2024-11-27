@@ -33,12 +33,16 @@ namespace runai::llm::streamer::impl::s3
 extern "C" void * runai_create_s3_client(const common::s3::StorageUri & uri);
 // destroy client
 extern "C" void runai_remove_s3_client(void * client);
+// synchronous read
+extern "C" common::ResponseCode runai_read_s3_client(void * client, size_t offset, size_t bytesize, char * buffer);
 // asynchronous read
 extern "C" common::ResponseCode  runai_async_read_s3_client(void * client, unsigned num_ranges, common::Range * ranges, size_t chunk_bytesize, char * buffer);
 // wait for asynchronous read response
 extern "C" common::ResponseCode  runai_async_response_s3_client(void * client, unsigned * index /* output parameter */);
 // list object keys
 extern "C" common::ResponseCode runai_list_objects_s3_client(void * client, char*** object_keys, size_t * object_count);
+// get size of object in bytes
+extern "C" common::ResponseCode runai_object_bytesize_s3_client(void * client, size_t * object_bytesize);
 
 // stop clients
 // Stops the responder of each client, in order to notify callers which sent a request and are waiting for a response

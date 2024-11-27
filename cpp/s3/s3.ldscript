@@ -2,10 +2,12 @@
     global:
         runai_create_s3_client;
         runai_remove_s3_client;
+        runai_read_s3_client;
         runai_async_read_s3_client;
         runai_async_response_s3_client;
         runai_stop_s3_clients;
         runai_release_s3_clients;
         runai_list_objects_s3_client;
+        runai_object_bytesize_s3_client;
     local: *;
 };
