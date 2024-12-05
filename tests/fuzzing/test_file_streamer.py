@@ -69,7 +69,7 @@ class TestFuzzing(unittest.TestCase):
             for id, dst, offset in fs.get_chunks():
                 self.assertEqual(offset, expected_id_to_results[id]["expected_offset"])
                 self.assertEqual(
-                    dst[offset : offset + request_sizes[id]],
+                    dst[offset : offset + request_sizes[id]].tobytes(),
                     expected_id_to_results[id]["expected_content"],
                 )
 

@@ -17,7 +17,7 @@ jobs:
       uses: devcontainers/ci@v0.3
       with:
         runCmd: |
-          make test
+          make test && \
           PACKAGE_VERSION=${{ env.PACKAGE_VERSION }} make build
 
     - name: Set package file names

@@ -30,7 +30,7 @@ class TestBindings(unittest.TestCase):
             for id, dst, offset in fs.get_chunks():
                 self.assertEqual(offset, id_to_results[id]["expected_offset"])
                 self.assertEqual(
-                    dst[offset : offset + request_sizes[id]].decode("utf-8"),
+                    dst[offset : offset + request_sizes[id]].tobytes().decode("utf-8"),
                     id_to_results[id]["expected_text"],
                 )
 
@@ -63,7 +63,7 @@ class TestBindings(unittest.TestCase):
             for id, dst, offset in fs.get_chunks():
                 self.assertEqual(offset, id_to_results[id]["expected_offset"])
                 self.assertEqual(
-                    dst[offset : offset + request_sizes[id]].decode("utf-8"),
+                    dst[offset : offset + request_sizes[id]].tobytes().decode("utf-8"),
                     id_to_results[id]["expected_text"],
                 )
 
@@ -95,7 +95,7 @@ class TestBindings(unittest.TestCase):
             for id, dst, offset in fs.get_chunks():
                 self.assertEqual(offset, id_to_results[id]["expected_offset"])
                 self.assertEqual(
-                    dst[offset : offset + request_sizes[id]].decode("utf-8"),
+                    dst[offset : offset + request_sizes[id]].tobytes(),
                     id_to_results[id]["expected_text"],
                 )
 
