@@ -198,7 +198,7 @@ TEST_F(StreamerTest, Read_Object_With_Wrong_Size)
     EXPECT_EQ(verify_mock(), 0);
 }
 
-TEST_F(StreamerTest, Read_Object_With_Wrong_Path)
+TEST_F(StreamerTest, Read_Object_With_Bad_Path)
 {
     utils::Dylib dylib("libstreamers3.so");
     auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
@@ -216,7 +216,7 @@ TEST_F(StreamerTest, Read_Object_With_Wrong_Path)
     const auto bad_path = utils::random::string();
 
     res = runai_read_object_to_file(streamer, bad_path.c_str(), dest_path.path.c_str());
-    EXPECT_EQ(res, static_cast<int>(common::ResponseCode::InvalidParameterError));
+    EXPECT_EQ(res, static_cast<int>(common::ResponseCode::FileAccessError));
 
     runai_end(streamer);
     EXPECT_EQ(verify_mock(), 0);

@@ -38,9 +38,9 @@ struct Streamer
     // returns common::ResponseCode::Success if successful or error code
     common::ResponseCode request(const std::string & path, size_t offset, size_t bytesize, void * dst);
 
-    // synchronous read of entire s3 object to a destination file (destination s3 path is not supported)
+    // synchronous read of entire s3 object or file to a destination file (destination s3 path is not supported)
     // returns common::ResponseCode::Success if successful or error code
-    common::ResponseCode request(const std::string & s3_path, const std::string & fs_path);
+    common::ResponseCode request(const std::string & source_path, const std::string & dest_path);
 
     // async request to read a range asynchronously as multiple chunks
     // returns common::ResponseCode::Success if successful or error code

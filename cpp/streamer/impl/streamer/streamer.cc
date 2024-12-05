@@ -224,8 +224,14 @@ common::ResponseCode Streamer::free_list_objects(char** object_keys, size_t obje
     return common::ResponseCode::UnknownError;
 }
 
-common::ResponseCode Streamer::request(const std::string & s3_path, const std::string & fs_path)
+common::ResponseCode Streamer::request(const std::string & source_path, const std::string & fs_path)
 {
+    if (source_path == fs_path)
+    {
+        LOG(WARNING) << "Requested to copy file to itself " << fs_path;
+        return common::ResponseCode::Success;
+    }
+
     // verify destination is not s3 uri
     std::shared_ptr<common::s3::StorageUri> uri;
     try
@@ -242,9 +248,12 @@ common::ResponseCode Streamer::request(const std::string & s3_path, const std::s
         return common::ResponseCode::InvalidParameterError;
     }
 
+    // get source size
+    size_t bytesize;
+
     try
     {
-        uri = std::make_unique<common::s3::StorageUri>(s3_path);
+        uri = std::make_unique<common::s3::StorageUri>(source_path);
         if (_s3 == nullptr)
         {
             _s3_stop = std::make_unique<S3Stop>();
@@ -255,26 +264,32 @@ common::ResponseCode Streamer::request(const std::string & s3_path, const std::s
     {
     }
 
-    if (uri == nullptr)
+    if (uri != nullptr)
     {
-        LOG(ERROR) << "Source path " << s3_path << " must be s3 uri";
-        return common::ResponseCode::InvalidParameterError;
+        auto s3_client = std::make_shared<common::s3::S3ClientWrapper>(*uri);
+        auto r = s3_client->object_bytesize(&bytesize);
+
+        if (r != common::ResponseCode::Success)
+        {
+            LOG(ERROR) << "Failed to get header of object " << source_path;
+            return r;
+        }
     }
-
-    // get object size;
-    size_t bytesize;
-
-    auto s3_client = std::make_shared<common::s3::S3ClientWrapper>(*uri);
-    auto r = s3_client->object_bytesize(&bytesize);
-
-    if (r != common::ResponseCode::Success)
+    else
     {
-        LOG(ERROR) << "Failed to get header of object " << s3_path;
-        return r;
+        // get bytesize from filesystem
+        try
+        {
+            bytesize = utils::Fd::size(source_path);
+        }
+        catch(const std::exception& e)
+        {
+            LOG(ERROR) << "Failed to get file size of " << source_path;
+            return common::ResponseCode::FileAccessError;
+        }
     }
-
     Destination dst(fs_path);
-    create_request(s3_path, 0, bytesize, dst, 1, &bytesize);
+    create_request(source_path, 0, bytesize, dst, 1, &bytesize);
     return _responder->pop().ret;
 }
 

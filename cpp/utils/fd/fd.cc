@@ -266,5 +266,13 @@ std::vector<std::string> Fd::list(const std::string & path)
     return strings;
 }
 
+size_t Fd::size(const std::string & path)
+{
+    Fd fd(::open(path.c_str(), O_RDONLY));
+    ASSERT(fd != -1) << "failed to open '" << path << "'";
+
+    return fd.size();
+}
+
 
 } // namespace runai::llm::streamer::utils

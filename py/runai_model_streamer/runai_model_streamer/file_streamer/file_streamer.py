@@ -8,6 +8,7 @@ from runai_model_streamer.libstreamer.libstreamer import (
     runai_read,
     runai_request,
     runai_response,
+    runai_list,
 )
 from runai_model_streamer.file_streamer.requests_iterator import (
     RequestsIterator,
@@ -97,3 +98,6 @@ class FileStreamer:
             yield relative_index, self.dst_buffer, sum(
                 self.current_request_chunks[:relative_index]
             )
+
+    def list(self, path: str) -> List:
+        return runai_list(self.streamer, path)

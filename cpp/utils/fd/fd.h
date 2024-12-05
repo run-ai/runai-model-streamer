@@ -51,6 +51,8 @@ struct Fd
 
     // list regular file names in path
     static std::vector<std::string> list(const std::string & path);
+    // get file size
+    static size_t size(const std::string & path);
 
     // read the entire file - used for testing
 
