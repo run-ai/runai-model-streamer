@@ -157,15 +157,18 @@ _RUNAI_EXTERN_C int runai_list_objects(void * streamer, const char * path, char*
     catch(...)
     {
     }
+
+    LOG(ERROR) << "returned " << common::ResponseCode::UnknownError;
     return static_cast<int>(common::ResponseCode::UnknownError);
 }
 
 // free list
-_RUNAI_EXTERN_C int runai_free_list_objects(char** object_keys, size_t object_count)
+_RUNAI_EXTERN_C int runai_free_list_objects(void * streamer, char*** object_keys, size_t object_count)
 {
     try
     {
         auto ret = impl::Streamer::free_list_objects(object_keys, object_count);
+        object_keys = nullptr;
         return static_cast<int>(ret);
     }
     catch(...)

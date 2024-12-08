@@ -209,11 +209,11 @@ common::ResponseCode Streamer::list_objects(const std::string & path, char*** ob
 }
 
 // free list of object keys
-common::ResponseCode Streamer::free_list_objects(char** object_keys, size_t object_count)
+common::ResponseCode Streamer::free_list_objects(char*** object_keys, size_t object_count)
 {
     try
     {
-        utils::Strings::free_cstring_list(object_keys, object_count);
+        utils::Strings::free_cstring_list(*object_keys, object_count);
         return common::ResponseCode::Success;
     }
     catch(const std::exception & e)
@@ -288,6 +288,7 @@ common::ResponseCode Streamer::request(const std::string & source_path, const st
             return common::ResponseCode::FileAccessError;
         }
     }
+
     Destination dst(fs_path);
     create_request(source_path, 0, bytesize, dst, 1, &bytesize);
     return _responder->pop().ret;

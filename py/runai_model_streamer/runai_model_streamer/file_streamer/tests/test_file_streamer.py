@@ -44,12 +44,6 @@ class TestBindings(unittest.TestCase):
             dst = fs.read_file(file_path, 2, len(file_content) - 2)
             self.assertEqual(bytearray(dst).decode("utf-8"), "TensorHelloTest")
 
-    def test_runai_list(self):
-        file_content = "MyTensorHelloTest"
-        file_path = os.path.join(self.temp_dir, "runai_read_test.txt")
-        with open(file_path, "w") as file:
-            file.write(file_content)
-
         with FileStreamer() as fs:
             list_files = fs.list(self.temp_dir)
             self.assertEqual(len(list_files), 1)

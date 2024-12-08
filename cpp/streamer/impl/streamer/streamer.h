@@ -54,7 +54,7 @@ struct Streamer
     // list files or object keys
     common::ResponseCode list_objects(const std::string & path, char*** object_keys, size_t * object_count);
     // free list
-    common::ResponseCode static free_list_objects(char** object_keys, size_t object_count);
+    common::ResponseCode static free_list_objects(char*** object_keys, size_t object_count);
 
  private:
     struct Destination

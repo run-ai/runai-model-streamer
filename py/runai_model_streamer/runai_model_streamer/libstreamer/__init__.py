@@ -60,7 +60,11 @@ class LibstreamerDLLWrapper:
         self.fn_runai_list_objects.restype = ctypes.c_int
 
         self.fn_runai_free_list_objects = self.lib.runai_free_list_objects
-        self.fn_runai_free_list_objects.argtypes = [t_streamer, ctypes.POINTER(ctypes.c_char_p), ctypes.c_size_t]
+        self.fn_runai_free_list_objects.argtypes = [
+            t_streamer,
+            ctypes.POINTER(ctypes.POINTER(ctypes.c_char_p)),
+            ctypes.c_size_t
+        ]
         self.fn_runai_free_list_objects.restype = ctypes.c_int
 
 

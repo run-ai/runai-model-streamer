@@ -45,6 +45,11 @@ class TestFuzzing(unittest.TestCase):
         with open(file_path, "wb") as file:
             file.write(file_content)
 
+        with FileStreamer() as fs:
+            list_files = fs.list(self.temp_dir)
+            self.assertEqual(len(list_files), 1)
+            self.assertEqual(list_files[0], file_path)
+
         initial_offset = chunk_sizes[0]
         request_sizes = chunk_sizes[1:]
         expected_id_to_results = {}

@@ -104,10 +104,17 @@ def runai_list(streamer: t_streamer, path: str) -> List[str]:
         for i in range(object_count.value)
     ]
 
+    # for i in range(object_count.value):
+    #     # Access each string and decode it
+    #     obj = ctypes.cast(object_keys[i], ctypes.c_char_p).value
+    #     if obj is not None:
+    #         object_list.append(obj.decode('utf-8'))
+
     # Free the allocated memory
-    error_code = dll.fn_runai_free_list_objects(streamer, object_keys, object_count)
+    error_code = dll.fn_runai_free_list_objects(streamer, ctypes.byref(object_keys), object_count)
     if error_code != SUCCESS_ERROR_CODE:
         raise Exception(
             f"Could not free list of files in libstreamer due to: {runai_response_str(error_code)}"
         )
+
     return object_list

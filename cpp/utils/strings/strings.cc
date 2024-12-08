@@ -20,21 +20,29 @@ void Strings::create_cstring_list(std::vector<std::string> & strings, char*** ob
             std::strncpy((*object_keys)[i], strings[i].c_str(), length);
         }
     }
+    else
+    {
+        *object_keys = nullptr;
+    }
 }
 
 void Strings::free_cstring_list(char** object_keys, size_t object_count)
 {
+    ASSERT(((object_count == 0 && object_keys == nullptr) || (object_count && object_keys != nullptr))) << "invalid arguments - size is " << object_count;
+
+    LOG(SPAM) << "will delete "<< object_keys;
+
     for (size_t i = 0; i < object_count; ++i)
     {
         if (object_keys[i])
         {
-            free(object_keys[i]); // Free each string
+            free(reinterpret_cast<char*>(object_keys[i])); // Free each string
+            object_keys[i] = nullptr;
         }
     }
-    if (object_count)
-    {
-        ASSERT(object_keys != NULL);
 
+    if (object_keys)
+    {
         free(object_keys); // Free the array of pointers
     }
 }
