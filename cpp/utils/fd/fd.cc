@@ -255,7 +255,9 @@ void Fd::write(const std::string & path, const std::vector<uint8_t> & data, int 
 std::vector<std::string> Fd::list(const std::string & path)
 {
     std::vector<std::string> strings;
-    for (const auto & entry : std::filesystem::directory_iterator(path))
+    // By default symlink (symbolic links) are not followed in the recursive iteration
+    // Therefore, cycles are not handled here
+    for (const auto & entry : std::filesystem::recursive_directory_iterator(path))
     {
         if (entry.is_regular_file())
         {

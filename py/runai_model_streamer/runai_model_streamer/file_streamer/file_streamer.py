@@ -25,12 +25,13 @@ class FileStreamer:
 
     def __exit__(self, exc_type: any, exc_value: any, traceback: any) -> None:
         size = self.total_size
-        elapsed_time = timer() - self.start_time
-        throughput = size / elapsed_time
-        print(
-            f"[RunAI Streamer] Overall time to stream {humanize.naturalsize(size, binary=True)} of all files: {round(elapsed_time, 2)}s, {humanize.naturalsize(throughput, binary=True)}/s",
-            flush=True,
-        )
+        if size:
+            elapsed_time = timer() - self.start_time
+            throughput = size / elapsed_time
+            print(
+                f"[RunAI Streamer] Overall time to stream {humanize.naturalsize(size, binary=True)} of all files: {round(elapsed_time, 2)}s, {humanize.naturalsize(throughput, binary=True)}/s",
+                flush=True,
+            )
         if self.streamer:
             runai_end(self.streamer)
 
