@@ -141,7 +141,7 @@ _RUNAI_EXTERN_C const char * runai_response_str(int response_code)
     return unexpected_error;
 }
 
-_RUNAI_EXTERN_C int runai_list_objects(void * streamer, const char * path, char*** object_keys, size_t * object_count)
+_RUNAI_EXTERN_C int runai_list(void * streamer, const char * path, char*** keys, size_t * count)
 {
     try
     {
@@ -151,7 +151,7 @@ _RUNAI_EXTERN_C int runai_list_objects(void * streamer, const char * path, char*
         }
 
         auto * s = static_cast<impl::Streamer *>(streamer);
-        auto ret = s->list_objects(path, object_keys, object_count);
+        auto ret = s->list(path, keys, count);
         return static_cast<int>(ret);
     }
     catch(...)
@@ -163,12 +163,12 @@ _RUNAI_EXTERN_C int runai_list_objects(void * streamer, const char * path, char*
 }
 
 // free list
-_RUNAI_EXTERN_C int runai_free_list_objects(void * streamer, char*** object_keys, size_t object_count)
+_RUNAI_EXTERN_C int runai_free_list(void * streamer, char*** keys, size_t count)
 {
     try
     {
-        auto ret = impl::Streamer::free_list_objects(object_keys, object_count);
-        object_keys = nullptr;
+        auto ret = impl::Streamer::free_list(keys, count);
+        keys = nullptr;
         return static_cast<int>(ret);
     }
     catch(...)

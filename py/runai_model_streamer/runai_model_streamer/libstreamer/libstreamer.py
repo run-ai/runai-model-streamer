@@ -82,15 +82,15 @@ def runai_response_str(response_code: int) -> str:
     return dll.fn_runai_response_str(response_code)
 
 def runai_list(streamer: t_streamer, path: str) -> List[str]:
-    object_keys = ctypes.POINTER(ctypes.c_char_p)()
-    object_count = ctypes.c_size_t()
+    keys = ctypes.POINTER(ctypes.c_char_p)()
+    count = ctypes.c_size_t()
 
-    # Call the `runai_list_objects` function
-    error_code = dll.fn_runai_list_objects(
+    # Call the `runai_list` function
+    error_code = dll.fn_runai_list(
         streamer,
         path.encode('utf-8'),
-        ctypes.byref(object_keys),
-        ctypes.byref(object_count)
+        ctypes.byref(keys),
+        ctypes.byref(count)
     )
 
     if error_code != SUCCESS_ERROR_CODE:
@@ -100,12 +100,12 @@ def runai_list(streamer: t_streamer, path: str) -> List[str]:
 
     # Convert the result to a Python list
     object_list = [
-        ctypes.cast(object_keys[i], ctypes.c_char_p).value.decode('utf-8')
-        for i in range(object_count.value)
+        ctypes.cast(keys[i], ctypes.c_char_p).value.decode('utf-8')
+        for i in range(count.value)
     ]
 
     # Free the allocated memory
-    error_code = dll.fn_runai_free_list_objects(streamer, ctypes.byref(object_keys), object_count)
+    error_code = dll.fn_runai_free_list(streamer, ctypes.byref(keys), count)
     if error_code != SUCCESS_ERROR_CODE:
         raise Exception(
             f"Could not free list of files in libstreamer due to: {runai_response_str(error_code)}"

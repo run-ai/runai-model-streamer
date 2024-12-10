@@ -52,9 +52,9 @@ struct Streamer
     common::Response response();
 
     // list files or object keys
-    common::ResponseCode list_objects(const std::string & path, char*** object_keys, size_t * object_count);
+    common::ResponseCode list(const std::string & path, char*** keys, size_t * count);
     // free list
-    common::ResponseCode static free_list_objects(char*** object_keys, size_t object_count);
+    common::ResponseCode static free_list(char*** keys, size_t count);
 
  private:
     struct Destination

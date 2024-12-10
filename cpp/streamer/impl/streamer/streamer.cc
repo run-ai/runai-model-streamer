@@ -170,7 +170,7 @@ common::Response Streamer::response()
 }
 
 // list object keys
-common::ResponseCode Streamer::list_objects(const std::string & path, char*** object_keys, size_t * object_count)
+common::ResponseCode Streamer::list(const std::string & path, char*** keys, size_t * count)
 {
     std::shared_ptr<common::s3::StorageUri> uri = nullptr;
     try
@@ -189,7 +189,7 @@ common::ResponseCode Streamer::list_objects(const std::string & path, char*** ob
     if (uri.get() != nullptr)
     {
         auto s3_client = std::make_shared<common::s3::S3ClientWrapper>(*uri);
-        return s3_client->list_objects(object_keys, object_count);
+        return s3_client->list_objects(keys, count);
     }
 
     // Not object store
@@ -197,7 +197,7 @@ common::ResponseCode Streamer::list_objects(const std::string & path, char*** ob
     try
     {
         auto strings = utils::Fd::list(path);
-        utils::Strings::create_cstring_list(strings, object_keys, object_count);
+        utils::Strings::create_cstring_list(strings, keys, count);
     }
     catch(const std::exception& e)
     {
@@ -209,11 +209,11 @@ common::ResponseCode Streamer::list_objects(const std::string & path, char*** ob
 }
 
 // free list of object keys
-common::ResponseCode Streamer::free_list_objects(char*** object_keys, size_t object_count)
+common::ResponseCode Streamer::free_list(char*** keys, size_t count)
 {
     try
     {
-        utils::Strings::free_cstring_list(*object_keys, object_count);
+        utils::Strings::free_cstring_list(*keys, count);
         return common::ResponseCode::Success;
     }
     catch(const std::exception & e)

@@ -19,13 +19,13 @@ int main(int argc, char *argv[])
 
     const std::string path(argv[1]);
 
-    char** object_keys;
-    size_t object_count;
+    char** keys;
+    size_t count;
 
     runai::llm::streamer::impl::Streamer streamer;
 
     auto start = std::chrono::steady_clock::now();
-    runai::llm::streamer::common::ResponseCode ret = streamer.list_objects(path, &object_keys, &object_count);
+    runai::llm::streamer::common::ResponseCode ret = streamer.list(path, &keys, &count);
     if (ret != runai::llm::streamer::common::ResponseCode::Success)
     {
         LOG(ERROR) << "Failed with response " << ret;
@@ -33,16 +33,16 @@ int main(int argc, char *argv[])
     }
 
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
-    LOG(INFO) << "Listing " << object_count << " files from path " << path;
+    LOG(INFO) << "Listing " << count << " files from path " << path;
 
-    for (size_t i =0 ; i < object_count; ++i)
+    for (size_t i =0 ; i < count; ++i)
     {
-        LOG(INFO) << object_keys[i];
+        LOG(INFO) << keys[i];
     }
 
     // free memory
     LOG(INFO) << "Free memory";
-    runai::llm::streamer::utils::Strings::free_cstring_list(object_keys, object_count);
+    runai::llm::streamer::utils::Strings::free_cstring_list(keys, count);
     LOG(INFO) << "Free memory done";
 
     return 0;

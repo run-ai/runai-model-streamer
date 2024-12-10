@@ -56,8 +56,8 @@ _RUNAI_EXTERN_C int runai_response(void * streamer, unsigned * index /* return p
 _RUNAI_EXTERN_C const char * runai_response_str(int response_code);
 
 // list files or object keys
-_RUNAI_EXTERN_C int runai_list_objects(void * streamer, const char * path, char*** object_keys, size_t * object_count);
+_RUNAI_EXTERN_C int runai_list(void * streamer, const char * path, char*** keys, size_t * count);
 // free list
-_RUNAI_EXTERN_C int runai_free_list_objects(void * streamer, char*** object_keys, size_t object_count);
+_RUNAI_EXTERN_C int runai_free_list(void * streamer, char*** keys, size_t count);
 
 } // namespace runai::llm::streamer
