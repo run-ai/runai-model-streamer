@@ -214,6 +214,7 @@ common::ResponseCode Streamer::free_list(char*** keys, size_t count)
     try
     {
         utils::Strings::free_cstring_list(*keys, count);
+        *keys = nullptr;
         return common::ResponseCode::Success;
     }
     catch(const std::exception & e)

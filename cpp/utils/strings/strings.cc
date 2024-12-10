@@ -6,44 +6,66 @@
 namespace runai::llm::streamer::utils
 {
 
-void Strings::create_cstring_list(std::vector<std::string> & strings, char*** object_keys, size_t * object_count)
+void Strings::create_cstring_list(std::vector<std::string>& strings, char*** list_ptr, size_t* count)
 {
-    *object_count = strings.size();
-    if (strings.size())
+    // Set object count
+    *count = strings.size();
+
+    if (*count == 0)
     {
-        // malloc and free are used here for ctypes (python integration layer)
-        *object_keys = reinterpret_cast<char**>(malloc(strings.size() * sizeof(char*)));
-        for (size_t i = 0; i < strings.size(); ++i)
+        // Set to null for empty input
+        *list_ptr = nullptr;
+        return;
+    }
+
+    // Allocate memory for the array of C-string pointers
+    *list_ptr = reinterpret_cast<char**>(malloc(*count * sizeof(char*)));
+    if (*list_ptr == nullptr) // Check malloc success
+    {
+        throw std::bad_alloc();
+    }
+
+    try
+    {
+        for (size_t i = 0; i < *count; ++i)
         {
-            auto length = strings[i].size() + 1;
-            (*object_keys)[i] = reinterpret_cast<char*>(malloc(length)); // Allocate memory for each string
-            std::strncpy((*object_keys)[i], strings[i].c_str(), length);
+            // Allocate memory for each string (+1 for null terminator)
+            size_t length = strings[i].size() + 1;
+            (*list_ptr)[i] = reinterpret_cast<char*>(malloc(length));
+            if ((*list_ptr)[i] == nullptr) // Check malloc success
+            {
+                throw std::bad_alloc();
+            }
+
+            // Copy string content
+            std::memcpy((*list_ptr)[i], strings[i].c_str(), length);
         }
     }
-    else
+    catch (...)
     {
-        *object_keys = nullptr;
+        free_cstring_list(*list_ptr, *count);
+        *list_ptr = nullptr;
+        *count = 0;
+        throw; // Re-throw the exception
     }
 }
 
-void Strings::free_cstring_list(char** object_keys, size_t object_count)
+void Strings::free_cstring_list(char** list, size_t count)
 {
-    ASSERT(((object_count == 0 && object_keys == nullptr) || (object_count && object_keys != nullptr))) << "invalid arguments - size is " << object_count;
+    ASSERT(((count == 0 && list == nullptr) || (count && list != nullptr))) << "invalid arguments - size is " << count;
 
-    LOG(SPAM) << "will delete "<< object_keys;
-
-    for (size_t i = 0; i < object_count; ++i)
+    for (size_t i = 0; i < count; ++i)
     {
-        if (object_keys[i])
+        if (list[i])
         {
-            free(reinterpret_cast<char*>(object_keys[i])); // Free each string
-            object_keys[i] = nullptr;
+            free(reinterpret_cast<char*>(list[i])); // Free each string
+            list[i] = nullptr;
         }
     }
 
-    if (object_keys)
+    if (list)
     {
-        free(object_keys); // Free the array of pointers
+        free(list); // Free the array of pointers
     }
 }
 
