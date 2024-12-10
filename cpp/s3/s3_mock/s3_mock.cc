@@ -293,10 +293,9 @@ common::ResponseCode runai_read_s3_client(void * client, size_t offset, size_t b
     if (r == common::ResponseCode::Success)
     {
         // read from __object_file_path
-
         try
         {
-            ASSERT(bytesize <= __object_data.size() - offset) << "Attempt to read out of range";
+            ASSERT(offset < __object_data.size() && bytesize <= __object_data.size() - offset) << "Attempt to read out of range";
             std::memcpy(buffer, __object_data.data() + offset, bytesize);
         }
         catch(...)

@@ -211,7 +211,7 @@ size_t Fd::size() const
 
 void Fd::seek(off_t offset) const
 {
-    PASSERT(static_cast<size_t>(offset) <= size()) << "trying to read offset after EOF";
+    // lseek() allows the file offset to be set beyond the end of the file (but this does not change the size of the file).
     PASSERT(::lseek(_fd, offset, SEEK_SET) != -1) << "failed seeking file";
 }
 

@@ -9,6 +9,7 @@ from runai_model_streamer.libstreamer.libstreamer import (
     runai_request,
     runai_response,
     runai_list,
+    runai_copy,
 )
 from runai_model_streamer.file_streamer.requests_iterator import (
     RequestsIterator,
@@ -102,3 +103,6 @@ class FileStreamer:
 
     def list(self, path: str) -> List:
         return runai_list(self.streamer, path)
+
+    def copy(self, src_path : str, dst_path : str) -> None:
+        return runai_copy(self.streamer, src_path, dst_path)

@@ -247,7 +247,7 @@ TEST(Seek, Sanity)
     EXPECT_EQ(buffer.at(0), data.at(offset));
 }
 
-TEST(Seek, InputValdation)
+TEST(Seek, Offset_Beyond_Size)
 {
     const auto len = random::number(100, 1000);
     const auto data = random::buffer(len);
@@ -257,8 +257,12 @@ TEST(Seek, InputValdation)
     auto fd = Helper(file.path, O_RDONLY);
     ASSERT_TRUE(is_fd_open(file.name));
 
-    const unsigned offset = random::number(data.size() + 1, data.size() * 10);
-    EXPECT_THROW(fd.seek(offset), std::exception);
+    // lseek beyond file size is allowed
+    const unsigned offset = utils::random::number(data.size() + 1, data.size() * 10);
+    EXPECT_NO_THROW(fd.seek(offset));
+
+    // but attempt to read after EOF should throw
+    EXPECT_THROW(fd.read(utils::random::number(1, 10), Fd::Read::Exactly), std::exception);
 }
 
 TEST(Size, Sanity)

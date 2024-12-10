@@ -67,5 +67,13 @@ class LibstreamerDLLWrapper:
         ]
         self.fn_runai_free_list_objects.restype = ctypes.c_int
 
+        self.fn_runai_read_object_to_file = self.lib.runai_read_object_to_file
+        self.fn_runai_read_object_to_file.argtypes = [
+            t_streamer,
+            ctypes.c_char_p,
+            ctypes.c_char_p
+        ]
+        self.fn_runai_read_object_to_file.restype = ctypes.c_int
+
 
 dll = LibstreamerDLLWrapper(STREAMER_LIBRARY)

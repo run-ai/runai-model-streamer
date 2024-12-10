@@ -112,3 +112,10 @@ def runai_list(streamer: t_streamer, path: str) -> List[str]:
         )
 
     return object_list
+
+def runai_copy(streamer: t_streamer, src_path: str, dst_path: str) -> None:
+    error_code = dll.fn_runai_read_object_to_file(streamer, src_path.encode('utf-8'), dst_path.encode('utf-8'))
+    if error_code != SUCCESS_ERROR_CODE:
+        raise Exception(
+            f"Could not download in libstreamer due to: {runai_response_str(error_code)}"
+        )
