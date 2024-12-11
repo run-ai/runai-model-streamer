@@ -4,9 +4,12 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <cstring>
 
 #include "utils/logging/logging.h"
+#include "utils/fd/fd.h"
 #include "utils/scope_guard/scope_guard.h"
+#include "utils/strings/strings.h"
 
 #include "streamer/impl/batches/batches.h"
 #include "common/exception/exception.h"
@@ -68,7 +71,24 @@ common::ResponseCode Streamer::request(const std::string & path, size_t file_off
     return ret;
 }
 
-void Streamer::create_request(const std::string & path, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes)
+Streamer::Destination::Destination(const std::string & fs_path) :
+    mode(Mode::Path),
+    fs_path(fs_path),
+    buffer(nullptr)
+{}
+
+Streamer::Destination::Destination(void * dst) :
+    mode(Mode::Buffer),
+    buffer(dst)
+{
+    if (dst == 0)
+    {
+        LOG(ERROR) << "Destination buffer is null";
+        throw common::Exception(common::ResponseCode::InvalidParameterError);
+    }
+}
+
+void Streamer::create_request(const std::string & path, size_t file_offset, size_t bytesize, const Destination & dst, unsigned num_sizes, size_t * internal_sizes)
 {
     LOG(SPAM) << "Requested to read asynchronously " << bytesize << " bytes from " << path << " offset " << file_offset << " in " << num_sizes << " chunks";
 
@@ -81,12 +101,6 @@ void Streamer::create_request(const std::string & path, size_t file_offset, size
     if (num_sizes == 0 || bytesize == 0)
     {
         LOG(ERROR) << "Total bytes to read is " << bytesize << " but number of sub requests is " << num_sizes;
-        throw common::Exception(common::ResponseCode::InvalidParameterError);
-    }
-
-    if (dst == 0)
-    {
-        LOG(ERROR) << "Destination buffer is null";
         throw common::Exception(common::ResponseCode::InvalidParameterError);
     }
 
@@ -117,12 +131,17 @@ void Streamer::create_request(const std::string & path, size_t file_offset, size
     {
     }
 
-    Batches batches(_config, _responder, path, uri, file_offset, bytesize, dst, num_sizes, internal_sizes);
+    Batches batches(_config, _responder, path, uri, file_offset, bytesize, dst.buffer, num_sizes, internal_sizes);
 
     if (batches.total() != bytesize)
     {
         LOG(ERROR) << "Total bytes to read " << bytesize << " is not equal to the sum of the sub ranges, which is " << batches.total();
         throw common::Exception(common::ResponseCode::InvalidParameterError);
+    }
+
+    if (dst.mode == Destination::Mode::Path)
+    {
+        batches.set_destination_file(dst.fs_path);
     }
 
     // send batches to threadpool
@@ -148,6 +167,132 @@ common::Response Streamer::response()
     }
 
     return _responder->pop();
+}
+
+// list object keys
+common::ResponseCode Streamer::list(const std::string & path, char*** keys, size_t * count)
+{
+    std::shared_ptr<common::s3::StorageUri> uri = nullptr;
+    try
+    {
+        uri = std::make_unique<common::s3::StorageUri>(path, common::s3::StorageUri::Type::Path);
+        if (_s3 == nullptr)
+        {
+            _s3_stop = std::make_unique<S3Stop>();
+            _s3 = std::make_unique<S3Cleanup>();
+        }
+    }
+    catch(const std::exception& e)
+    {
+    }
+
+    if (uri.get() != nullptr)
+    {
+        auto s3_client = std::make_shared<common::s3::S3ClientWrapper>(*uri);
+        return s3_client->list_objects(keys, count);
+    }
+
+    // Not object store
+    auto response_code = common::ResponseCode::Success;
+    try
+    {
+        auto strings = utils::Fd::list(path);
+        utils::Strings::create_cstring_list(strings, keys, count);
+    }
+    catch(const std::exception& e)
+    {
+        LOG(ERROR) << "failed to list regular files in path " << path;
+        response_code = common::ResponseCode::FileAccessError;
+    }
+
+    return response_code;
+}
+
+// free list of object keys
+common::ResponseCode Streamer::free_list(char*** keys, size_t count)
+{
+    try
+    {
+        utils::Strings::free_cstring_list(*keys, count);
+        *keys = nullptr;
+        return common::ResponseCode::Success;
+    }
+    catch(const std::exception & e)
+    {
+        LOG(ERROR) << "Caught exception while releasing list of objects";
+    }
+
+    return common::ResponseCode::UnknownError;
+}
+
+common::ResponseCode Streamer::request(const std::string & source_path, const std::string & fs_path)
+{
+    if (source_path == fs_path)
+    {
+        LOG(WARNING) << "Requested to copy file to itself " << fs_path;
+        return common::ResponseCode::Success;
+    }
+
+    // verify destination is not s3 uri
+    std::shared_ptr<common::s3::StorageUri> uri;
+    try
+    {
+        uri = std::make_unique<common::s3::StorageUri>(fs_path);
+    }
+    catch(const std::exception& e)
+    {
+    }
+
+    if (uri != nullptr)
+    {
+        LOG(ERROR) << "Destination file " << fs_path << " cannot be in object store. Streanmer do not support uploading objects to S3";
+        return common::ResponseCode::InvalidParameterError;
+    }
+
+    // get source size
+    size_t bytesize;
+
+    try
+    {
+        uri = std::make_unique<common::s3::StorageUri>(source_path);
+        if (_s3 == nullptr)
+        {
+            _s3_stop = std::make_unique<S3Stop>();
+            _s3 = std::make_unique<S3Cleanup>();
+        }
+    }
+    catch(const std::exception& e)
+    {
+    }
+
+    if (uri != nullptr)
+    {
+        auto s3_client = std::make_shared<common::s3::S3ClientWrapper>(*uri);
+        auto r = s3_client->object_bytesize(&bytesize);
+
+        if (r != common::ResponseCode::Success)
+        {
+            LOG(ERROR) << "Failed to get header of object " << source_path;
+            return r;
+        }
+    }
+    else
+    {
+        // get bytesize from filesystem
+        try
+        {
+            bytesize = utils::Fd::size(source_path);
+        }
+        catch(const std::exception& e)
+        {
+            LOG(ERROR) << "Failed to get file size of " << source_path;
+            return common::ResponseCode::FileAccessError;
+        }
+    }
+
+    Destination dst(fs_path);
+    create_request(source_path, 0, bytesize, dst, 1, &bytesize);
+    return _responder->pop().ret;
 }
 
 }; // namespace runai::llm::streamer::impl

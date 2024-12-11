@@ -20,6 +20,11 @@ struct Batches
 {
     Batches(std::shared_ptr<const Config> config, std::shared_ptr<common::Responder> responder, const std::string & path, std::shared_ptr<common::s3::StorageUri> uri, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes);
 
+    // optional reading into a file
+    // destination path cannot be s3 uri - not supported
+    // file will be created, and existing files will be overriden
+    void set_destination_file(const std::string & path);
+
     unsigned size() const;
 
     Batch & operator[](unsigned index);

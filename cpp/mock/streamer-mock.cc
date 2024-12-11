@@ -124,4 +124,24 @@ extern "C" const char * runai_response_str(int response_code)
 {
     return 0;
 }
+
+extern "C"  int runai_list(void * streamer, const char * path, char*** keys, size_t * count)
+{
+    if (count)
+    {
+        *count = 0;
+    }
+    return 0;
+}
+
+extern "C" int runai_free_list(void * streamer, char*** keys, size_t count)
+{
+    return 0;
+}
+
+extern "C" int runai_read_object_to_file(void * streamer, const char * s3_path, const char * fs_path)
+{
+    return 0;
+}
+
 } // namespace runai::llm::streamer

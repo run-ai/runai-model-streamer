@@ -1,5 +1,6 @@
 #include "streamer/impl/batch/batch.h"
 
+#include <fcntl.h>
 #include <algorithm>
 #include <memory>
 #include <utility>
@@ -84,7 +85,11 @@ void Batch::execute(std::atomic<bool> & stopped)
             _reader = std::make_unique<File>(path, *config);
         }
 
-        if (_reader->mode == Reader::Mode::Sync)
+        if (dst_path.size())
+        {
+            read_to_file(*config, stopped);
+        }
+        else if (_reader->mode == Reader::Mode::Sync)
         {
             read(*config, stopped);
         }
@@ -172,6 +177,55 @@ void Batch::read(const Config & config, std::atomic<bool> & stopped)
 }
 
 // read the entire range and send notifications for each sub range
+void Batch::read_to_file(const Config & config, std::atomic<bool> & stopped)
+{
+    if (tasks.empty())
+    {
+        LOG(DEBUG) << "Empty batch";
+        return;
+    }
+
+    auto file_offset = range.start;
+
+    auto dst = utils::Fd(::open(dst_path.c_str(), O_WRONLY|O_CREAT|O_TRUNC, S_IRUSR | S_IWUSR));
+    if (dst.fd() == -1)
+    {
+        LOG(ERROR) << "Failed to open destination file " << dst_path;
+        throw common::Exception(common::ResponseCode::FileAccessError);
+    }
+    // seek just once because writings are consecutive within the range
+    dst.seek(file_offset);
+    _reader->seek(file_offset);
+
+    // create buffer to read to
+    const auto block_bytesize = config.s3_block_bytesize;
+    std::vector<char> vbuffer(range.size);
+    auto buffer = vbuffer.data();
+
+    size_t num_chunks = range.size / block_bytesize;
+
+     // read task's range in chunks
+    size_t i = 0;
+    for (; i < num_chunks && !stopped; ++i)
+    {
+        _reader->read(block_bytesize, buffer);
+        dst.write(buffer, block_bytesize);
+        file_offset += block_bytesize;
+        finished_until(file_offset, common::ResponseCode::Success);
+    }
+
+    const size_t to_read =  (file_offset < range.end ? range.end - file_offset : 0);
+    if (to_read && !stopped)
+    {
+        _reader->read(to_read, buffer);
+        dst.write(buffer, to_read);
+        finished_until(range.end, common::ResponseCode::Success);
+    }
+
+    LOG(DEBUG) << "Finished synchronous reading " << i << "/" << num_chunks << " chunks from file " << path << (stopped ? " - terminated" : " successfully");
+}
+
+// read the entire range and send notifications for each sub range
 void Batch::async_read(const Config & config, std::atomic<bool> & stopped)
 {
     if (tasks.empty())
@@ -201,7 +255,8 @@ void Batch::async_read(const Config & config, std::atomic<bool> & stopped)
 
         if (r.ret == common::ResponseCode::FinishedError)
         {
-            LOG(DEBUG) << "Finished reading from file " << path << " - terminated";
+            // Reading has finished either successfuly or because the request was cancelled since the streamer is shutting down
+            LOG(DEBUG) << "Finished reading from file " << path;
             throw common::Exception(common::ResponseCode::FinishedError);
         }
 
@@ -217,8 +272,6 @@ void Batch::async_read(const Config & config, std::atomic<bool> & stopped)
             responder->push(std::move(response), task.request->bytesize);
         }
     }
-
-    LOG(DEBUG) << "Finished reading from file " << path << (stopped ? " - terminated" : " successfully");
 }
 
 // notify unfinished tasks up to but not including offset end

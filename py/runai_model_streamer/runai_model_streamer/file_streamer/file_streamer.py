@@ -8,6 +8,8 @@ from runai_model_streamer.libstreamer.libstreamer import (
     runai_read,
     runai_request,
     runai_response,
+    runai_list,
+    runai_copy,
 )
 from runai_model_streamer.file_streamer.requests_iterator import (
     RequestsIterator,
@@ -24,12 +26,13 @@ class FileStreamer:
 
     def __exit__(self, exc_type: any, exc_value: any, traceback: any) -> None:
         size = self.total_size
-        elapsed_time = timer() - self.start_time
-        throughput = size / elapsed_time
-        print(
-            f"[RunAI Streamer] Overall time to stream {humanize.naturalsize(size, binary=True)} of all files: {round(elapsed_time, 2)}s, {humanize.naturalsize(throughput, binary=True)}/s",
-            flush=True,
-        )
+        if size:
+            elapsed_time = timer() - self.start_time
+            throughput = size / elapsed_time
+            print(
+                f"[RunAI Streamer] Overall time to stream {humanize.naturalsize(size, binary=True)} of all files: {round(elapsed_time, 2)}s, {humanize.naturalsize(throughput, binary=True)}/s",
+                flush=True,
+            )
         if self.streamer:
             runai_end(self.streamer)
 
@@ -97,3 +100,9 @@ class FileStreamer:
             yield relative_index, self.dst_buffer, sum(
                 self.current_request_chunks[:relative_index]
             )
+
+    def list(self, path: str) -> List:
+        return runai_list(self.streamer, path)
+
+    def copy(self, src_path : str, dst_path : str) -> None:
+        return runai_copy(self.streamer, src_path, dst_path)

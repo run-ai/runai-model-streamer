@@ -49,6 +49,11 @@ struct Fd
     std::vector<uint8_t> read(size_t size, Read mode = Read::Exactly);
     void write(const std::vector<uint8_t> & data);
 
+    // recursive list of regular file names in path
+    static std::vector<std::string> list(const std::string & path);
+    // get file size
+    static size_t size(const std::string & path);
+
     // read the entire file - used for testing
 
     static std::vector<uint8_t> read(const std::string & path);

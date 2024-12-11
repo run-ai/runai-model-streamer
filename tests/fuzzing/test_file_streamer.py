@@ -1,5 +1,6 @@
 import unittest
 import tempfile
+import filecmp
 import shutil
 import os
 import random
@@ -44,6 +45,17 @@ class TestFuzzing(unittest.TestCase):
         file_path = os.path.join(self.temp_dir, "test_file.txt")
         with open(file_path, "wb") as file:
             file.write(file_content)
+
+        with FileStreamer() as fs:
+            list_files = fs.list(self.temp_dir)
+            self.assertEqual(len(list_files), 1)
+            self.assertEqual(list_files[0], file_path)
+
+        copy_file_path = file_path + ".copy"
+        with FileStreamer() as fs:
+            fs.copy(file_path, copy_file_path)
+        are_identical = filecmp.cmp(file_path, copy_file_path, shallow=False)
+        self.assertTrue(are_identical)
 
         initial_offset = chunk_sizes[0]
         request_sizes = chunk_sizes[1:]

@@ -38,6 +38,10 @@ struct Streamer
     // returns common::ResponseCode::Success if successful or error code
     common::ResponseCode request(const std::string & path, size_t offset, size_t bytesize, void * dst);
 
+    // synchronous read of entire s3 object or file to a destination file (destination s3 path is not supported)
+    // returns common::ResponseCode::Success if successful or error code
+    common::ResponseCode request(const std::string & source_path, const std::string & dest_path);
+
     // async request to read a range asynchronously as multiple chunks
     // returns common::ResponseCode::Success if successful or error code
     common::ResponseCode request(const std::string & path, size_t offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes);
@@ -47,8 +51,28 @@ struct Streamer
     // returns common::ResponseCode error if failed
     common::Response response();
 
+    // list files or object keys
+    common::ResponseCode list(const std::string & path, char*** keys, size_t * count);
+    // free list
+    common::ResponseCode static free_list(char*** keys, size_t count);
+
  private:
-    void create_request(const std::string & path, size_t offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes);
+    struct Destination
+    {
+      Destination(const std::string & fs_path);
+      Destination(void * dst);
+
+      enum class Mode
+      {
+         Buffer = 0,
+         Path,
+      };
+      Mode mode;
+      std::string fs_path;
+      void * buffer;
+    };
+
+    void create_request(const std::string & path, size_t offset, size_t bytesize, const Destination & dst, unsigned num_sizes, size_t * internal_sizes);
 
  private:
     std::shared_ptr<const Config> _config;
