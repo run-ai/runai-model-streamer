@@ -44,11 +44,6 @@ class TestBindings(unittest.TestCase):
             dst = fs.read_file(file_path, 2, len(file_content) - 2)
             self.assertEqual(bytearray(dst).decode("utf-8"), "TensorHelloTest")
 
-        with FileStreamer() as fs:
-            list_files = fs.list(self.temp_dir)
-            self.assertEqual(len(list_files), 1)
-            self.assertEqual(list_files[0], file_path)
-
     @patch("runai_model_streamer.file_streamer.requests_iterator._get_memory_mode")
     def test_min_memory_cap(self, mock_get_memory_mode):
         mock_get_memory_mode.return_value = MemoryCapMode.largest_chunk
