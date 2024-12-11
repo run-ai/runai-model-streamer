@@ -145,7 +145,7 @@ _RUNAI_EXTERN_C int runai_list(void * streamer, const char * path, char*** keys,
 {
     try
     {
-        if (streamer == nullptr || path == nullptr)
+        if (streamer == nullptr || path == nullptr || count == nullptr)
         {
             return static_cast<int>(common::ResponseCode::InvalidParameterError);
         }
@@ -167,8 +167,12 @@ _RUNAI_EXTERN_C int runai_free_list(void * streamer, char*** keys, size_t count)
 {
     try
     {
+        if (keys == nullptr || (*keys == nullptr && count > 0) || (*keys != nullptr && count == 0))
+        {
+            return static_cast<int>(common::ResponseCode::InvalidParameterError);
+        }
+
         auto ret = impl::Streamer::free_list(keys, count);
-        keys = nullptr;
         return static_cast<int>(ret);
     }
     catch(...)
