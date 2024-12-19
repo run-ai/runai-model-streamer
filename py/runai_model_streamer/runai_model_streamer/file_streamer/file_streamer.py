@@ -1,4 +1,5 @@
 import os
+import fnmatch
 from typing import List, Iterator
 import numpy as np
 from timeit import default_timer as timer
@@ -101,8 +102,9 @@ class FileStreamer:
                 self.current_request_chunks[:relative_index]
             )
 
-    def list(self, path: str) -> List:
-        return runai_list(self.streamer, path)
+    def list(self, path: str, pattern: str) -> List[str]:
+        all_files = runai_list(self.streamer, path)
+        return [file for file in all_files if fnmatch.fnmatch(file, pattern)]
 
     def copy(self, src_path : str, dst_path : str) -> None:
         return runai_copy(self.streamer, src_path, dst_path)
