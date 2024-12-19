@@ -99,6 +99,13 @@ class TestBindings(unittest.TestCase):
                     id_to_results[id]["expected_text"],
                 )
 
+    @patch("runai_model_streamer.file_streamer.file_streamer.runai_list")
+    def test_list_pattern(self, mock_runai_list):
+        mock_runai_list.return_value = ["a.safetensors", "b.py", "c.safetensors"]
+        with FileStreamer() as fs:
+            filtered = fs.list("test", "*.safetensors")
+            self.assertCountEqual(filtered, ["c.safetensors", "a.safetensors"])
+
     def tearDown(self):
         shutil.rmtree(self.temp_dir)
 
