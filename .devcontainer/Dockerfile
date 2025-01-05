@@ -10,6 +10,12 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
 RUN pip install \
     cpplint==1.5.4
 
+RUN mkdir -p /opt/toolchains && \
+    wget "https://releases.linaro.org/components/toolchain/binaries/7.2-2017.11/aarch64-linux-gnu/gcc-linaro-7.2.1-2017.11-x86_64_aarch64-linux-gnu.tar.xz" && \
+    tar -xf gcc-linaro-7.2.1-2017.11-x86_64_aarch64-linux-gnu.tar.xz -C /opt/toolchains && \
+    mv /opt/toolchains/gcc-linaro-7.2.1-2017.11-x86_64_aarch64-linux-gnu /opt/toolchains/aarch64-linux-gnu && \
+    rm -f gcc-linaro-7.2.1-2017.11-x86_64_aarch64-linux-gnu.tar.xz
+
 ARG BAZEL=4.2.1
 RUN ARCH=$([ "$(uname -m)" = "aarch64" ] && echo "arm64" || uname -m); \
     wget -O /usr/local/bin/bazel "https://github.com/bazelbuild/bazel/releases/download/$BAZEL/bazel-$BAZEL-linux-$ARCH" && \
