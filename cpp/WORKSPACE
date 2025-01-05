@@ -1,6 +1,7 @@
-local_repository(name = "cc", path = "../external/cc")
+load("//toolchain:rules.bzl", "runai_cc_configure_toolchain", "runai_cc_autoconf_impl_x86", "runai_cc_autoconf_impl_arm64")
 
-local_repository(name = "elements", path = "../external/elements")
+runai_cc_configure_toolchain("x86_64", runai_cc_autoconf_impl_x86)
+runai_cc_configure_toolchain("aarch64", runai_cc_autoconf_impl_arm64)
 
 new_local_repository(
     name = "aws",
