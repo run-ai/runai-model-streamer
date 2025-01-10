@@ -8,7 +8,7 @@ build_mock:
 	bazel build mock:libstreamer-mock.so
 
 test:
-	bazel test //...:all
+	bazel test //...:all --define BASE_PATH=$$( [ "${ARCH}" = "aarch64" ] && echo "aarch64-" || echo "" )
 
 clean:
 	bazel clean
