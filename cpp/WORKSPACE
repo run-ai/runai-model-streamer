@@ -3,9 +3,10 @@ load("//toolchain:rules.bzl", "runai_cc_configure_toolchain", "runai_cc_autoconf
 runai_cc_configure_toolchain("x86_64", runai_cc_autoconf_impl_x86)
 runai_cc_configure_toolchain("aarch64", runai_cc_autoconf_impl_arm64)
 
+
 new_local_repository(
     name = "aws",
-    path = "/usr/local",
+    path = "/opt",
     build_file_content = """
 package(default_visibility = ["//visibility:public"])
 
@@ -20,11 +21,11 @@ config_setting(
 
 cc_library(
     name = "aws",
-    hdrs = glob(["include/aws/**/*.h"]),
-    includes = ["include"],
+    hdrs = glob(["*aws/include/**/*.*"]),
+    includes = ["$(BASE_PATH)aws/include"],
     linkopts = [
-        "-L/usr/local/lib/",
-        "-lpthread -lz",
+        "-L/opt/$(BASE_PATH)aws/lib",
+        "-lpthread",
         "-l:libaws-cpp-sdk-s3-crt.a",
         "-l:libaws-cpp-sdk-core.a",
         "-l:libaws-crt-cpp.a",
@@ -42,11 +43,12 @@ cc_library(
         "-l:libaws-c-common.a",
         "-ldl -lm -lrt",
     ] + select({
-        ":dynamic_link": ["-lssl", "-lcrypto", "-lcurl"],
+        ":dynamic_link": ["-lz", "-lssl", "-lcrypto", "-lcurl"],
         "//conditions:default": [
-            "-l:/opt/curl/lib/libcurl.a",
-            "-l:/opt/ssl/lib/libssl.a",
-            "-l:/opt/ssl/lib/libcrypto.a",
+            "-l:/opt/$(BASE_PATH)zlib/lib/libz.a",
+            "-l:/opt/$(BASE_PATH)curl/lib/libcurl.a",
+            "-l:/opt/$(BASE_PATH)ssl/lib/libssl.a",
+            "-l:/opt/$(BASE_PATH)ssl/lib/libcrypto.a",
         ],
     }),
 )
