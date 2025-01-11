@@ -5,7 +5,7 @@ PACKAGE_VERSION ?= 0.0.0
 .PHONY: install_dev_dep build mock test clean
 
 install_dev_dep:
-	python3 -m pip install -r requirements.dev --break-system-packages
+	python3 -m pip install -r requirements.dev
 
 build:
 	python3 setup.py bdist_wheel --plat-name ${PLATFORM}
@@ -20,4 +20,4 @@ clean:
 	rm -rf build/ dist/ runai_model_streamer.egg-info/
 
 install:
-	pip3 install --force-reinstall dist/runai_model_streamer-${PACKAGE_VERSION}-py3-none-${PLATFORM}.whl --break-system-packages
+	pip3 install --force-reinstall dist/runai_model_streamer-${PACKAGE_VERSION}-py3-none-${PLATFORM}.whl
