@@ -5,24 +5,20 @@ load(
 )
 
 def __tool_path(toolchain_name, tool_name):
-    if toolchain_name:
-        return "/opt/toolchains/" + toolchain_name + "/bin/" + toolchain_name + "-" + tool_name
-    else:
-        return "/usr/bin/" + tool_name
+    return "/usr/bin/" + toolchain_name  + tool_name
 
 def runai_crosstool_tools(toolchain_name):
     return {
-        "ld.gold":      __tool_path(toolchain_name, "ld.gold"),
-        "gcc":     __tool_path(toolchain_name, "gcc"),
-        "g++":     __tool_path(toolchain_name, "g++"),
-        "ld":      __tool_path(toolchain_name, "ld"),
-        "ar":      __tool_path(toolchain_name, "ar"),
-        "cpp":     __tool_path(toolchain_name, "cpp"),
-        "gcov":    __tool_path(toolchain_name, "gcov"),
-        "nm":      __tool_path(toolchain_name, "nm"),
-        "objdump": __tool_path(toolchain_name, "objdump"),
-        "strip":   __tool_path(toolchain_name, "strip"),
-        "cc1plus": __tool_path(toolchain_name, "cc1plus")
+        "ld":           __tool_path(toolchain_name, "ld"),
+        "gcc":          __tool_path(toolchain_name, "gcc"),
+        "g++":          __tool_path(toolchain_name, "g++"),
+        "ar":           __tool_path(toolchain_name, "ar"),
+        "cpp":          __tool_path(toolchain_name, "cpp"),
+        "gcov":         __tool_path(toolchain_name, "gcov"),
+        "nm":           __tool_path(toolchain_name, "nm"),
+        "objdump":      __tool_path(toolchain_name, "objdump"),
+        "strip":        __tool_path(toolchain_name, "strip"),
+        "cc1plus":      __tool_path(toolchain_name, "cc1plus")
     }
 
 def runai_cc_autoconf_configurator(impl):
@@ -100,9 +96,11 @@ def runai_cc_configure_toolchain(toolchain_name, impl = cc_autoconf_impl):
     )
 
 def runai_cc_autoconf_impl_x86(ctx):
-    tools = runai_crosstool_tools("")
+    toolchain_name = "x86_64-linux-gnu-"
+    tools = runai_crosstool_tools(toolchain_name)
     return cc_autoconf_impl(ctx, overriden_tools = tools)
 
 def runai_cc_autoconf_impl_arm64(ctx):
-    tools = runai_crosstool_tools("aarch64-linux-gnu")
+    toolchain_name = "aarch64-linux-gnu-"
+    tools = runai_crosstool_tools(toolchain_name)
     return cc_autoconf_impl(ctx, overriden_tools = tools) 

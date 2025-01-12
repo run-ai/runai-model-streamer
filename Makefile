@@ -1,9 +1,9 @@
-.PHONY: build build_aarch64 build_native test install
+.PHONY: build build_aarch64 build_x86_64 test install
 
-build_native:
+build_x86_64:
 	make -C cpp clean && \
-	make -C cpp build && \
-	make -C py build
+	make -C cpp build ARCH=x86_64 && \
+	make -C py build ARCH=x86_64
 
 build_aarch64:
 	make -C cpp clean && \
@@ -12,7 +12,7 @@ build_aarch64:
 
 build: 
 	make -C py clean && \
-	make build_native && \
+	make build_x86_64 && \
 	make build_aarch64
 
 install: build

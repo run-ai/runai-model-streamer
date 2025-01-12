@@ -1,20 +1,21 @@
 FROM ubuntu:20.04
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    g++ \
+    gcc-x86-64-linux-gnu \
+    g++-x86-64-linux-gnu \
+    binutils-x86-64-linux-gnu \
+    gcc-aarch64-linux-gnu \
+    g++-aarch64-linux-gnu \
+    binutils-aarch64-linux-gnu \
     python3 \
     python3-pip \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
+RUN ln -f /usr/bin/aarch64-linux-gnu-ld.gold /usr/bin/ld.gold
+
 RUN pip install \
     cpplint==1.5.4
-
-RUN mkdir -p /opt/toolchains && \
-    wget "https://releases.linaro.org/components/toolchain/binaries/7.2-2017.11/aarch64-linux-gnu/gcc-linaro-7.2.1-2017.11-x86_64_aarch64-linux-gnu.tar.xz" && \
-    tar -xf gcc-linaro-7.2.1-2017.11-x86_64_aarch64-linux-gnu.tar.xz -C /opt/toolchains && \
-    mv /opt/toolchains/gcc-linaro-7.2.1-2017.11-x86_64_aarch64-linux-gnu /opt/toolchains/aarch64-linux-gnu && \
-    rm -f gcc-linaro-7.2.1-2017.11-x86_64_aarch64-linux-gnu.tar.xz
 
 ARG BAZEL=4.2.1
 RUN ARCH=$([ "$(uname -m)" = "aarch64" ] && echo "arm64" || uname -m); \
@@ -37,7 +38,7 @@ RUN curl -fsSL -o openssl-1.1.1o.tar.gz https://www.openssl.org/source/openssl-1
     make install_sw > /dev/null && \
     make clean > /dev/null && \
     make distclean > /dev/null && \
-    ./Configure no-ssl2 no-zlib no-shared no-comp no-dynamic-engine enable-ec_nistp_64_gcc_128 --cross-compile-prefix=/opt/toolchains/aarch64-linux-gnu/bin/aarch64-linux-gnu- --prefix=/opt/aarch64-ssl --openssldir=/opt/aarch64-ssl linux-aarch64 && \
+    ./Configure no-ssl2 no-zlib no-shared no-comp no-dynamic-engine enable-ec_nistp_64_gcc_128 --cross-compile-prefix=/usr/bin/aarch64-linux-gnu- --prefix=/opt/aarch64-ssl --openssldir=/opt/aarch64-ssl linux-aarch64 && \
     make -j4 > /dev/null && \
     make install_sw > /dev/null && \
     make clean > /dev/null && \
@@ -52,12 +53,12 @@ RUN curl -fsSL -o curl-7.83.1.tar.gz https://github.com/curl/curl/releases/downl
     make -j4 > /dev/null && \
     make install > /dev/null && \
     make clean > /dev/null  && \
-    AR=/opt/toolchains/aarch64-linux-gnu/bin/aarch64-linux-gnu-ar \
-    AS=/opt/toolchains/aarch64-linux-gnu/bin/aarch64-linux-gnu-as \
-    LD=/opt/toolchains/aarch64-linux-gnu/bin/aarch64-linux-gnu-ld \
-    RANLIB=/opt/toolchains/aarch64-linux-gnu/bin/aarch64-linux-gnu-ranlib \
-    CC=/opt/toolchains/aarch64-linux-gnu/bin/aarch64-linux-gnu-gcc \
-    NM=/opt/toolchains/aarch64-linux-gnu/bin/aarch64-linux-gnu-nm \
+    AR=/usr/bin/aarch64-linux-gnu-ar \
+    AS=/usr/bin/aarch64-linux-gnu-as \
+    LD=/usr/bin/aarch64-linux-gnu-ld \
+    RANLIB=/usr/bin/aarch64-linux-gnu-ranlib \
+    CC=/usr/bin/aarch64-linux-gnu-gcc \
+    NM=/usr/bin/aarch64-linux-gnu-nm \
     ./configure --host=x86_64-linux-gnu --build=aarch64-linux-gnu --disable-shared --with-openssl=/opt/aarch64-ssl --prefix=/opt/aarch64-curl && \
     make -j4 > /dev/null && \
     make install > /dev/null && \
@@ -71,12 +72,12 @@ RUN curl -fsSL -o zlib-1.3.1.tar.gz https://github.com/madler/zlib/releases/down
     make -j4 > /dev/null && \
     make install > /dev/null && \
     make clean > /dev/null  && \
-    AR=/opt/toolchains/aarch64-linux-gnu/bin/aarch64-linux-gnu-ar \
-    AS=/opt/toolchains/aarch64-linux-gnu/bin/aarch64-linux-gnu-as \
-    LD=/opt/toolchains/aarch64-linux-gnu/bin/aarch64-linux-gnu-ld \
-    RANLIB=/opt/toolchains/aarch64-linux-gnu/bin/aarch64-linux-gnu-ranlib \
-    CC=/opt/toolchains/aarch64-linux-gnu/bin/aarch64-linux-gnu-gcc \
-    NM=/opt/toolchains/aarch64-linux-gnu/bin/aarch64-linux-gnu-nm \
+    AR=/usr/bin/aarch64-linux-gnu-ar \
+    AS=/usr/bin/aarch64-linux-gnu-as \
+    LD=/usr/bin/aarch64-linux-gnu-ld \
+    RANLIB=/usr/bin/aarch64-linux-gnu-ranlib \
+    CC=/usr/bin/aarch64-linux-gnu-gcc \
+    NM=/usr/bin/aarch64-linux-gnu-nm \
     ./configure --static --prefix=/opt/aarch64-zlib && \
     make -j4 > /dev/null && \
     make install > /dev/null && \
