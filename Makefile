@@ -1,14 +1,17 @@
+X86_64_ARCH := x86_64
+AARCH64_ARCH := aarch64
+
 .PHONY: build build_aarch64 build_x86_64 test install
 
 build_x86_64:
 	make -C cpp clean && \
-	make -C cpp build ARCH=x86_64 && \
-	make -C py build ARCH=x86_64
+	make -C cpp build ARCH=${X86_64_ARCH} && \
+	make -C py build ARCH=${X86_64_ARCH}
 
 build_aarch64:
 	make -C cpp clean && \
-	make -C cpp build ARCH=aarch64 && \
-	make -C py build ARCH=aarch64
+	make -C cpp build ARCH=${AARCH64_ARCH} && \
+	make -C py build ARCH=${AARCH64_ARCH}
 
 build: 
 	make -C py clean && \

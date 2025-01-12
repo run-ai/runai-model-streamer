@@ -1,18 +1,16 @@
 FROM ubuntu:20.04
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    gcc-x86-64-linux-gnu \
-    g++-x86-64-linux-gnu \
-    binutils-x86-64-linux-gnu \
-    gcc-aarch64-linux-gnu \
-    g++-aarch64-linux-gnu \
-    binutils-aarch64-linux-gnu \
     python3 \
     python3-pip \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
-RUN ln -f /usr/bin/aarch64-linux-gnu-ld.gold /usr/bin/ld.gold
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    gcc-x86-64-linux-gnu g++-x86-64-linux-gnu binutils-x86-64-linux-gnu \
+    gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -f /usr/bin/aarch64-linux-gnu-ld.gold /usr/bin/ld.gold
 
 RUN pip install \
     cpplint==1.5.4
@@ -33,26 +31,30 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
 RUN curl -fsSL -o openssl-1.1.1o.tar.gz https://www.openssl.org/source/openssl-1.1.1o.tar.gz && \
     tar zxf openssl-1.1.1o.tar.gz && \
     cd openssl-1.1.1o && \
-    ./config no-ssl2 no-zlib no-shared no-comp no-dynamic-engine enable-ec_nistp_64_gcc_128 --prefix=/opt/ssl --openssldir=/opt/ssl && \
-    make -j4 > /dev/null && \
-    make install_sw > /dev/null && \
-    make clean > /dev/null && \
-    make distclean > /dev/null && \
-    ./Configure no-ssl2 no-zlib no-shared no-comp no-dynamic-engine enable-ec_nistp_64_gcc_128 --cross-compile-prefix=/usr/bin/aarch64-linux-gnu- --prefix=/opt/aarch64-ssl --openssldir=/opt/aarch64-ssl linux-aarch64 && \
-    make -j4 > /dev/null && \
-    make install_sw > /dev/null && \
-    make clean > /dev/null && \
-    make distclean > /dev/null && \
-    rm -rf openssl-1.1.1o openssl-1.1.1o.tar.gz
 
+    ./config no-ssl2 no-zlib no-shared no-comp no-dynamic-engine enable-ec_nistp_64_gcc_128 --prefix=/opt/ssl --openssldir=/opt/ssl && \
+        make -j4 > /dev/null && \
+        make install_sw > /dev/null && \
+        make clean > /dev/null && \
+        make distclean > /dev/null && \
+
+    ./Configure no-ssl2 no-zlib no-shared no-comp no-dynamic-engine enable-ec_nistp_64_gcc_128 --cross-compile-prefix=/usr/bin/aarch64-linux-gnu- --prefix=/opt/aarch64-ssl --openssldir=/opt/aarch64-ssl linux-aarch64 && \
+        make -j4 > /dev/null && \
+        make install_sw > /dev/null && \
+        make clean > /dev/null && \
+        make distclean > /dev/null && \
+
+    rm -rf openssl-1.1.1o openssl-1.1.1o.tar.gz
 
 RUN curl -fsSL -o curl-7.83.1.tar.gz https://github.com/curl/curl/releases/download/curl-7_83_1/curl-7.83.1.tar.gz && \
     tar zxf curl-7.83.1.tar.gz && \
     cd curl-7.83.1 && \
+
     ./configure --disable-shared --with-openssl=/opt/ssl --prefix=/opt/curl && \
-    make -j4 > /dev/null && \
-    make install > /dev/null && \
-    make clean > /dev/null  && \
+        make -j4 > /dev/null && \
+        make install > /dev/null && \
+        make clean > /dev/null  && \
+
     AR=/usr/bin/aarch64-linux-gnu-ar \
     AS=/usr/bin/aarch64-linux-gnu-as \
     LD=/usr/bin/aarch64-linux-gnu-ld \
@@ -60,18 +62,21 @@ RUN curl -fsSL -o curl-7.83.1.tar.gz https://github.com/curl/curl/releases/downl
     CC=/usr/bin/aarch64-linux-gnu-gcc \
     NM=/usr/bin/aarch64-linux-gnu-nm \
     ./configure --host=x86_64-linux-gnu --build=aarch64-linux-gnu --disable-shared --with-openssl=/opt/aarch64-ssl --prefix=/opt/aarch64-curl && \
-    make -j4 > /dev/null && \
-    make install > /dev/null && \
-    make clean > /dev/null && \
+        make -j4 > /dev/null && \
+        make install > /dev/null && \
+        make clean > /dev/null && \
+
     rm -rf curl-7.83.1 curl-7.83.1.tar.gz
 
 RUN curl -fsSL -o zlib-1.3.1.tar.gz https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz && \
     tar zxf zlib-1.3.1.tar.gz && \
     cd zlib-1.3.1 && \
+
     ./configure --static --prefix=/opt/zlib && \
-    make -j4 > /dev/null && \
-    make install > /dev/null && \
-    make clean > /dev/null  && \
+        make -j4 > /dev/null && \
+        make install > /dev/null && \
+        make clean > /dev/null  && \
+
     AR=/usr/bin/aarch64-linux-gnu-ar \
     AS=/usr/bin/aarch64-linux-gnu-as \
     LD=/usr/bin/aarch64-linux-gnu-ld \
@@ -79,9 +84,9 @@ RUN curl -fsSL -o zlib-1.3.1.tar.gz https://github.com/madler/zlib/releases/down
     CC=/usr/bin/aarch64-linux-gnu-gcc \
     NM=/usr/bin/aarch64-linux-gnu-nm \
     ./configure --static --prefix=/opt/aarch64-zlib && \
-    make -j4 > /dev/null && \
-    make install > /dev/null && \
-    make clean > /dev/null && \
+        make -j4 > /dev/null && \
+        make install > /dev/null && \
+        make clean > /dev/null && \
     rm -rf zlib-1.3.1 zlib-1.3.1.tar.gz
 
 RUN git clone --recurse-submodules --depth 1 --branch "1.11.321" https://github.com/aws/aws-sdk-cpp /opt/aws-sdk-cpp && \
@@ -110,8 +115,8 @@ RUN git clone --recurse-submodules --depth 1 --branch "1.11.321" https://github.
           -DAUTORUN_UNIT_TESTS=OFF \
           -DZLIB_LIBRARY="/opt/aarch64-zlib/lib/libz.a" \
           -DZLIB_INCLUDE_DIR="/opt/aarch64-zlib/include" \
-	  -Dcrypto_LIBRARY="/opt/aarch64-ssl/lib/libcrypto.a" \
-	  -Dcrypto_INCLUDE_DIR="/opt/aarch64-ssl/include" \
+          -Dcrypto_LIBRARY="/opt/aarch64-ssl/lib/libcrypto.a" \
+          -Dcrypto_INCLUDE_DIR="/opt/aarch64-ssl/include" \
           -DCURL_LIBRARY="/opt/aarch64-curl/lib/libcurl.a" \
           -DCURL_INCLUDE_DIR="/opt/aarch64-curl/include" \
           -DOPENSSL_CRYPTO_LIBRARY="/opt/aarch64-ssl/lib/libssl.a" \

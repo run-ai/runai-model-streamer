@@ -3,7 +3,6 @@
 #include <gtest/gtest.h>
 #include <map>
 #include <string>
-#include <array>
 
 #include "utils/logging/logging.h"
 #include "utils/random/random.h"
