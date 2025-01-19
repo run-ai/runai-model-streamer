@@ -10,7 +10,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     gcc-x86-64-linux-gnu g++-x86-64-linux-gnu binutils-x86-64-linux-gnu \
     gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu \
     && rm -rf /var/lib/apt/lists/* \
-    && ln -f /usr/bin/aarch64-linux-gnu-ld.gold /usr/bin/ld.gold
+    && ln -sf /usr/bin/aarch64-linux-gnu-ld.gold /usr/bin/ld.gold
 
 RUN pip install \
     cpplint==1.5.4
@@ -32,7 +32,7 @@ RUN curl -fsSL -o openssl-1.1.1o.tar.gz https://www.openssl.org/source/openssl-1
     tar zxf openssl-1.1.1o.tar.gz && \
     cd openssl-1.1.1o && \
 
-    ./config no-ssl2 no-zlib no-shared no-comp no-dynamic-engine enable-ec_nistp_64_gcc_128 --prefix=/opt/ssl --openssldir=/opt/ssl && \
+    ./Configure no-ssl2 no-zlib no-shared no-comp no-dynamic-engine enable-ec_nistp_64_gcc_128 --cross-compile-prefix=/usr/bin/x86_64-linux-gnu- --prefix=/opt/x86_64-ssl --openssldir=/opt/x86_64-ssl linux-x86_64 && \
         make -j4 > /dev/null && \
         make install_sw > /dev/null && \
         make clean > /dev/null && \
@@ -44,13 +44,20 @@ RUN curl -fsSL -o openssl-1.1.1o.tar.gz https://www.openssl.org/source/openssl-1
         make clean > /dev/null && \
         make distclean > /dev/null && \
 
+    cd - && \
     rm -rf openssl-1.1.1o openssl-1.1.1o.tar.gz
 
 RUN curl -fsSL -o curl-7.83.1.tar.gz https://github.com/curl/curl/releases/download/curl-7_83_1/curl-7.83.1.tar.gz && \
     tar zxf curl-7.83.1.tar.gz && \
     cd curl-7.83.1 && \
 
-    ./configure --disable-shared --with-openssl=/opt/ssl --prefix=/opt/curl && \
+    AR=/usr/bin/x86_64-linux-gnu-ar \
+    AS=/usr/bin/x86_64-linux-gnu-as \
+    LD=/usr/bin/x86_64-linux-gnu-ld \
+    RANLIB=/usr/bin/x86_64-linux-gnu-ranlib \
+    CC=/usr/bin/x86_64-linux-gnu-gcc \
+    NM=/usr/bin/x86_64-linux-gnu-nm \
+    ./configure --host=x86_64-linux-gnu --build=x86_64-linux-gnu --disable-shared --with-openssl=/opt/x86_64-ssl --prefix=/opt/x86_64-curl && \
         make -j4 > /dev/null && \
         make install > /dev/null && \
         make clean > /dev/null  && \
@@ -66,16 +73,23 @@ RUN curl -fsSL -o curl-7.83.1.tar.gz https://github.com/curl/curl/releases/downl
         make install > /dev/null && \
         make clean > /dev/null && \
 
+    cd - && \
     rm -rf curl-7.83.1 curl-7.83.1.tar.gz
 
 RUN curl -fsSL -o zlib-1.3.1.tar.gz https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz && \
     tar zxf zlib-1.3.1.tar.gz && \
     cd zlib-1.3.1 && \
 
-    ./configure --static --prefix=/opt/zlib && \
+    AR=/usr/bin/x86_64-linux-gnu-ar \
+    AS=/usr/bin/x86_64-linux-gnu-as \
+    LD=/usr/bin/x86_64-linux-gnu-ld \
+    RANLIB=/usr/bin/x86_64-linux-gnu-ranlib \
+    CC=/usr/bin/x86_64-linux-gnu-gcc \
+    NM=/usr/bin/x86_64-linux-gnu-nm \
+    ./configure --static --prefix=/opt/x86_64-zlib && \
         make -j4 > /dev/null && \
         make install > /dev/null && \
-        make clean > /dev/null  && \
+        make clean > /dev/null && \
 
     AR=/usr/bin/aarch64-linux-gnu-ar \
     AS=/usr/bin/aarch64-linux-gnu-as \
@@ -87,23 +101,36 @@ RUN curl -fsSL -o zlib-1.3.1.tar.gz https://github.com/madler/zlib/releases/down
         make -j4 > /dev/null && \
         make install > /dev/null && \
         make clean > /dev/null && \
+    cd - && \
     rm -rf zlib-1.3.1 zlib-1.3.1.tar.gz
 
+ADD aarch64-linux-gnu.cmake /opt/toolchains/aarch64-linux-gnu.cmake
+ADD x86_64-linux-gnu.cmake /opt/toolchains/x86_64-linux-gnu.cmake
 RUN git clone --recurse-submodules --depth 1 --branch "1.11.321" https://github.com/aws/aws-sdk-cpp /opt/aws-sdk-cpp && \
     cd /opt/aws-sdk-cpp && \
-    cmake -DBUILD_ONLY="s3-crt" \
-          -DCMAKE_PREFIX_PATH="/opt/zlib;/opt/ssl;/opt/curl" \
-          -DCMAKE_INSTALL_PREFIX="/opt/aws" \
+    
+    cmake -DCMAKE_TOOLCHAIN_FILE=/opt/toolchains/x86_64-linux-gnu.cmake \
+          -DBUILD_ONLY="s3-crt" \
+          -DCMAKE_PREFIX_PATH="/opt/x86_64-ssl;/opt/x86_64-curl" \
+          -DCMAKE_INSTALL_PREFIX="/opt/x86_64-aws" \
           -DFORCE_SHARED_CRT=OFF \
           -DBUILD_SHARED_LIBS=OFF \
           -DENABLE_TESTING=OFF \
-          -DAUTORUN_UNIT_TESTS=OFF && \
+          -DAUTORUN_UNIT_TESTS=OFF \
+          -DZLIB_LIBRARY="/opt/x86_64-zlib/lib/libz.a" \
+          -DZLIB_INCLUDE_DIR="/opt/x86_64-zlib/include" \
+          -Dcrypto_LIBRARY="/opt/x86_64-ssl/lib/libcrypto.a" \
+          -Dcrypto_INCLUDE_DIR="/opt/x86_64-ssl/include" \
+          -DCURL_LIBRARY="/opt/x86_64-curl/lib/libcurl.a" \
+          -DCURL_INCLUDE_DIR="/opt/x86_64-curl/include" \
+          -DOPENSSL_CRYPTO_LIBRARY="/opt/x86_64-ssl/lib/libssl.a" \
+          -DOPENSSL_INCLUDE_DIR="/opt/x86_64-ssl/include" && \
     make -j4 && \
     make install && \
 
     make clean && \
     rm -rf CMakeCache.txt && \
-
+    
     cmake -DCMAKE_TOOLCHAIN_FILE=/opt/toolchains/aarch64-linux-gnu.cmake \
           -DBUILD_ONLY="s3-crt" \
           -DCMAKE_PREFIX_PATH="/opt/aarch64-ssl;/opt/aarch64-curl" \

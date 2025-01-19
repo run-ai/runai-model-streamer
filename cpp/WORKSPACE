@@ -21,9 +21,9 @@ config_setting(
 cc_library(
     name = "aws",
     hdrs = glob(["*aws/include/**/*.*"]),
-    includes = ["$(BASE_PATH)aws/include"],
+    includes = ["$(BASE_PATH)-aws/include"],
     linkopts = [
-        "-L/opt/$(BASE_PATH)aws/lib",
+        "-L/opt/$(BASE_PATH)-aws/lib",
         "-lpthread",
         "-l:libaws-cpp-sdk-s3-crt.a",
         "-l:libaws-cpp-sdk-core.a",
@@ -42,12 +42,11 @@ cc_library(
         "-l:libaws-c-common.a",
         "-ldl -lm -lrt",
     ] + select({
-        ":dynamic_link": ["-lz", "-lssl", "-lcrypto", "-lcurl"],
+        ":dynamic_link": ["-lssl", "-lcrypto", "-lcurl"],
         "//conditions:default": [
-            "-l:/opt/$(BASE_PATH)zlib/lib/libz.a",
-            "-l:/opt/$(BASE_PATH)curl/lib/libcurl.a",
-            "-l:/opt/$(BASE_PATH)ssl/lib/libssl.a",
-            "-l:/opt/$(BASE_PATH)ssl/lib/libcrypto.a",
+            "-l:/opt/$(BASE_PATH)-curl/lib/libcurl.a",
+            "-l:/opt/$(BASE_PATH)-ssl/lib/libssl.a",
+            "-l:/opt/$(BASE_PATH)-ssl/lib/libcrypto.a",
         ],
     }),
 )
