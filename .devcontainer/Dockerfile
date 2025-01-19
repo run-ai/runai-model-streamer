@@ -100,11 +100,10 @@ RUN git clone --recurse-submodules --depth 1 --branch "1.11.321" https://github.
           -DAUTORUN_UNIT_TESTS=OFF && \
     make -j4 && \
     make install && \
-    rm -rf /opt/aws-sdk-cpp
 
-ADD aarch64-linux-gnu.cmake /opt/toolchains/aarch64-linux-gnu.cmake
-RUN git clone --recurse-submodules --depth 1 --branch "1.11.321" https://github.com/aws/aws-sdk-cpp /opt/aws-sdk-cpp && \
-    cd /opt/aws-sdk-cpp && \
+    make clean && \
+    rm -rf CMakeCache.txt && \
+
     cmake -DCMAKE_TOOLCHAIN_FILE=/opt/toolchains/aarch64-linux-gnu.cmake \
           -DBUILD_ONLY="s3-crt" \
           -DCMAKE_PREFIX_PATH="/opt/aarch64-ssl;/opt/aarch64-curl" \
