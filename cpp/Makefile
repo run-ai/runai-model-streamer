@@ -1,14 +1,20 @@
-.PHONY: build build_mock test
+.PHONY: build build_mock test clean
+
+ARCH := $$(uname -m)
 
 build:
-	bazel build streamer:libstreamer.so && \
-	bazel build --define USE_SYSTEM_LIBS=${USE_SYSTEM_LIBS} s3:libstreamers3.so
+	bazel build streamer:libstreamer.so \
+		"--crosstool_top=@${ARCH}//:toolchain" && \
+	bazel build s3:libstreamers3.so \
+		--define USE_SYSTEM_LIBS=${USE_SYSTEM_LIBS} \
+		--define BASE_PATH=${ARCH} \
+		"--crosstool_top=@${ARCH}//:toolchain"
 
 build_mock:
 	bazel build mock:libstreamer-mock.so
 
 test:
-	bazel test //...:all
+	echo bazel test //...:all --define BASE_PATH=${ARCH}
 
 clean:
 	bazel clean

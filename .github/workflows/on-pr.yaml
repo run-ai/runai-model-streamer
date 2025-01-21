@@ -20,23 +20,16 @@ jobs:
           make test && \
           PACKAGE_VERSION=${{ env.PACKAGE_VERSION }} make build
 
-    - name: Set package file names
-      run: |
-        file=$(find py/runai_model_streamer/dist -maxdepth 1 -type f -name 'runai_model_streamer*.whl' -print -quit)
-        s3_file=$(find py/runai_model_streamer_s3/dist -maxdepth 1 -type f -name 'runai_model_streamer_s3-*.whl' -print -quit)
-        echo "PACKAGE_FILE=$(basename $file)" >> $GITHUB_ENV
-        echo "S3_PACKAGE_FILE=$(basename $s3_file)" >> $GITHUB_ENV
-
     - name: Upload streamer package to github action
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ env.PACKAGE_FILE }}
-        path: py/runai_model_streamer/dist/${{ env.PACKAGE_FILE }}
+        name: runai_model_streamer
+        path: py/runai_model_streamer/dist/*
         if-no-files-found: error
 
     - name: Upload s3 streamer package to github action
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ env.S3_PACKAGE_FILE }}
-        path: py/runai_model_streamer_s3/dist/${{ env.S3_PACKAGE_FILE }}
+        name: runai_model_streamer_s3
+        path: py/runai_model_streamer_s3/dist/*
         if-no-files-found: error
