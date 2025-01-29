@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <map>
+#include <filesystem>
 
 #include "utils/logging/logging.h"
 
@@ -210,7 +211,7 @@ size_t Fd::size() const
 
 void Fd::seek(off_t offset) const
 {
-    PASSERT(static_cast<size_t>(offset) <= size()) << "trying to read offset after EOF";
+    // lseek() allows the file offset to be set beyond the end of the file (but this does not change the size of the file).
     PASSERT(::lseek(_fd, offset, SEEK_SET) != -1) << "failed seeking file";
 }
 
@@ -250,5 +251,30 @@ void Fd::write(const std::string & path, const std::vector<uint8_t> & data, int 
     ASSERT(fd != -1) << "Failed opening '" << path << "'";
     fd.write(data.data(), data.size());
 }
+
+std::vector<std::string> Fd::list(const std::string & path)
+{
+    std::vector<std::string> strings;
+    // By default symlink (symbolic links) are not followed in the recursive iteration
+    // Therefore, cycles are not handled here
+    for (const auto & entry : std::filesystem::recursive_directory_iterator(path))
+    {
+        if (entry.is_regular_file())
+        {
+            strings.push_back(entry.path());
+        }
+    }
+
+    return strings;
+}
+
+size_t Fd::size(const std::string & path)
+{
+    Fd fd(::open(path.c_str(), O_RDONLY));
+    ASSERT(fd != -1) << "failed to open '" << path << "'";
+
+    return fd.size();
+}
+
 
 } // namespace runai::llm::streamer::utils

@@ -31,6 +31,11 @@ _RUNAI_EXTERN_C void runai_end(void * streamer);
 
 _RUNAI_EXTERN_C int runai_read_file(void * streamer, const char * path, const char * dst);
 
+// send a read request to copy s3 object to a file destination and wait until finished
+// return Success if succeeded
+
+_RUNAI_EXTERN_C int runai_read_object_to_file(void * streamer, const char * s3_path, const char * fs_path);
+
 // send a read request and wait until finished
 // return Success if the exact number of bytes was read
 
@@ -49,5 +54,10 @@ _RUNAI_EXTERN_C int runai_request(void * streamer, const char * path, size_t fil
 _RUNAI_EXTERN_C int runai_response(void * streamer, unsigned * index /* return parameter */);
 
 _RUNAI_EXTERN_C const char * runai_response_str(int response_code);
+
+// list files or object keys
+_RUNAI_EXTERN_C int runai_list(void * streamer, const char * path, char*** keys, size_t * count);
+// free list
+_RUNAI_EXTERN_C int runai_free_list(void * streamer, char*** keys, size_t count);
 
 } // namespace runai::llm::streamer

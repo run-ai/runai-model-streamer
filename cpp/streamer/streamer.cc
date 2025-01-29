@@ -2,6 +2,7 @@
 
 #include <memory>
 
+#include "common/exception/exception.h"
 #include "common/response_code/response_code.h"
 #include "streamer/impl/streamer/streamer.h"
 
@@ -138,6 +139,69 @@ _RUNAI_EXTERN_C const char * runai_response_str(int response_code)
     }
 
     return unexpected_error;
+}
+
+_RUNAI_EXTERN_C int runai_list(void * streamer, const char * path, char*** keys, size_t * count)
+{
+    try
+    {
+        if (streamer == nullptr || path == nullptr || count == nullptr)
+        {
+            return static_cast<int>(common::ResponseCode::InvalidParameterError);
+        }
+
+        auto * s = static_cast<impl::Streamer *>(streamer);
+        auto ret = s->list(path, keys, count);
+        return static_cast<int>(ret);
+    }
+    catch(...)
+    {
+    }
+
+    LOG(ERROR) << "returned " << common::ResponseCode::UnknownError;
+    return static_cast<int>(common::ResponseCode::UnknownError);
+}
+
+// free list
+_RUNAI_EXTERN_C int runai_free_list(void * streamer, char*** keys, size_t count)
+{
+    try
+    {
+        if (keys == nullptr || (*keys == nullptr && count > 0) || (*keys != nullptr && count == 0))
+        {
+            return static_cast<int>(common::ResponseCode::InvalidParameterError);
+        }
+
+        auto ret = impl::Streamer::free_list(keys, count);
+        return static_cast<int>(ret);
+    }
+    catch(...)
+    {
+    }
+    return static_cast<int>(common::ResponseCode::UnknownError);
+}
+
+int runai_read_object_to_file(void * streamer, const char * s3_path, const char * fs_path)
+{
+    try
+    {
+        if (streamer == nullptr)
+        {
+            return static_cast<int>(common::ResponseCode::InvalidParameterError);
+        }
+
+        auto * s = static_cast<impl::Streamer *>(streamer);
+        auto ret = s->request(s3_path, fs_path);
+        return static_cast<int>(ret);
+    }
+    catch(common::Exception & exception)
+    {
+        return static_cast<int>(exception.error());
+    }
+    catch(...)
+    {
+    }
+    return static_cast<int>(common::ResponseCode::UnknownError);
 }
 
 } // namespace runai::llm::streamer

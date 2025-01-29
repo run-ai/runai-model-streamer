@@ -7,7 +7,13 @@ namespace runai::llm::streamer::common::s3
 
 struct StorageUri
 {
-    StorageUri(const std::string & uri);
+    enum class Type
+    {
+        Object,
+        Path,
+    };
+
+    StorageUri(const std::string & uri, Type type = Type::Object);
 
     std::string bucket;
     std::string path;
