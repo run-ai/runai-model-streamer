@@ -24,7 +24,7 @@ cc_library(
     includes = ["$(BASE_PATH)-aws/include"],
     linkopts = [
         "-L/opt/$(BASE_PATH)-aws/lib",
-        "-lpthread",
+        "-lpthread -lz",
         "-l:libaws-cpp-sdk-s3-crt.a",
         "-l:libaws-cpp-sdk-core.a",
         "-l:libaws-crt-cpp.a",
