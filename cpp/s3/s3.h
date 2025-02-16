@@ -8,7 +8,7 @@
 //
 // 1. Uri should be in the format s3://bucket/path or gs://bucket/path
 //
-// 2. Provide endpoint url with environment variable RUNAI_STREAMER_S3_ENDPOINT
+// 2. Provide endpoint url with environment variable AWS_ENDPOINT_URL
 //    No need to set the endpoint for gs or aws, if using the default endpoint)
 //
 // 3. Set RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING = false
@@ -23,7 +23,7 @@
 //    Note: this workaround should be removed if the Aws::S3Crt::ClientConfiguration will accept shouldDisableIMDS
 //
 // For aws:   <streamer app> s3://bucket/path
-// For minio: RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING=false AWS_EC2_METADATA_DISABLED=true RUNAI_STREAMER_S3_ENDPOINT="http://localhost:9000" <streamer app> s3://bucket/path
+// For minio: RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING=false AWS_EC2_METADATA_DISABLED=true AWS_ENDPOINT_URL="http://localhost:9000" <streamer app> s3://bucket/path
 // For gs:    RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING=false AWS_EC2_METADATA_DISABLED=true <streamer app> gs://bucket/path
 
 namespace runai::llm::streamer::impl::s3
