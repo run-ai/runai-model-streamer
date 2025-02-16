@@ -23,6 +23,8 @@ cc_library(
     hdrs = glob(["*aws/include/**/*.*"]),
     includes = ["$(BASE_PATH)-aws/include"],
     linkopts = [
+        "-L/opt/$(BASE_PATH)-zlib/lib",
+        "-lz",
         "-L/opt/$(BASE_PATH)-aws/lib",
         "-lpthread",
         "-l:libaws-cpp-sdk-s3-crt.a",

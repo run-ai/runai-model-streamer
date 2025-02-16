@@ -86,7 +86,7 @@ RUN curl -fsSL -o zlib-1.3.1.tar.gz https://github.com/madler/zlib/releases/down
     RANLIB=/usr/bin/x86_64-linux-gnu-ranlib \
     CC=/usr/bin/x86_64-linux-gnu-gcc \
     NM=/usr/bin/x86_64-linux-gnu-nm \
-    ./configure --static --prefix=/opt/x86_64-zlib && \
+    ./configure --static --shared --prefix=/opt/x86_64-zlib && \
         make -j4 > /dev/null && \
         make install > /dev/null && \
         make clean > /dev/null && \
@@ -97,7 +97,7 @@ RUN curl -fsSL -o zlib-1.3.1.tar.gz https://github.com/madler/zlib/releases/down
     RANLIB=/usr/bin/aarch64-linux-gnu-ranlib \
     CC=/usr/bin/aarch64-linux-gnu-gcc \
     NM=/usr/bin/aarch64-linux-gnu-nm \
-    ./configure --static --prefix=/opt/aarch64-zlib && \
+    ./configure --static --shared --prefix=/opt/aarch64-zlib && \
         make -j4 > /dev/null && \
         make install > /dev/null && \
         make clean > /dev/null && \
