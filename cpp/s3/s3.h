@@ -6,10 +6,11 @@
 
 // For connecting to s3 providers other then aws:
 //
-// 1. Uri should be in the format s3://bucket/path or gs://bucket/path
+// 1. Uri should be in the format s3://bucket/path
 //
-// 2. Provide endpoint url with environment variable RUNAI_STREAMER_S3_ENDPOINT
-//    No need to set the endpoint for gs or aws, if using the default endpoint)
+// 2. Provide endpoint url only with environment variable AWS_ENDPOINT_URL
+//    Note: the aws cpp sdk ignores the endpoint url in ~/.aws/config file 
+//    No need to set the endpoint for aws, if using the default endpoint
 //
 // 3. Set RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING = false
 //    This parameter controls the parsing of the URL
@@ -22,9 +23,11 @@
 //    Then the ClientConfigurationProvider object should be destructed for restoring the environment variable
 //    Note: this workaround should be removed if the Aws::S3Crt::ClientConfiguration will accept shouldDisableIMDS
 //
-// For aws:   <streamer app> s3://bucket/path
-// For minio: RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING=false AWS_EC2_METADATA_DISABLED=true RUNAI_STREAMER_S3_ENDPOINT="http://localhost:9000" <streamer app> s3://bucket/path
-// For gs:    RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING=false AWS_EC2_METADATA_DISABLED=true <streamer app> gs://bucket/path
+// 5. Credentials can be provided in ~/.aws/credentials file or by passing environment variables AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY 
+//
+// aws:   <streamer app> s3://bucket/path
+// gcs:   AWS_ENDPOINT_URL="https://storage.googleapis.com" RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING=false AWS_EC2_METADATA_DISABLED=true <streamer app> s3://bucket/path
+// minio: AWS_ENDPOINT_URL="http://localhost:9000" RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING=0 AWS_EC2_METADATA_DISABLED=true AWS_ACCESS_KEY_ID="minio" AWS_SECRET_ACCESS_KEY="miniostorage" <streamer app> s3://bucket/path
 
 namespace runai::llm::streamer::impl::s3
 {

@@ -23,7 +23,7 @@ StorageUri::StorageUri(const std::string & uri)
         throw std::exception();
     }
 
-    bool override_endpoint = utils::try_getenv("RUNAI_STREAMER_S3_ENDPOINT", endpoint);
+    bool override_endpoint = utils::try_getenv("AWS_ENDPOINT_URL", endpoint);
     LOG_IF(DEBUG, override_endpoint) << "override url endpoint: " << endpoint;
 
     bucket = match[1];

@@ -58,7 +58,7 @@ TEST(Endpoint, Exists)
     std::unique_ptr<StorageUri> uri;
 
     auto endpoint = utils::random::string();
-    utils::temp::Env size("RUNAI_STREAMER_S3_ENDPOINT", endpoint);
+    utils::temp::Env endpoint_env("AWS_ENDPOINT_URL", endpoint);
 
     EXPECT_NO_THROW(uri = std::make_unique<StorageUri>(s3_path));
     EXPECT_EQ(uri->bucket, bucket);
