@@ -10,6 +10,7 @@
 #include "common/response/response.h"
 
 #include "utils/dylib/dylib.h"
+#include "utils/misc/misc.h"
 
 namespace runai::llm::streamer::common::s3
 {

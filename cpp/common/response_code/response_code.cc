@@ -28,6 +28,7 @@ constexpr std::array<const char *, static_cast<size_t>(ResponseCode::__Max)> __m
     "File access error",
     "End of file reached",
     "S3 not supported",
+    "GLIBC version should be at least 2.29",
     "Invalid request parameters",
     "Empty request parameters",
     "Streamer is handling previous request",

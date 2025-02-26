@@ -9,7 +9,7 @@
 // 1. Uri should be in the format s3://bucket/path
 //
 // 2. Provide endpoint url only with environment variable AWS_ENDPOINT_URL
-//    Note: the aws cpp sdk ignores the endpoint url in ~/.aws/config file 
+//    Note: the aws cpp sdk ignores the endpoint url in ~/.aws/config file
 //    No need to set the endpoint for aws, if using the default endpoint
 //
 // 3. Set RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING = false
@@ -23,7 +23,7 @@
 //    Then the ClientConfigurationProvider object should be destructed for restoring the environment variable
 //    Note: this workaround should be removed if the Aws::S3Crt::ClientConfiguration will accept shouldDisableIMDS
 //
-// 5. Credentials can be provided in ~/.aws/credentials file or by passing environment variables AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY 
+// 5. Credentials can be provided in ~/.aws/credentials file or by passing environment variables AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
 //
 // aws:   <streamer app> s3://bucket/path
 // gcs:   AWS_ENDPOINT_URL="https://storage.googleapis.com" RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING=false AWS_EC2_METADATA_DISABLED=true <streamer app> s3://bucket/path

@@ -24,7 +24,7 @@ struct S3WrappertTest : ::testing::Test
 
 TEST_F(S3WrappertTest, Creation_Sanity)
 {
-    S3ClientWrapper wrapper(uri);
+    EXPECT_NO_THROW(S3ClientWrapper wrapper(uri));
 }
 
 TEST_F(S3WrappertTest, Creation)
