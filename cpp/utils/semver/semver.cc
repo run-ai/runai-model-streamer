@@ -1,27 +1,14 @@
-#include "utils/misc/misc.h"
+#include "utils/semver/semver.h"
 
 #include <unistd.h>
-#include <sys/resource.h>
 #include <iostream>
 #include <sstream>
 #include <vector>
 
 #include "utils/logging/logging.h"
 
-namespace runai::llm::streamer::utils::misc
+namespace runai::llm::streamer::utils
 {
-
-unsigned long get_max_file_descriptors()
-{
-    struct rlimit limit;
-    if (getrlimit(RLIMIT_NOFILE, &limit) == 0)
-    {
-        return limit.rlim_max;  // Maximum limit on file descriptors
-    }
-
-    LOG(ERROR) << "Failed to get maximal number of file descriptors";
-    return 0;
-}
 
 Semver::Semver(unsigned short major, unsigned short minor):
     Semver(major, minor, 0)
@@ -135,4 +122,4 @@ Semver get_glibc_version()
     return Semver(str);
 }
 
-} // namespace runai::llm::streamer::utils::misc
+} // namespace runai::llm::streamer::utils

@@ -9,8 +9,10 @@
 
 #include "utils/logging/logging.h"
 #include "utils/random/random.h"
+#include "utils/env/env.h"
 #include "utils/dylib/dylib.h"
 #include "utils/temp/env/env.h"
+#include "utils/fdlimit/fdlimit.h"
 
 namespace runai::llm::streamer
 {
@@ -133,6 +135,33 @@ TEST_F(StreamerTest, Error)
         EXPECT_EQ(verify_mock(), 0);
         mock_cleanup();
     }
+}
+
+TEST_F(StreamerTest, Increase_Insufficient_Fd_Limit)
+{
+    utils::Dylib dylib("libstreamers3.so");
+    auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
+
+    auto size = utils::random::number(100, 1000);
+    const auto data = utils::random::buffer(size);
+
+    auto concurrency = utils::getenv<int>("RUNAI_STREAMER_CONCURRENCY");
+
+    const auto insufficient_fd_limit = utils::random::number<rlim_t>(50, concurrency * 64 -1);
+    utils::FdLimitSetter fd_limit(insufficient_fd_limit);
+    void * streamer;
+    auto res = runai_start(&streamer);
+    EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
+
+    std::vector<char> v(size);
+    res = runai_read(streamer, s3_path.c_str(), 0, size, v.data());
+    EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
+
+    runai_end(streamer);
+    EXPECT_EQ(verify_mock(), 0);
+
+    // verify that fd limit was restored
+    EXPECT_EQ(utils::get_cur_file_descriptors(), insufficient_fd_limit);
 }
 
 TEST_F(StreamerTest, Stop_Before_Async_Read)

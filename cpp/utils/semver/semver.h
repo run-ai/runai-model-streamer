@@ -3,10 +3,8 @@
 #include <string>
 #include <ostream>
 
-namespace runai::llm::streamer::utils::misc
+namespace runai::llm::streamer::utils
 {
-
-unsigned long get_max_file_descriptors();
 
 struct Semver
 {
@@ -38,4 +36,4 @@ bool operator<=(const Semver &, const Semver &);
 
 Semver get_glibc_version();
 
-} // namespace runai::llm::streamer::utils::misc
+} // namespace runai::llm::streamer::utils

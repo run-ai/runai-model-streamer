@@ -5,6 +5,7 @@
 #include <string>
 
 #include "utils/threadpool/threadpool.h"
+#include "utils/fdlimit/fdlimit.h"
 
 #include "common/responder/responder.h"
 #include "streamer/impl/config/config.h"
@@ -55,6 +56,7 @@ struct Streamer
     std::unique_ptr<S3Cleanup> _s3;
     utils::ThreadPool<Batch> _pool;
     std::unique_ptr<S3Stop> _s3_stop;
+    std::unique_ptr<utils::FdLimitSetter> _fd_limit;
     std::shared_ptr<common::Responder> _responder;
 };
 
