@@ -109,6 +109,14 @@ void Streamer::create_request(const std::string & path, size_t file_offset, size
         uri = std::make_unique<common::s3::StorageUri>(path);
         if (_s3 == nullptr)
         {
+            // verify fd limit acording to concurrency
+            auto fd_limit = utils::misc::get_max_file_descriptors();
+            LOG(DEBUG) << "Process file descriptors limit is " << fd_limit << " and concurrency level is " << _config->concurrency;
+            if (fd_limit/_config->concurrency < 64)
+            {
+                LOG(ERROR) << "Insufficient file descriptors limit " << fd_limit << " for concurrency level " << _config->concurrency << " ; increase fd limit to " << _config->concurrency  * 64  << " or higher, depending on your application fd usage";
+                throw common::Exception(common::ResponseCode::InsufficientFdLimit);
+            }
             _s3_stop = std::make_unique<S3Stop>();
             _s3 = std::make_unique<S3Cleanup>();
         }

@@ -63,10 +63,7 @@ def _runai_portable_binary(rule, deps=[], linkopts=[], **kwargs):
             # we link against librt.so in order to cause `clock_gettime()`
             # to be taken from glibc version 2.2.5.
             # without doing this, it will be taken from glibc 2.17.
-            #
-            # NOTE: we add this dependency to every Run:AI portable shared
-            # object because currently both preloader.so and loader.so
-            # use `clock_gettime` indirectly (`std::chrono::*::now`).
+
             "-lrt",
         ],
         **kwargs
