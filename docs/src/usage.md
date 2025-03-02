@@ -60,6 +60,12 @@ Setting the environment variable `AWS_ENDPOINT_URL` is mandatory
 
 Setting the environment variable `AWS_EC2_METADATA_DISABLED` is needed in order to avoid a delay of few seconds, which happens only when the aws s3 sdk is used for compatible storage as explained [here](https://github.com/aws/aws-sdk-cpp/issues/1410)   
 
+#####  Troubleshooting
+
+For AWS S3 trace logs pass the environment variable `RUNAI_STREAMER_S3_TRACE=1` - this will create a log file in the location of the application
+
+For the streamer internal logs pass the environment variables `RUNAI_STREAMER_LOG_TO_STDERR=1 RUNAI_STREAMER_LOG_LEVEL=DEBUG`
+
 ### CPU Memory Capping
 
 The streamer allocates a buffer on the CPU Memory for storing the tensors before moving them to the GPU Memory. Control the size of the allocated buffer by using the environment variable `RUNAI_STREAMER_MEMORY_LIMIT`.
