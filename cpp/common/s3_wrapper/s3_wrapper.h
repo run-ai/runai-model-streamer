@@ -10,6 +10,7 @@
 #include "common/response/response.h"
 
 #include "utils/dylib/dylib.h"
+#include "utils/semver/semver.h"
 
 namespace runai::llm::streamer::common::s3
 {

@@ -37,6 +37,7 @@ runai_cc_test(
             "//utils/temp/env",
             "//utils/dylib",
             "//utils/logging",
+            "//utils/fdlimit",
             "//s3/s3_mock:libstreamers3.so",
     ],
     linkstatic=False,

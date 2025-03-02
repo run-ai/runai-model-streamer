@@ -7,6 +7,7 @@ runai_cc_auto_library(
         "//streamer/impl/batches",
         "//common/responder",
         "//utils/threadpool",
+        "//utils/fdlimit",
     ],
 )
 

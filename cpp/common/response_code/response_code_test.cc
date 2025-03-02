@@ -18,6 +18,8 @@ TEST(Response, Description)
         "File access error",
         "End of file reached",
         "S3 not supported",
+        "GLIBC version should be at least 2.29",
+        "Increase process fd limit or decrease the concurrency level. Recommended value for the streamer alone is the concurrency multiplied by 64, in addition to your application fd usage",
         "Invalid request parameters",
         "Empty request parameters",
         "Streamer is handling previous request",
@@ -26,7 +28,7 @@ TEST(Response, Description)
 
     // errors
 
-    for (auto response_code : {ResponseCode::FileAccessError, ResponseCode::EofError, ResponseCode::InvalidParameterError, ResponseCode::EmptyRequestError, ResponseCode::BusyError, ResponseCode::UnknownError, ResponseCode::FinishedError, ResponseCode::S3NotSupported} )
+    for (auto response_code : {ResponseCode::FileAccessError, ResponseCode::EofError, ResponseCode::InvalidParameterError, ResponseCode::EmptyRequestError, ResponseCode::BusyError, ResponseCode::UnknownError, ResponseCode::FinishedError, ResponseCode::S3NotSupported, ResponseCode::GlibcPrerequisite, ResponseCode::InsufficientFdLimit} )
     {
         std::string str = description(static_cast<int>(response_code));
 

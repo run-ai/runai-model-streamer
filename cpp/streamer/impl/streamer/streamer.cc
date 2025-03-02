@@ -100,21 +100,35 @@ void Streamer::create_request(const std::string & path, size_t file_offset, size
     _responder = std::make_shared<common::Responder>(num_sizes);
 
     // cancel responder in case of an error - cancelled response will not delay sending the next request
-    utils::ScopeGuard __responder_release(
-                [&](){_responder->cancel();});
+    utils::ScopeGuard __responder_release([&](){_responder->cancel();});
 
     std::shared_ptr<common::s3::StorageUri> uri;
     try
     {
         uri = std::make_unique<common::s3::StorageUri>(path);
-        if (_s3 == nullptr)
-        {
-            _s3_stop = std::make_unique<S3Stop>();
-            _s3 = std::make_unique<S3Cleanup>();
-        }
     }
     catch(const std::exception& e)
     {
+    }
+
+    if (uri != nullptr && _s3 == nullptr)
+    {
+        // adjust fd limit acording to concurrency
+        auto fd_limit = utils::get_cur_file_descriptors();
+        LOG(DEBUG) << "Process file descriptors limit is " << fd_limit << " and concurrency level is " << _config->concurrency;
+        const auto desired_fd_limit = _config->concurrency * 64;
+        if (fd_limit < desired_fd_limit)
+        {
+            if (desired_fd_limit > utils::get_max_file_descriptors())
+            {
+                LOG(ERROR) << "Insufficient file descriptors limit " << fd_limit << " for concurrency level " << _config->concurrency << " ; increase fd limit to " << desired_fd_limit << " or higher, depending on your application fd usage";
+                throw common::Exception(common::ResponseCode::InsufficientFdLimit);
+            }
+            LOG(INFO) << "Increasing fd soft limit to " << desired_fd_limit << " for concurrency level " << _config->concurrency;
+            _fd_limit = std::make_unique<utils::FdLimitSetter>(desired_fd_limit);
+        }
+        _s3_stop = std::make_unique<S3Stop>();
+        _s3 = std::make_unique<S3Cleanup>();
     }
 
     Batches batches(_config, _responder, path, uri, file_offset, bytesize, dst, num_sizes, internal_sizes);

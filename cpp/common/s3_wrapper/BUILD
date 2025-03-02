@@ -9,6 +9,7 @@ runai_cc_auto_library(
         "//common/exception",
         "//utils/dylib",
         "//utils/env",
+        "//utils/semver",
     ],
 )
 

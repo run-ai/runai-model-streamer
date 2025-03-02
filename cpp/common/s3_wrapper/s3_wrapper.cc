@@ -11,6 +11,8 @@
 namespace runai::llm::streamer::common::s3
 {
 
+const utils::Semver min_glibc_semver = utils::Semver(description(static_cast<int>(ResponseCode::GlibcPrerequisite)));
+
 void S3ClientWrapper::shutdown()
 {
     try
@@ -74,6 +76,14 @@ std::shared_ptr<utils::Dylib> S3ClientWrapper::open_s3()
 
 std::shared_ptr<utils::Dylib> S3ClientWrapper::open_s3_impl()
 {
+    // verify prerequisites
+    auto glibc_version = utils::get_glibc_version();
+    if (min_glibc_semver > glibc_version)
+    {
+        LOG(ERROR) << "GLIBC version must be at least " << min_glibc_semver << ", instead of " << glibc_version;
+        throw Exception(ResponseCode::GlibcPrerequisite);
+    }
+
     size_t chunk_size;
     if (utils::try_getenv("RUNAI_STREAMER_CHUNK_BYTESIZE", chunk_size))
     {

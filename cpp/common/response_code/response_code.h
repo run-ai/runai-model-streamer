@@ -14,6 +14,8 @@ enum class ResponseCode : int
     FileAccessError,
     EofError,
     S3NotSupported,
+    GlibcPrerequisite,
+    InsufficientFdLimit,
     InvalidParameterError,
     EmptyRequestError,
     BusyError,
