@@ -54,9 +54,9 @@ To check if IAM role assumption is needed run `aws s3 ls s3://your-bucket-name -
 
 To load tensors from S3 compatible object store, define the following environment variables
 
-`RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING=0 AWS_ENDPOINT_URL="your_S3_endpoint" AWS_EC2_METADATA_DISABLED=true`
+`RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING=0 RUNAI_STREAMER_S3_ENDPOINT="your_S3_endpoint" AWS_EC2_METADATA_DISABLED=true`
 
-Setting the environment variable `AWS_ENDPOINT_URL` is mandatory
+Setting the environment variable `RUNAI_STREAMER_S3_ENDPOINT` is mandatory
 
 Setting the environment variable `AWS_EC2_METADATA_DISABLED` is needed in order to avoid a delay of few seconds, which happens only when the aws s3 sdk is used for compatible storage as explained [here](https://github.com/aws/aws-sdk-cpp/issues/1410)   
 
