@@ -33,7 +33,7 @@ namespace runai::llm::streamer::impl::s3
 {
 
 // create client
-extern "C" void * runai_create_s3_client(const common::s3::StorageUri & uri);
+extern "C" void * runai_create_s3_client(const common::s3::StorageUri & uri, const char * access_key_id, const char * secret_access_key, const char * session_token);
 // destroy client
 extern "C" void runai_remove_s3_client(void * client);
 // asynchronous read

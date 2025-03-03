@@ -13,10 +13,17 @@
 namespace runai::llm::streamer::impl::s3
 {
 
-S3Client::S3Client(const common::s3::StorageUri & uri) :
+S3Client::S3Client(const common::s3::StorageUri & uri) : S3Client(uri, "", "", "")
+{}
+
+S3Client::S3Client(const common::s3::StorageUri & uri, const std::string & access_key_id, const std::string & secret_access_key, const std::string & session_token) :
     _stop(false),
     _bucket_name(uri.bucket.c_str(), uri.bucket.size()),
-    _path(uri.path.c_str(), uri.path.size())
+    _path(uri.path.c_str(), uri.path.size()),
+    _key(access_key_id.c_str(), access_key_id.size()),
+    _secret(secret_access_key.c_str(), secret_access_key.size()),
+    _token(session_token.c_str(), session_token.size()),
+    _client_credentials(_key, _secret, _token)
 {
     if (!uri.endpoint.empty())
     {
@@ -28,8 +35,17 @@ S3Client::S3Client(const common::s3::StorageUri & uri) :
         LOG(DEBUG) << "Setting s3 configuration useVirtualAddressing to " << _client_config.config.useVirtualAddressing;
     }
 
-    _client = std::make_unique<Aws::S3Crt::S3CrtClient>(_client_config.config);
+    if (access_key_id.empty())
+    {
+        _client = std::make_unique<Aws::S3Crt::S3CrtClient>(_client_config.config);
+    }
+    else
+    {
+        LOG(DEBUG) << "Creating S3 client with given credentials";
+        _client = std::make_unique<Aws::S3Crt::S3CrtClient>(_client_credentials, _client_config.config);
+    }
 }
+
 
 common::ResponseCode S3Client::read(size_t offset, size_t bytesize, char * buffer)
 {

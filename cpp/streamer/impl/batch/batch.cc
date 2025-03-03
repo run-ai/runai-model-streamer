@@ -54,9 +54,9 @@ size_t Range::calculate_end(const Tasks & tasks)
     return tasks[tasks.size() - 1].info.end;
 }
 
-Batch::Batch(const std::string & path, std::shared_ptr<common::s3::StorageUri> uri, Range && range, char * dst, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config) :
+Batch::Batch(const std::string & path, const common::s3::S3ClientWrapper::Params & params, Range && range, char * dst, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config) :
     path(path),
-    uri(uri),
+    params(params),
     range(range),
     dst(dst),
     tasks(tasks),
@@ -74,9 +74,9 @@ void Batch::execute(std::atomic<bool> & stopped)
     try
     {
         // create reader
-        if (uri.get() != nullptr)
+        if (params.valid())
         {
-            auto s3_client = std::make_shared<common::s3::S3ClientWrapper>(*uri);
+            auto s3_client = std::make_shared<common::s3::S3ClientWrapper>(params);
             _reader = std::make_unique<S3>(s3_client, *config);
         }
         else

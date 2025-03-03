@@ -20,11 +20,11 @@
 namespace runai::llm::streamer::impl::s3
 {
 
-void * runai_create_s3_client(const common::s3::StorageUri & uri)
+void * runai_create_s3_client(const common::s3::StorageUri & uri, const char * access_key_id, const char * secret_access_key, const char * session_token)
 {
     try
     {
-        return static_cast<void *>(S3ClientMgr::pop(uri));
+        return static_cast<void *>(S3ClientMgr::pop(uri, access_key_id, secret_access_key, session_token));
     }
     catch(const std::exception & e)
     {

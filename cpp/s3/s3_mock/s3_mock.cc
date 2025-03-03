@@ -27,7 +27,7 @@ void runai_mock_s3_set_response_time_ms(unsigned milliseconds)
     __mock_response_time_ms = milliseconds;
 }
 
-void * runai_create_s3_client(const common::s3::StorageUri & uri)
+void * runai_create_s3_client(const common::s3::StorageUri & uri, const char * access_key_id, const char * secret_access_key, const char * session_token)
 {
     const auto guard = std::unique_lock<std::mutex>(__mutex);
 
