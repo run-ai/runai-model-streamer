@@ -23,6 +23,8 @@ namespace runai::llm::streamer::impl
 TEST(Batch, Finished_Until)
 {
     unsigned num_tasks = utils::random::number(1, 10);
+    const auto path = utils::random::string();
+    common::s3::S3ClientWrapper::Params params;
 
     // File range to read
     auto start = utils::random::number<size_t>(0, 1024);
@@ -56,17 +58,8 @@ TEST(Batch, Finished_Until)
 
     // create batch
     const auto config = std::make_shared<Config>();
-    const auto path = utils::random::string();
-    std::shared_ptr<common::s3::StorageUri> uri;
-    try
-    {
-        uri = std::make_shared<common::s3::StorageUri>(path);
-    }
-    catch(const std::exception& e)
-    {
-    }
 
-    Batch batch(path, uri, std::move(range), nullptr, std::move(tasks), responder, config);
+    Batch batch(path, params, std::move(range), nullptr, std::move(tasks), responder, config);
 
     // execute part of the tasks
 
@@ -111,14 +104,7 @@ TEST(Read, Sanity)
     const auto data = utils::random::buffer(start + size);
     utils::temp::File file(data);
     const auto path = file.path;
-    std::shared_ptr<common::s3::StorageUri> uri;
-    try
-    {
-        uri = std::make_shared<common::s3::StorageUri>(path);
-    }
-    catch(const std::exception& e)
-    {
-    }
+    common::s3::S3ClientWrapper::Params params;
 
     // divide range into chunks - a chunk per task
     auto chunks = utils::random::chunks(range.size, num_tasks);
@@ -145,7 +131,7 @@ TEST(Read, Sanity)
         tasks.push_back(std::move(task));
     }
 
-    Batch batch(path, uri, std::move(range), dst_ptr, std::move(tasks), responder, config);
+    Batch batch(path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
 
     std::atomic<bool> stopped(false);
     EXPECT_NO_THROW(batch.execute(stopped));
@@ -178,6 +164,7 @@ TEST(Read, Error)
     const auto data = utils::random::buffer(start + size - utils::random::number<size_t>(1, size));
     utils::temp::File file(data);
     path = file.path;
+    common::s3::S3ClientWrapper::Params params;
 
     // divide range into chunks - a chunk per task
     auto chunks = utils::random::chunks(range.size, num_tasks);
@@ -204,16 +191,7 @@ TEST(Read, Error)
         tasks.push_back(std::move(task));
     }
 
-    std::shared_ptr<common::s3::StorageUri> uri;
-    try
-    {
-        uri = std::make_shared<common::s3::StorageUri>(path);
-    }
-    catch(const std::exception& e)
-    {
-    }
-
-    Batch batch(path, uri, std::move(range), dst_ptr, std::move(tasks), responder, config);
+     Batch batch(path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
 
     std::atomic<bool> stopped(false);
     EXPECT_NO_THROW(batch.execute(stopped));
@@ -237,14 +215,7 @@ TEST(Read, Already_Stopped)
     const auto data = utils::random::buffer(start + size);
     utils::temp::File file(data);
     const auto path = file.path;
-    std::shared_ptr<common::s3::StorageUri> uri;
-    try
-    {
-        uri = std::make_shared<common::s3::StorageUri>(path);
-    }
-    catch(const std::exception& e)
-    {
-    }
+    common::s3::S3ClientWrapper::Params params;
 
     // divide range into chunks - a chunk per task
     auto chunks = utils::random::chunks(range.size, num_tasks);
@@ -271,7 +242,7 @@ TEST(Read, Already_Stopped)
         tasks.push_back(std::move(task));
     }
 
-    Batch batch(path, uri, std::move(range), dst_ptr, std::move(tasks), responder, config);
+    Batch batch(path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
 
     std::atomic<bool> stopped(true);
     EXPECT_NO_THROW(batch.execute(stopped));
@@ -303,14 +274,7 @@ TEST(Read, Stopped_During_Read)
     const auto data = utils::random::buffer(start + size);
     utils::temp::File file(data);
     const auto path = file.path;
-    std::shared_ptr<common::s3::StorageUri> uri;
-    try
-    {
-        uri = std::make_shared<common::s3::StorageUri>(path);
-    }
-    catch(const std::exception& e)
-    {
-    }
+    common::s3::S3ClientWrapper::Params params;
 
     // divide range into chunks - a chunk per request
 
@@ -343,7 +307,7 @@ TEST(Read, Stopped_During_Read)
         offset += chunks[i];
     }
 
-    Batch batch(path, uri, std::move(range), dst_ptr, std::move(tasks), responder, config);
+    Batch batch(path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
 
     std::atomic<bool> stopped(false);
 
@@ -430,6 +394,7 @@ TEST(Read, Stopped_During_Async_Read)
 
     std::shared_ptr<common::s3::StorageUri> uri;
     EXPECT_NO_THROW(uri = std::make_shared<common::s3::StorageUri>(path));
+    common::s3::S3ClientWrapper::Params params(uri, {utils::random::string(), utils::random::string(), utils::random::string()});
 
     // divide range into chunks - a chunk per request
 
@@ -462,7 +427,7 @@ TEST(Read, Stopped_During_Async_Read)
         offset += chunks[i];
     }
 
-    Batch batch(path, uri, std::move(range), dst_ptr, std::move(tasks), responder, config);
+    Batch batch(path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
 
     std::atomic<bool> stopped(false);
 

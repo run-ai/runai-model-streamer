@@ -8,6 +8,7 @@
 #include "utils/fdlimit/fdlimit.h"
 
 #include "common/responder/responder.h"
+#include "common/s3_credentials/s3_credentials.h"
 #include "streamer/impl/config/config.h"
 #include "streamer/impl/batch/batch.h"
 #include "streamer/impl/reader/reader.h"
@@ -37,11 +38,11 @@ struct Streamer
 
     // single synchronous read request from offset in file
     // returns common::ResponseCode::Success if successful or error code
-    common::ResponseCode request(const std::string & path, size_t offset, size_t bytesize, void * dst);
+    common::ResponseCode request(const std::string & path, size_t offset, size_t bytesize, void * dst, const common::s3::Credentials & credentials);
 
     // async request to read a range asynchronously as multiple chunks
     // returns common::ResponseCode::Success if successful or error code
-    common::ResponseCode request(const std::string & path, size_t offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes);
+    common::ResponseCode request(const std::string & path, size_t offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes, const common::s3::Credentials & credentials);
 
     // return when there is a ready chunk
     // returns common::ResponseCode::FinishedError if no responses are expected
@@ -49,7 +50,7 @@ struct Streamer
     common::Response response();
 
  private:
-    void create_request(const std::string & path, size_t offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes);
+    void create_request(const std::string & path, size_t offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes, const common::s3::Credentials & credentials);
 
  private:
     std::shared_ptr<const Config> _config;

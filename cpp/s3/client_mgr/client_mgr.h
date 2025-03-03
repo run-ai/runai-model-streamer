@@ -24,7 +24,7 @@ struct ClientMgr
 
     ClientMgr<T> & operator=(const ClientMgr<T> &) = delete;
 
-    static T* pop(const common::s3::StorageUri & uri);
+    static T* pop(const common::s3::StorageUri & uri, const std::string & access_key_id, const std::string & secret_access_key, const std::string & session_token);
     static void push(T* client);
 
     static void clear();
@@ -97,7 +97,7 @@ std::string ClientMgr<T>::current_bucket()
 
 
 template <typename T>
-T* ClientMgr<T>::pop(const common::s3::StorageUri & uri)
+T* ClientMgr<T>::pop(const common::s3::StorageUri & uri, const std::string & access_key_id, const std::string & secret_access_key, const std::string & session_token)
 {
     auto & mgr = get();
 
@@ -129,7 +129,7 @@ T* ClientMgr<T>::pop(const common::s3::StorageUri & uri)
 
     // create new client if there are no unused clients for this bucket
 
-    auto client = std::make_unique<T>(uri);
+    auto client = std::make_unique<T>(uri, access_key_id, secret_access_key, session_token);
 
     const auto guard = std::unique_lock<std::mutex>(mgr._mutex);
     auto ptr = client.get();

@@ -7,7 +7,7 @@
 namespace runai::llm::streamer::common::s3
 {
 
-extern "C" void * runai_create_s3_client(const common::s3::StorageUri & uri);
+extern "C" void * runai_create_s3_client(const common::s3::StorageUri & uri, const char * access_key_id, const char * secret_access_key, const char * session_token);
 extern "C" void runai_remove_s3_client(void * client);
 extern "C" common::ResponseCode  runai_async_read_s3_client(void * client, unsigned num_ranges, common::Range * ranges, size_t chunk_bytesize, char * buffer);
 extern "C" common::ResponseCode  runai_async_response_s3_client(void * client, unsigned * index /* output parameter */);

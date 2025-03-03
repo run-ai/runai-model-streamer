@@ -18,6 +18,8 @@ struct S3Client
 {
     S3Client(const common::s3::StorageUri & path);
 
+    S3Client(const common::s3::StorageUri & path, const std::string & access_key_id, const std::string & secret_access_key, const std::string & session_token);
+
     common::ResponseCode read(size_t offset, size_t bytesize, char * buffer);
 
     common::ResponseCode async_read(unsigned num_ranges, common::Range * ranges, size_t chunk_bytesize, char * buffer);
@@ -35,10 +37,14 @@ struct S3Client
 
  private:
     std::atomic<bool> _stop;
-    ClientConfiguration _client_config;
-    std::unique_ptr<Aws::S3Crt::S3CrtClient> _client;
     const Aws::String _bucket_name;
     Aws::String _path;
+    const Aws::String _key;
+    const Aws::String _secret;
+    const Aws::String _token;
+    const Aws::Auth::AWSCredentials _client_credentials;
+    ClientConfiguration _client_config;
+    std::unique_ptr<Aws::S3Crt::S3CrtClient> _client;
 
     // queue of asynchronous responses
     std::shared_ptr<common::Responder> _responder;

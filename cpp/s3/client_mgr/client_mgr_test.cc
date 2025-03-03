@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <set>
+#include <string>
 
 #include "utils/random/random.h"
 
@@ -12,7 +13,7 @@ namespace runai::llm::streamer::impl::s3
 
 struct Helper
 {
-    Helper(const common::s3::StorageUri & uri) :
+    Helper(const common::s3::StorageUri & uri, const std::string & access_key_id, const std::string & secret_access_key, const std::string & session_token) :
         id(utils::random::number<size_t>()),
         uri(uri)
     {}
@@ -32,7 +33,6 @@ struct Helper
         return uri.bucket;
     }
 
-
     const size_t id;
     common::s3::StorageUri uri;
 };
@@ -40,7 +40,10 @@ struct Helper
 struct ClientMgrTest : ::testing::Test
 {
     ClientMgrTest() :
-        uri(create_uri())
+        uri(create_uri()),
+        access_key_id(utils::random::string()),
+        secret_access_key(utils::random::string()),
+        session_token(utils::random::string())
     {}
 
     void TearDown() override
@@ -58,6 +61,9 @@ struct ClientMgrTest : ::testing::Test
     }
 
     common::s3::StorageUri uri;
+    std::string access_key_id;
+    std::string secret_access_key;
+    std::string session_token;
 };
 
 TEST_F(ClientMgrTest, Creation_Sanity)
@@ -69,7 +75,7 @@ TEST_F(ClientMgrTest, Creation_Sanity)
 
 TEST_F(ClientMgrTest, Create_Client)
 {
-    Helper * helper = ClientMgr<Helper>::pop(uri);
+    Helper * helper = ClientMgr<Helper>::pop(uri, access_key_id, secret_access_key, session_token);
     EXPECT_EQ(helper->bucket(), uri.bucket);
     EXPECT_EQ(ClientMgr<Helper>::current_bucket(), uri.bucket);
 
@@ -84,7 +90,7 @@ TEST_F(ClientMgrTest, Create_Client)
 
 TEST_F(ClientMgrTest, Reuse_Client)
 {
-    Helper * helper = ClientMgr<Helper>::pop(uri);
+    Helper * helper = ClientMgr<Helper>::pop(uri, access_key_id, secret_access_key, session_token);
     EXPECT_EQ(helper->bucket(), uri.bucket);
     EXPECT_EQ(ClientMgr<Helper>::current_bucket(), uri.bucket);
 
@@ -100,7 +106,7 @@ TEST_F(ClientMgrTest, Reuse_Client)
     {
         const std::string path = utils::random::string();
         uri.path = path;
-        Helper * helper = ClientMgr<Helper>::pop(uri);
+        Helper * helper = ClientMgr<Helper>::pop(uri, access_key_id, secret_access_key, session_token);
         EXPECT_EQ(helper->bucket(), uri.bucket);
         EXPECT_EQ(helper->path(), path);
         EXPECT_EQ(ClientMgr<Helper>::current_bucket(), uri.bucket);
@@ -120,7 +126,7 @@ TEST_F(ClientMgrTest, Change_Bucket)
     unsigned m = utils::random::number(2, 20);
     for (unsigned i = 0; i < m; ++i)
     {
-        Helper * helper = ClientMgr<Helper>::pop(uri);
+        Helper * helper = ClientMgr<Helper>::pop(uri, access_key_id, secret_access_key, session_token);
         EXPECT_EQ(helper->bucket(), uri.bucket);
         EXPECT_EQ(ClientMgr<Helper>::current_bucket(), uri.bucket);
 
@@ -148,7 +154,7 @@ TEST_F(ClientMgrTest, Change_Bucket)
     {
         const std::string path = utils::random::string();
         uri_.path = path;
-        Helper * helper = ClientMgr<Helper>::pop(uri_);
+        Helper * helper = ClientMgr<Helper>::pop(uri_, access_key_id, secret_access_key, session_token);
         EXPECT_EQ(ClientMgr<Helper>::unused(), 0);
 
         EXPECT_EQ(helper->bucket(), uri_.bucket);
@@ -167,7 +173,8 @@ TEST_F(ClientMgrTest, Change_Bucket)
 
 TEST_F(ClientMgrTest, Remove_Client)
 {
-    Helper * helper = ClientMgr<Helper>::pop(uri);
+    Helper * helper = ClientMgr<Helper>::pop(uri, access_key_id, secret_access_key, session_token);
+
     EXPECT_EQ(helper->bucket(), uri.bucket);
     EXPECT_EQ(ClientMgr<Helper>::current_bucket(), uri.bucket);
 
@@ -179,7 +186,8 @@ TEST_F(ClientMgrTest, Remove_Client)
 
 TEST_F(ClientMgrTest, Remove_Client_Is_Reentrant)
 {
-    Helper * helper = ClientMgr<Helper>::pop(uri);
+    Helper * helper = ClientMgr<Helper>::pop(uri, access_key_id, secret_access_key, session_token);
+
     EXPECT_EQ(helper->bucket(), uri.bucket);
     EXPECT_EQ(ClientMgr<Helper>::current_bucket(), uri.bucket);
 
