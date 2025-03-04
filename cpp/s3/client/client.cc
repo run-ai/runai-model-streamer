@@ -204,4 +204,9 @@ void S3Client::stop()
     }
 }
 
+bool S3Client::verify_credentials(const std::string & access_key_id, const std::string & secret_access_key, const std::string & session_token) const
+{
+    return (access_key_id == _key && secret_access_key == _secret && session_token == _token);
+}
+
 }; // namespace runai::llm::streamer::impl::s3
