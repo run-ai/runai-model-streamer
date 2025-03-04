@@ -35,6 +35,9 @@ struct S3Client
 
     void path(const std::string & path);
 
+    // verify that clien's credentials have not change
+    bool verify_credentials(const std::string & access_key_id, const std::string & secret_access_key, const std::string & session_token) const;
+
  private:
     std::atomic<bool> _stop;
     const Aws::String _bucket_name;

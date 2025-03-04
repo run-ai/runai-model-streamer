@@ -106,16 +106,26 @@ T* ClientMgr<T>::pop(const common::s3::StorageUri & uri, const std::string & acc
 
         auto & unused = mgr._bucket_unused_clients;
         bool is_bucket = uri.bucket == mgr._current_bucket;
-        if (is_bucket && !unused.empty())
+        if (is_bucket)
         {
-            LOG(DEBUG) << "Reusing S3 client";
+            while (!unused.empty())
+            {
+                auto ptr = *unused.begin();
+                ptr->path(uri.path);
+                unused.erase(unused.begin());
 
-            auto ptr = *unused.begin();
-            ptr->path(uri.path);
-            unused.erase(unused.begin());
-            return ptr;
+                // Reuse client only if credentials have not changed
+                if (ptr->verify_credentials(access_key_id, secret_access_key, session_token))
+                {
+                    LOG(DEBUG) << "Reusing S3 client";
+                    return ptr;
+                }
+                
+                // release the stale client
+                mgr._clients.erase(ptr);                
+            }
         }
-        else if (!is_bucket)
+        else
         {
             // remove unused clients of other buckets
             for (T* client : unused)

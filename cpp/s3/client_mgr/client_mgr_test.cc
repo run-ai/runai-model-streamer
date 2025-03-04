@@ -14,9 +14,14 @@ namespace runai::llm::streamer::impl::s3
 struct Helper
 {
     Helper(const common::s3::StorageUri & uri, const std::string & access_key_id, const std::string & secret_access_key, const std::string & session_token) :
+        counter(++global_counter),
         id(utils::random::number<size_t>()),
-        uri(uri)
-    {}
+        uri(uri),
+        key(access_key_id.c_str(), access_key_id.size()),
+        secret(secret_access_key.c_str(), secret_access_key.size()),
+        token(session_token.c_str(), session_token.size())
+    {
+    }
 
     void path(const std::string & str)
     {
@@ -33,9 +38,22 @@ struct Helper
         return uri.bucket;
     }
 
+    bool verify_credentials(const std::string & access_key_id, const std::string & secret_access_key, const std::string & session_token) const
+    {
+        return (access_key_id == key && secret_access_key == secret && session_token == token);
+    }
+
+    static size_t global_counter;
+    const size_t counter;
+
     const size_t id;
     common::s3::StorageUri uri;
+    const Aws::String key;
+    const Aws::String secret;
+    const Aws::String token;
 };
+
+size_t Helper::global_counter = 0;
 
 struct ClientMgrTest : ::testing::Test
 {
@@ -79,6 +97,10 @@ TEST_F(ClientMgrTest, Create_Client)
     EXPECT_EQ(helper->bucket(), uri.bucket);
     EXPECT_EQ(ClientMgr<Helper>::current_bucket(), uri.bucket);
 
+    EXPECT_EQ(helper->key, access_key_id);
+    EXPECT_EQ(helper->secret, secret_access_key);
+    EXPECT_EQ(helper->token, session_token);
+
     EXPECT_EQ(ClientMgr<Helper>::size(), 1);
     EXPECT_EQ(ClientMgr<Helper>::unused(), 0);
 
@@ -94,12 +116,18 @@ TEST_F(ClientMgrTest, Reuse_Client)
     EXPECT_EQ(helper->bucket(), uri.bucket);
     EXPECT_EQ(ClientMgr<Helper>::current_bucket(), uri.bucket);
 
+    EXPECT_EQ(helper->key, access_key_id);
+    EXPECT_EQ(helper->secret, secret_access_key);
+    EXPECT_EQ(helper->token, session_token);
+
     EXPECT_EQ(ClientMgr<Helper>::size(), 1);
     EXPECT_EQ(ClientMgr<Helper>::unused(), 0);
 
     ClientMgr<Helper>::push(helper);
     EXPECT_EQ(ClientMgr<Helper>::size(), 1);
     EXPECT_EQ(ClientMgr<Helper>::unused(), 1);
+
+    const auto expected = helper->counter;
 
     unsigned n = utils::random::number(2, 20);
     for (unsigned i = 0; i < n; ++i)
@@ -110,6 +138,60 @@ TEST_F(ClientMgrTest, Reuse_Client)
         EXPECT_EQ(helper->bucket(), uri.bucket);
         EXPECT_EQ(helper->path(), path);
         EXPECT_EQ(ClientMgr<Helper>::current_bucket(), uri.bucket);
+        EXPECT_EQ(helper->key, access_key_id);
+        EXPECT_EQ(helper->secret, secret_access_key);
+        EXPECT_EQ(helper->token, session_token);
+        EXPECT_EQ(helper->counter, expected);
+
+        EXPECT_EQ(ClientMgr<Helper>::size(), 1);
+        EXPECT_EQ(ClientMgr<Helper>::unused(), 0);
+
+        ClientMgr<Helper>::push(helper);
+        EXPECT_EQ(ClientMgr<Helper>::size(), 1);
+        EXPECT_EQ(ClientMgr<Helper>::unused(), 1);
+    }
+}
+
+TEST_F(ClientMgrTest, Credentials_Changed)
+{
+    Helper * helper = ClientMgr<Helper>::pop(uri, access_key_id, secret_access_key, session_token);
+    EXPECT_EQ(helper->bucket(), uri.bucket);
+    EXPECT_EQ(ClientMgr<Helper>::current_bucket(), uri.bucket);
+
+    EXPECT_EQ(helper->key, access_key_id);
+    EXPECT_EQ(helper->secret, secret_access_key);
+    EXPECT_EQ(helper->token, session_token);
+
+    EXPECT_EQ(ClientMgr<Helper>::size(), 1);
+    EXPECT_EQ(ClientMgr<Helper>::unused(), 0);
+
+    ClientMgr<Helper>::push(helper);
+    EXPECT_EQ(ClientMgr<Helper>::size(), 1);
+    EXPECT_EQ(ClientMgr<Helper>::unused(), 1);
+
+    auto expected = helper->counter;
+
+    unsigned n = utils::random::number(2, 20);
+    for (unsigned i = 0; i < n; ++i)
+    {
+        auto new_key = utils::random::string();    
+        auto new_secret = utils::random::string();    
+        auto new_token = utils::random::string();
+
+        bool changed = (new_key != access_key_id || new_secret != secret_access_key || new_token != session_token);
+
+        const std::string path = utils::random::string();
+        uri.path = path;
+        Helper * helper = ClientMgr<Helper>::pop(uri, new_key, new_secret, new_token);
+        EXPECT_EQ(helper->bucket(), uri.bucket);
+        EXPECT_EQ(helper->path(), path);
+        EXPECT_EQ(ClientMgr<Helper>::current_bucket(), uri.bucket);
+        EXPECT_EQ(helper->key, new_key);
+        EXPECT_EQ(helper->secret, new_secret);
+        EXPECT_EQ(helper->token, new_token);
+        EXPECT_EQ(helper->counter != expected, changed);
+
+        expected = helper->counter;
 
         EXPECT_EQ(ClientMgr<Helper>::size(), 1);
         EXPECT_EQ(ClientMgr<Helper>::unused(), 0);
