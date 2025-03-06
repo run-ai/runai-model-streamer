@@ -3,10 +3,12 @@
 #include <atomic>
 #include <memory>
 #include <string>
+#include <optional>
 
 #include "s3/client_configuration/client_configuration.h"
 
 #include "common/storage_uri/storage_uri.h"
+#include "common/s3_credentials/s3_credentials.h"
 #include "common/responder/responder.h"
 #include "common/response/response.h"
 #include "common/range/range.h"
@@ -14,11 +16,38 @@
 namespace runai::llm::streamer::impl::s3
 {
 
-struct S3Client
+struct S3ClientBase
 {
-    S3Client(const common::s3::StorageUri & path);
+    S3ClientBase(const common::s3::StorageUri_C & path);
 
-    S3Client(const common::s3::StorageUri & path, const std::string & access_key_id, const std::string & secret_access_key, const std::string & session_token);
+    S3ClientBase(const common::s3::StorageUri_C & path, const common::s3::Credentials_C & credentials);
+
+    std::string bucket() const;
+
+    void path(const char * path);
+
+    // verify that clien's credentials have not change
+    bool verify_credentials(const common::s3::Credentials_C & credentials) const;
+
+ protected:
+    const Aws::String _bucket_name;
+    Aws::String _path;
+    const std::optional<Aws::String> _key;
+    const std::optional<Aws::String> _secret;
+    const std::optional<Aws::String> _token;
+    const std::optional<Aws::String> _region;
+    const std::optional<Aws::String> _endpoint;
+    std::unique_ptr<Aws::Auth::AWSCredentials> _client_credentials;
+
+ private:
+    bool verify_credentials_member(const std::optional<Aws::String>& client_member, const char* input_member, const char * name) const;
+};
+
+struct S3Client : S3ClientBase
+{
+    S3Client(const common::s3::StorageUri_C & path);
+
+    S3Client(const common::s3::StorageUri_C & path, const common::s3::Credentials_C & credentials);
 
     common::ResponseCode read(size_t offset, size_t bytesize, char * buffer);
 
@@ -31,21 +60,12 @@ struct S3Client
     // The S3CrtClient d'tor will wait for response of all teh sent requests, which can take a while
     void stop();
 
-    std::string bucket() const;
-
-    void path(const std::string & path);
-
-    // verify that clien's credentials have not change
-    bool verify_credentials(const std::string & access_key_id, const std::string & secret_access_key, const std::string & session_token) const;
+    using S3ClientBase::bucket;
+    using S3ClientBase::path;
+    using S3ClientBase::verify_credentials;
 
  private:
     std::atomic<bool> _stop;
-    const Aws::String _bucket_name;
-    Aws::String _path;
-    const Aws::String _key;
-    const Aws::String _secret;
-    const Aws::String _token;
-    const Aws::Auth::AWSCredentials _client_credentials;
     ClientConfiguration _client_config;
     std::unique_ptr<Aws::S3Crt::S3CrtClient> _client;
 

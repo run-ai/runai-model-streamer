@@ -31,7 +31,18 @@ _RUNAI_EXTERN_C void runai_end(void * streamer);
 
 _RUNAI_EXTERN_C int runai_read(void * streamer, const char * path, size_t file_offset, size_t bytesize, void * dst);
 
-_RUNAI_EXTERN_C int runai_read_with_credentials(void * streamer, const char * path, size_t file_offset, size_t bytesize, void * dst, const char * key, const char * secret, const char * token);
+_RUNAI_EXTERN_C int runai_read_with_credentials(
+    void * streamer,
+    const char * path,
+    size_t file_offset,
+    size_t bytesize,
+    void * dst,
+    const char * key,
+    const char * secret,
+    const char * token,
+    const char * region,
+    const char * endpoint
+);
 
 // send asynchronous read request with a list of consecutive sub requests, and receive response for each sub request when ready
 // num_sizes : number of sub requests
@@ -40,7 +51,20 @@ _RUNAI_EXTERN_C int runai_read_with_credentials(void * streamer, const char * pa
 
 _RUNAI_EXTERN_C int runai_request(void * streamer, const char * path, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes);
 
-_RUNAI_EXTERN_C int runai_request_with_credentials(void * streamer, const char * path, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes, const char * key, const char * secret, const char * token);
+_RUNAI_EXTERN_C int runai_request_with_credentials(
+    void * streamer,
+    const char * path,
+    size_t file_offset,
+    size_t bytesize,
+    void * dst,
+    unsigned num_sizes,
+    size_t * internal_sizes,
+    const char * key,
+    const char * secret,
+    const char * token,
+    const char * region,
+    const char * endpoint
+);
 
 // wait until the next sub request is ready
 // return FinishedError when there are no more responses

@@ -6,6 +6,7 @@ import mmap
 from runai_model_streamer.libstreamer.libstreamer import (
     runai_start,
     runai_request,
+    runai_request_with_credentials,
     runai_response,
 )
 
@@ -21,27 +22,32 @@ class TestBindings(unittest.TestCase):
             file.write("XTest Text1TestText2Test-Text3\n")
 
         size = 30
-        buffer = mmap.mmap(-1, size, mmap.MAP_ANONYMOUS | mmap.MAP_PRIVATE)
-        buffer_ptr = id(buffer)
 
-        streamer = runai_start()
-        self.assertNotEqual(streamer, 0)
+        for use_credentials in (False, True) :
+            buffer = mmap.mmap(-1, size, mmap.MAP_ANONYMOUS | mmap.MAP_PRIVATE)
+            buffer_ptr = id(buffer)
 
-        # Chunks of text sizes in file content
-        items = [10, 9]
-        runai_request(streamer, file_path, 1, 30, buffer, items)
+            streamer = runai_start()
+            self.assertNotEqual(streamer, 0)
 
-        # Read both file contents
-        result = runai_response(streamer)
-        self.assertEqual(result, 0)
-        self.assertEqual(bytes(buffer[:10]), b"Test Text1")
+            # Chunks of text sizes in file content
+            items = [10, 9]
+            if use_credentials:
+                runai_request_with_credentials(streamer, file_path, 1, 30, buffer, items, "access_key_id", "secret_access_key", "session_token", "region", "endpoint")
+            else:
+                runai_request(streamer, file_path, 1, 30, buffer, items)
 
-        result = runai_response(streamer)
-        self.assertEqual(result, 1)
-        self.assertEqual(bytes(buffer[10:19]), b"TestText2")
+            # Read both file contents
+            result = runai_response(streamer)
+            self.assertEqual(result, 0)
+            self.assertEqual(bytes(buffer[:10]), b"Test Text1")
 
-        # Assert buffer filled copyless
-        self.assertEqual(id(buffer), buffer_ptr)
+            result = runai_response(streamer)
+            self.assertEqual(result, 1)
+            self.assertEqual(bytes(buffer[10:19]), b"TestText2")
+
+            # Assert buffer filled copyless
+            self.assertEqual(id(buffer), buffer_ptr)
 
     def tearDown(self):
         shutil.rmtree(self.temp_dir)

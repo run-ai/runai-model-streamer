@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/storage_uri/storage_uri.h"
+#include "common/s3_credentials/s3_credentials.h"
 #include "common/response/response.h"
 #include "common/range/range.h"
 
@@ -33,7 +34,7 @@ namespace runai::llm::streamer::impl::s3
 {
 
 // create client
-extern "C" void * runai_create_s3_client(const common::s3::StorageUri & uri, const char * access_key_id, const char * secret_access_key, const char * session_token);
+extern "C" void * runai_create_s3_client(const common::s3::StorageUri_C & uri,  common::s3::Credentials_C & credentials);
 // destroy client
 extern "C" void runai_remove_s3_client(void * client);
 // asynchronous read

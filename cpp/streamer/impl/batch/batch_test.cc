@@ -394,7 +394,15 @@ TEST(Read, Stopped_During_Async_Read)
 
     std::shared_ptr<common::s3::StorageUri> uri;
     EXPECT_NO_THROW(uri = std::make_shared<common::s3::StorageUri>(path));
-    common::s3::S3ClientWrapper::Params params(uri, {utils::random::string(), utils::random::string(), utils::random::string()});
+
+    common::s3::Credentials credentials(
+        (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
+        (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
+        (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
+        (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
+        (utils::random::boolean() ? utils::random::string().c_str() : nullptr));
+
+    common::s3::S3ClientWrapper::Params params(uri, credentials);
 
     // divide range into chunks - a chunk per request
 

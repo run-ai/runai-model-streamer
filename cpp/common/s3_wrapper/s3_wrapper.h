@@ -28,7 +28,7 @@ struct S3ClientWrapper
             credentials(credentials)
          {}
 
-         Params(std::shared_ptr<StorageUri> uri) : Params(uri, {"", "", ""})
+         Params(std::shared_ptr<StorageUri> uri) : Params(uri, Credentials())
          {}
 
          bool valid() const { return (uri.get() != nullptr); }
@@ -59,7 +59,7 @@ struct S3ClientWrapper
       static constexpr size_t default_chunk_bytesize = 8 * 1024 * 1024;
 
  private:
-      void * create_client(const StorageUri & uri, const std::string & access_key_id, const std::string & secret_access_key, const std::string & session_token);
+      void * create_client(const StorageUri & uri, const Credentials & credentials);
       static std::shared_ptr<utils::Dylib> open_s3();
       static std::shared_ptr<utils::Dylib> open_s3_impl();
 
