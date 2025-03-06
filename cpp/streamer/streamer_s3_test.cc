@@ -27,9 +27,13 @@ struct StreamerTest : ::testing::Test
         _size("RUNAI_STREAMER_CONCURRENCY", utils::random::number<int>(1, 10)),
         _chunk_bytesize("RUNAI_STREAMER_CHUNK_BYTESIZE", utils::random::number<int>(1, 1024)),
         s3_path("s3://" + utils::random::string() + "/" + utils::random::string()),
-        key(utils::random::string()),
-        secret(utils::random::string()),
-        token(utils::random::string())
+        credentials(
+            (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
+            (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
+            (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
+            (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
+            (utils::random::boolean() ? utils::random::string().c_str() : nullptr)),
+        credentials_c(credentials)
     {}
 
     ~StreamerTest()
@@ -44,9 +48,8 @@ struct StreamerTest : ::testing::Test
     utils::temp::Env _chunk_bytesize;
     utils::temp::Env _block_bytesize;
     std::string s3_path;
-    const std::string key;
-    const std::string secret;
-    const std::string token;
+    common::s3::Credentials credentials;
+    common::s3::Credentials_C credentials_c;
 };
 
 } // namespace
@@ -68,7 +71,7 @@ TEST_F(StreamerTest, Sync_Read)
         EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
 
         std::vector<char> v(size);
-        res = use_credentials ? runai_read_with_credentials(streamer, s3_path.c_str(), 0, size, v.data(), key.c_str(), secret.c_str(), token.c_str()) : runai_read(streamer, s3_path.c_str(), 0, size, v.data());
+        res = use_credentials ? runai_read_with_credentials(streamer, s3_path.c_str(), 0, size, v.data(), credentials_c.access_key_id, credentials_c.secret_access_key, credentials_c.session_token, credentials_c.region, credentials_c.endpoint) : runai_read(streamer, s3_path.c_str(), 0, size, v.data());
         EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
 
         runai_end(streamer);
@@ -108,7 +111,7 @@ TEST_F(StreamerTest, Async_Read)
 
         if (use_credentials)
         {
-            EXPECT_EQ(runai_request_with_credentials(streamer, s3_path.c_str(), offset, total_size, dst.data(), sizes.size(), sizes.data(), key.c_str(), secret.c_str(), token.c_str()), static_cast<int>(common::ResponseCode::Success));
+            EXPECT_EQ(runai_request_with_credentials(streamer, s3_path.c_str(), offset, total_size, dst.data(), sizes.size(), sizes.data(), credentials_c.access_key_id, credentials_c.secret_access_key, credentials_c.session_token, credentials_c.region, credentials_c.endpoint), static_cast<int>(common::ResponseCode::Success));
         }
         else
         {
@@ -155,7 +158,7 @@ TEST_F(StreamerTest, Error)
             EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
 
             std::vector<char> v(size);
-            res = use_credentials ? runai_read_with_credentials(streamer, s3_path.c_str(), 0, size, v.data(), key.c_str(), secret.c_str(), token.c_str()) : runai_read(streamer, s3_path.c_str(), 0, size, v.data());
+            res = use_credentials ? runai_read_with_credentials(streamer, s3_path.c_str(), 0, size, v.data(), credentials_c.access_key_id, credentials_c.secret_access_key, credentials_c.session_token, credentials_c.region, credentials_c.endpoint) : runai_read(streamer, s3_path.c_str(), 0, size, v.data());
 
             EXPECT_EQ(res, static_cast<int>(response_code));
 
@@ -186,7 +189,8 @@ TEST_F(StreamerTest, Increase_Insufficient_Fd_Limit)
         EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
 
         std::vector<char> v(size);
-        res = use_credentials ? runai_read_with_credentials(streamer, s3_path.c_str(), 0, size, v.data(), key.c_str(), secret.c_str(), token.c_str()) : runai_read(streamer, s3_path.c_str(), 0, size, v.data());
+
+        res = use_credentials ? runai_read_with_credentials(streamer, s3_path.c_str(), 0, size, v.data(), credentials_c.access_key_id, credentials_c.secret_access_key, credentials_c.session_token, credentials_c.region, credentials_c.endpoint) : runai_read(streamer, s3_path.c_str(), 0, size, v.data());
         EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
 
         runai_end(streamer);
@@ -231,7 +235,7 @@ TEST_F(StreamerTest, Stop_Before_Async_Read)
 
         if (use_credentials)
         {
-            EXPECT_EQ(runai_request_with_credentials(streamer, s3_path.c_str(), offset, total_size, dst.data(), sizes.size(), sizes.data(), key.c_str(), secret.c_str(), token.c_str()), static_cast<int>(common::ResponseCode::Success));
+            EXPECT_EQ(runai_request_with_credentials(streamer, s3_path.c_str(), offset, total_size, dst.data(), sizes.size(), sizes.data(), credentials_c.access_key_id, credentials_c.secret_access_key, credentials_c.session_token, credentials_c.region, credentials_c.endpoint), static_cast<int>(common::ResponseCode::Success));
         }
         else
         {
@@ -283,7 +287,7 @@ TEST_F(StreamerTest, End_During_Async_Read)
 
         if (use_credentials)
         {
-            EXPECT_EQ(runai_request_with_credentials(streamer, s3_path.c_str(), offset, total_size, dst.data(), sizes.size(), sizes.data(), key.c_str(), secret.c_str(), token.c_str()), static_cast<int>(common::ResponseCode::Success));
+            EXPECT_EQ(runai_request_with_credentials(streamer, s3_path.c_str(), offset, total_size, dst.data(), sizes.size(), sizes.data(), credentials_c.access_key_id, credentials_c.secret_access_key, credentials_c.session_token, credentials_c.region, credentials_c.endpoint), static_cast<int>(common::ResponseCode::Success));
         }
         else
         {

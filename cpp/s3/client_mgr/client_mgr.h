@@ -24,7 +24,7 @@ struct ClientMgr
 
     ClientMgr<T> & operator=(const ClientMgr<T> &) = delete;
 
-    static T* pop(const common::s3::StorageUri & uri, const std::string & access_key_id, const std::string & secret_access_key, const std::string & session_token);
+    static T* pop(const common::s3::StorageUri_C & uri, const common::s3::Credentials_C & credentials);
     static void push(T* client);
 
     static void clear();
@@ -97,7 +97,7 @@ std::string ClientMgr<T>::current_bucket()
 
 
 template <typename T>
-T* ClientMgr<T>::pop(const common::s3::StorageUri & uri, const std::string & access_key_id, const std::string & secret_access_key, const std::string & session_token)
+T* ClientMgr<T>::pop(const common::s3::StorageUri_C & uri, const common::s3::Credentials_C & credentials)
 {
     auto & mgr = get();
 
@@ -115,14 +115,14 @@ T* ClientMgr<T>::pop(const common::s3::StorageUri & uri, const std::string & acc
                 unused.erase(unused.begin());
 
                 // Reuse client only if credentials have not changed
-                if (ptr->verify_credentials(access_key_id, secret_access_key, session_token))
+                if (ptr->verify_credentials(credentials))
                 {
                     LOG(DEBUG) << "Reusing S3 client";
                     return ptr;
                 }
-                
+
                 // release the stale client
-                mgr._clients.erase(ptr);                
+                mgr._clients.erase(ptr);
             }
         }
         else
@@ -139,7 +139,7 @@ T* ClientMgr<T>::pop(const common::s3::StorageUri & uri, const std::string & acc
 
     // create new client if there are no unused clients for this bucket
 
-    auto client = std::make_unique<T>(uri, access_key_id, secret_access_key, session_token);
+    auto client = std::make_unique<T>(uri, credentials);
 
     const auto guard = std::unique_lock<std::mutex>(mgr._mutex);
     auto ptr = client.get();

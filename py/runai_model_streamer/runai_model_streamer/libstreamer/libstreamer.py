@@ -39,6 +39,36 @@ def runai_read(
         raise Exception(
             f"Could not send runai_request to libstreamer due to: {runai_response_str(error_code)}"
         )
+    
+def runai_read_with_credentials(
+    streamer: t_streamer,
+    path: str,
+    offset: int,
+    bytesize: int,
+    dst: memoryview,
+    access_id: Optional[str] = None,
+    access_key: Optional[str] = None,
+    access_token: Optional[str] = None,
+    region: Optional[str] = None,
+    endpoint: Optional[str] = None,
+) -> None:
+    c_dst = (ctypes.c_ubyte * len(dst)).from_buffer(dst)
+    error_code = dll.fn_runai_read_with_credentials(
+        streamer,
+        path.encode("utf-8"),
+        offset,
+        bytesize,
+        c_dst,
+        ctypes.c_char_p(access_id.encode("utf-8")) if access_id is not None else None,
+        ctypes.c_char_p(access_key.encode("utf-8")) if access_key is not None else None,
+        ctypes.c_char_p(access_token.encode("utf-8")) if access_token is not None else None,
+        ctypes.c_char_p(region.encode("utf-8")) if region is not None else None,
+        ctypes.c_char_p(endpoint.encode("utf-8")) if endpoint is not None else None,
+    )
+    if error_code != SUCCESS_ERROR_CODE:
+        raise Exception(
+            f"Could not send runai_request_with_credentials to libstreamer due to: {runai_response_str(error_code)}"
+        )
 
 
 def runai_request(
@@ -62,6 +92,39 @@ def runai_request(
     if error_code != SUCCESS_ERROR_CODE:
         raise Exception(
             f"Could not send runai_request to libstreamer due to: {runai_response_str(error_code)}"
+        )
+
+def runai_request_with_credentials(
+    streamer: t_streamer,
+    path: str,
+    offset: int,
+    bytesize: int,
+    dst: memoryview,
+    internal_sizes: List[int],
+    access_id: Optional[str] = None,
+    access_key: Optional[str] = None,
+    access_token: Optional[str] = None,
+    region: Optional[str] = None,
+    endpoint: Optional[str] = None,
+) -> None:
+    c_dst = (ctypes.c_ubyte * len(dst)).from_buffer(dst)
+    error_code = dll.fn_runai_request_with_credentials(
+        streamer,
+        path.encode("utf-8"),
+        offset,
+        bytesize,
+        c_dst,
+        len(internal_sizes),
+        (ctypes.c_uint64 * len(internal_sizes))(*internal_sizes),
+        ctypes.c_char_p(access_id.encode("utf-8")) if access_id is not None else None,
+        ctypes.c_char_p(access_key.encode("utf-8")) if access_key is not None else None,
+        ctypes.c_char_p(access_token.encode("utf-8")) if access_token is not None else None,
+        ctypes.c_char_p(region.encode("utf-8")) if region is not None else None,
+        ctypes.c_char_p(endpoint.encode("utf-8")) if endpoint is not None else None,
+    )
+    if error_code != SUCCESS_ERROR_CODE:
+        raise Exception(
+            f"Could not send runai_request_with_credentials to libstreamer due to: {runai_response_str(error_code)}"
         )
 
 

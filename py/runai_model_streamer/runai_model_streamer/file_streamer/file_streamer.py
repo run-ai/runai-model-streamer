@@ -1,12 +1,14 @@
 import os
-from typing import List, Iterator
+from typing import List, Iterator, Optional
 import numpy as np
 from timeit import default_timer as timer
 from runai_model_streamer.libstreamer.libstreamer import (
     runai_start,
     runai_end,
     runai_read,
+    runai_read_with_credentials,
     runai_request,
+    runai_request_with_credentials,
     runai_response,
 )
 from runai_model_streamer.file_streamer.requests_iterator import (
@@ -33,12 +35,43 @@ class FileStreamer:
         if self.streamer:
             runai_end(self.streamer)
 
-    def read_file(self, path: str, offset: int, len: int) -> memoryview:
+    def read_file(
+            self,
+            path: str,
+            offset: int,
+            len: int,
+            s3_access_key_id: Optional[str] = None,
+            s3_secret_access_key: Optional[str] = None,
+            s3_session_token: Optional[str] = None,
+            s3_region_name: Optional[str] = None,
+            s3_endpoint: Optional[str] = None,
+    ) -> memoryview:
         dst_buffer = np.empty(len, dtype=np.uint8)
-        runai_read(self.streamer, path, offset, len, dst_buffer)
+        runai_read_with_credentials(
+            self.streamer,
+            path,
+            offset,
+            len,
+            dst_buffer,
+            s3_access_key_id,
+            s3_secret_access_key,
+            s3_session_token,
+            s3_region_name,
+            s3_endpoint,
+        )
         return dst_buffer
 
-    def stream_file(self, path: str, file_offset: int, chunks: List[int]) -> None:
+    def stream_file(
+            self,
+            path: str,
+            file_offset: int,
+            chunks: List[int],
+            s3_access_key_id: Optional[str] = None,
+            s3_secret_access_key: Optional[str] = None,
+            s3_session_token: Optional[str] = None,
+            s3_region_name: Optional[str] = None,
+            s3_endpoint: Optional[str] = None,
+) -> None:
         self.total_size = self.total_size + sum(chunks)
         self.path = path
 
@@ -54,13 +87,18 @@ class FileStreamer:
 
         request = self.requests_iterator.next_request()
         self.current_request_chunks = request.chunks
-        runai_request(
+        runai_request_with_credentials(
             self.streamer,
             self.path,
             request.file_offset,
             sum(request.chunks),
             self.dst_buffer,
             request.chunks,
+            s3_access_key_id,
+            s3_secret_access_key,
+            s3_session_token,
+            s3_region_name,
+            s3_endpoint,
         )
 
     def get_chunks(self) -> Iterator:

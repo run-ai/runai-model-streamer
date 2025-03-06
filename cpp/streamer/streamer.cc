@@ -79,7 +79,18 @@ _RUNAI_EXTERN_C int runai_read(void * streamer, const char * path, size_t file_o
     return static_cast<int>(common::ResponseCode::UnknownError);
 }
 
-_RUNAI_EXTERN_C int runai_read_with_credentials(void * streamer, const char * path, size_t file_offset, size_t bytesize, void * dst, const char * key, const char * secret, const char * token)
+_RUNAI_EXTERN_C int runai_read_with_credentials(
+    void * streamer,
+    const char * path,
+    size_t file_offset,
+    size_t bytesize,
+    void * dst,
+    const char * key,
+    const char * secret,
+    const char * token,
+    const char * region,
+    const char * endpoint
+)
 {
     try
     {
@@ -89,13 +100,7 @@ _RUNAI_EXTERN_C int runai_read_with_credentials(void * streamer, const char * pa
             return static_cast<int>(common::ResponseCode::InvalidParameterError);
         }
 
-        if (key == nullptr || secret == nullptr)
-        {
-            LOG(ERROR) << "Empty S3 credentials";
-            return static_cast<int>(common::ResponseCode::InvalidParameterError);
-        }
-
-        common::s3::Credentials credentials(key, secret, token);
+        common::s3::Credentials credentials(key, secret, token, region, endpoint);
         return static_cast<int>(s->request(path, file_offset, bytesize, dst, credentials));
     }
     catch(...)
@@ -126,7 +131,20 @@ _RUNAI_EXTERN_C int runai_request(void * streamer, const char * path, size_t fil
     return static_cast<int>(common::ResponseCode::UnknownError);
 }
 
-_RUNAI_EXTERN_C int runai_request_with_credentials(void * streamer, const char * path, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes, const char * key, const char * secret, const char * token)
+_RUNAI_EXTERN_C int runai_request_with_credentials(
+    void * streamer,
+    const char * path,
+    size_t file_offset,
+    size_t bytesize,
+    void * dst,
+    unsigned num_sizes,
+    size_t * internal_sizes,
+    const char * key,
+    const char * secret,
+    const char * token,
+    const char * region,
+    const char * endpoint
+)
 {
     try
     {
@@ -136,12 +154,7 @@ _RUNAI_EXTERN_C int runai_request_with_credentials(void * streamer, const char *
             return static_cast<int>(common::ResponseCode::InvalidParameterError);
         }
 
-        if (key == nullptr || secret == nullptr)
-        {
-            LOG(ERROR) << "Empty S3 credentials";
-            return static_cast<int>(common::ResponseCode::InvalidParameterError);
-        }
-        common::s3::Credentials credentials(key, secret, token);
+        common::s3::Credentials credentials(key, secret, token, region, endpoint);
         return static_cast<int>(s->request(path, file_offset, bytesize, dst, num_sizes, internal_sizes, credentials));
     }
     catch(...)

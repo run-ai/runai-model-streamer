@@ -7,6 +7,8 @@
 #include <set>
 #include <atomic>
 
+#include "common/s3_credentials/s3_credentials.h"
+
 #include "utils/random/random.h"
 #include "utils/logging/logging.h"
 #include "utils/env/env.h"
@@ -27,7 +29,7 @@ void runai_mock_s3_set_response_time_ms(unsigned milliseconds)
     __mock_response_time_ms = milliseconds;
 }
 
-void * runai_create_s3_client(const common::s3::StorageUri & uri, const char * access_key_id, const char * secret_access_key, const char * session_token)
+void * runai_create_s3_client(const common::s3::StorageUri_C & uri, const common::s3::Credentials_C & credentials)
 {
     const auto guard = std::unique_lock<std::mutex>(__mutex);
 

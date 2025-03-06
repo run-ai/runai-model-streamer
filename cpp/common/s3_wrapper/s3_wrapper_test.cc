@@ -12,7 +12,13 @@ struct S3WrappertTest : ::testing::Test
 {
     S3WrappertTest() :
         uri("s3://" + utils::random::string() + "/" + utils::random::string()),
-        params(std::make_shared<StorageUri>(uri))
+        credentials(
+            (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
+            (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
+            (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
+            (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
+            (utils::random::boolean() ? utils::random::string().c_str() : nullptr)),
+        params(std::make_shared<StorageUri>(uri), credentials)
     {}
 
     void TearDown() override
@@ -21,6 +27,7 @@ struct S3WrappertTest : ::testing::Test
     }
 
     StorageUri uri;
+    Credentials credentials;
     S3ClientWrapper::Params params;
 };
 

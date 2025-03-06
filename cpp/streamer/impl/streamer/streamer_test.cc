@@ -33,7 +33,13 @@ TEST(Sync, Sanity)
     auto size = utils::random::number(100, 1000);
     const auto data = utils::random::buffer(size);
     utils::temp::File file(data);
-    common::s3::Credentials credentials(utils::random::string(), utils::random::string(), utils::random::string());
+
+    common::s3::Credentials credentials(
+        (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
+        (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
+        (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
+        (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
+        (utils::random::boolean() ? utils::random::string().c_str() : nullptr));
 
     const auto expected = utils::Fd::read(file.path);
     EXPECT_EQ(expected.size(), size);
@@ -65,7 +71,12 @@ TEST(Sync, File_Not_Found_Error)
     const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
     Config config(utils::random::number(2, 30), chunk_size, bulk_size, false /* do not enforce minimum */);
     Streamer streamer(config);
-    common::s3::Credentials credentials(utils::random::string(), utils::random::string(), utils::random::string());
+    common::s3::Credentials credentials(
+        (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
+        (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
+        (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
+        (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
+        (utils::random::boolean() ? utils::random::string().c_str() : nullptr));
 
     std::vector<char> v(size);
     auto r = streamer.request(utils::random::string(), 0, size, v.data(), credentials);
@@ -81,7 +92,7 @@ TEST(Sync, End_Of_File_Error)
     const auto chunk_size = utils::random::number<size_t>(1, 1024);
     const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
     Config config(utils::random::number(2, 30), chunk_size, bulk_size, false /* do not enforce minimum */);
-    common::s3::Credentials credentials(utils::random::string(), utils::random::string(), utils::random::string());
+    common::s3::Credentials credentials;
 
     Streamer streamer(config);
 
@@ -116,7 +127,7 @@ TEST(Sync, Offset)
     const auto chunk_size = utils::random::number<size_t>(1, 1024);
     const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
 
-    common::s3::Credentials credentials(utils::random::string(), utils::random::string(), utils::random::string());
+    common::s3::Credentials credentials;
 
     std::vector<unsigned char> v(size_to_read);
     {
@@ -149,7 +160,7 @@ TEST(Async, Sanity)
     const auto chunk_size = utils::random::number<size_t>(1, 1024);
     const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
     Config config(utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
-    common::s3::Credentials credentials(utils::random::string(), utils::random::string(), utils::random::string());
+    common::s3::Credentials credentials;
 
     Streamer streamer(config);
 
@@ -192,7 +203,7 @@ TEST(Async, Requests)
     Config config(utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
     Streamer streamer(config);
 
-    common::s3::Credentials credentials(utils::random::string(), utils::random::string(), utils::random::string());
+    common::s3::Credentials credentials;
 
     std::vector<unsigned char> dst(size);
     EXPECT_EQ(streamer.request(file.path, 0, size, dst.data(), num_chunks, chunks.data(), credentials), common::ResponseCode::Success);
@@ -240,7 +251,7 @@ TEST(Async, File_Not_Found_Error)
     const auto chunk_size = utils::random::number<size_t>(1, 1024);
     const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
     Config config(utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
-    common::s3::Credentials credentials(utils::random::string(), utils::random::string(), utils::random::string());
+    common::s3::Credentials credentials;
 
     Streamer streamer(config);
 
@@ -293,7 +304,7 @@ TEST(Async, End_Of_File_Error)
 
     std::vector<char> dst(size);
 
-    common::s3::Credentials credentials(utils::random::string(), utils::random::string(), utils::random::string());
+    common::s3::Credentials credentials;
 
     auto request_ret = streamer.request(file.path, 0, size, dst.data(), num_chunks, chunks.data(), credentials);
 
@@ -335,7 +346,7 @@ TEST(Async, Zero_Requests_Error)
     const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
     Config config(utils::random::number(1, 10), chunk_size, bulk_size, false /* do not enforce minimum */);
 
-    common::s3::Credentials credentials(utils::random::string(), utils::random::string(), utils::random::string());
+    common::s3::Credentials credentials;
 
     Streamer streamer(config);
 
@@ -363,7 +374,7 @@ TEST(Async, Zero_Bytes_To_Read_Error)
     const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
     Config config(utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
 
-    common::s3::Credentials credentials(utils::random::string(), utils::random::string(), utils::random::string());
+    common::s3::Credentials credentials;
 
     Streamer streamer(config);
 
@@ -402,7 +413,7 @@ TEST(Async, Busy_Error)
     const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
     Config config(utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
 
-    common::s3::Credentials credentials(utils::random::string(), utils::random::string(), utils::random::string());
+    common::s3::Credentials credentials;
 
     Streamer streamer(config);
 

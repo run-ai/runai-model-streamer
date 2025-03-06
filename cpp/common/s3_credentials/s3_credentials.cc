@@ -3,20 +3,23 @@
 namespace runai::llm::streamer::common::s3
 {
 
-Credentials::Credentials(const char * access_key_id, const char * secret_access_key, const char * session_token) :
-    access_key_id(access_key_id == nullptr ? "" : access_key_id),
-    secret_access_key(secret_access_key == nullptr ? "" : secret_access_key),
-    session_token(session_token == nullptr ? "" : session_token)
+Credentials::Credentials(const char * access_key_id, const char * secret_access_key, const char * session_token, const char * region, const char * endpoint) :
+    access_key_id(access_key_id ? std::optional<std::string>(access_key_id) : std::nullopt),
+    secret_access_key(secret_access_key ? std::optional<std::string>(secret_access_key) : std::nullopt),
+    session_token(session_token ? std::optional<std::string>(session_token) : std::nullopt),
+    region(region ? std::optional<std::string>(region) : std::nullopt),
+    endpoint(endpoint ? std::optional<std::string>(endpoint) : std::nullopt)
 {}
 
-
-Credentials::Credentials(const std::string & access_key_id, const std::string & secret_access_key, const std::string & session_token) :
-    access_key_id(access_key_id),
-    secret_access_key(secret_access_key),
-    session_token(session_token)
+Credentials::Credentials() : Credentials(nullptr, nullptr, nullptr, nullptr, nullptr)
 {}
 
-Credentials::Credentials() : Credentials("", "", "")
+Credentials_C::Credentials_C(const Credentials & credentials) :
+    access_key_id(credentials.access_key_id.has_value() ? credentials.access_key_id.value().c_str() : nullptr),
+    secret_access_key(credentials.secret_access_key.has_value() ? credentials.secret_access_key.value().c_str() : nullptr),
+    session_token(credentials.session_token.has_value() ? credentials.session_token.value().c_str() : nullptr),
+    region(credentials.region.has_value() ? credentials.region.value().c_str() : nullptr),
+    endpoint(credentials.endpoint.has_value() ? credentials.endpoint.value().c_str() : nullptr)
 {}
 
 }; //namespace runai::llm::streamer::common::s3

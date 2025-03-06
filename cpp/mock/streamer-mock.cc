@@ -66,6 +66,12 @@ extern "C" int runai_read(void * streamer, const char * path, size_t file_offset
     return 0;
 }
 
+extern "C" int runai_read_with_credentials(void * streamer, const char * path, size_t file_offset, size_t bytesize, char * dst, const char * key, const char * secret, const char * token, const char * region,  const char * endpoint)
+{
+    return runai_read(streamer, path, file_offset, bytesize, dst);
+}
+
+
 extern "C" int runai_request(void * streamer, const char * path, size_t file_offset, size_t bytesize, char * dst, unsigned num_sizes, size_t * internal_sizes)
 {
     __state = State{};
@@ -91,6 +97,11 @@ extern "C" int runai_request(void * streamer, const char * path, size_t file_off
     __state.total_items = num_sizes;
     __state.destination = dst;
     return 0;
+}
+
+extern "C" int runai_request_with_credentials(void * streamer, const char * path, size_t file_offset, size_t bytesize, char * dst, unsigned num_sizes, size_t * internal_sizes, const char * key, const char * secret, const char * token, const char * region, const char * endpoint)
+{
+    return runai_request(streamer, path, file_offset, bytesize, dst, num_sizes, internal_sizes);
 }
 
 extern "C" int runai_response(void * streamer, unsigned * index)

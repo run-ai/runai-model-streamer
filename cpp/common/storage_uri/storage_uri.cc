@@ -37,4 +37,10 @@ std::ostream & operator<<(std::ostream & os, const StorageUri & uri)
     return os << "endpoint: " << (uri.endpoint.empty() ? "aws" : uri.endpoint) <<  " bucket: " << uri.bucket << " path: " << uri.path;
 }
 
+StorageUri_C::StorageUri_C(const StorageUri & uri) :
+    bucket(uri.bucket.c_str()),
+    path(uri.path.c_str()),
+    endpoint(uri.endpoint.c_str())
+{}
+
 }; // namespace runai::llm::streamer::common::s3
