@@ -9,6 +9,9 @@ from runai_model_streamer.libstreamer.libstreamer import (
     runai_request_with_credentials,
     runai_response,
 )
+from runai_model_streamer.s3_utils.s3_utils import (
+    S3Credentials,
+)
 
 
 class TestBindings(unittest.TestCase):
@@ -33,7 +36,13 @@ class TestBindings(unittest.TestCase):
             # Chunks of text sizes in file content
             items = [10, 9]
             if use_credentials:
-                runai_request_with_credentials(streamer, file_path, 1, 30, buffer, items, "access_key_id", "secret_access_key", "session_token", "region", "endpoint")
+                credentials = S3Credentials(
+                    access_key_id="your_access_key",
+                    secret_access_key="your_secret_key",
+                    session_token="your_session_token",
+                    region_name="us-west-2",
+                    endpoint="optional_endpoint")
+                runai_request_with_credentials(streamer, file_path, 1, 30, buffer, items, credentials)
             else:
                 runai_request(streamer, file_path, 1, 30, buffer, items)
 

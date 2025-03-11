@@ -87,8 +87,14 @@ S3Client::S3Client(const common::s3::StorageUri_C & uri, const common::s3::Crede
     S3ClientBase(uri, credentials),
     _stop(false)
 {
-    if (uri.endpoint != nullptr)
+    if (_endpoint.has_value()) // endpoint passed as parameter by user application
     {
+        LOG(DEBUG) <<"Using credentials endpoint " << credentials.endpoint;
+        _client_config.config.endpointOverride = _endpoint.value();
+    }
+    else if (uri.endpoint != nullptr) // endpoint passed as environment variable
+    {
+        LOG(DEBUG) <<"Using environment variable endpoint " << credentials.endpoint;
         _client_config.config.endpointOverride = Aws::String(uri.endpoint);
     }
 
@@ -99,7 +105,7 @@ S3Client::S3Client(const common::s3::StorageUri_C & uri, const common::s3::Crede
 
     if (_region.has_value())
     {
-        LOG(DEBUG) << "Setting s3 region " << _region.value();
+        LOG(DEBUG) << "Setting s3 region to " << _region.value();
         _client_config.config.region = _region.value();
     }
 

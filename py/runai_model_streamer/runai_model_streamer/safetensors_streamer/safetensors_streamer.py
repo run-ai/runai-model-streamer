@@ -1,9 +1,13 @@
 from __future__ import annotations
-from typing import Iterator
+from typing import Iterator, Optional
 import torch
 import os
 from runai_model_streamer.file_streamer.file_streamer import FileStreamer
 import runai_model_streamer.safetensors_streamer.safetensors_pytorch as safetensors_pytorch
+
+from runai_model_streamer.s3_utils.s3_utils import (
+    S3Credentials,
+)
 
 RUNAI_DIRNAME = "RUNAI_DIRNAME"
 RUNAI_DIRNAME_TO_REMOVE = "RUNAI_DIRNAME_TO_REMOVE"
@@ -40,13 +44,22 @@ class SafetensorsStreamer:
     def __exit__(self, exc_type: any, exc_value: any, traceback: any) -> None:
         return self.file_streamer.__exit__(exc_type, exc_value, traceback)
 
-    def stream_file(self, path: str) -> None:
+    def stream_file(
+            self,
+            path: str,
+            s3_credentials : Optional[S3Credentials] = None,
+        ) -> None:
         path = convert_path_if_needed(path)
 
         file_offset, self.tensors_metadata, tensor_sizes = (
             safetensors_pytorch.prepare_request(self.file_streamer, path)
         )
-        self.file_streamer.stream_file(path, file_offset, tensor_sizes)
+        self.file_streamer.stream_file(
+            path,
+            file_offset,
+            tensor_sizes,
+            s3_credentials,
+        )
 
     def get_tensors(self) -> Iterator[torch.tensor]:
         for ready_chunk_index, buffer, buffer_offset in self.file_streamer.get_chunks():

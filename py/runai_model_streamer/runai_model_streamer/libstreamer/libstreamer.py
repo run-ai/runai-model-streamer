@@ -2,9 +2,12 @@ from runai_model_streamer.libstreamer import dll, t_streamer
 from typing import List, Optional
 import ctypes
 
+from runai_model_streamer.s3_utils.s3_utils import (
+    S3Credentials,
+)
+
 SUCCESS_ERROR_CODE = 0
 FINISHED_ERROR_CODE = 1
-
 
 def runai_start() -> t_streamer:
     streamer = t_streamer(0)
@@ -46,11 +49,7 @@ def runai_read_with_credentials(
     offset: int,
     bytesize: int,
     dst: memoryview,
-    access_id: Optional[str] = None,
-    access_key: Optional[str] = None,
-    access_token: Optional[str] = None,
-    region: Optional[str] = None,
-    endpoint: Optional[str] = None,
+    s3_credentials: Optional[S3Credentials] = None,
 ) -> None:
     c_dst = (ctypes.c_ubyte * len(dst)).from_buffer(dst)
     error_code = dll.fn_runai_read_with_credentials(
@@ -59,11 +58,11 @@ def runai_read_with_credentials(
         offset,
         bytesize,
         c_dst,
-        ctypes.c_char_p(access_id.encode("utf-8")) if access_id is not None else None,
-        ctypes.c_char_p(access_key.encode("utf-8")) if access_key is not None else None,
-        ctypes.c_char_p(access_token.encode("utf-8")) if access_token is not None else None,
-        ctypes.c_char_p(region.encode("utf-8")) if region is not None else None,
-        ctypes.c_char_p(endpoint.encode("utf-8")) if endpoint is not None else None,
+        ctypes.c_char_p(s3_credentials.access_key_id.encode("utf-8")) if s3_credentials is not None and s3_credentials.access_key_id is not None else None,
+        ctypes.c_char_p(s3_credentials.secret_access_key.encode("utf-8")) if s3_credentials is not None and s3_credentials.secret_access_key is not None else None,
+        ctypes.c_char_p(s3_credentials.session_token.encode("utf-8")) if s3_credentials is not None and s3_credentials.session_token is not None else None,
+        ctypes.c_char_p(s3_credentials.region_name.encode("utf-8")) if s3_credentials is not None and s3_credentials.region_name is not None else None,
+        ctypes.c_char_p(s3_credentials.endpoint.encode("utf-8")) if s3_credentials is not None and s3_credentials.endpoint is not None else None,
     )
     if error_code != SUCCESS_ERROR_CODE:
         raise Exception(
@@ -101,11 +100,7 @@ def runai_request_with_credentials(
     bytesize: int,
     dst: memoryview,
     internal_sizes: List[int],
-    access_id: Optional[str] = None,
-    access_key: Optional[str] = None,
-    access_token: Optional[str] = None,
-    region: Optional[str] = None,
-    endpoint: Optional[str] = None,
+    s3_credentials: Optional[S3Credentials] = None,
 ) -> None:
     c_dst = (ctypes.c_ubyte * len(dst)).from_buffer(dst)
     error_code = dll.fn_runai_request_with_credentials(
@@ -116,11 +111,11 @@ def runai_request_with_credentials(
         c_dst,
         len(internal_sizes),
         (ctypes.c_uint64 * len(internal_sizes))(*internal_sizes),
-        ctypes.c_char_p(access_id.encode("utf-8")) if access_id is not None else None,
-        ctypes.c_char_p(access_key.encode("utf-8")) if access_key is not None else None,
-        ctypes.c_char_p(access_token.encode("utf-8")) if access_token is not None else None,
-        ctypes.c_char_p(region.encode("utf-8")) if region is not None else None,
-        ctypes.c_char_p(endpoint.encode("utf-8")) if endpoint is not None else None,
+        ctypes.c_char_p(s3_credentials.access_key_id.encode("utf-8")) if s3_credentials is not None and s3_credentials.access_key_id is not None else None,
+        ctypes.c_char_p(s3_credentials.secret_access_key.encode("utf-8")) if s3_credentials is not None and s3_credentials.secret_access_key is not None else None,
+        ctypes.c_char_p(s3_credentials.session_token.encode("utf-8")) if s3_credentials is not None and s3_credentials.session_token is not None else None,
+        ctypes.c_char_p(s3_credentials.region_name.encode("utf-8")) if s3_credentials is not None and s3_credentials.region_name is not None else None,
+        ctypes.c_char_p(s3_credentials.endpoint.encode("utf-8")) if s3_credentials is not None and s3_credentials.endpoint is not None else None,
     )
     if error_code != SUCCESS_ERROR_CODE:
         raise Exception(

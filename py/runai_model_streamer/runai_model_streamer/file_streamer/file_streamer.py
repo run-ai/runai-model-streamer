@@ -14,14 +14,31 @@ from runai_model_streamer.libstreamer.libstreamer import (
 from runai_model_streamer.file_streamer.requests_iterator import (
     RequestsIterator,
 )
-import humanize
 
+from runai_model_streamer.s3_utils.s3_utils import (
+    S3Credentials,
+    is_s3_path,
+)
+
+import humanize
+import importlib
+
+s3_module = importlib.util.find_spec("runai_model_streamer_s3") if importlib.util.find_spec("runai_model_streamer_s3") else None
+s3_credentials_module_name = "runai_model_streamer_s3.credentials.credentials"
+if s3_module is not None and importlib.util.find_spec(s3_credentials_module_name):
+    s3_credentials_module = importlib.import_module(s3_credentials_module_name)
+else:
+    s3_credentials_module = None
+
+# use env variable to not use boto3
 
 class FileStreamer:
     def __enter__(self) -> "FileStreamer":
         self.streamer = runai_start()
         self.start_time = timer()
         self.total_size = 0
+        self.s3_session = None
+        self.s3_credentials = None
         return self
 
     def __exit__(self, exc_type: any, exc_value: any, traceback: any) -> None:
@@ -40,24 +57,20 @@ class FileStreamer:
             path: str,
             offset: int,
             len: int,
-            s3_access_key_id: Optional[str] = None,
-            s3_secret_access_key: Optional[str] = None,
-            s3_session_token: Optional[str] = None,
-            s3_region_name: Optional[str] = None,
-            s3_endpoint: Optional[str] = None,
+            credentials: Optional[S3Credentials] = None,
     ) -> memoryview:
         dst_buffer = np.empty(len, dtype=np.uint8)
+        if s3_credentials_module:
+            if is_s3_path(path) :
+                self.s3_session, self.s3_credentials = s3_credentials_module.get_credentials(credentials)
+        # check for s3 path and init sessions and credentials
         runai_read_with_credentials(
             self.streamer,
             path,
             offset,
             len,
             dst_buffer,
-            s3_access_key_id,
-            s3_secret_access_key,
-            s3_session_token,
-            s3_region_name,
-            s3_endpoint,
+            self.s3_credentials,
         )
         return dst_buffer
 
@@ -66,11 +79,7 @@ class FileStreamer:
             path: str,
             file_offset: int,
             chunks: List[int],
-            s3_access_key_id: Optional[str] = None,
-            s3_secret_access_key: Optional[str] = None,
-            s3_session_token: Optional[str] = None,
-            s3_region_name: Optional[str] = None,
-            s3_endpoint: Optional[str] = None,
+            credentials: Optional[S3Credentials] = None,
 ) -> None:
         self.total_size = self.total_size + sum(chunks)
         self.path = path
@@ -84,6 +93,9 @@ class FileStreamer:
         )
 
         self.dst_buffer = np.empty(buffer_size, dtype=np.uint8)
+        if s3_credentials_module:
+            if is_s3_path(path) :
+                self.s3_session, self.s3_credentials = s3_credentials_module.get_credentials(credentials)
 
         request = self.requests_iterator.next_request()
         self.current_request_chunks = request.chunks
@@ -94,11 +106,7 @@ class FileStreamer:
             sum(request.chunks),
             self.dst_buffer,
             request.chunks,
-            s3_access_key_id,
-            s3_secret_access_key,
-            s3_session_token,
-            s3_region_name,
-            s3_endpoint,
+            self.s3_credentials,
         )
 
     def get_chunks(self) -> Iterator:
