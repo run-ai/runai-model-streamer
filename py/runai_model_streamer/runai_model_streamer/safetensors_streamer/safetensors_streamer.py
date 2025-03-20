@@ -7,9 +7,19 @@ import runai_model_streamer.safetensors_streamer.safetensors_pytorch as safetens
 
 RUNAI_DIRNAME = "RUNAI_DIRNAME"
 RUNAI_DIRNAME_TO_REMOVE = "RUNAI_DIRNAME_TO_REMOVE"
+GCS_PROTOCOL_PREFIX = "gs://"
+S3_PROTOCOL_PREFIX = "s3://"
+AWS_ENDPOINT_URL_ENV = "AWS_ENDPOINT_URL"
+DEFAULT_GCS_ENDPOINT_URL = "https://storage.googleapis.com"
 
 
 def convert_path_if_needed(path: str) -> str:
+    # Auto-configure "AWS_ENDPOINT_URL" if GCS prefix is specified.
+    if path.startswith(GCS_PROTOCOL_PREFIX):
+        os.environ.setdefault(AWS_ENDPOINT_URL_ENV, DEFAULT_GCS_ENDPOINT_URL)
+        s3_path = path.removeprefix(GCS_PROTOCOL_PREFIX)
+        path = f"{S3_PROTOCOL_PREFIX}{s3_path}"
+
     s3_dir = os.getenv(RUNAI_DIRNAME)
     if s3_dir is None:
         return path
