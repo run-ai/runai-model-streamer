@@ -60,7 +60,7 @@ class FileStreamer:
     ) -> str:
         if s3_credentials_module:
             # initialize session only one
-            if is_s3_path(path) and self.session is None:
+            if is_s3_path(path) and self.s3_session is None:
                 # check for s3 path and init sessions and credentials           
                 self.s3_session, self.s3_credentials = s3_credentials_module.get_credentials(credentials)
             if is_gs_path(path):
