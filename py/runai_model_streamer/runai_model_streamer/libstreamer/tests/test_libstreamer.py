@@ -6,7 +6,6 @@ import mmap
 from runai_model_streamer.libstreamer.libstreamer import (
     runai_start,
     runai_request,
-    runai_request_with_credentials,
     runai_response,
 )
 from runai_model_streamer.s3_utils.s3_utils import (
@@ -42,7 +41,7 @@ class TestBindings(unittest.TestCase):
                     session_token="your_session_token",
                     region_name="us-west-2",
                     endpoint="optional_endpoint")
-                runai_request_with_credentials(streamer, file_path, 1, 30, buffer, items, credentials)
+                runai_request(streamer, file_path, 1, 30, buffer, items, credentials)
             else:
                 runai_request(streamer, file_path, 1, 30, buffer, items)
 

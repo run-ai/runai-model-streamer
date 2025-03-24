@@ -6,9 +6,7 @@ from runai_model_streamer.libstreamer.libstreamer import (
     runai_start,
     runai_end,
     runai_read,
-    runai_read_with_credentials,
     runai_request,
-    runai_request_with_credentials,
     runai_response,
 )
 from runai_model_streamer.file_streamer.requests_iterator import (
@@ -18,6 +16,9 @@ from runai_model_streamer.file_streamer.requests_iterator import (
 from runai_model_streamer.s3_utils.s3_utils import (
     S3Credentials,
     is_s3_path,
+    is_gs_path,
+    gs_credentials,
+    convert_gs_path,
 )
 
 import humanize
@@ -37,6 +38,7 @@ class FileStreamer:
         self.streamer = runai_start()
         self.start_time = timer()
         self.total_size = 0
+
         self.s3_session = None
         self.s3_credentials = None
         return self
@@ -52,6 +54,22 @@ class FileStreamer:
         if self.streamer:
             runai_end(self.streamer)
 
+    def handle_object_store(self,
+                            path : str,
+                            credentials : S3Credentials
+    ) -> str:
+        if s3_credentials_module:
+            # initialize session only one
+            if is_s3_path(path) and self.session is None:
+                # check for s3 path and init sessions and credentials           
+                self.s3_session, self.s3_credentials = s3_credentials_module.get_credentials(credentials)
+            if is_gs_path(path):
+                # set gs endpoint
+                self.s3_credentials = gs_credentials(credentials)
+                # replace path prefix
+                path = convert_gs_path(path)
+        return path
+
     def read_file(
             self,
             path: str,
@@ -60,11 +78,9 @@ class FileStreamer:
             credentials: Optional[S3Credentials] = None,
     ) -> memoryview:
         dst_buffer = np.empty(len, dtype=np.uint8)
-        if s3_credentials_module:
-            if is_s3_path(path) :
-                self.s3_session, self.s3_credentials = s3_credentials_module.get_credentials(credentials)
-        # check for s3 path and init sessions and credentials
-        runai_read_with_credentials(
+      
+        path = self.handle_object_store(path, credentials)
+        runai_read(
             self.streamer,
             path,
             offset,
@@ -93,13 +109,11 @@ class FileStreamer:
         )
 
         self.dst_buffer = np.empty(buffer_size, dtype=np.uint8)
-        if s3_credentials_module:
-            if is_s3_path(path) :
-                self.s3_session, self.s3_credentials = s3_credentials_module.get_credentials(credentials)
-
+        path = self.handle_object_store(path, credentials)
+ 
         request = self.requests_iterator.next_request()
         self.current_request_chunks = request.chunks
-        runai_request_with_credentials(
+        runai_request(
             self.streamer,
             self.path,
             request.file_offset,
@@ -143,3 +157,4 @@ class FileStreamer:
             yield relative_index, self.dst_buffer, sum(
                 self.current_request_chunks[:relative_index]
             )
+

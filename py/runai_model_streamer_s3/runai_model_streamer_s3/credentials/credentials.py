@@ -20,7 +20,7 @@ class S3Credentials:
 
 def get_credentials(credentials: Optional[S3Credentials] = None) -> Tuple[boto3.Session, S3Credentials]:
     """
-    Creates a boto3 session only if the environment variable BLA_BLA_BLA is set.
+    Creates a boto3 session only if the environment variable RUNAI_STREAMER_NO_BOTO3_SESSION is set.
     If the variable is not set, returns None and the original credentials.
 
     Returns:
