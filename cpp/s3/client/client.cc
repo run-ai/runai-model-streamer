@@ -94,8 +94,12 @@ S3Client::S3Client(const common::s3::StorageUri_C & uri, const common::s3::Crede
     }
     else if (uri.endpoint != nullptr) // endpoint passed as environment variable
     {
-        LOG(DEBUG) <<"Using environment variable endpoint " << credentials.endpoint;
-        _client_config.config.endpointOverride = Aws::String(uri.endpoint);
+        bool override_endpoint_flag = utils::getenv<bool>("RUNAI_STREAMER_OVERRIDE_ENDPOINT_URL", true);
+        if (override_endpoint_flag)
+        {
+            _client_config.config.endpointOverride = Aws::String(uri.endpoint);
+        }
+        LOG(DEBUG) <<"Using environment variable endpoint " << uri.endpoint << (override_endpoint_flag ? " , using configuration parameter endpointOverride" : "");
     }
 
     if (utils::try_getenv("RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING", _client_config.config.useVirtualAddressing))
@@ -112,6 +116,7 @@ S3Client::S3Client(const common::s3::StorageUri_C & uri, const common::s3::Crede
     if (_client_credentials == nullptr)
     {
         _client = std::make_unique<Aws::S3Crt::S3CrtClient>(_client_config.config);
+        LOG(DEBUG) << "Using default authentication";
     }
     else
     {
@@ -187,7 +192,7 @@ common::ResponseCode S3Client::async_read(unsigned num_ranges, common::Range * r
 
         // split range into chunks
         size_t size = std::max(1UL, range_.size/chunk_bytesize);
-        LOG(DEBUG) <<"Number of chunks is " << size;
+        LOG(SPAM) <<"Number of chunks is " << size;
 
         // each range is divided into chunks (size is the number of chunks)
         // when all the chunks have been read successfuly the response for that range is pushed to the responder

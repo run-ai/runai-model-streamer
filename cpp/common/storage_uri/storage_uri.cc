@@ -24,7 +24,9 @@ StorageUri::StorageUri(const std::string & uri)
     }
 
     bool override_endpoint = utils::try_getenv("AWS_ENDPOINT_URL", endpoint);
+    bool override_endpoint_flag = utils::getenv<bool>("RUNAI_STREAMER_OVERRIDE_ENDPOINT_URL", true);
     LOG_IF(DEBUG, override_endpoint) << "override url endpoint: " << endpoint;
+    LOG_IF(DEBUG, override_endpoint_flag && override_endpoint) << "direct override of url endpoint in client configuration";
 
     bucket = match[1];
     path = match[2];

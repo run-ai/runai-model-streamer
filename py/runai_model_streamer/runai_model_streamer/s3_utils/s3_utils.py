@@ -1,9 +1,15 @@
 from typing import Optional
 import re
+import os
 
 GCS_PROTOCOL_PREFIX = "gs://"
 S3_PROTOCOL_PREFIX = "s3://"
 DEFAULT_GCS_ENDPOINT_URL = "https://storage.googleapis.com"
+AWS_ENDPOINT_URL_ENV = "AWS_ENDPOINT_URL"
+AWS_EC2_METADATA_DISABLED_ENV = "AWS_EC2_METADATA_DISABLED"
+DEFAULT_AWS_EC2_METADATA_DISABLED = "true"
+RUNAI_STREAMER_OVERRIDE_ENDPOINT_URL_ENV = "RUNAI_STREAMER_OVERRIDE_ENDPOINT_URL"
+DEFAULT_GCS_RUNAI_STREAMER_OVERRIDE_ENDPOINT_URL = "0"
 
 class S3Credentials:
     def __init__(
@@ -32,27 +38,26 @@ def is_s3_path(path: str) -> bool:
 def is_gs_path(path: str) -> bool:
     """
     Checks if the given string is an S3 path.
+    If the endpoint url is already gcs default endpoint, return true for setting the additional variables (most importantly the RUNAI_STREAMER_OVERRIDE_ENDPOINT_URL flag)
 
     :param path: The string to check.
     :return: True if it's an GCS path, False otherwise.
     """
-    return path.startswith(GCS_PROTOCOL_PREFIX)
+    is_gcs_endpoint = os.environ.get(AWS_ENDPOINT_URL_ENV) == DEFAULT_GCS_ENDPOINT_URL
+    return is_gcs_endpoint or path.startswith(GCS_PROTOCOL_PREFIX)
 
-def gs_credentials(credentials : S3Credentials) -> S3Credentials:
+def set_gs_environment_variables() -> None:
     """
     Sets default GCS url endpoint
-    Does not override if endpoint is already defined
-
-    :param credentials: Original credentials
-    :return: Modified credentials
+    Sets environment variable to use AWS_ENDPOINT_URL implictly:
+    GCS does not support setting endpointOverride in the client's configuration, but does support resolving AWS_ENDPOINT_URL by the AWS sdk 
+    Sets AWS_EC2_METADATA to speed authentication
     """
-    if credentials is None:
-        return S3Credentials(endpoint = DEFAULT_GCS_ENDPOINT_URL)
-    
-    if credentials.endpoint is None:
-        credentials.endpoint = DEFAULT_GCS_ENDPOINT_URL
-    
-    return credentials
+
+    os.environ.setdefault(AWS_ENDPOINT_URL_ENV, DEFAULT_GCS_ENDPOINT_URL)
+    os.environ.setdefault(RUNAI_STREAMER_OVERRIDE_ENDPOINT_URL_ENV, DEFAULT_GCS_RUNAI_STREAMER_OVERRIDE_ENDPOINT_URL)
+    os.environ.setdefault(AWS_EC2_METADATA_DISABLED_ENV, DEFAULT_AWS_EC2_METADATA_DISABLED)
+
 
 def convert_gs_path(path : str) -> str:
     """
@@ -61,6 +66,8 @@ def convert_gs_path(path : str) -> str:
     :param credentials: Original path
     :return: Modified path
     """
-    stripped_path = path.removeprefix(GCS_PROTOCOL_PREFIX)
-    converted_path = f"{S3_PROTOCOL_PREFIX}{stripped_path}"
-    return converted_path
+    if path.startswith(GCS_PROTOCOL_PREFIX):
+        stripped_path = path.removeprefix(GCS_PROTOCOL_PREFIX)
+        converted_path = f"{S3_PROTOCOL_PREFIX}{stripped_path}"
+        return converted_path
+    return path

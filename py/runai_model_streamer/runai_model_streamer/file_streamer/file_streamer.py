@@ -17,7 +17,7 @@ from runai_model_streamer.s3_utils.s3_utils import (
     S3Credentials,
     is_s3_path,
     is_gs_path,
-    gs_credentials,
+    set_gs_environment_variables,
     convert_gs_path,
 )
 
@@ -60,14 +60,15 @@ class FileStreamer:
     ) -> str:
         if s3_credentials_module:
             # initialize session only one
-            if is_s3_path(path) and self.s3_session is None:
-                # check for s3 path and init sessions and credentials           
-                self.s3_session, self.s3_credentials = s3_credentials_module.get_credentials(credentials)
+
             if is_gs_path(path):
                 # set gs endpoint
-                self.s3_credentials = gs_credentials(credentials)
+                set_gs_environment_variables()
                 # replace path prefix
                 path = convert_gs_path(path)
+            elif is_s3_path(path) and self.s3_session is None:
+                # check for s3 path and init sessions and credentials           
+                self.s3_session, self.s3_credentials = s3_credentials_module.get_credentials(credentials)
         return path
 
     def read_file(
@@ -98,7 +99,7 @@ class FileStreamer:
             credentials: Optional[S3Credentials] = None,
 ) -> None:
         self.total_size = self.total_size + sum(chunks)
-        self.path = path
+        self.path = self.handle_object_store(path, credentials)
 
         self.requests_iterator, buffer_size = RequestsIterator.with_memory_mode(
             file_offset, chunks
@@ -109,7 +110,6 @@ class FileStreamer:
         )
 
         self.dst_buffer = np.empty(buffer_size, dtype=np.uint8)
-        path = self.handle_object_store(path, credentials)
  
         request = self.requests_iterator.next_request()
         self.current_request_chunks = request.chunks
