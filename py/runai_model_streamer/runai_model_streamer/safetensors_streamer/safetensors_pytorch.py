@@ -109,6 +109,9 @@ def prepare_request(
 def create_torch_tensor(
     buffer: memoryview, offset: int, tensor_metadata: SafetensorMetadata
 ) -> torch.tensor:
+    if tensor_metadata.get_item_count() == 0:
+        return torch.empty(tensor_metadata.shape, dtype=tensor_metadata.get_torch_dtype())
+    
     tensor = torch.frombuffer(
         buffer,
         dtype=tensor_metadata.get_torch_dtype(),
