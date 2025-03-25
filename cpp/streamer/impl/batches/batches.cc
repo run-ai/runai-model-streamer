@@ -145,14 +145,14 @@ void Batches::handle_request(std::vector<Tasks> & v_tasks, unsigned request_inde
     auto bytes_to_request = request_size;
     size_t task_offset = request_file_offset;
 
-    while (bytes_to_request > 0)
+    do
     {
         auto to_read = _itr.consume(bytes_to_request);
         Task::Info info(task_offset, to_read);
         infos.try_emplace(_itr.current_index(), std::move(info));
         task_offset += to_read;
         bytes_to_request -= to_read;
-    }
+    } while (bytes_to_request > 0);
 
     auto request_ptr = std::make_shared<Request>(request_file_offset, request_index, infos.size(), request_size);
 
