@@ -19,19 +19,12 @@ from runai_model_streamer.s3_utils.s3_utils import (
     is_gs_path,
     set_gs_environment_variables,
     convert_gs_path,
+    get_s3_credentials_module,
 )
 
 import humanize
-import importlib
 
-s3_module = importlib.util.find_spec("runai_model_streamer_s3") if importlib.util.find_spec("runai_model_streamer_s3") else None
-s3_credentials_module_name = "runai_model_streamer_s3.credentials.credentials"
-if s3_module is not None and importlib.util.find_spec(s3_credentials_module_name):
-    s3_credentials_module = importlib.import_module(s3_credentials_module_name)
-else:
-    s3_credentials_module = None
-
-# use env variable to not use boto3
+s3_credentials_module = get_s3_credentials_module()
 
 class FileStreamer:
     def __enter__(self) -> "FileStreamer":

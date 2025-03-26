@@ -1,6 +1,7 @@
 from typing import Optional
 import re
 import os
+import importlib
 
 GCS_PROTOCOL_PREFIX = "gs://"
 S3_PROTOCOL_PREFIX = "s3://"
@@ -8,8 +9,21 @@ DEFAULT_GCS_ENDPOINT_URL = "https://storage.googleapis.com"
 AWS_ENDPOINT_URL_ENV = "AWS_ENDPOINT_URL"
 AWS_EC2_METADATA_DISABLED_ENV = "AWS_EC2_METADATA_DISABLED"
 DEFAULT_AWS_EC2_METADATA_DISABLED = "true"
-RUNAI_STREAMER_OVERRIDE_ENDPOINT_URL_ENV = "RUNAI_STREAMER_OVERRIDE_ENDPOINT_URL"
-DEFAULT_GCS_RUNAI_STREAMER_OVERRIDE_ENDPOINT_URL = "0"
+
+def get_s3_credentials_module():
+    s3_module_name = "runai_model_streamer_s3"
+    s3_credentials_module_name = "runai_model_streamer_s3.credentials.credentials"
+
+    # Check if the main module exists first
+    if importlib.util.find_spec(s3_module_name) is None:
+        return None
+
+    # Now check if the credentials module exists
+    if importlib.util.find_spec(s3_credentials_module_name) is None:
+        return None
+
+    # Import and return the credentials module
+    return importlib.import_module(s3_credentials_module_name)
 
 class S3Credentials:
     def __init__(
@@ -49,13 +63,10 @@ def is_gs_path(path: str) -> bool:
 def set_gs_environment_variables() -> None:
     """
     Sets default GCS url endpoint
-    Sets environment variable to use AWS_ENDPOINT_URL implictly:
-    GCS does not support setting endpointOverride in the client's configuration, but does support resolving AWS_ENDPOINT_URL by the AWS sdk 
     Sets AWS_EC2_METADATA to speed authentication
     """
 
     os.environ.setdefault(AWS_ENDPOINT_URL_ENV, DEFAULT_GCS_ENDPOINT_URL)
-    os.environ.setdefault(RUNAI_STREAMER_OVERRIDE_ENDPOINT_URL_ENV, DEFAULT_GCS_RUNAI_STREAMER_OVERRIDE_ENDPOINT_URL)
     os.environ.setdefault(AWS_EC2_METADATA_DISABLED_ENV, DEFAULT_AWS_EC2_METADATA_DISABLED)
 
 

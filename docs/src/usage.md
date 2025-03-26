@@ -64,8 +64,6 @@ The streamer supports GCS url `gs://my-bucket/my/file/path.safetensors`
 
 > **Note:** If using GCS url with prefix `gs://` there is no need to pass additional environment variables for S3 compatible storage 
 
-> **Note for vLLM users:** GCS url not supported in vLLM - if using the streamer in vLLM follow instructions for S3 compatible storage
-
 ##### Streaming from S3 compatible storage
 
 To load tensors from S3 compatible object store, define the following environment variables
