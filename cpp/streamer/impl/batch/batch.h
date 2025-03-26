@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "common/storage_uri/storage_uri.h"
+#include "common/s3_wrapper/s3_wrapper.h"
 #include "common/response_code/response_code.h"
 #include "common/responder/responder.h"
 #include "common/range/range.h"
@@ -46,7 +47,7 @@ struct Batch
     Batch(Batch &&) = default;
     Batch & operator=(Batch &&) = default;
 
-    Batch(const std::string & path, std::shared_ptr<common::s3::StorageUri> uri, Range && range, char * dst, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config);
+    Batch(const std::string & path, const common::s3::S3ClientWrapper::Params & params, Range && range, char * dst, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config);
 
     void execute(std::atomic<bool> & stopped);
 
@@ -55,7 +56,9 @@ struct Batch
     unsigned finished_until() const;
 
     std::string path;
-    std::shared_ptr<common::s3::StorageUri> uri;
+
+    // s3 parameters
+    common::s3::S3ClientWrapper::Params params;
 
     // range in file
     Range range;

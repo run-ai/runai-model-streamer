@@ -13,6 +13,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     && ln -sf /usr/bin/aarch64-linux-gnu-ld.gold /usr/bin/ld.gold
 
 RUN pip install \
+    boto3 \
     cpplint==1.5.4
 
 ARG BAZEL=4.2.1

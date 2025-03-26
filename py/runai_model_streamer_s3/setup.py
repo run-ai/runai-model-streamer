@@ -24,5 +24,6 @@ setup(
     version=VERSION,
     license_files=("LICENSE",),
     packages=find_packages(),
+    install_requires=["boto3"],
     data_files=[("/runai_model_streamer/libstreamer/lib/", [LIB])],
 )

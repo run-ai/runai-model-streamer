@@ -53,13 +53,13 @@ size_t Batches::BatchItr::consume(size_t bytesize)
     return to_read;
 }
 
-Batches::Batches(std::shared_ptr<const Config> config, std::shared_ptr<common::Responder> responder, const std::string & path, std::shared_ptr<common::s3::StorageUri> uri, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes) :
-    _itr(config->concurrency, batch_bytesize(bytesize, *config, uri)),
+Batches::Batches(std::shared_ptr<const Config> config, std::shared_ptr<common::Responder> responder, const std::string & path, const common::s3::S3ClientWrapper::Params & params, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes) :
+    _itr(config->concurrency, batch_bytesize(bytesize, *config, params.uri)),
     _responder(responder)
 {
     LOG(DEBUG) << "worker maximal range size is " << utils::logging::human_readable_size(_itr.worker_bytesize());
     _batches.reserve(config->concurrency);
-    build_tasks(config, path, uri, file_offset, dst, num_sizes, internal_sizes);
+    build_tasks(config, path, params, file_offset, dst, num_sizes, internal_sizes);
 }
 
 unsigned Batches::size() const
@@ -93,7 +93,7 @@ size_t Batches::total() const
     return _total;
 }
 
-void Batches::build_tasks(std::shared_ptr<const Config> config, const std::string & path, std::shared_ptr<common::s3::StorageUri> uri, size_t file_offset, void * dst, unsigned num_sizes, size_t * internal_sizes)
+void Batches::build_tasks(std::shared_ptr<const Config> config, const std::string & path, const common::s3::S3ClientWrapper::Params & params, size_t file_offset, void * dst, unsigned num_sizes, size_t * internal_sizes)
 {
     std::vector<Tasks> v_tasks(config->concurrency);
     std::vector<Range> v_ranges(config->concurrency);
@@ -129,7 +129,7 @@ void Batches::build_tasks(std::shared_ptr<const Config> config, const std::strin
 
         const auto range_size = range.size;
 
-        _batches.emplace_back(path, uri, std::move(range), dst_, std::move(tasks), _responder, config);
+        _batches.emplace_back(path, params, std::move(range), dst_, std::move(tasks), _responder, config);
 
         dst_ += range_size;
     }
@@ -145,14 +145,14 @@ void Batches::handle_request(std::vector<Tasks> & v_tasks, unsigned request_inde
     auto bytes_to_request = request_size;
     size_t task_offset = request_file_offset;
 
-    while (bytes_to_request > 0)
+    do
     {
         auto to_read = _itr.consume(bytes_to_request);
         Task::Info info(task_offset, to_read);
         infos.try_emplace(_itr.current_index(), std::move(info));
         task_offset += to_read;
         bytes_to_request -= to_read;
-    }
+    } while (bytes_to_request > 0);
 
     auto request_ptr = std::make_shared<Request>(request_file_offset, request_index, infos.size(), request_size);
 

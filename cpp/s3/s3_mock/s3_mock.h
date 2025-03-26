@@ -2,12 +2,13 @@
 
 #include "common/range/range.h"
 #include "common/storage_uri/storage_uri.h"
+#include "common/s3_credentials/s3_credentials.h"
 #include "common/response_code/response_code.h"
 
 namespace runai::llm::streamer::common::s3
 {
 
-extern "C" void * runai_create_s3_client(const common::s3::StorageUri & uri);
+extern "C" void * runai_create_s3_client(const common::s3::StorageUri_C & uri,  const common::s3::Credentials_C & credentials);
 extern "C" void runai_remove_s3_client(void * client);
 extern "C" common::ResponseCode  runai_async_read_s3_client(void * client, unsigned num_ranges, common::Range * ranges, size_t chunk_bytesize, char * buffer);
 extern "C" common::ResponseCode  runai_async_response_s3_client(void * client, unsigned * index /* output parameter */);

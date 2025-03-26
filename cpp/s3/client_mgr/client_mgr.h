@@ -24,7 +24,7 @@ struct ClientMgr
 
     ClientMgr<T> & operator=(const ClientMgr<T> &) = delete;
 
-    static T* pop(const common::s3::StorageUri & uri);
+    static T* pop(const common::s3::StorageUri_C & uri, const common::s3::Credentials_C & credentials);
     static void push(T* client);
 
     static void clear();
@@ -97,7 +97,7 @@ std::string ClientMgr<T>::current_bucket()
 
 
 template <typename T>
-T* ClientMgr<T>::pop(const common::s3::StorageUri & uri)
+T* ClientMgr<T>::pop(const common::s3::StorageUri_C & uri, const common::s3::Credentials_C & credentials)
 {
     auto & mgr = get();
 
@@ -106,16 +106,26 @@ T* ClientMgr<T>::pop(const common::s3::StorageUri & uri)
 
         auto & unused = mgr._bucket_unused_clients;
         bool is_bucket = uri.bucket == mgr._current_bucket;
-        if (is_bucket && !unused.empty())
+        if (is_bucket)
         {
-            LOG(DEBUG) << "Reusing S3 client";
+            while (!unused.empty())
+            {
+                auto ptr = *unused.begin();
+                ptr->path(uri.path);
+                unused.erase(unused.begin());
 
-            auto ptr = *unused.begin();
-            ptr->path(uri.path);
-            unused.erase(unused.begin());
-            return ptr;
+                // Reuse client only if credentials have not changed
+                if (ptr->verify_credentials(credentials))
+                {
+                    LOG(DEBUG) << "Reusing S3 client";
+                    return ptr;
+                }
+
+                // release the stale client
+                mgr._clients.erase(ptr);
+            }
         }
-        else if (!is_bucket)
+        else
         {
             // remove unused clients of other buckets
             for (T* client : unused)
@@ -129,7 +139,7 @@ T* ClientMgr<T>::pop(const common::s3::StorageUri & uri)
 
     // create new client if there are no unused clients for this bucket
 
-    auto client = std::make_unique<T>(uri);
+    auto client = std::make_unique<T>(uri, credentials);
 
     const auto guard = std::unique_lock<std::mutex>(mgr._mutex);
     auto ptr = client.get();

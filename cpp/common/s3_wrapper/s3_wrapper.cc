@@ -39,11 +39,10 @@ void S3ClientWrapper::stop()
     }
 }
 
-S3ClientWrapper::S3ClientWrapper(const StorageUri & uri) :
+S3ClientWrapper::S3ClientWrapper(const Params & params) :
     _s3_dylib(open_s3()),
-    _s3_client(create_client(uri))
-{
-}
+    _s3_client(create_client(*params.uri, params.credentials))
+{}
 
 S3ClientWrapper::~S3ClientWrapper()
 {
@@ -93,12 +92,12 @@ std::shared_ptr<utils::Dylib> S3ClientWrapper::open_s3_impl()
     return std::make_shared<utils::Dylib>("libstreamers3.so");
 }
 
-void * S3ClientWrapper::create_client(const StorageUri & uri)
+void * S3ClientWrapper::create_client(const StorageUri & uri, const Credentials & credentials)
 {
-    static auto __s3_gen = _s3_dylib->dlsym<void *(*)(const StorageUri &)>("runai_create_s3_client");
+    static auto __s3_gen = _s3_dylib->dlsym<void *(*)(const StorageUri_C &, const Credentials_C &)>("runai_create_s3_client");
     auto start = std::chrono::steady_clock::now();
 
-    auto client = __s3_gen(uri);
+    auto client = __s3_gen(uri, credentials);
     if (client == nullptr)
     {
         LOG(ERROR) << "Failed to create S3 client for uri " << uri;

@@ -1,5 +1,5 @@
 import os
-from typing import List, Iterator
+from typing import List, Iterator, Optional
 import numpy as np
 from timeit import default_timer as timer
 from runai_model_streamer.libstreamer.libstreamer import (
@@ -12,14 +12,28 @@ from runai_model_streamer.libstreamer.libstreamer import (
 from runai_model_streamer.file_streamer.requests_iterator import (
     RequestsIterator,
 )
+
+from runai_model_streamer.s3_utils.s3_utils import (
+    S3Credentials,
+    is_s3_path,
+    is_gs_path,
+    set_gs_environment_variables,
+    convert_gs_path,
+    get_s3_credentials_module,
+)
+
 import humanize
 
+s3_credentials_module = get_s3_credentials_module()
 
 class FileStreamer:
     def __enter__(self) -> "FileStreamer":
         self.streamer = runai_start()
         self.start_time = timer()
         self.total_size = 0
+
+        self.s3_session = None
+        self.s3_credentials = None
         return self
 
     def __exit__(self, exc_type: any, exc_value: any, traceback: any) -> None:
@@ -33,14 +47,52 @@ class FileStreamer:
         if self.streamer:
             runai_end(self.streamer)
 
-    def read_file(self, path: str, offset: int, len: int) -> memoryview:
+    def handle_object_store(self,
+                            path : str,
+                            credentials : S3Credentials
+    ) -> str:
+        if s3_credentials_module:
+            # initialize session only one
+
+            if is_gs_path(path):
+                # set gs endpoint
+                set_gs_environment_variables()
+                # replace path prefix
+                path = convert_gs_path(path)
+            elif is_s3_path(path) and self.s3_session is None:
+                # check for s3 path and init sessions and credentials           
+                self.s3_session, self.s3_credentials = s3_credentials_module.get_credentials(credentials)
+        return path
+
+    def read_file(
+            self,
+            path: str,
+            offset: int,
+            len: int,
+            credentials: Optional[S3Credentials] = None,
+    ) -> memoryview:
         dst_buffer = np.empty(len, dtype=np.uint8)
-        runai_read(self.streamer, path, offset, len, dst_buffer)
+      
+        path = self.handle_object_store(path, credentials)
+        runai_read(
+            self.streamer,
+            path,
+            offset,
+            len,
+            dst_buffer,
+            self.s3_credentials,
+        )
         return dst_buffer
 
-    def stream_file(self, path: str, file_offset: int, chunks: List[int]) -> None:
+    def stream_file(
+            self,
+            path: str,
+            file_offset: int,
+            chunks: List[int],
+            credentials: Optional[S3Credentials] = None,
+) -> None:
         self.total_size = self.total_size + sum(chunks)
-        self.path = path
+        self.path = self.handle_object_store(path, credentials)
 
         self.requests_iterator, buffer_size = RequestsIterator.with_memory_mode(
             file_offset, chunks
@@ -51,7 +103,7 @@ class FileStreamer:
         )
 
         self.dst_buffer = np.empty(buffer_size, dtype=np.uint8)
-
+ 
         request = self.requests_iterator.next_request()
         self.current_request_chunks = request.chunks
         runai_request(
@@ -61,6 +113,7 @@ class FileStreamer:
             sum(request.chunks),
             self.dst_buffer,
             request.chunks,
+            self.s3_credentials,
         )
 
     def get_chunks(self) -> Iterator:
@@ -97,3 +150,4 @@ class FileStreamer:
             yield relative_index, self.dst_buffer, sum(
                 self.current_request_chunks[:relative_index]
             )
+

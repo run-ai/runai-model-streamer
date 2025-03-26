@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <string>
 #include <utility>
+#include <optional>
 
 #include "s3/client/client.h"
 
@@ -13,14 +14,92 @@
 namespace runai::llm::streamer::impl::s3
 {
 
-S3Client::S3Client(const common::s3::StorageUri & uri) :
-    _stop(false),
-    _bucket_name(uri.bucket.c_str(), uri.bucket.size()),
-    _path(uri.path.c_str(), uri.path.size())
-{
-    if (!uri.endpoint.empty())
+S3ClientBase::S3ClientBase(const common::s3::StorageUri_C & uri) : S3ClientBase(uri, common::s3::Credentials())
+{}
+
+std::optional<Aws::String> convert(const char * input) {
+    if (input)
     {
-        _client_config.config.endpointOverride = Aws::String(uri.endpoint.c_str(), uri.endpoint.size());
+        return Aws::String(input);
+    }
+    return std::nullopt;
+}
+
+S3ClientBase::S3ClientBase(const common::s3::StorageUri_C & uri, const common::s3::Credentials_C & credentials) :
+    _bucket_name(uri.bucket),
+    _path(uri.path),
+    _key(convert(credentials.access_key_id)),
+    _secret(convert(credentials.secret_access_key)),
+    _token(convert(credentials.session_token)),
+    _region(convert(credentials.region)),
+    _endpoint(convert(credentials.endpoint)),
+    _client_credentials(_key.has_value() && _secret.has_value() ? std::make_unique<Aws::Auth::AWSCredentials>(_key.value(), _secret.value(), (_token.has_value() ? _token.value() : Aws::String(""))) : nullptr)
+{
+}
+
+std::string S3ClientBase::bucket() const
+{
+    return std::string(_bucket_name.c_str(), _bucket_name.size());
+}
+
+void S3ClientBase::path(const char * path)
+{
+    _path = Aws::String(path);
+}
+
+bool S3ClientBase::verify_credentials_member(const std::optional<Aws::String>& member, const char* value, const char * name) const
+{
+    if (member.has_value())
+    {
+        if (value == nullptr)
+        {
+            LOG(DEBUG) << "credentials member " << name << " is set, but provided member is nullptr";
+            return false;
+        }
+        if (member.value() != value)
+        {
+            LOG(DEBUG) << "credentials member " << name << " doesn't match the provided value";
+            return false;
+        }
+    }
+    else if (value != nullptr) // must be nullptr and not empty string
+    {
+        LOG(DEBUG) << "credentials member " << name << " is not set, but provided member is not nullptr";
+        return false;
+    }
+    LOG(DEBUG) << "credentials member " << name << " verified";
+    return true;
+}
+
+bool S3ClientBase::verify_credentials(const common::s3::Credentials_C & credentials) const
+{
+    return (verify_credentials_member(_key, credentials.access_key_id, " access key") &&
+            verify_credentials_member(_secret, credentials.secret_access_key, "secret") &&
+            verify_credentials_member(_token, credentials.session_token, "session token") &&
+            verify_credentials_member(_region, credentials.region, "region") &&
+            verify_credentials_member(_endpoint, credentials.endpoint, "endpoint"));
+}
+
+S3Client::S3Client(const common::s3::StorageUri_C & uri) : S3Client(uri, common::s3::Credentials())
+{}
+
+S3Client::S3Client(const common::s3::StorageUri_C & uri, const common::s3::Credentials_C & credentials) :
+    S3ClientBase(uri, credentials),
+    _stop(false)
+{
+    if (_endpoint.has_value()) // endpoint passed as parameter by user application
+    {
+        LOG(DEBUG) <<"Using credentials endpoint " << credentials.endpoint;
+        _client_config.config.endpointOverride = _endpoint.value();
+    }
+    else if (uri.endpoint != nullptr) // endpoint passed as environment variable
+    {
+        bool override_endpoint_flag = utils::getenv<bool>("RUNAI_STREAMER_OVERRIDE_ENDPOINT_URL", true);
+        if (override_endpoint_flag)
+        {
+            _client_config.config.endpointOverride = Aws::String(uri.endpoint);
+        }
+        LOG(DEBUG) <<"Using environment variable endpoint " << uri.endpoint << (override_endpoint_flag ? " , using configuration parameter endpointOverride" : "");
     }
 
     if (utils::try_getenv("RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING", _client_config.config.useVirtualAddressing))
@@ -28,7 +107,22 @@ S3Client::S3Client(const common::s3::StorageUri & uri) :
         LOG(DEBUG) << "Setting s3 configuration useVirtualAddressing to " << _client_config.config.useVirtualAddressing;
     }
 
-    _client = std::make_unique<Aws::S3Crt::S3CrtClient>(_client_config.config);
+    if (_region.has_value())
+    {
+        LOG(DEBUG) << "Setting s3 region to " << _region.value();
+        _client_config.config.region = _region.value();
+    }
+
+    if (_client_credentials == nullptr)
+    {
+        _client = std::make_unique<Aws::S3Crt::S3CrtClient>(_client_config.config);
+        LOG(DEBUG) << "Using default authentication";
+    }
+    else
+    {
+        LOG(DEBUG) << "Creating S3 client with given credentials";
+        _client = std::make_unique<Aws::S3Crt::S3CrtClient>(*_client_credentials, _client_config.config);
+    }
 }
 
 common::ResponseCode S3Client::read(size_t offset, size_t bytesize, char * buffer)
@@ -98,7 +192,7 @@ common::ResponseCode S3Client::async_read(unsigned num_ranges, common::Range * r
 
         // split range into chunks
         size_t size = std::max(1UL, range_.size/chunk_bytesize);
-        LOG(DEBUG) <<"Number of chunks is " << size;
+        LOG(SPAM) <<"Number of chunks is " << size;
 
         // each range is divided into chunks (size is the number of chunks)
         // when all the chunks have been read successfuly the response for that range is pushed to the responder
@@ -167,16 +261,6 @@ common::ResponseCode S3Client::async_read(unsigned num_ranges, common::Range * r
     }
 
     return _stop ? common::ResponseCode::FinishedError : common::ResponseCode::Success;
-}
-
-std::string S3Client::bucket() const
-{
-    return std::string(_bucket_name.c_str(), _bucket_name.size());
-}
-
-void S3Client::path(const std::string & path)
-{
-    _path = Aws::String(path.c_str(), path.size());
 }
 
 void S3Client::stop()

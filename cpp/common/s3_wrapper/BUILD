@@ -4,6 +4,7 @@ runai_cc_auto_library(
     name = "s3_wrapper",
     deps = [
         "//common/storage_uri",
+        "//common/s3_credentials",
         "//common/response",
         "//common/range",
         "//common/exception",

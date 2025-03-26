@@ -11,7 +11,6 @@
 #include "streamer/impl/batches/batches.h"
 #include "common/exception/exception.h"
 
-
 namespace runai::llm::streamer::impl
 {
 
@@ -38,11 +37,11 @@ Streamer::~Streamer()
     {}
 }
 
-common::ResponseCode Streamer::request(const std::string & path, size_t file_offset, size_t bytesize, void * dst)
+common::ResponseCode Streamer::request(const std::string & path, size_t file_offset, size_t bytesize, void * dst, const common::s3::Credentials & credentials)
 {
     LOG(SPAM) << "Requested to read " << bytesize << " bytes from " << path << " offset " << file_offset;
 
-    auto r = request(path, file_offset, bytesize, dst, 1, &bytesize);
+    auto r = request(path, file_offset, bytesize, dst, 1, &bytesize, credentials);
     if (r != common::ResponseCode::Success)
     {
         return r;
@@ -51,13 +50,13 @@ common::ResponseCode Streamer::request(const std::string & path, size_t file_off
     return _responder->pop().ret;
 }
 
-common::ResponseCode Streamer::request(const std::string & path, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes)
+common::ResponseCode Streamer::request(const std::string & path, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes, const common::s3::Credentials & credentials)
 {
     common::ResponseCode ret = common::ResponseCode::Success;
 
     try
     {
-        create_request(path, file_offset, bytesize, dst, num_sizes, internal_sizes);
+        create_request(path, file_offset, bytesize, dst, num_sizes, internal_sizes, credentials);
     }
     catch(const common::Exception & e)
     {
@@ -68,7 +67,7 @@ common::ResponseCode Streamer::request(const std::string & path, size_t file_off
     return ret;
 }
 
-void Streamer::create_request(const std::string & path, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes)
+void Streamer::create_request(const std::string & path, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes, const common::s3::Credentials & credentials)
 {
     LOG(SPAM) << "Requested to read asynchronously " << bytesize << " bytes from " << path << " offset " << file_offset << " in " << num_sizes << " chunks";
 
@@ -105,7 +104,7 @@ void Streamer::create_request(const std::string & path, size_t file_offset, size
     std::shared_ptr<common::s3::StorageUri> uri;
     try
     {
-        uri = std::make_unique<common::s3::StorageUri>(path);
+        uri = std::make_shared<common::s3::StorageUri>(path);
     }
     catch(const std::exception& e)
     {
@@ -131,7 +130,9 @@ void Streamer::create_request(const std::string & path, size_t file_offset, size
         _s3 = std::make_unique<S3Cleanup>();
     }
 
-    Batches batches(_config, _responder, path, uri, file_offset, bytesize, dst, num_sizes, internal_sizes);
+    common::s3::S3ClientWrapper::Params params(uri, credentials);
+
+    Batches batches(_config, _responder, path, params, file_offset, bytesize, dst, num_sizes, internal_sizes);
 
     if (batches.total() != bytesize)
     {

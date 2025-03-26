@@ -11,7 +11,14 @@ namespace runai::llm::streamer::common::s3
 struct S3WrappertTest : ::testing::Test
 {
     S3WrappertTest() :
-        uri("s3://" + utils::random::string() + "/" + utils::random::string())
+        uri("s3://" + utils::random::string() + "/" + utils::random::string()),
+        credentials(
+            (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
+            (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
+            (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
+            (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
+            (utils::random::boolean() ? utils::random::string().c_str() : nullptr)),
+        params(std::make_shared<StorageUri>(uri), credentials)
     {}
 
     void TearDown() override
@@ -20,11 +27,13 @@ struct S3WrappertTest : ::testing::Test
     }
 
     StorageUri uri;
+    Credentials credentials;
+    S3ClientWrapper::Params params;
 };
 
 TEST_F(S3WrappertTest, Creation_Sanity)
 {
-    EXPECT_NO_THROW(S3ClientWrapper wrapper(uri));
+    EXPECT_NO_THROW(S3ClientWrapper wrapper(params));
 }
 
 TEST_F(S3WrappertTest, Creation)
@@ -34,7 +43,7 @@ TEST_F(S3WrappertTest, Creation)
     EXPECT_EQ(verify_mock(), 0);
 
     {
-        S3ClientWrapper wrapper(uri);
+        S3ClientWrapper wrapper(params);
         EXPECT_EQ(verify_mock(), 1);
     }
     S3ClientWrapper::shutdown();
@@ -43,7 +52,7 @@ TEST_F(S3WrappertTest, Creation)
 
 TEST_F(S3WrappertTest, Read)
 {
-    S3ClientWrapper wrapper(uri);
+    S3ClientWrapper wrapper(params);
     std::vector<Range> ranges;
     auto response_code = wrapper.async_read(ranges, utils::random::number<size_t>(), nullptr);
     EXPECT_EQ(response_code, common::ResponseCode::Success);
@@ -55,7 +64,7 @@ TEST_F(S3WrappertTest, Cleanup)
     auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
     EXPECT_EQ(verify_mock(), 0);
     {
-        S3ClientWrapper wrapper(uri);
+        S3ClientWrapper wrapper(params);
         std::vector<Range> ranges;
         wrapper.async_read(ranges, utils::random::number<size_t>(), nullptr);
 
