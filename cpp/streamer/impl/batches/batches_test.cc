@@ -35,7 +35,7 @@ TEST(Batches, Sanity)
 
     {
         common::s3::S3ClientWrapper::Params s3_params;
-        Batches batches(config, responder, file.path, s3_params, 0, size, dst.data(), num_chunks, chunks.data());
+        Batches batches(utils::random::number(), config, responder, file.path, s3_params, 0, size, dst.data(), num_chunks, chunks.data());
 
         // execute tasks
         for (unsigned i = 0; i < batches.size(); ++i)
@@ -104,7 +104,7 @@ TEST(Batches, Failed_Reader)
     try
     {
         common::s3::S3ClientWrapper::Params s3_params;
-        Batches batches(config, responder, utils::random::string(), s3_params, 0, size, dst.data(), num_chunks, chunks.data());
+        Batches batches(utils::random::number(), config, responder, utils::random::string(), s3_params, 0, size, dst.data(), num_chunks, chunks.data());
     }
     catch(const common::Exception & e)
     {
@@ -159,7 +159,7 @@ TEST(Batches, Zero_Size_Request)
 
     {
         common::s3::S3ClientWrapper::Params s3_params;
-        Batches batches(config, responder, file.path, s3_params, 0, size, dst.data(), num_chunks, chunks.data());
+        Batches batches(utils::random::number(), config, responder, file.path, s3_params, 0, size, dst.data(), num_chunks, chunks.data());
 
         // execute tasks
         for (unsigned i = 0; i < batches.size(); ++i)

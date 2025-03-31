@@ -59,7 +59,7 @@ TEST(Batch, Finished_Until)
     // create batch
     const auto config = std::make_shared<Config>();
 
-    Batch batch(path, params, std::move(range), nullptr, std::move(tasks), responder, config);
+    Batch batch(utils::random::number(), path, params, std::move(range), nullptr, std::move(tasks), responder, config);
 
     // execute part of the tasks
 
@@ -131,7 +131,7 @@ TEST(Read, Sanity)
         tasks.push_back(std::move(task));
     }
 
-    Batch batch(path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
+    Batch batch(utils::random::number(), path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
 
     std::atomic<bool> stopped(false);
     EXPECT_NO_THROW(batch.execute(stopped));
@@ -191,7 +191,7 @@ TEST(Read, Error)
         tasks.push_back(std::move(task));
     }
 
-     Batch batch(path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
+     Batch batch(utils::random::number(), path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
 
     std::atomic<bool> stopped(false);
     EXPECT_NO_THROW(batch.execute(stopped));
@@ -242,7 +242,7 @@ TEST(Read, Already_Stopped)
         tasks.push_back(std::move(task));
     }
 
-    Batch batch(path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
+    Batch batch(utils::random::number(), path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
 
     std::atomic<bool> stopped(true);
     EXPECT_NO_THROW(batch.execute(stopped));
@@ -307,7 +307,7 @@ TEST(Read, Stopped_During_Read)
         offset += chunks[i];
     }
 
-    Batch batch(path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
+    Batch batch(utils::random::number(), path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
 
     std::atomic<bool> stopped(false);
 
@@ -435,7 +435,7 @@ TEST(Read, Stopped_During_Async_Read)
         offset += chunks[i];
     }
 
-    Batch batch(path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
+    Batch batch(utils::random::number(), path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
 
     std::atomic<bool> stopped(false);
 

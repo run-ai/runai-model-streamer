@@ -49,8 +49,21 @@ struct Streamer
     // returns common::ResponseCode error if failed
     common::Response response();
 
+    common::ResponseCode request_multi(
+      std::vector<std::string> & paths,
+      std::vector<size_t> & file_offsets,
+      std::vector<size_t> & bytesizes,
+      std::vector<void *> & dsts,
+      std::vector<unsigned> & num_sizes,
+      std::vector<size_t *> & internal_sizes,
+      const common::s3::Credentials & credentials);
+ 
  private:
     void create_request(const std::string & path, size_t offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes, const common::s3::Credentials & credentials);
+
+    void Streamer::handle_request(unsigned file_index, const std::string & path, size_t file_offset, size_t bytesize, unsigned num_sizes, size_t * internal_sizes, void * dst, const common::s3::Credentials & credentials);
+
+    void verify_requests(std::vector<std::string> & paths, std::vector<size_t> & file_offsets, std::vector<size_t> & bytesizes, std::vector<unsigned> & num_sizes, std::vector<void *> & dsts);
 
  private:
     std::shared_ptr<const Config> _config;

@@ -190,6 +190,69 @@ _RUNAI_EXTERN_C int runai_response(void * streamer, unsigned * index)
     return static_cast<int>(common::ResponseCode::UnknownError);
 }
 
+_RUNAI_EXTERN_C int runai_request_multi(
+    void * streamer,
+    unsigned num_files,
+    const char ** paths,
+    size_t * file_offsets,
+    size_t * bytesizes,
+    void ** dsts,
+    unsigned * num_sizes,
+    size_t ** internal_sizes,
+    const char * key,
+    const char * secret,
+    const char * token,
+    const char * region,
+    const char * endpoint
+)
+{
+    try
+    {
+        auto s = static_cast<impl::Streamer *>(streamer);
+        if (s == nullptr)
+        {
+            return static_cast<int>(common::ResponseCode::InvalidParameterError);
+        }
+
+        common::s3::Credentials credentials(key, secret, token, region, endpoint);
+        std::vector<std::string> paths_v(paths, paths + num_files);
+        std::vector<size_t> file_offsets_v(file_offsets, file_offsets + num_files);
+        std::vector<size_t> bytesizes_v(bytesizes, bytesizes + num_files);
+        std::vector<void *> dsts_v(dsts, dsts + num_files);
+        std::vector<unsigned> num_sizes_v(num_sizes, num_sizes + num_files);
+        std::vector<size_t *> internal_sizes_v(internal_sizes, internal_sizes + num_files);
+        return static_cast<int>(s->request_multi(paths_v, file_offsets_v, bytesizes_v, dsts_v, num_sizes_v, internal_sizes_v, credentials));
+    }
+    catch(...)
+    {
+    }
+    return static_cast<int>(common::ResponseCode::UnknownError);
+}
+
+_RUNAI_EXTERN_C int runai_response_multi(void * streamer, unsigned * file_index /* return parameter */, unsigned * index /* return parameter */)
+{
+    try
+    {
+        if (streamer == nullptr || index == nullptr)
+        {
+            return static_cast<int>(common::ResponseCode::InvalidParameterError);
+        }
+
+        auto * s = static_cast<impl::Streamer *>(streamer);
+        auto r = s->response();
+        if (r.ret == common::ResponseCode::Success)
+        {
+            *index = r.index;
+            *file_index = r.file_index;
+        }
+        return static_cast<int>(r.ret);
+    }
+    catch(...)
+    {
+    }
+    return static_cast<int>(common::ResponseCode::UnknownError);
+}
+
 const char * unexpected_error = "Unexpected error occured";
 
 _RUNAI_EXTERN_C const char * runai_response_str(int response_code)

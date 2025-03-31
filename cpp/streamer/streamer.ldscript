@@ -7,6 +7,8 @@
         runai_request;
         runai_request_with_credentials;
         runai_response;
+        runai_request_multi;
+        runai_response_multi;
         runai_response_str;
     local: *;
 };

@@ -4,9 +4,14 @@
 namespace runai::llm::streamer::common
 {
 
-Response::Response(unsigned index, ResponseCode ret) :
+Response::Response(unsigned file_index, unsigned index, common::ResponseCode ret) :
+    file_index(file_index),
     index(index),
     ret(ret)
+{}
+
+Response::Response(unsigned index, ResponseCode ret) :
+    Response(0, index, ret)
 {}
 
 Response::Response(unsigned index) : Response(index, ResponseCode::Success)
