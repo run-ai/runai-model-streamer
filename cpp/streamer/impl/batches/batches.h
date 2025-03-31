@@ -18,7 +18,7 @@ namespace runai::llm::streamer::impl
 
 struct Batches
 {
-    Batches(std::shared_ptr<const Config> config, std::shared_ptr<common::Responder> responder, const std::string & path, const common::s3::S3ClientWrapper::Params & params, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes);
+    Batches(unsigned file_index, std::shared_ptr<const Config> config, std::shared_ptr<common::Responder> responder, const std::string & path, const common::s3::S3ClientWrapper::Params & params, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes);
 
     unsigned size() const;
 
@@ -51,7 +51,9 @@ struct Batches
     // create tasks of a given request
     void handle_request(std::vector<Tasks> & v_tasks, unsigned request_index, size_t request_file_offset, size_t request_size);
 
-    unsigned _concurrency;
+    unsigned _file_index;
+
+    unsigned _size;
 
     BatchItr _itr;
 

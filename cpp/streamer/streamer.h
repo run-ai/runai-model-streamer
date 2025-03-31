@@ -71,6 +71,35 @@ _RUNAI_EXTERN_C int runai_request_with_credentials(
 
 _RUNAI_EXTERN_C int runai_response(void * streamer, unsigned * index /* return parameter */);
 
+// send asynchronous read request to read multiple files
+// Each file will be copied to its own memory buffer (dst) with a list of consecutive sub requests, and receive response for each sub request when ready
+// num_files : number of files to read
+// paths : list of files paths
+// file_offsets : offset for each file path, from which to start reading
+// bytesizes : size of each destination buffer
+// dsts : destination buffers
+// num_sizes : number of sub requests for each file
+// internal_sizes : a list containing the size of each sub request, where the first sub request starts at the given file offset and each sub request starts at the end of the previous one
+// return Success if request is valid
+
+_RUNAI_EXTERN_C int runai_request_multi(
+    void * streamer,
+    unsigned num_files,
+    const char ** paths,
+    size_t * file_offsets,
+    size_t * bytesizes,
+    void ** dsts,
+    unsigned * num_sizes,
+    size_t ** internal_sizes,
+    const char * key,
+    const char * secret,
+    const char * token,
+    const char * region,
+    const char * endpoint
+);
+
+_RUNAI_EXTERN_C int runai_response_multi(void * streamer, unsigned * file_index /* return parameter */, unsigned * index /* return parameter */);
+
 _RUNAI_EXTERN_C const char * runai_response_str(int response_code);
 
 } // namespace runai::llm::streamer

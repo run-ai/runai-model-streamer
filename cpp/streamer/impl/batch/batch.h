@@ -47,13 +47,15 @@ struct Batch
     Batch(Batch &&) = default;
     Batch & operator=(Batch &&) = default;
 
-    Batch(const std::string & path, const common::s3::S3ClientWrapper::Params & params, Range && range, char * dst, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config);
+    Batch(unsigned file_index, const std::string & path, const common::s3::S3ClientWrapper::Params & params, Range && range, char * dst, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config);
 
     void execute(std::atomic<bool> & stopped);
 
     // notify tasks until file offset
     void finished_until(size_t file_offset, common::ResponseCode ret = common::ResponseCode::Success);
     unsigned finished_until() const;
+
+    unsigned file_index;
 
     std::string path;
 

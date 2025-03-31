@@ -53,9 +53,9 @@ size_t Batches::BatchItr::consume(size_t bytesize)
     return to_read;
 }
 
-Batches::Batches(std::shared_ptr<const Config> config, std::shared_ptr<common::Responder> responder, const std::string & path, const common::s3::S3ClientWrapper::Params & params, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes) :
-    _concurrency(params.uri != nullptr ? config->s3_concurrency : config->concurrency),
-    _itr(_concurrency, batch_bytesize(bytesize, *config, params.uri)),
+Batches::Batches(unsigned file_index, std::shared_ptr<const Config> config, std::shared_ptr<common::Responder> responder, const std::string & path, const common::s3::S3ClientWrapper::Params & params, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes) :
+    _file_index(file_index),
+    _itr(config->concurrency, batch_bytesize(bytesize, *config, params.uri)),
     _responder(responder)
 {
     LOG(DEBUG) << "worker maximal range size is " << utils::logging::human_readable_size(_itr.worker_bytesize());
@@ -130,7 +130,7 @@ void Batches::build_tasks(std::shared_ptr<const Config> config, const std::strin
 
         const auto range_size = range.size;
 
-        _batches.emplace_back(path, params, std::move(range), dst_, std::move(tasks), _responder, config);
+        _batches.emplace_back(_file_index, path, params, std::move(range), dst_, std::move(tasks), _responder, config);
 
         dst_ += range_size;
     }

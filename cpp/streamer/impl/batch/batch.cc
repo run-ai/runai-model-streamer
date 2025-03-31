@@ -54,7 +54,8 @@ size_t Range::calculate_end(const Tasks & tasks)
     return tasks[tasks.size() - 1].info.end;
 }
 
-Batch::Batch(const std::string & path, const common::s3::S3ClientWrapper::Params & params, Range && range, char * dst, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config) :
+Batch::Batch(unsigned file_index, const std::string & path, const common::s3::S3ClientWrapper::Params & params, Range && range, char * dst, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config) :
+    file_index(file_index),
     path(path),
     params(params),
     range(range),
@@ -122,7 +123,7 @@ void Batch::execute(std::atomic<bool> & stopped)
         {
             if (task.finished_request(response_code))
             {
-                common::Response response(task.request->index, task.request->ret());
+                common::Response response(file_index, task.request->index, task.request->ret());
                 responder->push(std::move(response), task.request->bytesize);
             }
         }
@@ -213,7 +214,7 @@ void Batch::async_read(const Config & config, std::atomic<bool> & stopped)
         auto & task = tasks.at(r.index);
         if (task.finished_request(r.ret))
         {
-            common::Response response(task.request->index, task.request->ret());
+            common::Response response(file_index, task.request->index, task.request->ret());
             responder->push(std::move(response), task.request->bytesize);
         }
     }
@@ -234,7 +235,7 @@ void Batch::finished_until(size_t file_offset, common::ResponseCode ret /*= comm
         if (tasks[i].finished_request(ret))
         {
             const auto & r = tasks[i].request;
-            common::Response response(r->index, r->ret());
+            common::Response response(file_index, r->index, r->ret());
             responder->push(std::move(response), tasks[i].request->bytesize);
         }
     }
