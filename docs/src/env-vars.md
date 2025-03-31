@@ -43,7 +43,7 @@ Controls how the CPU Memory buffer to which tensors are read from the file is be
 
 `-1 - UNLIMITED`
 
-### RUNAI_STREAMER_S3_ENDPOINT
+### AWS_ENDPOINT_URL
 
 Overrides url endpoint for reading from S3 compatible object store
 
