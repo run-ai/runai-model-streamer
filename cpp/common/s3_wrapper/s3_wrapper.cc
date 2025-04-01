@@ -94,14 +94,15 @@ std::shared_ptr<utils::Dylib> S3ClientWrapper::open_s3_impl()
 
 void * S3ClientWrapper::create_client(const StorageUri & uri, const Credentials & credentials)
 {
-    static auto __s3_gen = _s3_dylib->dlsym<void *(*)(const StorageUri_C &, const Credentials_C &)>("runai_create_s3_client");
+    static auto __s3_gen = _s3_dylib->dlsym<ResponseCode(*)(const StorageUri_C &, const Credentials_C &, void **)>("runai_create_s3_client");
     auto start = std::chrono::steady_clock::now();
 
-    auto client = __s3_gen(uri, credentials);
-    if (client == nullptr)
+    void * client;
+    auto ret = __s3_gen(uri, credentials, &client);
+    if (ret != ResponseCode::Success)
     {
         LOG(ERROR) << "Failed to create S3 client for uri " << uri;
-        throw Exception(ResponseCode::FileAccessError);
+        throw Exception(ret);
     }
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
     LOG(DEBUG) << "created client in " << duration.count() << " ms";

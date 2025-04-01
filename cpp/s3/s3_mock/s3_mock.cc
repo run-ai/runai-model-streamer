@@ -29,19 +29,18 @@ void runai_mock_s3_set_response_time_ms(unsigned milliseconds)
     __mock_response_time_ms = milliseconds;
 }
 
-void * runai_create_s3_client(const common::s3::StorageUri_C & uri, const common::s3::Credentials_C & credentials)
+common::ResponseCode runai_create_s3_client(const common::s3::StorageUri_C & uri, const common::s3::Credentials_C & credentials, void ** client)
 {
     const auto guard = std::unique_lock<std::mutex>(__mutex);
 
-    void * client;
     do
     {
-        client = reinterpret_cast<void *>(utils::random::number());
+        *client = reinterpret_cast<void *>(utils::random::number());
     } while (__mock_clients.count(client));
 
     __mock_clients.insert(client);
     __mock_index[client] = 0;
-    return client;
+    return common::ResponseCode::Success;
 }
 
 void runai_remove_s3_client(void * client)

@@ -23,12 +23,13 @@ TEST(Response, Description)
         "Invalid request parameters",
         "Empty request parameters",
         "Streamer is handling previous request",
+        "CA bundle file not found",
         "Unknown Error"
     };
 
     // errors
 
-    for (auto response_code : {ResponseCode::FileAccessError, ResponseCode::EofError, ResponseCode::InvalidParameterError, ResponseCode::EmptyRequestError, ResponseCode::BusyError, ResponseCode::UnknownError, ResponseCode::FinishedError, ResponseCode::S3NotSupported, ResponseCode::GlibcPrerequisite, ResponseCode::InsufficientFdLimit} )
+    for (auto response_code : {ResponseCode::FileAccessError, ResponseCode::EofError, ResponseCode::InvalidParameterError, ResponseCode::EmptyRequestError, ResponseCode::BusyError, ResponseCode::UnknownError, ResponseCode::FinishedError, ResponseCode::S3NotSupported, ResponseCode::GlibcPrerequisite, ResponseCode::InsufficientFdLimit, ResponseCode::CaFileNotFound} )
     {
         std::string str = description(static_cast<int>(response_code));
 
