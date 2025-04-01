@@ -61,6 +61,16 @@ String
 
 Default S3 url endpoint
 
+### AWS_CA_BUNDLE
+
+Specifies the path to a certificate bundle to use for HTTPS certificate validation.
+
+If defined, this environment variable overrides the value for the profile setting ca_bundle.
+
+#### Values accepted
+
+String
+
 ### RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING
 
 Controls parsing the url endpoint for reading from object store 

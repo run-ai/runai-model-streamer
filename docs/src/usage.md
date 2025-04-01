@@ -36,6 +36,12 @@ By default, the streamer performs authentication via boto3 to obtain credentials
 
 This is the recommended way to load tensors from AWS S3 storage
 
+###### HTTPS certificate
+
+Custom certificates file can be passed using `AWS_CA_BUNDLE=path/to/ca_file`
+
+The file path can also be configured in `~/.aws/config` file with `ca_bundle = /path/to/ca_file`, in case the authentication is via boto3 (`RUNAI_STREAMER_NO_BOTO3_SESSION=0` which is the default)
+
 ###### Authentication via AWS CPP SDK 
 
 The boto3 authentication can be disabled by setting `RUNAI_STREAMER_NO_BOTO3_SESSION=1`.
