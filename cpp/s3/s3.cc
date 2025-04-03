@@ -1,6 +1,8 @@
 #include "s3/s3.h"
 #include "s3/client_mgr/client_mgr.h"
 
+#include "common/exception/exception.h"
+
 // For connecting to s3 providers other then aws:
 // 1. uri should be in the format s3://bucket/path
 // 2. endpoint url must be provided with environment variable AWS_ENDPOINT_URL
@@ -20,17 +22,25 @@
 namespace runai::llm::streamer::impl::s3
 {
 
-void * runai_create_s3_client(const common::s3::StorageUri_C & uri, const common::s3::Credentials_C & credentials)
+common::ResponseCode runai_create_s3_client(const common::s3::StorageUri_C & uri, const common::s3::Credentials_C & credentials, void ** client)
 {
+    common::ResponseCode ret = common::ResponseCode::Success;
     try
     {
-        return static_cast<void *>(S3ClientMgr::pop(uri, credentials));
+        *client = static_cast<void *>(S3ClientMgr::pop(uri, credentials));
+    }
+    catch(const common::Exception & e)
+    {
+        ret = e.error();
+        *client = nullptr;
     }
     catch(const std::exception & e)
     {
         LOG(ERROR) << "Failed to create S3 client";
+        ret = common::ResponseCode::FileAccessError;
+        *client = nullptr;
     }
-    return nullptr;
+    return ret;
 }
 
 void runai_remove_s3_client(void * client)

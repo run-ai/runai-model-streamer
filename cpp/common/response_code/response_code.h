@@ -19,6 +19,7 @@ enum class ResponseCode : int
     InvalidParameterError,
     EmptyRequestError,
     BusyError,
+    CaFileNotFound,
     UnknownError,
     __Max,
 };

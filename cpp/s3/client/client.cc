@@ -8,8 +8,11 @@
 
 #include "s3/client/client.h"
 
+#include "common/exception/exception.h"
+
 #include "utils/logging/logging.h"
 #include "utils/env/env.h"
+#include "utils/fd/fd.h"
 
 namespace runai::llm::streamer::impl::s3
 {
@@ -111,6 +114,18 @@ S3Client::S3Client(const common::s3::StorageUri_C & uri, const common::s3::Crede
     {
         LOG(DEBUG) << "Setting s3 region to " << _region.value();
         _client_config.config.region = _region.value();
+    }
+
+    if (utils::try_getenv("AWS_CA_BUNDLE", _client_config.config.caFile))
+    {
+        LOG(DEBUG) << "Setting s3 configuration ca certificate file to " << _client_config.config.caFile;
+
+        // verify file exists
+        if (!utils::Fd::exists(_client_config.config.caFile))
+        {
+            LOG(ERROR) << "CA cert file not found: " << _client_config.config.caFile;
+            throw common::Exception(common::ResponseCode::CaFileNotFound);
+        }
     }
 
     if (_client_credentials == nullptr)

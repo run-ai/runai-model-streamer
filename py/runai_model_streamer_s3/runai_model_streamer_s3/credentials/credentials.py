@@ -3,6 +3,8 @@ from typing import Tuple, Dict, Optional
 import os
 import boto3
 
+AWS_CA_BUNDLE_ENV = "AWS_CA_BUNDLE"
+
 class S3Credentials:
     def __init__(
         self,
@@ -51,4 +53,10 @@ def get_credentials(credentials: Optional[S3Credentials] = None) -> Tuple[boto3.
         endpoint=credentials.endpoint if credentials else None, 
     )
 
+    # set ca_bundle if exists and AWS_CA_BUNDLE is undefined
+    if AWS_CA_BUNDLE_ENV not in os.environ:
+        ca_bundle = session._session.get_config_variable("ca_bundle")
+        if ca_bundle is not None:
+            os.environ.setdefault(AWS_CA_BUNDLE_ENV, ca_bundle)
+ 
     return session, new_credentials

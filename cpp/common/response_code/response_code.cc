@@ -33,6 +33,7 @@ constexpr std::array<const char *, static_cast<size_t>(ResponseCode::__Max)> __m
     "Invalid request parameters",
     "Empty request parameters",
     "Streamer is handling previous request",
+    "CA bundle file not found",
     "Unknown Error"
 };
 

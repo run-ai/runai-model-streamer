@@ -49,6 +49,8 @@ struct Fd
     std::vector<uint8_t> read(size_t size, Read mode = Read::Exactly);
     void write(const std::vector<uint8_t> & data);
 
+    static bool exists(const std::string & path);
+
     // read the entire file - used for testing
 
     static std::vector<uint8_t> read(const std::string & path);

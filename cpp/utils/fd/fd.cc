@@ -251,4 +251,10 @@ void Fd::write(const std::string & path, const std::vector<uint8_t> & data, int 
     fd.write(data.data(), data.size());
 }
 
+bool Fd::exists(const std::string & path)
+{
+    return ::access(path.c_str(), F_OK) != -1;
+}
+
+
 } // namespace runai::llm::streamer::utils
