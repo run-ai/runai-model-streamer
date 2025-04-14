@@ -24,7 +24,7 @@ struct S3ClientBase
 
     std::string bucket() const;
 
-    void path(const char * path);
+    void path(const char * path, unsigned path_index);
 
     // verify that clien's credentials have not change
     bool verify_credentials(const common::s3::Credentials_C & credentials) const;
@@ -32,6 +32,7 @@ struct S3ClientBase
  protected:
     const Aws::String _bucket_name;
     Aws::String _path;
+    unsigned _path_index; // path identifer to be returned in response instead of the path string
     const std::optional<Aws::String> _key;
     const std::optional<Aws::String> _secret;
     const std::optional<Aws::String> _token;
