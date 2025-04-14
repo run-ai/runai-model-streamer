@@ -45,9 +45,10 @@ std::string S3ClientBase::bucket() const
     return std::string(_bucket_name.c_str(), _bucket_name.size());
 }
 
-void S3ClientBase::path(const char * path)
+void S3ClientBase::path(const char * path, unsigned path_index)
 {
     _path = Aws::String(path);
+    _path_index = path_index;
 }
 
 bool S3ClientBase::verify_credentials_member(const std::optional<Aws::String>& member, const char* value, const char * name) const
