@@ -35,7 +35,7 @@ TEST(Batch, Finished_Until)
     auto chunks = utils::random::chunks(size, num_tasks);
 
     auto responder = std::make_shared<common::Responder>(1);
-    auto request = std::make_shared<Request>(start, utils::random::number(), num_tasks, size);
+    auto request = std::make_shared<Request>(start, utils::random::number(), num_tasks, size, nullptr);
 
     // create tasks
 
@@ -59,7 +59,7 @@ TEST(Batch, Finished_Until)
     // create batch
     const auto config = std::make_shared<Config>();
 
-    Batch batch(utils::random::number(), path, params, std::move(range), nullptr, std::move(tasks), responder, config);
+    Batch batch(utils::random::number(), utils::random::number(), path, params, std::move(range), nullptr, std::move(tasks), responder, config);
 
     // execute part of the tasks
 
@@ -118,7 +118,7 @@ TEST(Read, Sanity)
     auto dst_ptr = dst.data();
 
     // create tasks
-    auto request = std::make_shared<Request>(range.start, utils::random::number(), num_tasks, size);
+    auto request = std::make_shared<Request>(range.start, utils::random::number(), num_tasks, size, dst_ptr);
 
     size_t offset = start;
 
@@ -131,7 +131,7 @@ TEST(Read, Sanity)
         tasks.push_back(std::move(task));
     }
 
-    Batch batch(utils::random::number(), path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
+    Batch batch(utils::random::number(), utils::random::number(), path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
 
     std::atomic<bool> stopped(false);
     EXPECT_NO_THROW(batch.execute(stopped));
@@ -177,7 +177,7 @@ TEST(Read, Error)
     auto dst_ptr = dst.data();
 
     // create tasks
-    auto request = std::make_shared<Request>(range.start, utils::random::number(), num_tasks, size);
+    auto request = std::make_shared<Request>(range.start, utils::random::number(), num_tasks, size, dst_ptr);
 
     size_t offset = start;
 
@@ -191,7 +191,7 @@ TEST(Read, Error)
         tasks.push_back(std::move(task));
     }
 
-     Batch batch(utils::random::number(), path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
+     Batch batch(utils::random::number(), utils::random::number(), path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
 
     std::atomic<bool> stopped(false);
     EXPECT_NO_THROW(batch.execute(stopped));
@@ -229,7 +229,7 @@ TEST(Read, Already_Stopped)
     auto dst_ptr = dst.data();
 
     // create tasks
-    auto request = std::make_shared<Request>(range.start, utils::random::number(), num_tasks, size);
+    auto request = std::make_shared<Request>(range.start, utils::random::number(), num_tasks, size, dst_ptr);
 
     size_t offset = start;
 
@@ -242,7 +242,7 @@ TEST(Read, Already_Stopped)
         tasks.push_back(std::move(task));
     }
 
-    Batch batch(utils::random::number(), path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
+    Batch batch(utils::random::number(), utils::random::number(), path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
 
     std::atomic<bool> stopped(true);
     EXPECT_NO_THROW(batch.execute(stopped));
@@ -293,9 +293,11 @@ TEST(Read, Stopped_During_Read)
     std::vector<std::shared_ptr<Request>> requests(num_requests);
     std::vector<size_t> offsets;
     auto offset = start;
+    auto request_offset = dst_ptr;
     for (unsigned i = 0; i < num_requests; ++i)
     {
-        requests[i] = std::make_shared<Request>(offset, i, 1, chunks[i]);
+        requests[i] = std::make_shared<Request>(offset, i, 1, chunks[i], request_offset);
+        request_offset += chunks[i];
         EXPECT_EQ(requests[i]->bytesize, chunks[i]);
         EXPECT_EQ(requests[i]->offset, offset);
 
@@ -307,7 +309,7 @@ TEST(Read, Stopped_During_Read)
         offset += chunks[i];
     }
 
-    Batch batch(utils::random::number(), path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
+    Batch batch(utils::random::number(), utils::random::number(), path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
 
     std::atomic<bool> stopped(false);
 
@@ -402,7 +404,7 @@ TEST(Read, Stopped_During_Async_Read)
         (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
         (utils::random::boolean() ? utils::random::string().c_str() : nullptr));
 
-    common::s3::S3ClientWrapper::Params params(uri, credentials);
+    common::s3::S3ClientWrapper::Params params(utils::random::number(), uri, credentials);
 
     // divide range into chunks - a chunk per request
 
@@ -421,11 +423,13 @@ TEST(Read, Stopped_During_Async_Read)
     std::vector<std::shared_ptr<Request>> requests(num_requests);
     std::vector<size_t> offsets;
     auto offset = start;
+    auto request_offset = dst_ptr;
     for (unsigned i = 0; i < num_requests; ++i)
     {
-        requests[i] = std::make_shared<Request>(offset, i, 1, chunks[i]);
+        requests[i] = std::make_shared<Request>(offset, i, 1, chunks[i], request_offset);
         EXPECT_EQ(requests[i]->bytesize, chunks[i]);
         EXPECT_EQ(requests[i]->offset, offset);
+        request_offset += chunks[i];
 
         // task offset is relative to the beginning of the request offset
         auto task = Task(requests[i], offset, chunks[i]);
@@ -435,7 +439,7 @@ TEST(Read, Stopped_During_Async_Read)
         offset += chunks[i];
     }
 
-    Batch batch(utils::random::number(), path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
+    Batch batch(utils::random::number(), utils::random::number(), path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
 
     std::atomic<bool> stopped(false);
 

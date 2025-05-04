@@ -9,8 +9,8 @@
 
 #include "common/s3_credentials/s3_credentials.h"
 
-#include "utils/random/random.h"
 #include "utils/logging/logging.h"
+#include "utils/random/random.h"
 #include "utils/env/env.h"
 
 namespace runai::llm::streamer::common::s3
@@ -29,14 +29,14 @@ void runai_mock_s3_set_response_time_ms(unsigned milliseconds)
     __mock_response_time_ms = milliseconds;
 }
 
-common::ResponseCode runai_create_s3_client(const common::s3::StorageUri_C & uri, const common::s3::Credentials_C & credentials, void ** client)
+common::ResponseCode runai_create_s3_client(const common::s3::Path & path, const common::s3::Credentials_C & credentials, void ** client)
 {
     const auto guard = std::unique_lock<std::mutex>(__mutex);
 
     do
     {
         *client = reinterpret_cast<void *>(utils::random::number());
-    } while (__mock_clients.count(client));
+    } while (__mock_clients.count(*client) || __mock_unused.count(*client));
 
     __mock_clients.insert(*client);
     __mock_index[*client] = 0;
@@ -49,9 +49,10 @@ void runai_remove_s3_client(void * client)
 
     try
     {
+        ASSERT(client) << "No client";
         __mock_index.erase(client);
         __mock_unused.insert(client);
-        LOG(DEBUG) << "Removed S3 client - mock size is " << __mock_clients.size();
+        LOG(DEBUG) << "Removed S3 client " << client << " - mock size is " << __mock_clients.size();
     }
     catch(const std::exception& e)
     {

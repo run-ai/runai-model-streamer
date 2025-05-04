@@ -9,6 +9,7 @@ runai_cc_auto_library(
         "//common/exception",
         "//common/responder",
         "//streamer/impl/file",
+        "//streamer/impl/assigner/file_read_task",
         "//streamer/impl/s3",
         "//utils/logging",
     ],
@@ -22,5 +23,6 @@ runai_cc_test(
         ":batches",
         "//utils/random",
         "//utils/temp/file",
+        "//streamer/impl/assigner",
     ],
 )

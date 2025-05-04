@@ -17,7 +17,7 @@
 namespace runai::llm::streamer::impl::s3
 {
 
-S3ClientBase::S3ClientBase(const common::s3::StorageUri_C & uri) : S3ClientBase(uri, common::s3::Credentials())
+S3ClientBase::S3ClientBase(const common::s3::Path & path) : S3ClientBase(path, common::s3::Credentials())
 {}
 
 std::optional<Aws::String> convert(const char * input) {
@@ -28,9 +28,10 @@ std::optional<Aws::String> convert(const char * input) {
     return std::nullopt;
 }
 
-S3ClientBase::S3ClientBase(const common::s3::StorageUri_C & uri, const common::s3::Credentials_C & credentials) :
-    _bucket_name(uri.bucket),
-    _path(uri.path),
+S3ClientBase::S3ClientBase(const common::s3::Path & path, const common::s3::Credentials_C & credentials) :
+    _bucket_name(path.uri.bucket),
+    _path(path.uri.path),
+    _path_index(path.index),
     _key(convert(credentials.access_key_id)),
     _secret(convert(credentials.secret_access_key)),
     _token(convert(credentials.session_token)),
@@ -45,10 +46,13 @@ std::string S3ClientBase::bucket() const
     return std::string(_bucket_name.c_str(), _bucket_name.size());
 }
 
-void S3ClientBase::path(const char * path, unsigned path_index)
+void S3ClientBase::path(const common::s3::Path & path)
 {
-    _path = Aws::String(path);
-    _path_index = path_index;
+    ASSERT(path.uri.bucket == _bucket_name) << "Attempting to reuse client of bucket " << _bucket_name << " with a different bucket " << path.uri.bucket;
+    ASSERT((path.uri.endpoint == nullptr) || (_endpoint.has_value() && _endpoint.value() == std::string(path.uri.endpoint))) << "Attempting to reuse client with a different endpoint " << path.uri.endpoint;
+    LOG(DEBUG) << "Setting s3 client path " << path.uri.path << "bucket " << path.uri.bucket << " and index to " << path.index;
+    _path = Aws::String(path.uri.path);
+    _path_index = path.index;
 }
 
 bool S3ClientBase::verify_credentials_member(const std::optional<Aws::String>& member, const char* value, const char * name) const
@@ -84,26 +88,27 @@ bool S3ClientBase::verify_credentials(const common::s3::Credentials_C & credenti
             verify_credentials_member(_endpoint, credentials.endpoint, "endpoint"));
 }
 
-S3Client::S3Client(const common::s3::StorageUri_C & uri) : S3Client(uri, common::s3::Credentials())
+S3Client::S3Client(const common::s3::Path & path) : S3Client(path, common::s3::Credentials())
 {}
 
-S3Client::S3Client(const common::s3::StorageUri_C & uri, const common::s3::Credentials_C & credentials) :
-    S3ClientBase(uri, credentials),
-    _stop(false)
+S3Client::S3Client(const common::s3::Path & path, const common::s3::Credentials_C & credentials) :
+    S3ClientBase(path, credentials),
+    _stop(false),
+    _responder(nullptr)
 {
     if (_endpoint.has_value()) // endpoint passed as parameter by user application
     {
         LOG(DEBUG) <<"Using credentials endpoint " << credentials.endpoint;
         _client_config.config.endpointOverride = _endpoint.value();
     }
-    else if (uri.endpoint != nullptr) // endpoint passed as environment variable
+    else if (path.uri.endpoint != nullptr) // endpoint passed as environment variable
     {
         bool override_endpoint_flag = utils::getenv<bool>("RUNAI_STREAMER_OVERRIDE_ENDPOINT_URL", true);
         if (override_endpoint_flag)
         {
-            _client_config.config.endpointOverride = Aws::String(uri.endpoint);
+            _client_config.config.endpointOverride = Aws::String(path.uri.endpoint);
         }
-        LOG(DEBUG) <<"Using environment variable endpoint " << uri.endpoint << (override_endpoint_flag ? " , using configuration parameter endpointOverride" : "");
+        LOG(DEBUG) <<"Using environment variable endpoint " << path.uri.endpoint << (override_endpoint_flag ? " , using configuration parameter endpointOverride" : "");
     }
 
     if (utils::try_getenv("RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING", _client_config.config.useVirtualAddressing))
@@ -194,7 +199,14 @@ common::ResponseCode S3Client::async_read(unsigned num_ranges, common::Range * r
         return common::ResponseCode::BusyError;
     }
 
-    _responder = std::make_shared<common::Responder>(num_ranges);
+    if (_responder == nullptr)
+    {
+        _responder = std::make_shared<common::Responder>(num_ranges);
+    }
+    else
+    {
+        _responder->increment(num_ranges);
+    }
 
     char * buffer_ = buffer;
     common::Range * ranges_ = ranges;
@@ -249,7 +261,7 @@ common::ResponseCode S3Client::async_read(unsigned num_ranges, common::Range * r
                     // note that unsuccessful attempts do not update the counter
                     if (running == 1)
                     {
-                        common::Response r(ir, common::ResponseCode::Success);
+                        common::Response r(file_index, ir, common::ResponseCode::Success);
                         responder->push(std::move(r));
                     }
                 }

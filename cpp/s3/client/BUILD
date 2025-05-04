@@ -9,6 +9,7 @@ runai_cc_auto_library(
         "//common/responder",
         "//common/range",
         "//common/s3_credentials",
+        "//common/path",
         "//common/exception",
         "//utils/env",
         "//utils/fd",

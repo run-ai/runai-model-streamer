@@ -29,6 +29,11 @@ struct Task
 
     std::shared_ptr<Request> request;
     Info info;
+
+    // Destination information for the worker
+    char * destination_base;      // Base address for the *request's* data buffer
+    size_t destination_offset;   // Offset from destination_base where *this task* should write
+
  private:
     bool _finished = false;
 };

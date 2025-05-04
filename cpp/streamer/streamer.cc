@@ -1,6 +1,8 @@
 #include "streamer/streamer.h"
 
 #include <memory>
+#include <string>
+#include <vector>
 
 #include "common/response_code/response_code.h"
 #include "streamer/impl/streamer/streamer.h"
@@ -215,13 +217,21 @@ _RUNAI_EXTERN_C int runai_request_multi(
         }
 
         common::s3::Credentials credentials(key, secret, token, region, endpoint);
+
         std::vector<std::string> paths_v(paths, paths + num_files);
         std::vector<size_t> file_offsets_v(file_offsets, file_offsets + num_files);
         std::vector<size_t> bytesizes_v(bytesizes, bytesizes + num_files);
         std::vector<void *> dsts_v(dsts, dsts + num_files);
         std::vector<unsigned> num_sizes_v(num_sizes, num_sizes + num_files);
         std::vector<size_t *> internal_sizes_v(internal_sizes, internal_sizes + num_files);
-        return static_cast<int>(s->request_multi(paths_v, file_offsets_v, bytesizes_v, dsts_v, num_sizes_v, internal_sizes_v, credentials));
+
+        std::vector<std::vector<size_t>> internal_sizes_vv(num_files);
+        for (unsigned i = 0; i < num_files; ++i)
+        {
+            internal_sizes_vv[i] = std::vector<size_t>(internal_sizes_v[i], internal_sizes_v[i] + num_sizes_v[i]);
+        }
+
+        return static_cast<int>(s->request_multi(paths_v, file_offsets_v, bytesizes_v, dsts_v, num_sizes_v, internal_sizes_vv, credentials));
     }
     catch(...)
     {
@@ -240,6 +250,7 @@ _RUNAI_EXTERN_C int runai_response_multi(void * streamer, unsigned * file_index 
 
         auto * s = static_cast<impl::Streamer *>(streamer);
         auto r = s->response();
+
         if (r.ret == common::ResponseCode::Success)
         {
             *index = r.index;

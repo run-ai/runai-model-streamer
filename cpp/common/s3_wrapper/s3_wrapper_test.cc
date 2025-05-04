@@ -11,6 +11,7 @@ namespace runai::llm::streamer::common::s3
 struct S3WrappertTest : ::testing::Test
 {
     S3WrappertTest() :
+        index(utils::random::number()),
         uri("s3://" + utils::random::string() + "/" + utils::random::string()),
         credentials(
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
@@ -18,7 +19,7 @@ struct S3WrappertTest : ::testing::Test
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr)),
-        params(std::make_shared<StorageUri>(uri), credentials)
+        params(index, std::make_shared<StorageUri>(uri), credentials)
     {}
 
     void TearDown() override
@@ -26,6 +27,7 @@ struct S3WrappertTest : ::testing::Test
         S3ClientWrapper::shutdown();
     }
 
+    unsigned index;
     StorageUri uri;
     Credentials credentials;
     S3ClientWrapper::Params params;

@@ -19,7 +19,7 @@ namespace runai::llm::streamer::impl
 
 struct Request
 {
-    Request(size_t file_offset, unsigned index, unsigned tasks, size_t bytesize);
+    Request(size_t file_offset, unsigned index, unsigned tasks, size_t bytesize, char * dst);
 
     // return true if all the request's range had been read
     bool finished(common::ResponseCode result = common::ResponseCode::Success);
@@ -29,9 +29,13 @@ struct Request
     // offset in file
     const size_t offset;
 
+    // request index in the original list of file's sub ranges
     const unsigned index;
 
     const size_t bytesize;
+
+    // start offset in destination buffer
+    char * dst;
 
  private:
     // counter of unread chunks (each chunk is handled by a Task object)

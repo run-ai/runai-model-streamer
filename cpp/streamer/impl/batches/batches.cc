@@ -21,46 +21,82 @@
 namespace runai::llm::streamer::impl
 {
 
-Batches::BatchItr::BatchItr(unsigned num_batches, size_t worker_bytesize) :
-    _num_batches(num_batches),
-    _worker_bytesize(worker_bytesize),
-    _current_worker_bytesize(_worker_bytesize)
-{}
+Batches::BatchItr::BatchItr(const std::vector<FileReadTask> & file_read_tasks) :
+     _file_read_tasks(file_read_tasks),
+    _num_batches(file_read_tasks.size()),
+    _current_task_index(0)
+{
+    ASSERT(_num_batches) << "Zero file read requests";
+    _current_worker_index = file_read_tasks[_current_task_index].worker_index;
+    _current_worker_bytesize = file_read_tasks[_current_task_index].size;
+}
 
 unsigned Batches::BatchItr::current_index() const
+{
+    return _current_task_index;
+}
+
+unsigned Batches::BatchItr::current_worker_index() const
 {
     return _current_worker_index;
 }
 
-size_t Batches::BatchItr::worker_bytesize() const
+const FileReadTask & Batches::BatchItr::read_task(unsigned index) const
 {
-    return _worker_bytesize;
+    ASSERT(index < _num_batches) << "Index overflow " << index << " should be less than " << _num_batches;
+    return _file_read_tasks[index];
+}
+
+unsigned Batches::BatchItr::workers() const
+{
+    return _num_batches;
+}
+
+unsigned Batches::BatchItr::worker_index(unsigned index) const
+{
+    return read_task(index).worker_index;
+}
+
+const FileReadTask & Batches::BatchItr::current_read_task() const
+{
+    ASSERT(_current_task_index < _num_batches) << "Batches iterator overflow _current_task_index = " << _current_task_index << " num_batches = " << _num_batches;
+    return _file_read_tasks[_current_task_index];
 }
 
 size_t Batches::BatchItr::consume(size_t bytesize)
 {
-    if (_current_worker_bytesize == 0)
+    if (bytesize == 0)
+    {
+        LOG(DEBUG) << "consuming zero bytes request";
+    }
+    if (_current_worker_bytesize == 0 && bytesize)
     {
         // advance to the next worker
-        ++_current_worker_index;
-        _current_worker_bytesize = _worker_bytesize;
+        ++_current_task_index;
+        _current_worker_index = worker_index(_current_task_index);
+        _current_worker_bytesize = read_task(_current_task_index).size;
     }
-
-    ASSERT(_current_worker_index < _num_batches) << "Batches iterator overflow";
 
     auto to_read = std::min<size_t>(_current_worker_bytesize, bytesize);
     _current_worker_bytesize -= to_read;
     return to_read;
 }
 
-Batches::Batches(unsigned file_index, std::shared_ptr<const Config> config, std::shared_ptr<common::Responder> responder, const std::string & path, const common::s3::S3ClientWrapper::Params & params, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes) :
+Batches::Batches(unsigned file_index,
+                    const std::vector<FileReadTask> & file_read_tasks,
+                    std::shared_ptr<const Config> config,
+                    std::shared_ptr<common::Responder> responder,
+                    const std::string & path,
+                    const common::s3::S3ClientWrapper::Params & params,
+                    size_t file_offset,
+                    size_t bytesize,
+                    const std::vector<size_t> & internal_sizes) :
     _file_index(file_index),
-    _itr(config->concurrency, batch_bytesize(bytesize, *config, params.uri)),
+    _itr(file_read_tasks),
     _responder(responder)
 {
-    LOG(DEBUG) << "worker maximal range size is " << utils::logging::human_readable_size(_itr.worker_bytesize());
-    _batches.reserve(config->concurrency);
-    build_tasks(config, path, params, file_offset, dst, num_sizes, internal_sizes);
+    _batches.reserve(file_read_tasks.size());
+    build_tasks(config, path, params, file_offset, internal_sizes);
 }
 
 unsigned Batches::size() const
@@ -68,20 +104,20 @@ unsigned Batches::size() const
     return _batches.size();
 }
 
-size_t Batches::batch_bytesize(size_t bytesize, const Config & config, std::shared_ptr<common::s3::StorageUri> uri)
-{
-    size_t result = std::ceil(static_cast<double>(bytesize) / static_cast<double>(_concurrency));
+// size_t Batches::batch_bytesize(size_t bytesize, const Config & config, std::shared_ptr<common::s3::StorageUri> uri)
+// {
+//     size_t result = std::ceil(static_cast<double>(bytesize) / static_cast<double>(config.concurrency));
 
-    // round up to the configured chunk byte size
-    const auto chunk_bytesize = (uri.get() == nullptr ? config.fs_block_bytesize : config.s3_block_bytesize);
-    int remainder = result % chunk_bytesize;
-    if (remainder)
-    {
-        result += (chunk_bytesize - remainder);
-    }
+//     // round up to the configured chunk byte size
+//     const auto chunk_bytesize = (uri.get() == nullptr ? config.fs_block_bytesize : config.s3_block_bytesize);
+//     int remainder = result % chunk_bytesize;
+//     if (remainder)
+//     {
+//         result += (chunk_bytesize - remainder);
+//     }
 
-    return result;
-}
+//     return result;
+// }
 
 Batch & Batches::operator[](unsigned index)
 {
@@ -94,35 +130,43 @@ size_t Batches::total() const
     return _total;
 }
 
-void Batches::build_tasks(std::shared_ptr<const Config> config, const std::string & path, const common::s3::S3ClientWrapper::Params & params, size_t file_offset, void * dst, unsigned num_sizes, size_t * internal_sizes)
+void Batches::build_tasks(std::shared_ptr<const Config> config, const std::string & path, const common::s3::S3ClientWrapper::Params & params, size_t file_offset, const std::vector<size_t> & internal_sizes)
 {
-    std::vector<Tasks> v_tasks(_concurrency);
-    std::vector<Range> v_ranges(_concurrency);
+    const auto num_workers = _itr.workers();
+    LOG(DEBUG) << "Building tasks for " <<num_workers << " workers";
+    std::vector<Tasks> v_tasks(num_workers);
+    std::vector<Range> v_ranges(num_workers);
 
-    size_t * size_ptr = internal_sizes;
+    auto num_sizes = internal_sizes.size();
     size_t request_file_offset = file_offset;
+
+    auto destination_start = static_cast<char *>(_itr.read_task(0).destination);
+
+    auto current_request_destination = destination_start;
 
     // iterate over the workers and the requests to fill each worker share
     for (unsigned request_index = 0; request_index < num_sizes; ++request_index)
     {
         // create tasks for the entire requested range before sending to the threadpool
-        const size_t request_size = *size_ptr;
+        const size_t request_size = internal_sizes[request_index];
 
-        handle_request(v_tasks, request_index, request_file_offset, request_size);
+        handle_request(v_tasks, request_index, request_file_offset, request_size, current_request_destination);
 
+        current_request_destination += request_size;
         request_file_offset += request_size;
-        ++size_ptr;
     }
 
-    auto dst_ = static_cast<char *>(dst);
+    auto dst_ = destination_start;
 
-    for (unsigned i = 0; i < _concurrency; ++i)
+    for (unsigned i = 0; i < num_workers; ++i)
     {
+        const auto worker_index = _itr.worker_index(i);
         auto & tasks = v_tasks[i];
         auto size = tasks.size();
         if (size == 0)
         {
-            break;
+            LOG(WARNING) << "Zero tasks for worker index " << _itr.worker_index(i);
+            continue;
         }
 
         auto range = Range(tasks);
@@ -130,17 +174,19 @@ void Batches::build_tasks(std::shared_ptr<const Config> config, const std::strin
 
         const auto range_size = range.size;
 
-        _batches.emplace_back(_file_index, path, params, std::move(range), dst_, std::move(tasks), _responder, config);
+        _batches.emplace_back(worker_index, _file_index, path, params, std::move(range), dst_, std::move(tasks), _responder, config);
 
         dst_ += range_size;
     }
 }
 
-void Batches::handle_request(std::vector<Tasks> & v_tasks, unsigned request_index, size_t request_file_offset, size_t request_size)
+void Batches::handle_request(std::vector<Tasks> & v_tasks, unsigned request_index, size_t request_file_offset, size_t request_size, char * destination)
 {
     LOG(DEBUG) << "request file offset " << request_file_offset << " size " << request_size;
 
     // create tasks info
+
+    // map worker index to tasks info
     std::map<unsigned, Task::Info> infos;
 
     auto bytes_to_request = request_size;
@@ -150,18 +196,20 @@ void Batches::handle_request(std::vector<Tasks> & v_tasks, unsigned request_inde
     {
         auto to_read = _itr.consume(bytes_to_request);
         Task::Info info(task_offset, to_read);
-        infos.try_emplace(_itr.current_index(), std::move(info));
+        auto worker_index = _itr.current_index();
+        infos.try_emplace(worker_index, std::move(info));
         task_offset += to_read;
         bytes_to_request -= to_read;
     } while (bytes_to_request > 0);
 
-    auto request_ptr = std::make_shared<Request>(request_file_offset, request_index, infos.size(), request_size);
+    auto request_ptr = std::make_shared<Request>(request_file_offset, request_index, infos.size(), request_size, destination);
 
     // create tasks
     for (auto & [batch_id, info] : infos)
     {
         Task task(request_ptr, std::move(info));
         LOG(SPAM) << task;
+        ASSERT(batch_id < v_tasks.size()) << batch_id << " v_tasks.size() " << v_tasks.size();
         v_tasks[batch_id].emplace_back(std::move(task));
     }
 }

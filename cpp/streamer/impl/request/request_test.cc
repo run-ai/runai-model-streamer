@@ -13,7 +13,7 @@ namespace runai::llm::streamer::impl
 TEST(Creation, Sanity)
 {
     unsigned num_tasks = utils::random::number(1, 10);
-    Request request(utils::random::number<size_t>(), utils::random::number(), num_tasks, utils::random::number<size_t>());
+    Request request(utils::random::number<size_t>(), utils::random::number(), num_tasks, utils::random::number<size_t>(), nullptr);
     std::atomic<unsigned int> finished = 0;
     unsigned retries = 5;
 
