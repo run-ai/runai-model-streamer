@@ -23,12 +23,18 @@ Responder::~Responder()
     LOG(DEBUG) << "Responder shutdown";
 }
 
+void Responder::increment(unsigned running)
+{
+    const auto guard = std::unique_lock<std::mutex>(_mutex);
+    _running += running;
+}
+
 // return -1 if there are no running requests
 Response Responder::pop()
 {
     if (_stopped || finished())
     {
-        LOG(DEBUG) << (_stopped ? "responder does not expect any more responses" : "responder stopped");
+        LOG(DEBUG) << (_stopped ? "responder stopped" : "responder does not expect any more responses");
         return ResponseCode::FinishedError;
     }
 
@@ -100,16 +106,18 @@ bool Responder::finished() const
 
 void Responder::cancel()
 {
-    const auto guard = std::unique_lock<std::mutex>(_mutex);
+     const auto guard = std::unique_lock<std::mutex>(_mutex);
     _canceled = true;
 }
 
 void Responder::stop()
 {
     {
+        LOG(ERROR) << "stopping";
         const auto guard = std::unique_lock<std::mutex>(_mutex);
         _stopped = true;
     }
+
     // wake up blocking waiting threads
     _ready.post();
 }

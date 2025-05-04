@@ -7,7 +7,7 @@ runai_portable_so(
     ],
     deps = [
         "//common/response_code",
-        "//common/storage_uri",
+        "//common/path",
         "//common/s3_credentials",
         "//common/range",
         "//utils/env",

@@ -23,16 +23,18 @@ struct S3ClientWrapper
          Params()
          {}
 
-         Params(std::shared_ptr<StorageUri> uri, const Credentials & credentials) :
+         Params(unsigned file_index, std::shared_ptr<StorageUri> uri, const Credentials & credentials) :
+            file_index(file_index),
             uri(uri),
             credentials(credentials)
          {}
 
-         Params(std::shared_ptr<StorageUri> uri) : Params(uri, Credentials())
+         Params(std::shared_ptr<StorageUri> uri) : Params(0, uri, Credentials())
          {}
 
          bool valid() const { return (uri.get() != nullptr); }
 
+         unsigned file_index;
          std::shared_ptr<StorageUri> uri;
          Credentials credentials;
       };
@@ -59,7 +61,7 @@ struct S3ClientWrapper
       static constexpr size_t default_chunk_bytesize = 8 * 1024 * 1024;
 
  private:
-      void * create_client(const StorageUri & uri, const Credentials & credentials);
+      void * create_client(unsigned file_index, const StorageUri & uri, const Credentials & credentials);
       static std::shared_ptr<utils::Dylib> open_s3();
       static std::shared_ptr<utils::Dylib> open_s3_impl();
 

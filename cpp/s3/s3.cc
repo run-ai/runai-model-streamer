@@ -22,12 +22,12 @@
 namespace runai::llm::streamer::impl::s3
 {
 
-common::ResponseCode runai_create_s3_client(const common::s3::StorageUri_C & uri, const common::s3::Credentials_C & credentials, void ** client)
+common::ResponseCode runai_create_s3_client(const common::s3::Path & path, const common::s3::Credentials_C & credentials, void ** client)
 {
     common::ResponseCode ret = common::ResponseCode::Success;
     try
     {
-        *client = static_cast<void *>(S3ClientMgr::pop(uri, credentials));
+        *client = static_cast<void *>(S3ClientMgr::pop(path, credentials));
     }
     catch(const common::Exception & e)
     {

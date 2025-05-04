@@ -7,6 +7,7 @@
 
 #include "s3/client_configuration/client_configuration.h"
 
+#include "common/path/path.h"
 #include "common/storage_uri/storage_uri.h"
 #include "common/s3_credentials/s3_credentials.h"
 #include "common/responder/responder.h"
@@ -18,13 +19,13 @@ namespace runai::llm::streamer::impl::s3
 
 struct S3ClientBase
 {
-    S3ClientBase(const common::s3::StorageUri_C & path);
+    S3ClientBase(const common::s3::Path & path);
 
-    S3ClientBase(const common::s3::StorageUri_C & path, const common::s3::Credentials_C & credentials);
+    S3ClientBase(const common::s3::Path & path, const common::s3::Credentials_C & credentials);
 
     std::string bucket() const;
 
-    void path(const char * path, unsigned path_index);
+    void path(const common::s3::Path & path);
 
     // verify that clien's credentials have not change
     bool verify_credentials(const common::s3::Credentials_C & credentials) const;
@@ -46,9 +47,9 @@ struct S3ClientBase
 
 struct S3Client : S3ClientBase
 {
-    S3Client(const common::s3::StorageUri_C & path);
+    S3Client(const common::s3::Path & path);
 
-    S3Client(const common::s3::StorageUri_C & path, const common::s3::Credentials_C & credentials);
+    S3Client(const common::s3::Path & path, const common::s3::Credentials_C & credentials);
 
     common::ResponseCode read(size_t offset, size_t bytesize, char * buffer);
 

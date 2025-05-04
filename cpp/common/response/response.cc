@@ -33,7 +33,7 @@ bool Response::operator!=(const ResponseCode other)
 
 std::ostream & operator<<(std::ostream & os, const Response & response)
 {
-    return os << "request index: " << response.index << " Response code: " << response.ret;
+    return os << "File index: " << response.file_index << " Request index: " << response.index << " Response code: " << response.ret;
 }
 
 }; // namespace runai::llm::streamer::common

@@ -24,7 +24,7 @@ struct ClientMgr
 
     ClientMgr<T> & operator=(const ClientMgr<T> &) = delete;
 
-    static T* pop(const common::s3::StorageUri_C & uri, const common::s3::Credentials_C & credentials);
+    static T* pop(const common::s3::Path & path, const common::s3::Credentials_C & credentials);
     static void push(T* client);
 
     static void clear();
@@ -97,7 +97,7 @@ std::string ClientMgr<T>::current_bucket()
 
 
 template <typename T>
-T* ClientMgr<T>::pop(const common::s3::StorageUri_C & uri, const common::s3::Credentials_C & credentials)
+T* ClientMgr<T>::pop(const common::s3::Path & path, const common::s3::Credentials_C & credentials)
 {
     auto & mgr = get();
 
@@ -105,13 +105,13 @@ T* ClientMgr<T>::pop(const common::s3::StorageUri_C & uri, const common::s3::Cre
         const auto guard = std::unique_lock<std::mutex>(mgr._mutex);
 
         auto & unused = mgr._bucket_unused_clients;
-        bool is_bucket = uri.bucket == mgr._current_bucket;
+        bool is_bucket = path.uri.bucket == mgr._current_bucket;
         if (is_bucket)
         {
             while (!unused.empty())
             {
                 auto ptr = *unused.begin();
-                ptr->path(uri.path);
+                ptr->path(path);
                 unused.erase(unused.begin());
 
                 // Reuse client only if credentials have not changed
@@ -133,13 +133,14 @@ T* ClientMgr<T>::pop(const common::s3::StorageUri_C & uri, const common::s3::Cre
                 mgr._clients.erase(client);
             }
             unused.clear();
-            mgr._current_bucket = uri.bucket;
+            mgr._current_bucket = path.uri.bucket;
         }
     }
 
     // create new client if there are no unused clients for this bucket
 
-    auto client = std::make_unique<T>(uri, credentials);
+    LOG(DEBUG) << "Creating client for path " << path.uri.path << " index " << path.index;
+    auto client = std::make_unique<T>(path, credentials);
 
     const auto guard = std::unique_lock<std::mutex>(mgr._mutex);
     auto ptr = client.get();

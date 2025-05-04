@@ -29,6 +29,8 @@ struct Responder
 
     ~Responder();
 
+    void increment(unsigned running);
+
     Response pop();
 
     void push(Response && response);

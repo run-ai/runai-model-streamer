@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include <chrono>
+#include <set>
 
 #include "common/response_code/response_code.h"
 
@@ -25,7 +26,7 @@ namespace
 struct StreamerTest : ::testing::Test
 {
     StreamerTest() :
-        _size("RUNAI_STREAMER_CONCURRENCY", utils::random::number<int>(1, 10)),
+        _size("RUNAI_STREAMER_CONCURRENCY", utils::random::number<int>(1, 16)),
         _chunk_bytesize("RUNAI_STREAMER_CHUNK_BYTESIZE", utils::random::number<int>(1, 1024))
     {}
 
@@ -241,6 +242,96 @@ TEST_F(StreamerTest, End_Before_Read)
     const auto time_ = std::chrono::steady_clock::now();
     const auto duration  = std::chrono::duration_cast<std::chrono::milliseconds>(time_ - start_time);
     EXPECT_LT(duration.count(), 1000);
+}
+
+TEST_F(StreamerTest, Multiple_Files)
+{
+    auto num_files = utils::random::number(1, 10);
+    std::vector<utils::temp::File> files(num_files);
+    std::vector<const char *> file_paths(num_files);
+    std::vector<size_t> file_offsets(num_files);
+
+    std::vector<std::vector<uint8_t>> buffers(num_files);
+    std::vector<std::vector<uint8_t>> expected(num_files);
+    std::vector<size_t> sizes(num_files);
+
+    // We assume that all files are written to a single continous cpu buffer
+    std::vector<void *> dsts(num_files);
+    std::vector<unsigned> num_ranges(num_files);
+    std::vector<std::vector<size_t>> range_sizes(num_files);
+    std::vector<size_t *> internal_sizes(num_files);
+
+    std::vector<std::set<unsigned>> expected_response(num_files);
+
+    size_t num_expected_responses = 0;
+    size_t dst_size = 0;
+    for (unsigned i = 0; i < num_files; ++i)
+    {
+        sizes[i] = utils::random::number(100, 1000);
+        dst_size += sizes[i];
+
+        buffers[i] = utils::random::buffer(sizes[i]);
+        files[i] = utils::temp::File(buffers[i]);
+        file_paths[i] = files[i].path.c_str();
+        file_offsets[i] = 0;
+        expected[i] = utils::Fd::read(files[i].path);
+        EXPECT_EQ(expected[i].size(), sizes[i]);
+
+        num_ranges[i] = utils::random::number(1, 1);
+        range_sizes[i] =  utils::random::chunks(sizes[i], num_ranges[i]);
+        internal_sizes[i] = range_sizes[i].data();
+
+        num_expected_responses += num_ranges[i];
+
+        for (unsigned request_index = 0; request_index < num_ranges[i]; ++request_index)
+        {
+            expected_response[i].insert(request_index);
+        }
+    }
+    std::vector<unsigned char> dst(dst_size);
+    dsts[0] = static_cast<void *>(dst.data());
+
+    void * streamer;
+    auto res = runai_start(&streamer);
+    EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
+
+    EXPECT_EQ(runai_request_multi(streamer, num_files, file_paths.data(), file_offsets.data(), sizes.data(), dsts.data(), num_ranges.data(), internal_sizes.data(), nullptr, nullptr, nullptr, nullptr, nullptr), static_cast<int>(common::ResponseCode::Success));
+
+    // wait for all the responses to arrive
+    unsigned r;
+    unsigned file_index;
+    for (unsigned i = 0; i < num_expected_responses; ++i)
+    {
+        r = utils::random::number();
+        file_index = utils::random::number();
+        EXPECT_EQ(runai_response_multi(streamer, &file_index, &r), static_cast<int>(common::ResponseCode::Success));
+        EXPECT_LT(file_index, num_files);
+        EXPECT_EQ(expected_response[file_index].count(r), 1);
+        expected_response[file_index].erase(r);
+    }
+
+    EXPECT_EQ(runai_response_multi(streamer, &file_index, &r), static_cast<int>(common::ResponseCode::FinishedError));
+
+    // verify
+    size_t offset = 0;
+    for (unsigned file_index = 0; file_index < num_files; ++file_index)
+    {
+        EXPECT_EQ(expected_response[file_index].size(), 0);
+        EXPECT_EQ(expected[file_index].size(), sizes[file_index]);
+        for (size_t j = 0; j < sizes[file_index]; ++j)
+        {
+            EXPECT_LT(offset + j, dst.size());
+            EXPECT_EQ(dst[offset + j], expected[file_index][j]);
+            if (dst[offset + j] != expected[file_index][j])
+            {
+                break;
+            }
+        }
+        offset += sizes[file_index];
+    }
+
+
+    runai_end(streamer);
 }
 
 }; // namespace runai::llm::streamer

@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "utils/threadpool/threadpool.h"
 #include "utils/fdlimit/fdlimit.h"
@@ -10,9 +11,9 @@
 #include "common/responder/responder.h"
 #include "common/s3_credentials/s3_credentials.h"
 #include "streamer/impl/config/config.h"
-#include "streamer/impl/batch/batch.h"
-#include "streamer/impl/reader/reader.h"
+#include "streamer/impl/workload/workload.h"
 #include "streamer/impl/s3/s3.h"
+#include "streamer/impl/batches/batches.h"
 
 namespace runai::llm::streamer::impl
 {
@@ -55,20 +56,17 @@ struct Streamer
       std::vector<size_t> & bytesizes,
       std::vector<void *> & dsts,
       std::vector<unsigned> & num_sizes,
-      std::vector<size_t *> & internal_sizes,
+      std::vector<std::vector<size_t>> & internal_sizes,
       const common::s3::Credentials & credentials);
- 
+
  private:
-    void create_request(const std::string & path, size_t offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes, const common::s3::Credentials & credentials);
-
-    void Streamer::handle_request(unsigned file_index, const std::string & path, size_t file_offset, size_t bytesize, unsigned num_sizes, size_t * internal_sizes, void * dst, const common::s3::Credentials & credentials);
-
+    common::s3::S3ClientWrapper::Params handle_s3(unsigned file_index, const std::string & path, const common::s3::Credentials & credentials);
     void verify_requests(std::vector<std::string> & paths, std::vector<size_t> & file_offsets, std::vector<size_t> & bytesizes, std::vector<unsigned> & num_sizes, std::vector<void *> & dsts);
 
  private:
     std::shared_ptr<const Config> _config;
     std::unique_ptr<S3Cleanup> _s3;
-    utils::ThreadPool<Batch> _pool;
+    utils::ThreadPool<Workload> _pool;
     std::unique_ptr<S3Stop> _s3_stop;
     std::unique_ptr<utils::FdLimitSetter> _fd_limit;
     std::shared_ptr<common::Responder> _responder;

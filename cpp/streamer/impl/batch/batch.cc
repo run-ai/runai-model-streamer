@@ -54,7 +54,8 @@ size_t Range::calculate_end(const Tasks & tasks)
     return tasks[tasks.size() - 1].info.end;
 }
 
-Batch::Batch(unsigned file_index, const std::string & path, const common::s3::S3ClientWrapper::Params & params, Range && range, char * dst, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config) :
+Batch::Batch(unsigned worker_index, unsigned file_index, const std::string & path, const common::s3::S3ClientWrapper::Params & params, Range && range, char * dst, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config) :
+    worker_index(worker_index),
     file_index(file_index),
     path(path),
     params(params),
@@ -64,7 +65,7 @@ Batch::Batch(unsigned file_index, const std::string & path, const common::s3::S3
     responder(responder),
     config(config)
 {
-    LOG(SPAM) << "Batch " << path << " range " << this->range.start << " - " << this->range.end << " ; " << this->tasks.size() << " tasks";
+    LOG(DEBUG) << "Batch " << path << " range " << this->range.start << " - " << this->range.end << " ; " << this->tasks.size() << " tasks " << " dst " << static_cast<void*>(dst);
 }
 
 void Batch::execute(std::atomic<bool> & stopped)
@@ -160,6 +161,8 @@ void Batch::read(const Config & config, std::atomic<bool> & stopped)
 
     if (file_offset < range.end && !stopped)
     {
+        num_chunks++;
+        i = 1;
         _reader->read(range.end - file_offset, buffer);
         finished_until(range.end, common::ResponseCode::Success);
     }
@@ -236,6 +239,7 @@ void Batch::finished_until(size_t file_offset, common::ResponseCode ret /*= comm
         {
             const auto & r = tasks[i].request;
             common::Response response(file_index, r->index, r->ret());
+            LOG(SPAM) << "Sending response " << response;
             responder->push(std::move(response), tasks[i].request->bytesize);
         }
     }
@@ -245,6 +249,11 @@ void Batch::finished_until(size_t file_offset, common::ResponseCode ret /*= comm
 unsigned Batch::finished_until() const
 {
     return _unfinished;
+}
+
+std::ostream & operator<<(std::ostream & os, const Batch & r)
+{
+    return os << r.path << " range " << r.range.start << " - " << r.range.end << " ; " << r.tasks.size() << " tasks";
 }
 
 }; // namespace runai::llm::streamer::impl

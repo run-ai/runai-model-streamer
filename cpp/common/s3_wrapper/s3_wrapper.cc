@@ -3,6 +3,7 @@
 #include <chrono>
 
 #include "common/s3_wrapper/s3_wrapper.h"
+#include "common/path/path.h"
 #include "common/exception/exception.h"
 
 #include "utils/logging/logging.h"
@@ -41,8 +42,10 @@ void S3ClientWrapper::stop()
 
 S3ClientWrapper::S3ClientWrapper(const Params & params) :
     _s3_dylib(open_s3()),
-    _s3_client(create_client(*params.uri, params.credentials))
-{}
+    _s3_client(create_client(params.file_index, *params.uri, params.credentials))
+{
+    LOG(SPAM) << "Created client for file index " << params.file_index;
+}
 
 S3ClientWrapper::~S3ClientWrapper()
 {
@@ -92,20 +95,21 @@ std::shared_ptr<utils::Dylib> S3ClientWrapper::open_s3_impl()
     return std::make_shared<utils::Dylib>("libstreamers3.so");
 }
 
-void * S3ClientWrapper::create_client(const StorageUri & uri, const Credentials & credentials)
+void * S3ClientWrapper::create_client(unsigned file_index, const StorageUri & uri, const Credentials & credentials)
 {
-    static auto __s3_gen = _s3_dylib->dlsym<ResponseCode(*)(const StorageUri_C &, const Credentials_C &, void **)>("runai_create_s3_client");
+    static auto __s3_gen = _s3_dylib->dlsym<ResponseCode(*)(const Path &, const Credentials_C &, void **)>("runai_create_s3_client");
     auto start = std::chrono::steady_clock::now();
 
     void * client;
-    auto ret = __s3_gen(uri, credentials, &client);
+    const Path s3_path(uri, file_index);
+    auto ret = __s3_gen(s3_path, credentials, &client);
     if (ret != ResponseCode::Success)
     {
         LOG(ERROR) << "Failed to create S3 client for uri " << uri;
         throw Exception(ret);
     }
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
-    LOG(DEBUG) << "created client in " << duration.count() << " ms";
+    LOG(SPAM) << "created s3 client in " << duration.count() << " ms";
     return client;
 }
 
