@@ -4,7 +4,7 @@ namespace runai::llm::streamer::impl
 {
 
 // Constructor
-FileReadTask::FileReadTask(unsigned worker_index, unsigned file_idx, const std::string & p, size_t offset, size_t sz, char* dst) :
+FileReadTask::FileReadTask(unsigned worker_index, unsigned file_idx, const std::string & p, size_t offset, size_t sz, char * dst) :
     worker_index(worker_index),
     original_file_index(file_idx),
     path(p),

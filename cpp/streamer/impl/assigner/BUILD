@@ -6,6 +6,7 @@ runai_cc_auto_library(
         "//streamer/impl/assigner/file_read_task",
         "//streamer/impl/batches",
         "//common/exception",
+        "//common/storage_uri",
         "//streamer/impl/config",
         "//utils/logging"
     ],

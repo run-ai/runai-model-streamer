@@ -54,18 +54,17 @@ size_t Range::calculate_end(const Tasks & tasks)
     return tasks[tasks.size() - 1].info.end;
 }
 
-Batch::Batch(unsigned worker_index, unsigned file_index, const std::string & path, const common::s3::S3ClientWrapper::Params & params, Range && range, char * dst, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config) :
+Batch::Batch(unsigned worker_index, unsigned file_index, const std::string & path, const common::s3::S3ClientWrapper::Params & params, Range && range, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config) :
     worker_index(worker_index),
     file_index(file_index),
     path(path),
     params(params),
     range(range),
-    dst(dst),
     tasks(tasks),
     responder(responder),
     config(config)
 {
-    LOG(DEBUG) << "Batch " << path << " range " << this->range.start << " - " << this->range.end << " ; " << this->tasks.size() << " tasks " << " dst " << static_cast<void*>(dst);
+    LOG(DEBUG) << "Batch " << path << " range " << this->range.start << " - " << this->range.end << " ; " << this->tasks.size() << " tasks";
 }
 
 void Batch::execute(std::atomic<bool> & stopped)
@@ -141,7 +140,9 @@ void Batch::read(const Config & config, std::atomic<bool> & stopped)
     }
 
     auto file_offset = range.start;
-    char * buffer = dst;
+    // For CPU buffer we assume that all the requests are written to a single continous buffer
+    char * buffer = tasks[0].destination();;
+
     size_t num_chunks = range.size / config.fs_block_bytesize;
 
     // seek just once because tasks are consecutive within the range
@@ -188,6 +189,9 @@ void Batch::async_read(const Config & config, std::atomic<bool> & stopped)
     {
         throw common::Exception(common::ResponseCode::FinishedError);
     }
+
+    // For CPU buffer we assume that all the requests are written to a single continous buffer
+    auto dst =  tasks[0].destination();
 
     std::vector<common::Range> ranges;
     ranges.reserve(tasks.size());

@@ -12,13 +12,14 @@
 #include <utility>
 
 #include "common/exception/exception.h"
+#include "common/storage_uri/storage_uri.h"
 
 #include "utils/logging/logging.h"
 
 namespace runai::llm::streamer::impl
 {
 
-MultiFileWorkloadAssigner::MultiFileWorkloadAssigner(
+Assigner::Assigner(
         const std::vector<std::string> & paths,
         const std::vector<size_t> & file_offsets,
         const std::vector<size_t>&  bytesizes,
@@ -30,7 +31,7 @@ _num_workers(_config->concurrency)
     const size_t num_files = paths.size();
     if (num_files == 0)
     {
-        LOG(WARNING) << "MultiFileWorkloadAssigner: No files provided.";
+        LOG(WARNING) << "Assigner: No files provided.";
         return; // Nothing to assign
     }
 
@@ -42,7 +43,8 @@ _num_workers(_config->concurrency)
 
     // Calculate Total Workload
     size_t total_bytes_to_read = 0;
-    for (size_t size : bytesizes) {
+    for (size_t size : bytesizes)
+    {
         // Check for potential overflow if sizes are huge
         if (total_bytes_to_read > std::numeric_limits<size_t>::max() - size)
         {
@@ -59,19 +61,13 @@ _num_workers(_config->concurrency)
     }
 
     // Determine Workload per Worker
-    const size_t base_bytes_per_worker = total_bytes_to_read / _num_workers;
-    const size_t remainder_bytes = total_bytes_to_read % _num_workers;
-    LOG(DEBUG) << "Total bytes: " << total_bytes_to_read
-                << ", Workers: " << _num_workers
-                << ", Base bytes/worker: " << base_bytes_per_worker
-                << ", Remainder: " << remainder_bytes;
-
+    size_t base_bytes_per_worker = bytes_per_worker(total_bytes_to_read, paths[0]);
 
     // --- Assign Workload Iteratively ---
     _worker_assignments.resize(_num_workers);
 
     // ASSUMES dsts[0] is base of one large buffer
-    char * global_dst_buffer = static_cast<char*>(dsts[0]);
+    char * global_dst_buffer = static_cast<char *>(dsts[0]);
 
     size_t current_global_dst_offset = 0; // Tracks position in the conceptual global buffer
     size_t current_file_index = 0;
@@ -79,8 +75,7 @@ _num_workers(_config->concurrency)
 
     for (unsigned worker_idx = 0; worker_idx < _num_workers; ++worker_idx)
     {
-        // Assign slightly more work to the first 'remainder_bytes' workers
-        size_t target_bytes_for_this_worker = base_bytes_per_worker + (worker_idx < remainder_bytes ? 1 : 0);
+        size_t target_bytes_for_this_worker = base_bytes_per_worker;
         size_t bytes_assigned_to_this_worker = 0;
 
         LOG(DEBUG) << "Assigning work to worker " << worker_idx << ", target bytes: " << target_bytes_for_this_worker;
@@ -93,22 +88,27 @@ _num_workers(_config->concurrency)
             char* current_global_dst_ptr = global_dst_buffer + current_global_dst_offset;
 
             // Sanity check: current offset should be within the requested range for the file
-            if (current_offset_within_file < file_start_offset || current_offset_within_file >= file_start_offset + file_total_requested_size) {
+            if (current_offset_within_file < file_start_offset || current_offset_within_file >= file_start_offset + file_total_requested_size)
+            {
                 // This case should ideally not happen if logic is correct, but indicates a problem if it does.
                 // It might happen if a file has bytesize 0.
-                    if (file_total_requested_size == 0) {
-                        // Skip zero-sized file request
-                        current_file_index++;
-                        if (current_file_index < num_files) {
-                            current_offset_within_file = file_offsets[current_file_index];
-                        }
-                        continue; // Move to next file
-                    } else {
-                    LOG(ERROR) << "Logic error: current_offset_within_file (" << current_offset_within_file
-                                << ") is outside the requested range [" << file_start_offset << ", "
-                                << file_start_offset + file_total_requested_size << ") for file " << current_file_index;
-                    throw std::logic_error("Internal error during workload assignment: Invalid file offset.");
+                if (file_total_requested_size == 0)
+                {
+                    // Skip zero-sized file request
+                    current_file_index++;
+                    if (current_file_index < num_files)
+                    {
+                        current_offset_within_file = file_offsets[current_file_index];
                     }
+                    continue; // Move to next file
+                }
+                else
+                {
+                    LOG(ERROR) << "Logic error: current_offset_within_file (" << current_offset_within_file
+                            << ") is outside the requested range [" << file_start_offset << ", "
+                            << file_start_offset + file_total_requested_size << ") for file " << current_file_index;
+                    throw std::logic_error("Internal error during workload assignment: Invalid file offset.");
+                }
             }
 
             const size_t bytes_remaining_in_current_file = (file_start_offset + file_total_requested_size) - current_offset_within_file;
@@ -120,7 +120,7 @@ _num_workers(_config->concurrency)
             {
                  // Create Task
 
-                 LOG(DEBUG) << "Assigned read file task to worker " << worker_idx << " file index: " << current_file_index << " file offset: " << current_offset_within_file << " bytesize: " << bytes_to_assign_now;
+                 LOG(DEBUG) << "Assigned read file task to worker " << worker_idx << " file index: " << current_file_index << " file offset: " << current_offset_within_file << " bytesize: " << bytes_to_assign_now << " destination " << static_cast<void *>(current_global_dst_ptr);
                 _worker_assignments[worker_idx].tasks.emplace_back(
                     worker_idx,
                     current_file_index,
@@ -191,14 +191,46 @@ _num_workers(_config->concurrency)
 }
 
 // Access the assignments of a given file by the original file index
-const std::vector<FileReadTask> & MultiFileWorkloadAssigner::file_assignments(unsigned file_index)
+const std::vector<FileReadTask> & Assigner::file_assignments(unsigned file_index)
 {
     return _assignments[file_index];
 }
 
-unsigned MultiFileWorkloadAssigner::get_num_workers() const
+unsigned Assigner::get_num_workers() const
 {
     return _num_workers;
+}
+
+size_t Assigner::bytes_per_worker(size_t total_bytes_to_read, const std::string & path)
+{
+    size_t base_bytes_per_worker = total_bytes_to_read / _num_workers;
+
+    if (_num_workers > 1)
+    {
+        // round up to the configured chunk byte size
+
+        std::shared_ptr<common::s3::StorageUri> uri;
+        try
+        {
+            uri = std::make_shared<common::s3::StorageUri>(path);
+        }
+        catch(const std::exception& e)
+        {
+        }
+
+        const auto chunk_bytesize = (uri.get() == nullptr ? _config->fs_block_bytesize : _config->s3_block_bytesize);
+        auto chunk_remainder = total_bytes_to_read % chunk_bytesize;
+        if (chunk_remainder)
+        {
+            base_bytes_per_worker += (chunk_bytesize - chunk_remainder);
+        }
+    }
+
+    LOG(DEBUG) << "Total bytes: " << total_bytes_to_read
+                << ", Workers: " << _num_workers
+                << ", Base bytes/worker: " << base_bytes_per_worker;
+                
+    return base_bytes_per_worker;
 }
 
 } // namespace runai::llm::streamer::impl

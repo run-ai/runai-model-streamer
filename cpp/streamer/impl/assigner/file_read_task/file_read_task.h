@@ -14,7 +14,7 @@ struct FileReadTask
                  const std::string& p,
                  size_t offset,
                  size_t sz,
-                 char* dst);
+                 char * dst);
 
     FileReadTask(FileReadTask&&) = default;
     FileReadTask& operator=(FileReadTask&&) = default;
@@ -25,7 +25,7 @@ struct FileReadTask
     std::string path;             // Path of the file to read
     size_t offset_in_file;        // Starting byte offset within this file
     size_t size;                  // Number of bytes to read
-    char* destination;            // Pointer to the destination buffer for this task's data
+    char * destination;            // Pointer to the destination buffer for this task's data
 };
 
 } // namespace runai::llm::streamer::impl

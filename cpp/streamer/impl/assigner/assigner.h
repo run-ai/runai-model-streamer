@@ -16,26 +16,6 @@
 namespace runai::llm::streamer::impl
 {
 
-// Generates the flat list of logical Request objects
-// including their destination base pointers.
-
-// struct FileRequests
-// {
-//     FileRequests(
-//         unsigned file_index,
-//         const std::string & path,
-//         size_t file_offset,
-//         size_t bytesizes,
-//         const std::vector<size_t> & internal_sizes,
-//         void * dst, // single continous buffer to write to
-//         const common::s3::Credentials& credentials);
-
-//     unsigned file_index;
-//     std::vector<std::shared_ptr<Request>> requests;
-//     size_t total_bytes = 0;
-// };
-
-
 // Holds all tasks assigned to a single worker
 
 struct WorkerTasks
@@ -46,9 +26,9 @@ struct WorkerTasks
 
 // Distributes multi-file read workload across workers
 
-struct MultiFileWorkloadAssigner
+struct Assigner
 {
-    MultiFileWorkloadAssigner(
+    Assigner(
         // Input file descriptions
         const std::vector<std::string>& paths,
         const std::vector<size_t>& file_offsets,
@@ -60,6 +40,10 @@ struct MultiFileWorkloadAssigner
     const std::vector<FileReadTask> & file_assignments(unsigned file_index);
 
     unsigned get_num_workers() const;
+
+ private:
+
+    size_t bytes_per_worker(size_t total_bytes_to_read, const std::string & path);
 
  private:
     std::shared_ptr<const Config> _config;

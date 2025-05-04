@@ -44,8 +44,7 @@ TEST(Batch, Finished_Until)
 
     for (unsigned i = 0; i < num_tasks; ++i)
     {
-        // task offset is relative to the beginning of the request offset
-        auto task = Task(request, offset, chunks[i]);
+        auto task = Task(request, offset, chunks[i], utils::random::number<size_t>());
         offset += chunks[i];
         tasks.push_back(std::move(task));
     }
@@ -59,7 +58,7 @@ TEST(Batch, Finished_Until)
     // create batch
     const auto config = std::make_shared<Config>();
 
-    Batch batch(utils::random::number(), utils::random::number(), path, params, std::move(range), nullptr, std::move(tasks), responder, config);
+    Batch batch(utils::random::number(), utils::random::number(), path, params, std::move(range), std::move(tasks), responder, config);
 
     // execute part of the tasks
 
@@ -121,17 +120,19 @@ TEST(Read, Sanity)
     auto request = std::make_shared<Request>(range.start, utils::random::number(), num_tasks, size, dst_ptr);
 
     size_t offset = start;
+    size_t relative_offset = 0;
 
     Tasks tasks;
     for (unsigned i = 0; i < num_tasks; ++i)
     {
         // task offset is relative to the beginning of the request offset
-        auto task = Task(request, offset, chunks[i]);
+        auto task = Task(request, offset, chunks[i], relative_offset);
         offset += chunks[i];
+        relative_offset += chunks[i];
         tasks.push_back(std::move(task));
     }
 
-    Batch batch(utils::random::number(), utils::random::number(), path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
+    Batch batch(utils::random::number(), utils::random::number(), path, params, std::move(range), std::move(tasks), responder, config);
 
     std::atomic<bool> stopped(false);
     EXPECT_NO_THROW(batch.execute(stopped));
@@ -182,16 +183,18 @@ TEST(Read, Error)
     size_t offset = start;
 
     Tasks tasks;
+    size_t relative_offset = 0;
 
     for (unsigned i = 0; i < num_tasks; ++i)
     {
         // task offset is relative to the beginning of the request offset
-        auto task = Task(request, offset, chunks[i]);
+        auto task = Task(request, offset, chunks[i], relative_offset);
         offset += chunks[i];
+        relative_offset += chunks[i];
         tasks.push_back(std::move(task));
     }
 
-     Batch batch(utils::random::number(), utils::random::number(), path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
+     Batch batch(utils::random::number(), utils::random::number(), path, params, std::move(range), std::move(tasks), responder, config);
 
     std::atomic<bool> stopped(false);
     EXPECT_NO_THROW(batch.execute(stopped));
@@ -232,17 +235,19 @@ TEST(Read, Already_Stopped)
     auto request = std::make_shared<Request>(range.start, utils::random::number(), num_tasks, size, dst_ptr);
 
     size_t offset = start;
+    size_t relative_offset = 0;
 
     Tasks tasks;
     for (unsigned i = 0; i < num_tasks; ++i)
     {
         // task offset is relative to the beginning of the request offset
-        auto task = Task(request, offset, chunks[i]);
+        auto task = Task(request, offset, chunks[i], relative_offset);
         offset += chunks[i];
+        relative_offset += chunks[i];
         tasks.push_back(std::move(task));
     }
 
-    Batch batch(utils::random::number(), utils::random::number(), path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
+    Batch batch(utils::random::number(), utils::random::number(), path, params, std::move(range), std::move(tasks), responder, config);
 
     std::atomic<bool> stopped(true);
     EXPECT_NO_THROW(batch.execute(stopped));
@@ -301,15 +306,14 @@ TEST(Read, Stopped_During_Read)
         EXPECT_EQ(requests[i]->bytesize, chunks[i]);
         EXPECT_EQ(requests[i]->offset, offset);
 
-        // task offset is relative to the beginning of the request offset
-        auto task = Task(requests[i], offset, chunks[i]);
+        auto task = Task(requests[i], offset, chunks[i], 0);
         tasks.push_back(std::move(task));
 
         offsets.push_back(offset);
         offset += chunks[i];
     }
 
-    Batch batch(utils::random::number(), utils::random::number(), path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
+    Batch batch(utils::random::number(), utils::random::number(), path, params, std::move(range), std::move(tasks), responder, config);
 
     std::atomic<bool> stopped(false);
 
@@ -432,14 +436,14 @@ TEST(Read, Stopped_During_Async_Read)
         request_offset += chunks[i];
 
         // task offset is relative to the beginning of the request offset
-        auto task = Task(requests[i], offset, chunks[i]);
+        auto task = Task(requests[i], offset, chunks[i], 0);
         tasks.push_back(std::move(task));
 
         offsets.push_back(offset);
         offset += chunks[i];
     }
 
-    Batch batch(utils::random::number(), utils::random::number(), path, params, std::move(range), dst_ptr, std::move(tasks), responder, config);
+    Batch batch(utils::random::number(), utils::random::number(), path, params, std::move(range), std::move(tasks), responder, config);
 
     std::atomic<bool> stopped(false);
 
