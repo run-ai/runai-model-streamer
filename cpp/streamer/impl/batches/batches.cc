@@ -104,21 +104,6 @@ unsigned Batches::size() const
     return _batches.size();
 }
 
-// size_t Batches::batch_bytesize(size_t bytesize, const Config & config, std::shared_ptr<common::s3::StorageUri> uri)
-// {
-//     size_t result = std::ceil(static_cast<double>(bytesize) / static_cast<double>(config.concurrency));
-
-//     // round up to the configured chunk byte size
-//     const auto chunk_bytesize = (uri.get() == nullptr ? config.fs_block_bytesize : config.s3_block_bytesize);
-//     int remainder = result % chunk_bytesize;
-//     if (remainder)
-//     {
-//         result += (chunk_bytesize - remainder);
-//     }
-
-//     return result;
-// }
-
 Batch & Batches::operator[](unsigned index)
 {
     ASSERT(index < _batches.size()) << "Batches overflow ( index " << index << " > size " << _batches.size();
@@ -151,12 +136,11 @@ void Batches::build_tasks(std::shared_ptr<const Config> config, const std::strin
         const size_t request_size = internal_sizes[request_index];
 
         handle_request(v_tasks, request_index, request_file_offset, request_size, current_request_destination);
+        LOG(INFO) << "created request index " << request_index << " dst " << static_cast<char *>(current_request_destination);
 
         current_request_destination += request_size;
         request_file_offset += request_size;
     }
-
-    auto dst_ = destination_start;
 
     for (unsigned i = 0; i < num_workers; ++i)
     {
@@ -172,11 +156,7 @@ void Batches::build_tasks(std::shared_ptr<const Config> config, const std::strin
         auto range = Range(tasks);
         _total += range.size;
 
-        const auto range_size = range.size;
-
-        _batches.emplace_back(worker_index, _file_index, path, params, std::move(range), dst_, std::move(tasks), _responder, config);
-
-        dst_ += range_size;
+        _batches.emplace_back(worker_index, _file_index, path, params, std::move(range), std::move(tasks), _responder, config);
     }
 }
 
@@ -191,15 +171,17 @@ void Batches::handle_request(std::vector<Tasks> & v_tasks, unsigned request_inde
 
     auto bytes_to_request = request_size;
     size_t task_offset = request_file_offset;
+    size_t destination_offset = 0;
 
     do
     {
         auto to_read = _itr.consume(bytes_to_request);
-        Task::Info info(task_offset, to_read);
+        Task::Info info(task_offset, to_read, destination_offset);
         auto worker_index = _itr.current_index();
         infos.try_emplace(worker_index, std::move(info));
         task_offset += to_read;
         bytes_to_request -= to_read;
+        destination_offset += to_read;
     } while (bytes_to_request > 0);
 
     auto request_ptr = std::make_shared<Request>(request_file_offset, request_index, infos.size(), request_size, destination);

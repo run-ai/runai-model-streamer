@@ -126,7 +126,7 @@ common::ResponseCode Streamer::request_multi(
     std::vector<Workload> workloads(_config->concurrency);
 
     // divide reading between workers
-    MultiFileWorkloadAssigner assigner(paths, file_offsets, bytesizes, dsts, _config);
+    Assigner assigner(paths, file_offsets, bytesizes, dsts, _config);
 
     // Create batches for each file
 

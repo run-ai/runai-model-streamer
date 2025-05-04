@@ -1,7 +1,7 @@
 
 #include "streamer/impl/workload/workload.h"
 
-#include "utils/logging/logging.h";
+#include "utils/logging/logging.h"
 
 namespace runai::llm::streamer::impl
 {

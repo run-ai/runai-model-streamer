@@ -48,7 +48,7 @@ struct Batch
     Batch(Batch &&) = default;
     Batch & operator=(Batch &&) = default;
 
-    Batch(unsigned worker_index, unsigned file_index, const std::string & path, const common::s3::S3ClientWrapper::Params & params, Range && range, char * dst, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config);
+    Batch(unsigned worker_index, unsigned file_index, const std::string & path, const common::s3::S3ClientWrapper::Params & params, Range && range, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config);
 
     void execute(std::atomic<bool> & stopped);
 
@@ -67,9 +67,6 @@ struct Batch
 
     // range in file
     Range range;
-
-    // start offset in destination buffer
-    char * dst;
 
     Tasks tasks;
 

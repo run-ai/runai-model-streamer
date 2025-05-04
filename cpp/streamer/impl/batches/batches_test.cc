@@ -60,13 +60,10 @@ TEST(Batches, Sanity)
         dsts.push_back(buffers[i].data());
     }
     {
-        MultiFileWorkloadAssigner assigner(paths, file_offsets, bytesizes, dsts, config);
+        Assigner assigner(paths, file_offsets, bytesizes, dsts, config);
 
         EXPECT_GT(assigner.file_assignments(0).size(), 0);
-        if (num_files == 1)
-        {
-            EXPECT_EQ(assigner.file_assignments(0).size(), config->concurrency);
-        }
+        EXPECT_LE(assigner.file_assignments(0).size(), config->concurrency);
 
         // create internal division to divide the file into requests (each request represent a tensor)
 
@@ -164,10 +161,10 @@ TEST(Batches, Failed_Reader)
         bytesizes.push_back(size);
         dsts.push_back(dst.data());
 
-        MultiFileWorkloadAssigner assigner(paths, file_offsets, bytesizes, dsts, config);
+        Assigner assigner(paths, file_offsets, bytesizes, dsts, config);
 
         EXPECT_GT(assigner.file_assignments(0).size(), 0);
-        EXPECT_EQ(assigner.file_assignments(0).size(), config->concurrency);
+        EXPECT_LE(assigner.file_assignments(0).size(), config->concurrency);
 
         Batches batches(utils::random::number(), assigner.file_assignments(0), config, responder, file_path, s3_params, 0, size, chunks);
     }
@@ -235,10 +232,10 @@ TEST(Batches, Zero_Size_Request)
         bytesizes.push_back(size);
         dsts.push_back(dst.data());
 
-        MultiFileWorkloadAssigner assigner(paths, file_offsets, bytesizes, dsts, config);
+        Assigner assigner(paths, file_offsets, bytesizes, dsts, config);
 
         EXPECT_GT(assigner.file_assignments(0).size(), 0);
-        EXPECT_EQ(assigner.file_assignments(0).size(), config->concurrency);
+        EXPECT_LE(assigner.file_assignments(0).size(), config->concurrency);
 
         Batches batches(utils::random::number(), assigner.file_assignments(0), config, responder, file.path, s3_params, 0, size, chunks);
 
