@@ -62,8 +62,9 @@ _num_workers(_config->concurrency)
 
     // Determine Workload per Worker
     size_t base_bytes_per_worker = bytes_per_worker(total_bytes_to_read, paths[0]);
-
-    // --- Assign Workload Iteratively ---
+    size_t base_bytes_remainder = total_bytes_to_read % _num_workers;
+    LOG(DEBUG) << "base_bytes_per_worker: " << base_bytes_per_worker << " base_bytes_remainder: " << base_bytes_remainder;
+    
     _worker_assignments.resize(_num_workers);
 
     // ASSUMES dsts[0] is base of one large buffer
@@ -73,14 +74,15 @@ _num_workers(_config->concurrency)
     size_t current_file_index = 0;
     size_t current_offset_within_file = file_offsets[0]; // Start at the beginning of the first file's range
 
-    for (unsigned worker_idx = 0; worker_idx < _num_workers; ++worker_idx)
+    for (unsigned worker_idx = 0; worker_idx < _num_workers && current_file_index < num_files; ++worker_idx)
     {
-        size_t target_bytes_for_this_worker = base_bytes_per_worker;
+        size_t target_bytes_for_this_worker = (worker_idx == 0 ? base_bytes_per_worker + base_bytes_remainder : base_bytes_per_worker);
+
         size_t bytes_assigned_to_this_worker = 0;
 
         LOG(DEBUG) << "Assigning work to worker " << worker_idx << ", target bytes: " << target_bytes_for_this_worker;
 
-        while (current_file_index < num_files )
+        while (current_file_index < num_files)
         {
             const std::string& file_path = paths[current_file_index];
             const size_t file_start_offset = file_offsets[current_file_index];
