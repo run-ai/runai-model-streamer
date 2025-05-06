@@ -83,20 +83,18 @@ size_t Batches::BatchItr::consume(size_t bytesize)
 }
 
 Batches::Batches(unsigned file_index,
-                    const std::vector<FileReadTask> & file_read_tasks,
-                    std::shared_ptr<const Config> config,
-                    std::shared_ptr<common::Responder> responder,
-                    const std::string & path,
-                    const common::s3::S3ClientWrapper::Params & params,
-                    size_t file_offset,
-                    size_t bytesize,
-                    const std::vector<size_t> & internal_sizes) :
+                 const std::vector<FileReadTask> & file_read_tasks,
+                 std::shared_ptr<const Config> config,
+                 std::shared_ptr<common::Responder> responder,
+                 const std::string & path,
+                 const common::s3::S3ClientWrapper::Params & params,
+                 const std::vector<size_t> & internal_sizes) :
     _file_index(file_index),
     _itr(file_read_tasks),
     _responder(responder)
 {
     _batches.reserve(file_read_tasks.size());
-    build_tasks(config, path, params, file_offset, internal_sizes);
+    build_tasks(config, path, params, internal_sizes);
 }
 
 unsigned Batches::size() const
@@ -115,7 +113,7 @@ size_t Batches::total() const
     return _total;
 }
 
-void Batches::build_tasks(std::shared_ptr<const Config> config, const std::string & path, const common::s3::S3ClientWrapper::Params & params, size_t file_offset, const std::vector<size_t> & internal_sizes)
+void Batches::build_tasks(std::shared_ptr<const Config> config, const std::string & path, const common::s3::S3ClientWrapper::Params & params, const std::vector<size_t> & internal_sizes)
 {
     const auto num_workers = _itr.workers();
     LOG(DEBUG) << "Building tasks for " <<num_workers << " workers";
@@ -123,7 +121,7 @@ void Batches::build_tasks(std::shared_ptr<const Config> config, const std::strin
     std::vector<Range> v_ranges(num_workers);
 
     auto num_sizes = internal_sizes.size();
-    size_t request_file_offset = file_offset;
+    size_t request_file_offset = _itr.read_task(0).offset_in_file;
 
     auto destination_start = static_cast<char *>(_itr.read_task(0).destination);
 
