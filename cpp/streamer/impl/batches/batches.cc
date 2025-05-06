@@ -134,7 +134,7 @@ void Batches::build_tasks(std::shared_ptr<const Config> config, const std::strin
         const size_t request_size = internal_sizes[request_index];
 
         handle_request(v_tasks, request_index, request_file_offset, request_size, current_request_destination);
-        LOG(INFO) << "created request index " << request_index << " dst " << static_cast<char *>(current_request_destination);
+        LOG(DEBUG) << "created request index " << request_index << " dst " << static_cast<void *>(current_request_destination);
 
         current_request_destination += request_size;
         request_file_offset += request_size;
