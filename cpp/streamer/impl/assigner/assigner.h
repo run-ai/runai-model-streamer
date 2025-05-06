@@ -37,12 +37,11 @@ struct Assigner
         std::shared_ptr<const Config> config);
 
     // Access the assignments for each worker
-    const std::vector<FileReadTask> & file_assignments(unsigned file_index);
+    const std::vector<FileReadTask> & file_assignments(unsigned file_index) const;
 
     unsigned get_num_workers() const;
 
  private:
-
     size_t bytes_per_worker(size_t total_bytes_to_read, const std::string & path);
 
  private:

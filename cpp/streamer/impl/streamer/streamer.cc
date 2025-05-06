@@ -134,7 +134,7 @@ common::ResponseCode Streamer::request_multi(
     {
         auto params = handle_s3(i, paths[i], credentials);
         LOG(DEBUG) << "Creating batches for file index " << i << " path: " <<  paths[i];
-        Batches batches(i, assigner.file_assignments(i), _config, _responder, paths[i], params, file_offsets[i], bytesizes[i], internal_sizes[i]);
+        Batches batches(i, assigner.file_assignments(i), _config, _responder, paths[i], params, bytesizes[i], internal_sizes[i]);
 
         for (size_t j = 0; j < batches.size(); ++j)
         {

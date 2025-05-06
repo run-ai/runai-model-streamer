@@ -28,6 +28,7 @@ Assigner::Assigner(
 _config(config),
 _num_workers(_config->concurrency)
 {
+    LOG(DEBUG) << "Assigning " << paths.size() << " files to " << _num_workers << " workers";
     const size_t num_files = paths.size();
     if (num_files == 0)
     {
@@ -38,7 +39,7 @@ _num_workers(_config->concurrency)
     if (!(num_files == file_offsets.size() && num_files == bytesizes.size() && num_files == dsts.size()))
     {
         LOG(ERROR) <<  "Input vector sizes mismatch";
-        throw common::ResponseCode::InvalidParameterError;
+        throw common::Exception(common::ResponseCode::InvalidParameterError);
     }
 
     // Calculate Total Workload
@@ -49,7 +50,7 @@ _num_workers(_config->concurrency)
         if (total_bytes_to_read > std::numeric_limits<size_t>::max() - size)
         {
             LOG(ERROR) << "Total byte size calculation overflow";
-                throw common::ResponseCode::InvalidParameterError;
+            throw common::Exception(common::ResponseCode::InvalidParameterError);
         }
         total_bytes_to_read += size;
     }
@@ -57,7 +58,6 @@ _num_workers(_config->concurrency)
     if (total_bytes_to_read == 0)
     {
         LOG(WARNING) << "Total bytes to read is zero.";
-        return; // Nothing to assign
     }
 
     // Determine Workload per Worker
@@ -80,35 +80,25 @@ _num_workers(_config->concurrency)
 
         LOG(DEBUG) << "Assigning work to worker " << worker_idx << ", target bytes: " << target_bytes_for_this_worker;
 
-        while (bytes_assigned_to_this_worker < target_bytes_for_this_worker && current_file_index < num_files)
+        while (current_file_index < num_files )
         {
             const std::string& file_path = paths[current_file_index];
             const size_t file_start_offset = file_offsets[current_file_index];
             const size_t file_total_requested_size = bytesizes[current_file_index];
             char* current_global_dst_ptr = global_dst_buffer + current_global_dst_offset;
 
-            // Sanity check: current offset should be within the requested range for the file
-            if (current_offset_within_file < file_start_offset || current_offset_within_file >= file_start_offset + file_total_requested_size)
+            if (file_total_requested_size > 0 && bytes_assigned_to_this_worker >= target_bytes_for_this_worker)
             {
-                // This case should ideally not happen if logic is correct, but indicates a problem if it does.
-                // It might happen if a file has bytesize 0.
-                if (file_total_requested_size == 0)
-                {
-                    // Skip zero-sized file request
-                    current_file_index++;
-                    if (current_file_index < num_files)
-                    {
-                        current_offset_within_file = file_offsets[current_file_index];
-                    }
-                    continue; // Move to next file
-                }
-                else
-                {
-                    LOG(ERROR) << "Logic error: current_offset_within_file (" << current_offset_within_file
-                            << ") is outside the requested range [" << file_start_offset << ", "
-                            << file_start_offset + file_total_requested_size << ") for file " << current_file_index;
-                    throw std::logic_error("Internal error during workload assignment: Invalid file offset.");
-                }
+                break;
+            }
+
+            // Sanity check: current offset should be within the requested range for the file
+            if (file_total_requested_size && (current_offset_within_file < file_start_offset || current_offset_within_file >= file_start_offset + file_total_requested_size))
+            {
+                LOG(ERROR) << "Logic error: current_offset_within_file (" << current_offset_within_file
+                        << ") is outside the requested range [" << file_start_offset << ", "
+                        << file_start_offset + file_total_requested_size << ") for file " << current_file_index;
+                throw std::logic_error("Internal error during workload assignment: Invalid file offset.");
             }
 
             const size_t bytes_remaining_in_current_file = (file_start_offset + file_total_requested_size) - current_offset_within_file;
@@ -116,7 +106,9 @@ _num_workers(_config->concurrency)
 
             const size_t bytes_to_assign_now = std::min(bytes_remaining_in_current_file, bytes_still_needed_by_worker);
 
-            if (bytes_to_assign_now > 0)
+            LOG(DEBUG) << "bytes_to_assign_now: " << bytes_to_assign_now;
+
+            if (file_total_requested_size == 0 || bytes_to_assign_now > 0)
             {
                  // Create Task
 
@@ -141,8 +133,10 @@ _num_workers(_config->concurrency)
             }
 
             // Check if we finished the current file
+            LOG(DEBUG) << "file_start_offset " << file_start_offset << " file_total_requested_size: " << file_total_requested_size << " current_offset_within_file: " << current_offset_within_file << " file_start_offset + file_total_requested_size: " << file_start_offset + file_total_requested_size;
             if (current_offset_within_file == file_start_offset + file_total_requested_size)
             {
+                LOG(DEBUG) << "Finished current file " << current_file_index;
                 current_file_index++;
                 if (current_file_index < num_files)
                 {
@@ -191,9 +185,10 @@ _num_workers(_config->concurrency)
 }
 
 // Access the assignments of a given file by the original file index
-const std::vector<FileReadTask> & Assigner::file_assignments(unsigned file_index)
+const std::vector<FileReadTask> & Assigner::file_assignments(unsigned file_index) const
 {
-    return _assignments[file_index];
+    ASSERT(file_index < _assignments.size()) << "file index " << file_index << " overflow";
+    return _assignments.at(file_index);
 }
 
 unsigned Assigner::get_num_workers() const
@@ -229,7 +224,7 @@ size_t Assigner::bytes_per_worker(size_t total_bytes_to_read, const std::string 
     LOG(DEBUG) << "Total bytes: " << total_bytes_to_read
                 << ", Workers: " << _num_workers
                 << ", Base bytes/worker: " << base_bytes_per_worker;
-                
+
     return base_bytes_per_worker;
 }
 

@@ -12,12 +12,14 @@ runai_cc_auto_library(
     ],
 )
 
-# runai_cc_test(
-#     name = "assigner_test",
-#     srcs = ["assigner_test.cc"],
-#     deps = [":assigner",
-#             "//utils/random",
-#             "//utils/temp/file",
-#             "//utils/scope_guard",
-#     ],
-# )
+runai_cc_test(
+    name = "assigner_test",
+    srcs = ["assigner_test.cc"],
+    deps = [
+        ":assigner",
+        "//utils/random",
+        "//common/response_code",
+        "//common/exception",
+        "//utils/logging",
+    ],
+)
