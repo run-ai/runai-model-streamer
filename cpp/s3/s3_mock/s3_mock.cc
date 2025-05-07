@@ -38,8 +38,8 @@ common::ResponseCode runai_create_s3_client(const common::s3::StorageUri_C & uri
         *client = reinterpret_cast<void *>(utils::random::number());
     } while (__mock_clients.count(client));
 
-    __mock_clients.insert(client);
-    __mock_index[client] = 0;
+    __mock_clients.insert(*client);
+    __mock_index[*client] = 0;
     return common::ResponseCode::Success;
 }
 
