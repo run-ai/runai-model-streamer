@@ -10,6 +10,7 @@
 #include "common/path/path.h"
 #include "common/storage_uri/storage_uri.h"
 #include "common/s3_credentials/s3_credentials.h"
+#include "common/s3_wrapper/s3_wrapper.h"
 #include "common/responder/responder.h"
 #include "common/response/response.h"
 #include "common/range/range.h"
@@ -23,17 +24,14 @@ struct S3ClientBase
 
     S3ClientBase(const common::s3::Path & path, const common::s3::Credentials_C & credentials);
 
+    // get client's bucket name
     std::string bucket() const;
-
-    void path(const common::s3::Path & path);
 
     // verify that clien's credentials have not change
     bool verify_credentials(const common::s3::Credentials_C & credentials) const;
 
  protected:
     const Aws::String _bucket_name;
-    Aws::String _path;
-    unsigned _path_index; // path identifer to be returned in response instead of the path string
     const std::optional<Aws::String> _key;
     const std::optional<Aws::String> _secret;
     const std::optional<Aws::String> _token;
@@ -51,9 +49,7 @@ struct S3Client : S3ClientBase
 
     S3Client(const common::s3::Path & path, const common::s3::Credentials_C & credentials);
 
-    common::ResponseCode read(size_t offset, size_t bytesize, char * buffer);
-
-    common::ResponseCode async_read(unsigned num_ranges, common::Range * ranges, size_t chunk_bytesize, char * buffer);
+    common::ResponseCode async_read(const common::s3::Path & path, unsigned num_ranges, common::Range * ranges, size_t chunk_bytesize, char * buffer);
 
     common::Response async_read_response();
 
@@ -63,7 +59,6 @@ struct S3Client : S3ClientBase
     void stop();
 
     using S3ClientBase::bucket;
-    using S3ClientBase::path;
     using S3ClientBase::verify_credentials;
 
  private:

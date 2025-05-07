@@ -29,9 +29,9 @@ void S3::read(size_t bytesize, char * buffer)
     throw common::Exception(common::ResponseCode::UnknownError);
 }
 
-void S3::async_read(std::vector<common::Range> & ranges, char * buffer)
+void S3::async_read(const common::s3::S3ClientWrapper::Params & params, std::vector<common::Range> & ranges, char * buffer)
 {
-    auto response_code = _client->async_read(ranges, _config.s3_block_bytesize, buffer);
+    auto response_code = _client->async_read(params, ranges, _config.s3_block_bytesize, buffer);
     if (response_code != common::ResponseCode::Success)
     {
         throw common::Exception(response_code);

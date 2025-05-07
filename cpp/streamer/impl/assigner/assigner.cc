@@ -64,7 +64,7 @@ _num_workers(_config->concurrency)
     size_t base_bytes_per_worker = bytes_per_worker(total_bytes_to_read, paths[0]);
     size_t base_bytes_remainder = total_bytes_to_read % _num_workers;
     LOG(DEBUG) << "base_bytes_per_worker: " << base_bytes_per_worker << " base_bytes_remainder: " << base_bytes_remainder;
-    
+
     _worker_assignments.resize(_num_workers);
 
     // ASSUMES dsts[0] is base of one large buffer

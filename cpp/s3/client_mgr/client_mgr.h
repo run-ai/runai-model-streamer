@@ -106,12 +106,12 @@ T* ClientMgr<T>::pop(const common::s3::Path & path, const common::s3::Credential
 
         auto & unused = mgr._bucket_unused_clients;
         bool is_bucket = path.uri.bucket == mgr._current_bucket;
+
         if (is_bucket)
         {
             while (!unused.empty())
             {
                 auto ptr = *unused.begin();
-                ptr->path(path);
                 unused.erase(unused.begin());
 
                 // Reuse client only if credentials have not changed

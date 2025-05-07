@@ -67,6 +67,14 @@ Batch::Batch(unsigned worker_index, unsigned file_index, const std::string & pat
     LOG(DEBUG) << "Batch " << path << " range " << this->range.start << " - " << this->range.end << " ; " << this->tasks.size() << " tasks";
 }
 
+void Batch::request(std::shared_ptr<Reader> reader, std::atomic<bool> & stopped)
+{
+    ASSERT(reader != nullptr) << "Reader is not initialized";
+    ASSERT(params.valid()) << "S3 params are not initialized";
+
+    request_async_read(reader.get(), stopped);
+}
+
 void Batch::execute(std::atomic<bool> & stopped)
 {
     LOG(DEBUG) << "Start reading from file " << path;
@@ -91,7 +99,7 @@ void Batch::execute(std::atomic<bool> & stopped)
         }
         else
         {
-            async_read(*config, stopped);
+            async_read(stopped);
         }
     }
     catch(const common::Exception & e)
@@ -103,6 +111,13 @@ void Batch::execute(std::atomic<bool> & stopped)
         response_code = common::ResponseCode::UnknownError;
     }
 
+    // in case of an error all of the batch's unfinished tasks are failed with the same error code
+    // in case of success the finished tasks were already notified
+    handle_error(response_code);
+}
+
+void Batch::handle_error(common::ResponseCode response_code)
+{
     // in case of an error all of the batch's unfinished tasks are failed with the same error code
     // in case of success the finished tasks were already notified
 
@@ -177,7 +192,7 @@ void Batch::read(const Config & config, std::atomic<bool> & stopped)
 }
 
 // read the entire range and send notifications for each sub range
-void Batch::async_read(const Config & config, std::atomic<bool> & stopped)
+void Batch::async_read(std::atomic<bool> & stopped)
 {
     if (tasks.empty())
     {
@@ -185,6 +200,26 @@ void Batch::async_read(const Config & config, std::atomic<bool> & stopped)
         return;
     }
 
+    request_async_read(_reader.get(), stopped);
+
+    while (true)
+    {
+        auto r = _reader->async_response();
+
+        if (r.ret == common::ResponseCode::FinishedError)
+        {
+            LOG(DEBUG) << "Finished reading from file " << path << " - terminated";
+            throw common::Exception(common::ResponseCode::FinishedError);
+        }
+
+        handle_response(r);
+    }
+
+    LOG(DEBUG) << "Finished reading from file " << path << (stopped ? " - terminated" : " successfully");
+}
+
+void Batch::request_async_read(Reader * reader, std::atomic<bool> & stopped)
+{
     if (stopped)
     {
         throw common::Exception(common::ResponseCode::FinishedError);
@@ -201,32 +236,23 @@ void Batch::async_read(const Config & config, std::atomic<bool> & stopped)
         ranges.push_back({tasks[i].info.offset, tasks[i].info.bytesize});
     }
 
-    _reader->async_read(ranges, dst);
+    reader->async_read(params, ranges, dst);
+}
 
-    while (true)
+void Batch::handle_response(const common::Response & response)
+{
+    LOG(SPAM) << "Received response " << response;
+
+    ASSERT(response.file_index == file_index) << "Received response from a different file " << response.file_index << " expected " << file_index;
+
+    ASSERT(response.index >= 0 && response.index < tasks.size()) << "Worker received out of range index " << response.index << " number of tasks is " << tasks.size();
+
+    auto & task = tasks.at(response.index);
+    if (task.finished_request(response.ret))
     {
-        auto r = _reader->async_response();
-
-        if (r.ret == common::ResponseCode::FinishedError)
-        {
-            LOG(DEBUG) << "Finished reading from file " << path << " - terminated";
-            throw common::Exception(common::ResponseCode::FinishedError);
-        }
-
-        LOG(SPAM) << "Received response index " << r.index;
-        if (r.index < 0 || r.index >= tasks.size())
-        {
-            LOG(ERROR) << "received out of range index " << r.index << " number of tasks is " << tasks.size();
-        }
-        auto & task = tasks.at(r.index);
-        if (task.finished_request(r.ret))
-        {
-            common::Response response(file_index, task.request->index, task.request->ret());
-            responder->push(std::move(response), task.request->bytesize);
-        }
+        common::Response response(file_index, task.request->index, task.request->ret());
+        responder->push(std::move(response), task.request->bytesize);
     }
-
-    LOG(DEBUG) << "Finished reading from file " << path << (stopped ? " - terminated" : " successfully");
 }
 
 // notify unfinished tasks up to but not including offset end

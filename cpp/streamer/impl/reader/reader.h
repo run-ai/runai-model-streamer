@@ -7,7 +7,7 @@
 
 #include "common/range/range.h"
 #include "common/response/response.h"
-
+#include "common/s3_wrapper/s3_wrapper.h"
 namespace runai::llm::streamer::impl
 {
 
@@ -30,7 +30,7 @@ struct Reader
 
     // asynchronous
 
-    virtual void async_read(std::vector<common::Range> & ranges, char * buffer) = 0;
+    virtual void async_read(const common::s3::S3ClientWrapper::Params & params, std::vector<common::Range> & ranges, char * buffer) = 0;
     virtual common::Response async_response() = 0;
 
     const Mode mode;

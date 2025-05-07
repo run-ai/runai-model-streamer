@@ -53,7 +53,7 @@ void File::read(size_t bytesize, char * buffer)
     }
 }
 
-void File::async_read(std::vector<common::Range> & ranges, char * buffer)
+void File::async_read(const common::s3::S3ClientWrapper::Params & params, std::vector<common::Range> & ranges, char * buffer)
 {
     LOG(ERROR) << "Not implemented";
     throw common::Exception(common::ResponseCode::UnknownError);

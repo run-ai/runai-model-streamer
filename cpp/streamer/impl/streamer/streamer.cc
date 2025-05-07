@@ -149,16 +149,21 @@ common::ResponseCode Streamer::request_multi(
 
             LOG(DEBUG) << "created " << batch.tasks.size() << " tasks for worker " << worker_index << " total bytes " << batch.range.size << " range " << batch.range.start << " to " << batch.range.end;
 
-            workloads[worker_index].batches.push_back(std::move(batch));
+            const auto & result = workloads[worker_index].add_batch(std::move(batch));
+            if (result != common::ResponseCode::Success)
+            {
+                LOG(ERROR) << "Failed to add batch to worker " << worker_index << " error: " << result;
+                return result;
+            }
         }
     }
 
     // send batches to threadpool
     for (auto & workload : workloads)
     {
-        if (workload.batches.size() > 0)
+        if (workload.size() > 0)
         {
-            LOG(DEBUG) << "sending workload to worker with batches " << workload.batches.size();
+            LOG(DEBUG) << "sending workload to worker with batches " << workload.size();
 
             _pool.push(std::move(workload));
         }

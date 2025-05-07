@@ -47,7 +47,7 @@ struct S3ClientWrapper
       // ranges - list of sub ranges
       // chunk_bytesize - size of chunk for reading in multi parts (minimal size is 5 MB)
 
-      ResponseCode async_read(std::vector<Range>& ranges, size_t chunk_bytesize, char * buffer);
+      ResponseCode async_read(const Params & params, std::vector<Range>& ranges, size_t chunk_bytesize, char * buffer);
       Response async_read_response();
 
       // stop - stops the responder of each S3 client, in order to notify callers which sent a request and are waiting for a response
