@@ -30,8 +30,6 @@ std::optional<Aws::String> convert(const char * input) {
 
 S3ClientBase::S3ClientBase(const common::s3::Path & path, const common::s3::Credentials_C & credentials) :
     _bucket_name(path.uri.bucket),
-    _path(path.uri.path),
-    _path_index(path.index),
     _key(convert(credentials.access_key_id)),
     _secret(convert(credentials.secret_access_key)),
     _token(convert(credentials.session_token)),
@@ -44,15 +42,6 @@ S3ClientBase::S3ClientBase(const common::s3::Path & path, const common::s3::Cred
 std::string S3ClientBase::bucket() const
 {
     return std::string(_bucket_name.c_str(), _bucket_name.size());
-}
-
-void S3ClientBase::path(const common::s3::Path & path)
-{
-    ASSERT(path.uri.bucket == _bucket_name) << "Attempting to reuse client of bucket " << _bucket_name << " with a different bucket " << path.uri.bucket;
-    ASSERT((path.uri.endpoint == nullptr) || (_endpoint.has_value() && _endpoint.value() == std::string(path.uri.endpoint))) << "Attempting to reuse client with a different endpoint " << path.uri.endpoint;
-    LOG(DEBUG) << "Setting s3 client path " << path.uri.path << "bucket " << path.uri.bucket << " and index to " << path.index;
-    _path = Aws::String(path.uri.path);
-    _path_index = path.index;
 }
 
 bool S3ClientBase::verify_credentials_member(const std::optional<Aws::String>& member, const char* value, const char * name) const
@@ -146,38 +135,6 @@ S3Client::S3Client(const common::s3::Path & path, const common::s3::Credentials_
     }
 }
 
-common::ResponseCode S3Client::read(size_t offset, size_t bytesize, char * buffer)
-{
-    std::string range_str = "bytes=" + std::to_string(offset) + "-" + std::to_string(offset + bytesize);
-
-    Aws::S3Crt::Model::GetObjectRequest request;
-    request.SetBucket(_bucket_name);
-    request.SetKey(_path);
-    request.SetRange(range_str.c_str());
-
-    request.SetResponseStreamFactory(
-        [buffer, bytesize]()
-        {
-            std::unique_ptr<Aws::StringStream>
-                    stream(Aws::New<Aws::StringStream>("RunaiBuffer"));
-
-            stream->rdbuf()->pubsetbuf(buffer, bytesize);
-
-            return stream.release();
-        });
-
-    Aws::S3Crt::Model::GetObjectOutcome outcome = _client->GetObject(request);
-
-    if (!outcome.IsSuccess()) {
-        const auto & err = outcome.GetError();
-        LOG(ERROR) << "Failed to download s3 object " << err.GetExceptionName() << ": " << err.GetMessage();
-        return common::ResponseCode::FileAccessError;
-    }
-
-    LOG(SPAM) << "Successfully retrieved '" << _path << "' from '" << _bucket_name << "'."  << range_str;
-    return common::ResponseCode::Success;
-}
-
 // returns response object that contains the index of the range in ranges vector  which was passed in the request (0... number of ranges - 1)
 common::Response S3Client::async_read_response()
 {
@@ -191,7 +148,7 @@ common::Response S3Client::async_read_response()
 }
 
 // aynchronously read consecutive ranges, producing a Response object per range in the ranges vector
-common::ResponseCode S3Client::async_read(unsigned num_ranges, common::Range * ranges, size_t chunk_bytesize, char * buffer)
+common::ResponseCode S3Client::async_read(const common::s3::Path & object_path, unsigned num_ranges, common::Range * ranges, size_t chunk_bytesize, char * buffer)
 {
     if (_responder != nullptr && !_responder->finished())
     {
@@ -208,9 +165,16 @@ common::ResponseCode S3Client::async_read(unsigned num_ranges, common::Range * r
         _responder->increment(num_ranges);
     }
 
+    ASSERT((object_path.uri.endpoint == nullptr) || (_endpoint.has_value() && _endpoint.value() == std::string(object_path.uri.endpoint))) << "Attempting to reuse client with a different endpoint " << object_path.uri.endpoint;
+    ASSERT(object_path.uri.bucket == _bucket_name) << "Attempting to reuse client of bucket " << _bucket_name << " with a different bucket " << object_path.uri.bucket;
+
+    Aws::String bucket_name(object_path.uri.bucket);
+    Aws::String path(object_path.uri.path);
+    unsigned path_index(object_path.index);
+
     Aws::S3Crt::Model::GetObjectRequest request;
-    request.SetBucket(_bucket_name);
-    request.SetKey(_path);
+    request.SetBucket(bucket_name);
+    request.SetKey(path);
 
     char * buffer_ = buffer;
     common::Range * ranges_ = ranges;
@@ -250,7 +214,7 @@ common::ResponseCode S3Client::async_read(unsigned num_ranges, common::Range * r
                     return stream.release();
                 });
 
-            _client->GetObjectAsync(request, [responder = _responder, file_index = _path_index, ir, counter, is_success](const Aws::S3Crt::S3CrtClient*, const Aws::S3Crt::Model::GetObjectRequest&,
+            _client->GetObjectAsync(request, [responder = _responder, file_index = path_index, ir, counter, is_success](const Aws::S3Crt::S3CrtClient*, const Aws::S3Crt::Model::GetObjectRequest&,
                                                                             const Aws::S3Crt::Model::GetObjectOutcome& outcome,
                                                                             const std::shared_ptr<const Aws::Client::AsyncCallerContext>&) {
                 if (outcome.IsSuccess())

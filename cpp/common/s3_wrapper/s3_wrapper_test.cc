@@ -56,7 +56,7 @@ TEST_F(S3WrappertTest, Read)
 {
     S3ClientWrapper wrapper(params);
     std::vector<Range> ranges;
-    auto response_code = wrapper.async_read(ranges, utils::random::number<size_t>(), nullptr);
+    auto response_code = wrapper.async_read(params, ranges, utils::random::number<size_t>(), nullptr);
     EXPECT_EQ(response_code, common::ResponseCode::Success);
 }
 
@@ -68,7 +68,7 @@ TEST_F(S3WrappertTest, Cleanup)
     {
         S3ClientWrapper wrapper(params);
         std::vector<Range> ranges;
-        wrapper.async_read(ranges, utils::random::number<size_t>(), nullptr);
+        wrapper.async_read(params, ranges, utils::random::number<size_t>(), nullptr);
 
         EXPECT_EQ(verify_mock(), 1);
 

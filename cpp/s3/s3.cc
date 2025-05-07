@@ -82,7 +82,7 @@ void runai_stop_s3_clients()
     }
 }
 
-common::ResponseCode  runai_async_read_s3_client(void * client, unsigned num_ranges, common::Range * ranges, size_t chunk_bytesize, char * buffer)
+common::ResponseCode runai_async_read_s3_client(void * client, const common::s3::Path & path, unsigned num_ranges, common::Range * ranges, size_t chunk_bytesize, char * buffer)
 {
     try
     {
@@ -92,7 +92,7 @@ common::ResponseCode  runai_async_read_s3_client(void * client, unsigned num_ran
             return common::ResponseCode::UnknownError;
         }
         auto ptr = static_cast<S3Client *>(client);
-        return ptr->async_read(num_ranges, ranges, chunk_bytesize, buffer);
+        return ptr->async_read(path, num_ranges, ranges, chunk_bytesize, buffer);
     }
     catch(const std::exception& e)
     {
@@ -101,7 +101,7 @@ common::ResponseCode  runai_async_read_s3_client(void * client, unsigned num_ran
     return common::ResponseCode::UnknownError;
 }
 
-common::ResponseCode runai_async_response_s3_client(void * client, unsigned * index)
+common::ResponseCode runai_async_response_s3_client(void * client, unsigned * file_index, unsigned * index)
 {
     try
     {
@@ -113,6 +113,7 @@ common::ResponseCode runai_async_response_s3_client(void * client, unsigned * in
         auto ptr = static_cast<S3Client *>(client);
         auto response = ptr->async_read_response();
         *index = response.index;
+        *file_index = response.file_index;
         return response.ret;
     }
     catch(const std::exception& e)

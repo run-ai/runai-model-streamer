@@ -17,7 +17,7 @@ namespace runai::llm::streamer::common::s3
 {
 
 std::set<void *> __mock_clients;
-std::map<void *, unsigned> __mock_index;
+std::map<void * /* client */, std::map<unsigned /* file index */, unsigned /* ranges counter */>> __mock_index; // for each client - ranges counter for each file index
 std::set<void *> __mock_unused;
 unsigned __mock_response_time_ms = 0;
 std::mutex __mutex;
@@ -39,7 +39,7 @@ common::ResponseCode runai_create_s3_client(const common::s3::Path & path, const
     } while (__mock_clients.count(*client) || __mock_unused.count(*client));
 
     __mock_clients.insert(*client);
-    __mock_index[client] = 0;
+    __mock_index[client][path.index] = 0;
 
     LOG(DEBUG) << "created client " << *client << " - mock size is " << __mock_clients.size();
     return common::ResponseCode::Success;
@@ -75,7 +75,7 @@ common::ResponseCode get_response_code(void * client)
     return common::ResponseCode::UnknownError;
 }
 
-common::ResponseCode  runai_async_read_s3_client(void * client, unsigned num_ranges, common::Range * ranges, size_t chunk_bytesize, char * buffer)
+common::ResponseCode  runai_async_read_s3_client(void * client, const common::s3::Path & path, unsigned num_ranges, common::Range * ranges, size_t chunk_bytesize, char * buffer)
 {
     const auto guard = std::unique_lock<std::mutex>(__mutex);
 
@@ -94,17 +94,23 @@ common::ResponseCode  runai_async_read_s3_client(void * client, unsigned num_ran
     auto r = get_response_code(client);
     if (r == common::ResponseCode::Success)
     {
-        __mock_index[client] = num_ranges;
+        __mock_index[client][path.index] = num_ranges;
     }
 
     return r;
 }
 
-common::ResponseCode  runai_async_response_s3_client(void * client, unsigned * index)
+common::ResponseCode  runai_async_response_s3_client(void * client, unsigned * file_index, unsigned * index)
 {
     if (index == nullptr)
     {
         LOG(ERROR) << "output parameter index is null";
+        return common::ResponseCode::UnknownError;
+    }
+
+    if (file_index == nullptr)
+    {
+        LOG(ERROR) << "output parameter file_index is null";
         return common::ResponseCode::UnknownError;
     }
 
@@ -137,14 +143,23 @@ common::ResponseCode  runai_async_response_s3_client(void * client, unsigned * i
 
     if (r == common::ResponseCode::Success)
     {
-        if (__mock_index[client] == 0)
+        auto & file_counters = __mock_index[client];
+        bool found = false;
+        for (auto & [current_file_index, counter] : file_counters)
+        {
+            if (counter > 0)
+            {
+                counter--;
+                *index = counter;
+                *file_index = current_file_index;
+                found = true;
+                break;
+            }
+        }
+
+        if (!found)
         {
             r = common::ResponseCode::FinishedError;
-        }
-        else
-        {
-            *index = __mock_index.at(client) - 1;
-            __mock_index[client]--;
         }
     }
     return r;

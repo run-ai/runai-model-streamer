@@ -21,18 +21,7 @@ struct Helper : S3ClientBase
     }
 
     using S3ClientBase::bucket;
-    using S3ClientBase::path;
     using S3ClientBase::verify_credentials;
-
-    const std::string & path() const
-    {
-        return _path;
-    }
-
-    unsigned path_index() const
-    {
-        return _path_index;
-    }
 
     const std::optional<std::string> & key()
     {
@@ -161,7 +150,6 @@ TEST_F(ClientMgrTest, Reuse_Client)
         const common::s3::Path s3_path(uri, index);
         Helper * helper = ClientMgr<Helper>::pop(s3_path, credentials);
         EXPECT_EQ(helper->bucket(), uri.bucket);
-        EXPECT_EQ(helper->path(), path);
         EXPECT_EQ(ClientMgr<Helper>::current_bucket(), uri.bucket);
         EXPECT_EQ(helper->key(), credentials.access_key_id);
         EXPECT_EQ(helper->secret(), credentials.secret_access_key);
@@ -218,7 +206,6 @@ TEST_F(ClientMgrTest, Credentials_Changed)
         const common::s3::Path s3_path(uri, utils::random::number());
         Helper * helper = ClientMgr<Helper>::pop(s3_path, new_credentials);
         EXPECT_EQ(helper->bucket(), uri.bucket);
-        EXPECT_EQ(helper->path(), path);
         EXPECT_EQ(ClientMgr<Helper>::current_bucket(), uri.bucket);
         EXPECT_EQ(helper->key(), new_credentials.access_key_id);
         EXPECT_EQ(helper->secret(), new_credentials.secret_access_key);
@@ -281,8 +268,6 @@ TEST_F(ClientMgrTest, Change_Bucket)
         EXPECT_EQ(ClientMgr<Helper>::unused(), 0);
 
         EXPECT_EQ(helper->bucket(), uri_.bucket);
-        EXPECT_EQ(helper->path(), path);
-        EXPECT_EQ(helper->path_index(), index);
         EXPECT_EQ(ClientMgr<Helper>::current_bucket(), uri_.bucket);
 
         EXPECT_EQ(ClientMgr<Helper>::size(), i + 1);

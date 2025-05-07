@@ -21,7 +21,7 @@ struct File : Reader
 
     void seek(size_t offset) override;
 
-    void async_read(std::vector<common::Range> & ranges, char * buffer) override;
+    void async_read(const common::s3::S3ClientWrapper::Params & params, std::vector<common::Range> & ranges, char * buffer) override;
     common::Response async_response() override;
 
  private:

@@ -32,7 +32,7 @@ struct S3 : Reader
     void read(size_t bytesize, char * buffer) override;
     void seek(size_t offset) override;
 
-    void async_read(std::vector<common::Range> & ranges, char * buffer) override;
+    void async_read(const common::s3::S3ClientWrapper::Params & params, std::vector<common::Range> & ranges, char * buffer) override;
     common::Response async_response() override;
 
  private:

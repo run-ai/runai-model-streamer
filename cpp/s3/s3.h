@@ -38,9 +38,9 @@ extern "C" common::ResponseCode runai_create_s3_client(const common::s3::Path & 
 // destroy client
 extern "C" void runai_remove_s3_client(void * client);
 // asynchronous read
-extern "C" common::ResponseCode  runai_async_read_s3_client(void * client, unsigned num_ranges, common::Range * ranges, size_t chunk_bytesize, char * buffer);
+extern "C" common::ResponseCode  runai_async_read_s3_client(void * client, const common::s3::Path & path, unsigned num_ranges, common::Range * ranges, size_t chunk_bytesize, char * buffer);
 // wait for asynchronous read response
-extern "C" common::ResponseCode  runai_async_response_s3_client(void * client, unsigned * index /* output parameter */);
+extern "C" common::ResponseCode  runai_async_response_s3_client(void * client, unsigned * file_index /* output parameter */, unsigned * index /* output parameter */);
 // stop clients
 // Stops the responder of each client, in order to notify callers which sent a request and are waiting for a response
 extern "C" void runai_stop_s3_clients();

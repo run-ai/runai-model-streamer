@@ -113,10 +113,11 @@ void * S3ClientWrapper::create_client(unsigned file_index, const StorageUri & ur
     return client;
 }
 
-ResponseCode S3ClientWrapper::async_read(std::vector<Range>& ranges, size_t chunk_bytesize, char * buffer)
+ResponseCode S3ClientWrapper::async_read(const Params & params, std::vector<Range>& ranges, size_t chunk_bytesize, char * buffer)
 {
-    static auto _s3_async_read = _s3_dylib->dlsym<ResponseCode(*)(void *, unsigned, Range*, size_t, char *)>("runai_async_read_s3_client");
-    return _s3_async_read(_s3_client, ranges.size(), ranges.data(), chunk_bytesize, buffer);
+    static auto _s3_async_read = _s3_dylib->dlsym<ResponseCode(*)(void *, const Path &, unsigned, Range*, size_t, char *)>("runai_async_read_s3_client");
+    const Path s3_path(*params.uri, params.file_index);
+    return _s3_async_read(_s3_client, s3_path, ranges.size(), ranges.data(), chunk_bytesize, buffer);
     return common::ResponseCode::Success;
 }
 
@@ -124,8 +125,8 @@ Response S3ClientWrapper::async_read_response()
 {
     Response r(common::ResponseCode::Success);
 
-    static auto _s3_async_response = _s3_dylib->dlsym<ResponseCode(*)(void *, unsigned*)>("runai_async_response_s3_client");
-    r.ret = _s3_async_response(_s3_client, &r.index);
+    static auto _s3_async_response = _s3_dylib->dlsym<ResponseCode(*)(void *, unsigned*, unsigned*)>("runai_async_response_s3_client");
+    r.ret = _s3_async_response(_s3_client, &r.file_index, &r.index);
     return r;
 }
 

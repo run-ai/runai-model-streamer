@@ -50,7 +50,17 @@ struct Batch
 
     Batch(unsigned worker_index, unsigned file_index, const std::string & path, const common::s3::S3ClientWrapper::Params & params, Range && range, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config);
 
+    // read the batch synchronously
     void execute(std::atomic<bool> & stopped);
+
+    // request the batch asynchronously
+    void request(std::shared_ptr<Reader> reader, std::atomic<bool> & stopped);
+
+    // handle response from the reader
+    void handle_response(const common::Response & response);
+
+    // handle error
+    void handle_error(common::ResponseCode response_code);
 
     // notify tasks until file offset
     void finished_until(size_t file_offset, common::ResponseCode ret = common::ResponseCode::Success);
@@ -76,8 +86,13 @@ struct Batch
 
  private:
     void read(const Config & config, std::atomic<bool> & stopped);
-    void async_read(const Config & config, std::atomic<bool> & stopped);
 
+    // should we keep async read for a single batch ?
+    void async_read(std::atomic<bool> & stopped);
+
+    void async_wait(Reader * reader, std::atomic<bool> & stopped);
+
+    void request_async_read(Reader * reader, std::atomic<bool> & stopped);
  private:
     // index of first unfinished task
     unsigned _unfinished = 0;
