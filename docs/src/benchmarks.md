@@ -37,7 +37,7 @@ High-performance local storage types with different IOPS and throughput limits:
 - **IOPS**: 100,000
 - **Throughput**: up to 4,000 MiB/s
 
-##### Amazon S3
+#### Amazon S3
 A cloud-based storage option where the latency and bandwidth constraints of the cloud environment were expected to affect performance. We used S3 buckets located in the same AWS region as the instance to minimize inter-region latency.
 
 ## Experiment Results
