@@ -94,7 +94,7 @@ We performed these experiments without the optional hashing.
 **Figure 7:** This figure presents the total time required for the vLLM engine to be ready for inference across different storage types (GP3 SSD, IO2 SSD, and S3) when using Run:ai Model Streamer, HuggingFace Safetensors Loader, and Tensorizer. The dark-colored bars show the time it takes to load the model from storage to GPU while the light-colored bars show the total time for the vLLM engine to load and get ready to serve requests (time to load the model plus the time to warm the inference engine up). For local storage options (GP3 and IO2 SSD), the Run:ai Model Streamer and Tensorizer consistently outperformed the Safetensors Loader, cutting readiness times nearly in half. On S3, both Run:ai Model Streamer and Tensorizer were tested, with Run:ai Model Streamer delivering significantly faster readiness times. 
 
 ## Appendix A
-**GP3 SSD Results as Table**
+**GP3 SSD Results**
 
 <table>
   <tr>
@@ -166,7 +166,7 @@ We performed these experiments without the optional hashing.
 
 
 ## Appendix B
-**IO2 SSD Results as Table**
+**IO2 SSD Results**
 <table>
   <tr>
     <td colspan="2" align="center" valign="middle"><b>Run:ai Model Streamer</b></td>
@@ -233,7 +233,7 @@ We performed these experiments without the optional hashing.
 </table>
 
 ## Appendix C
-**S3 Bucket Results as Table**
+**S3 Bucket Results**
 
 <table>
   <tr>
@@ -292,7 +292,7 @@ We performed these experiments without the optional hashing.
 </table>
 
 ## Appendix D
-**vLLM Results as Table**
+**vLLM Results**
 
 For GP3 SSD Storage
 <table>
