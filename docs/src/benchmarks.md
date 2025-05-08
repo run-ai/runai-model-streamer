@@ -1,5 +1,5 @@
 # Run:ai Model Streamer Benchmarks
-
+The purpose of this document is to present an empirical performance analysis of the Run:ai Model Streamer, highlighting its effectiveness across different storage types (local SSDs and cloud-based S3) and in combination with the vLLM inference engine. We compare the Run:ai Model Streamer’s performance against other tools, such as the Hugging Face safetensors loader and Tensorizer, providing insights into its advantages and limitations. The full experimental setup and results are documented below.
 
 ## Technical Configuration
 
