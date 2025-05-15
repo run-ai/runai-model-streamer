@@ -20,11 +20,6 @@ RUN pip install --upgrade \
     boto3 \
     cpplint==1.5.4
 
-ARG BAZEL=4.2.1
-RUN ARCH=$([ "$(uname -m)" = "aarch64" ] && echo "arm64" || uname -m); \
-    wget -O /usr/local/bin/bazel "https://github.com/bazelbuild/bazel/releases/download/$BAZEL/bazel-$BAZEL-linux-$ARCH" && \
-    chmod +x /usr/local/bin/bazel
-
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     cmake \
     git \
