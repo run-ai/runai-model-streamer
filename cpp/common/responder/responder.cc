@@ -113,7 +113,7 @@ void Responder::cancel()
 void Responder::stop()
 {
     {
-        LOG(ERROR) << "stopping";
+        LOG(DEBUG) << "stopping";
         const auto guard = std::unique_lock<std::mutex>(_mutex);
         _stopped = true;
     }

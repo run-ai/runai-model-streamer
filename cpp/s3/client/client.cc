@@ -165,7 +165,7 @@ common::ResponseCode S3Client::async_read(const common::s3::Path & object_path, 
         _responder->increment(num_ranges);
     }
 
-    ASSERT((object_path.uri.endpoint == nullptr) || (_endpoint.has_value() && _endpoint.value() == std::string(object_path.uri.endpoint))) << "Attempting to reuse client with a different endpoint " << object_path.uri.endpoint;
+    ASSERT((!_endpoint.has_value()) || (object_path.uri.endpoint == nullptr) || (_endpoint.has_value() && _endpoint.value() == std::string(object_path.uri.endpoint))) << "Attempting to reuse client with a different endpoint " << object_path.uri.endpoint;
     ASSERT(object_path.uri.bucket == _bucket_name) << "Attempting to reuse client of bucket " << _bucket_name << " with a different bucket " << object_path.uri.bucket;
 
     Aws::String bucket_name(object_path.uri.bucket);
