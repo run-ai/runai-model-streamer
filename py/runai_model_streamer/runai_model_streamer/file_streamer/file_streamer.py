@@ -10,7 +10,7 @@ from runai_model_streamer.libstreamer.libstreamer import (
     runai_response,
 )
 from runai_model_streamer.file_streamer.requests_iterator import (
-    RequestsIterator,
+    FileRequestsIterator,
 )
 
 from runai_model_streamer.s3_utils.s3_utils import (
@@ -94,7 +94,7 @@ class FileStreamer:
         self.total_size = self.total_size + sum(chunks)
         self.path = self.handle_object_store(path, credentials)
 
-        self.requests_iterator, buffer_size = RequestsIterator.with_memory_mode(
+        self.requests_iterator, buffer_size = FileRequestsIterator.with_memory_mode(
             file_offset, chunks
         )
         print(
