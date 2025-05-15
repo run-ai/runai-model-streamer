@@ -11,6 +11,7 @@ from runai_model_streamer.libstreamer.libstreamer import (
 )
 from runai_model_streamer.file_streamer.requests_iterator import (
     FilesRequestsIterator,
+    FileChunks
 )
 
 from runai_model_streamer.s3_utils.s3_utils import (
@@ -95,7 +96,7 @@ class FileStreamer:
         self.path = self.handle_object_store(path, credentials)
 
         self.requests_iterator, buffer_size = FilesRequestsIterator.with_memory_mode(
-            [file_offset], [chunks]
+            [FileChunks(file_offset, chunks)]
         )
         print(
             f"[RunAI Streamer] CPU Buffer size: {humanize.naturalsize(buffer_size, binary=True)} for file: {os.path.basename(path)}",

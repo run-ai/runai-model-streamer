@@ -16,57 +16,65 @@ class MemoryCapMode(enum.Enum):
     limited = 2
     largest_chunk = 3
 
+class FileChunks:
+    def __init__(self, file_offset: int, chunks: List[int]) -> None:
+        self.file_offset = file_offset
+        self.chunks = chunks
 
 class FileRequest:
     def __init__(self, file_offset: int, chunks: List[int]) -> None:
         self.file_offset = file_offset
         self.chunks = chunks
 
+
 class FilesRequestsIterator:
-    def __init__(self, memory_limit: int, initial_file_offsets: List[int], chunkses: List[List[int]]) -> None:
+    def __init__(self, memory_limit: int, files_chunks: List[FileChunks]) -> None:
         self.memory_limit = memory_limit
-        self.file_requests_iterator = FileRequestsIterator(
-            initial_file_offsets[0], chunkses[0])
+        self.files_requests_iterator = [
+            FileRequestsIterator(
+            files_chunks[0].file_offset, files_chunks[0].chunks)
+            ]
+        self.current_file_index = 0
         
     def next_request(self) -> Optional[FileRequest]:
-        return self.file_requests_iterator.next_request(self.memory_limit)
+        return self.files_requests_iterator[0].next_request(self.memory_limit)
 
     @staticmethod
     def with_memory_cap(
         memory_mode: MemoryCapMode,
-        initial_offsets: List[int],
-        chunkses: List[List[int]],
+        files_chunks: List[FileChunks],
         user_memory_limit: Optional[int] = None,
     ) -> Tuple[FilesRequestsIterator, int]:
         memory_limit = 0
         if memory_mode == MemoryCapMode.unlimited:
-            memory_limit = sum(sum(chunks) for chunks in chunkses)
+            memory_limit = sum(sum(file_chunks.chunks) for file_chunks in files_chunks)
         elif memory_mode == MemoryCapMode.largest_chunk:
-            memory_limit = max(max(chunks) for chunks in chunkses)
+            memory_limit = max(max(file_chunks.chunks) for file_chunks in files_chunks)
         elif memory_mode == MemoryCapMode.limited:
             if user_memory_limit is None:
                 raise RunaiStreamerMemoryLimitException(
                     f"MemoryCapMode is Limited, but no limit supplied"
                 )
-            largest_chunk = max(max(chunks) for chunks in chunkses)
+            largest_chunk = max(max(file_chunks.chunks) for file_chunks in files_chunks)
             if user_memory_limit < largest_chunk:
                 raise RunaiStreamerMemoryLimitException(
                     f"Memory limit supplied: {user_memory_limit} cannot be smaller than: {largest_chunk}"
                 )
             memory_limit = user_memory_limit
-        return FilesRequestsIterator(memory_limit, initial_offsets, chunkses), memory_limit
+        return FilesRequestsIterator(memory_limit, files_chunks), memory_limit
 
     @staticmethod
     def with_memory_mode(
-        initial_offsets: List[int], chunkses: List[List[int]]
+        files_chunks: List[FileChunks],
     ) -> Tuple[FilesRequestsIterator, int]:
         memory_limit = os.getenv(RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME)
         memory_mode = _get_memory_mode(memory_limit)
         if memory_limit is not None:
             memory_limit = int(memory_limit)
         return FilesRequestsIterator.with_memory_cap(
-            memory_mode, initial_offsets, chunkses, memory_limit
+            memory_mode, files_chunks, memory_limit
         )
+
 
 class FileRequestsIterator:
     def __init__(
