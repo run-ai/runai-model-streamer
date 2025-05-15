@@ -21,17 +21,19 @@ size_t Workload::size() const
 
 common::ResponseCode Workload::add_batch(Batch && batch)
 {
-    _batches.push_back(std::move(batch));
-    _batches_by_file_index[batch.file_index] = &_batches.back();
 
-    if (_batches.size() == 1)
+    if (_batches.size() == 0)
     {
-        _params = _batches.front().params;
+        _params = batch.params;
     }
     else
     {
         return verify_batch(batch.params);
     }
+
+    _batches.push_back(std::move(batch));
+    _batches_by_file_index[batch.file_index] = &_batches.back();
+    
     return common::ResponseCode::Success;
 }
 
@@ -39,7 +41,7 @@ common::ResponseCode Workload::verify_batch(const common::s3::S3ClientWrapper::P
 {
     if (_params.valid() != params.valid())
     {
-        LOG(ERROR) << "Workload contains paths of different storage backends";
+         LOG(ERROR) << "Workload contains paths of different storage backends";
 
         return common::ResponseCode::InvalidParameterError;
     }

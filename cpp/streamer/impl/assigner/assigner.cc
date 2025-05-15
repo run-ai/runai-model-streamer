@@ -36,9 +36,9 @@ _num_workers(_config->concurrency)
         return; // Nothing to assign
     }
 
-    if (!(num_files == file_offsets.size() && num_files == bytesizes.size() && num_files == dsts.size()))
+    if (!(num_files == file_offsets.size() && num_files == bytesizes.size() && (num_files == dsts.size() || dsts.size() == 1)))
     {
-        LOG(ERROR) <<  "Input vector sizes mismatch";
+        LOG(ERROR) <<  "Input vector sizes mismatch " << num_files << " " << file_offsets.size() << " " << bytesizes.size() << " " << dsts.size();
         throw common::Exception(common::ResponseCode::InvalidParameterError);
     }
 
