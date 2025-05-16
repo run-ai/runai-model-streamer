@@ -150,12 +150,6 @@ common::Response S3Client::async_read_response()
 // aynchronously read consecutive ranges, producing a Response object per range in the ranges vector
 common::ResponseCode S3Client::async_read(const common::s3::Path & object_path, unsigned num_ranges, common::Range * ranges, size_t chunk_bytesize, char * buffer)
 {
-    if (_responder != nullptr && !_responder->finished())
-    {
-        LOG(ERROR) << "S3 client has not finished the previous async request";
-        return common::ResponseCode::BusyError;
-    }
-
     if (_responder == nullptr)
     {
         _responder = std::make_shared<common::Responder>(num_ranges);
