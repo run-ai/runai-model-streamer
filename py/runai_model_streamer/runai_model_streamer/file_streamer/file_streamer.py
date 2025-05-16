@@ -137,6 +137,7 @@ class FileStreamer:
                 sum(next_request.chunks),
                 self.dst_buffer,
                 next_request.chunks,
+                self.s3_credentials,
             )
 
     # This function iterates over indexes of ready chunks.
