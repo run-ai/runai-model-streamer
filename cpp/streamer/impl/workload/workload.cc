@@ -16,24 +16,25 @@ namespace runai::llm::streamer::impl
 
 size_t Workload::size() const
 {
-    return _batches.size();
+    return _batches_by_file_index.size();
 }
 
 common::ResponseCode Workload::add_batch(Batch && batch)
 {
+    const auto file_index = batch.file_index;
+    ASSERT(_batches_by_file_index.find(file_index) == _batches_by_file_index.end()) << "Batch for file index " << file_index << " already exists";
 
-    if (_batches.size() == 0)
+    if (size() == 0)
     {
         _params = batch.params;
     }
-    else
+    else if  (auto res = verify_batch(batch.params); res != common::ResponseCode::Success)
     {
-        return verify_batch(batch.params);
+        return res;
     }
 
-    _batches.push_back(std::move(batch));
-    _batches_by_file_index[batch.file_index] = &_batches.back();
-    
+    _batches_by_file_index.emplace(file_index, std::move(batch));
+
     return common::ResponseCode::Success;
 }
 
@@ -56,7 +57,7 @@ common::ResponseCode Workload::verify_batch(const common::s3::S3ClientWrapper::P
 
 void Workload::execute(std::atomic<bool> & stopped)
 {
-    if (_batches.empty())
+    if (size() == 0)
     {
         return;
     }
@@ -68,7 +69,7 @@ void Workload::execute(std::atomic<bool> & stopped)
     }
     else
     {
-        for (auto & batch : _batches)
+        for (auto & [file_index, batch] : _batches_by_file_index)
         {
             batch.execute(stopped);
             LOG(DEBUG) << "Finished batch " << batch;
@@ -81,12 +82,14 @@ void Workload::async_read(std::atomic<bool> & stopped)
     auto response_code = common::ResponseCode::Success;
     try
     {
-        const auto & config = *_batches.front().config;
+        const auto & config = _batches_by_file_index.begin()->second.config;
+
         auto s3_client = std::make_shared<common::s3::S3ClientWrapper>(_params);
-        _reader = std::make_shared<S3>(s3_client, config);
-        for (auto & batch : _batches)
+        _reader = std::make_shared<S3>(s3_client, *config);
+
+        for (auto & [file_index, batch] : _batches_by_file_index)
         {
-            LOG(DEBUG) << "Requesting batch " << batch;
+            LOG(SPAM) << "Requesting batch " << batch;
             _error_by_file_index[batch.file_index] = common::ResponseCode::Success;
             batch.request(_reader, stopped);
         }
@@ -105,9 +108,9 @@ void Workload::async_read(std::atomic<bool> & stopped)
         response_code = common::ResponseCode::UnknownError;
     }
 
-    for (auto & batch : _batches)
+    for (auto & [file_index, batch] : _batches_by_file_index)
     {
-        const auto error_code = (response_code == common::ResponseCode::Success ?  _error_by_file_index.at(batch.file_index) : response_code);
+        const auto error_code = (response_code == common::ResponseCode::Success ?  _error_by_file_index.at(file_index) : response_code);
         batch.handle_error(error_code);
     }
 }
@@ -125,21 +128,19 @@ void Workload::wait_for_responses(std::atomic<bool> & stopped)
     {
         auto r = _reader->async_response();
 
-        LOG(SPAM) << "Received response " << r;
-
         if (r.ret == common::ResponseCode::FinishedError)
         {
             throw common::Exception(common::ResponseCode::FinishedError);
         }
 
-        auto batch = _batches_by_file_index.at(r.file_index);
+        auto & batch = _batches_by_file_index.at(r.file_index);
 
         if (r.ret != common::ResponseCode::Success)
         {
             _error_by_file_index[r.file_index] = r.ret;
         }
 
-        batch->handle_response(r);
+        batch.handle_response(r);
     }
 
     LOG(DEBUG) << "Finished reading files "  << (stopped ? " - terminated" : " successfully");

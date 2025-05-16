@@ -135,8 +135,9 @@ common::ResponseCode Streamer::request_multi(
         auto params = handle_s3(i, paths[i], credentials);
         LOG(DEBUG) << "Creating batches for file index " << i << " path: " <<  paths[i];
         Batches batches(i, assigner.file_assignments(i), _config, _responder, paths[i], params, internal_sizes[i]);
-
-        for (size_t j = 0; j < batches.size(); ++j)
+        const auto num_batches = batches.size();
+        LOG(DEBUG) << "Created " << num_batches << " batches for file index " << i;
+        for (size_t j = 0; j < num_batches; ++j)
         {
             auto & batch = batches[j];
             if (batch.tasks.size() == 0)
@@ -147,9 +148,10 @@ common::ResponseCode Streamer::request_multi(
 
             const auto worker_index = batch.worker_index;
 
-            LOG(DEBUG) << "created " << batch.tasks.size() << " tasks for worker " << worker_index << " total bytes " << batch.range.size << " range " << batch.range.start << " to " << batch.range.end;
+            LOG(DEBUG) << "Batch: file index " << batch.file_index << " with " << batch.tasks.size() << " tasks for worker " << worker_index << " total bytes " << batch.range.size << " range " << batch.range.start << " to " << batch.range.end;
 
             const auto & result = workloads[worker_index].add_batch(std::move(batch));
+            LOG(DEBUG) << "Added batch to worker " << worker_index << " with result " << result;
             if (result != common::ResponseCode::Success)
             {
                 LOG(ERROR) << "Failed to add batch to worker " << worker_index << " error: " << result;
