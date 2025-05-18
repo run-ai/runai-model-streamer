@@ -3,7 +3,7 @@ import tempfile
 import shutil
 import os
 import random
-from runai_model_streamer.file_streamer.file_streamer import FileStreamer
+from runai_model_streamer.file_streamer import (FileStreamer, FileChunks)
 from runai_model_streamer.file_streamer.requests_iterator import (
     RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME,
 )
@@ -65,8 +65,9 @@ class TestFuzzing(unittest.TestCase):
             }
 
         with FileStreamer() as fs:
-            fs.stream_file(file_path, initial_offset, request_sizes)
-            for id, dst, offset in fs.get_chunks():
+            fs.stream_files([FileChunks(file_path, initial_offset, request_sizes)])
+            for file, id, dst, offset in fs.get_chunks():
+                self.assertEqual(file, file_path)
                 self.assertEqual(offset, expected_id_to_results[id]["expected_offset"])
                 self.assertEqual(
                     dst[offset : offset + request_sizes[id]].tobytes(),

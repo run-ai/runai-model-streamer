@@ -82,7 +82,7 @@ class LibstreamerDLLWrapper:
             ctypes.POINTER(ctypes.c_size_t), # bytesizes
             ctypes.POINTER(ctypes.c_void_p), # dsts
             ctypes.POINTER(ctypes.c_uint32), # num_sizes
-            ctypes.POINTER(ctypes.c_size_t), # internal_sizes
+            ctypes.POINTER(ctypes.POINTER(ctypes.c_size_t)), # internal_sizes
             ctypes.c_char_p, # key
             ctypes.c_char_p, # secret
             ctypes.c_char_p, # token
