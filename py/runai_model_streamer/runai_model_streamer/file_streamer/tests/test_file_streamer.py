@@ -4,7 +4,7 @@ import shutil
 import os
 from unittest.mock import patch
 from runai_model_streamer.file_streamer.file_streamer import FileStreamer
-from runai_model_streamer.file_streamer.requests_iterator import MemoryCapMode
+from runai_model_streamer.file_streamer.requests_iterator import (MemoryCapMode, FileChunks)
 
 
 class TestBindings(unittest.TestCase):
@@ -26,8 +26,9 @@ class TestBindings(unittest.TestCase):
             2: {"expected_offset": 19, "expected_text": "Test-Text3"},
         }
         with FileStreamer() as fs:
-            fs.stream_file(file_path, 1, request_sizes)
-            for id, dst, offset in fs.get_chunks():
+            fs.stream_files([FileChunks(file_path, 1, request_sizes)])
+            for file, id, dst, offset in fs.get_chunks():
+                self.assertEqual(file, file_path)
                 self.assertEqual(offset, id_to_results[id]["expected_offset"])
                 self.assertEqual(
                     dst[offset : offset + request_sizes[id]].tobytes().decode("utf-8"),
@@ -59,8 +60,9 @@ class TestBindings(unittest.TestCase):
             2: {"expected_offset": 0, "expected_text": "Test-Text3"},
         }
         with FileStreamer() as fs:
-            fs.stream_file(file_path, 1, request_sizes)
-            for id, dst, offset in fs.get_chunks():
+            fs.stream_files([FileChunks(file_path, 1, request_sizes)])
+            for file, id, dst, offset in fs.get_chunks():
+                self.assertEqual(file, file_path)
                 self.assertEqual(offset, id_to_results[id]["expected_offset"])
                 self.assertEqual(
                     dst[offset : offset + request_sizes[id]].tobytes().decode("utf-8"),
@@ -91,8 +93,9 @@ class TestBindings(unittest.TestCase):
             8: {"expected_offset": 5, "expected_text": "I"},
         }
         with FileStreamer() as fs:
-            fs.stream_file(file_path, 1, request_sizes)
-            for id, dst, offset in fs.get_chunks():
+            fs.stream_files([FileChunks(file_path, 1, request_sizes)])
+            for file, id, dst, offset in fs.get_chunks():
+                self.assertEqual(file, file_path)
                 self.assertEqual(offset, id_to_results[id]["expected_offset"])
                 self.assertEqual(
                     dst[offset : offset + request_sizes[id]].tobytes().decode("utf-8"),

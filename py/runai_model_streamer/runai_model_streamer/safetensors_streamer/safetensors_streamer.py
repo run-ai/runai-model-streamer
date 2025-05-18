@@ -1,8 +1,11 @@
 from __future__ import annotations
 from typing import Iterator, Optional
 import torch
-import os
-from runai_model_streamer.file_streamer.file_streamer import FileStreamer
+from typing import List
+from runai_model_streamer.file_streamer import (
+    FileStreamer,
+    FileChunks
+)
 import runai_model_streamer.safetensors_streamer.safetensors_pytorch as safetensors_pytorch
 
 from runai_model_streamer.s3_utils.s3_utils import (
@@ -12,6 +15,7 @@ from runai_model_streamer.s3_utils.s3_utils import (
 class SafetensorsStreamer:
     def __init__(self) -> None:
         self.file_streamer = FileStreamer()
+        self.files_to_tensors_metadata = {}
 
     def __enter__(self) -> SafetensorsStreamer:
         self.file_streamer.__enter__()
@@ -25,20 +29,31 @@ class SafetensorsStreamer:
             path: str,
             s3_credentials : Optional[S3Credentials] = None,
         ) -> None:
+        return self.stream_files([path], s3_credentials)
+    
+    def stream_files(
+            self,
+            paths: List[str],
+            s3_credentials : Optional[S3Credentials] = None,
+        ) -> None:
+        self.files_to_tensors_metadata = {}
 
-        file_offset, self.tensors_metadata, tensor_sizes = (
-            safetensors_pytorch.prepare_request(self.file_streamer, path)
-        )
-        self.file_streamer.stream_file(
-            path,
-            file_offset,
-            tensor_sizes,
+        file_stream_requests: List[FileChunks] = []
+        for path in paths:
+            file_offset, tensors_metadata, tensor_sizes = (
+                safetensors_pytorch.prepare_request(self.file_streamer, path)
+            )
+            self.files_to_tensors_metadata[path] = tensors_metadata
+            file_stream_requests.append(FileChunks(path, file_offset, tensor_sizes))
+
+        self.file_streamer.stream_files(
+            file_stream_requests,
             s3_credentials,
         )
 
     def get_tensors(self) -> Iterator[torch.tensor]:
-        for ready_chunk_index, buffer, buffer_offset in self.file_streamer.get_chunks():
-            tensor_metadata = self.tensors_metadata[ready_chunk_index]
+        for file_path, ready_chunk_index, buffer, buffer_offset in self.file_streamer.get_chunks():
+            tensor_metadata = self.files_to_tensors_metadata[file_path][ready_chunk_index]
             yield tensor_metadata.name, safetensors_pytorch.create_torch_tensor(
                 buffer, buffer_offset, tensor_metadata
             )
