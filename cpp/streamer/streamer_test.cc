@@ -246,7 +246,7 @@ TEST_F(StreamerTest, End_Before_Read)
 
 TEST_F(StreamerTest, Multiple_Files)
 {
-    auto num_files = utils::random::number(1, 10);
+    auto num_files = utils::random::number(1, 50);
     std::vector<utils::temp::File> files(num_files);
     std::vector<const char *> file_paths(num_files);
     std::vector<size_t> file_offsets(num_files);
@@ -267,7 +267,7 @@ TEST_F(StreamerTest, Multiple_Files)
     size_t dst_size = 0;
     for (unsigned i = 0; i < num_files; ++i)
     {
-        sizes[i] = utils::random::number(100, 1000);
+        sizes[i] = utils::random::number(1000000, 10000000);
         dst_size += sizes[i];
 
         buffers[i] = utils::random::buffer(sizes[i]);
@@ -277,7 +277,7 @@ TEST_F(StreamerTest, Multiple_Files)
         expected[i] = utils::Fd::read(files[i].path);
         EXPECT_EQ(expected[i].size(), sizes[i]);
 
-        num_ranges[i] = utils::random::number(1, 1);
+        num_ranges[i] = utils::random::number(1, 100);
         range_sizes[i] =  utils::random::chunks(sizes[i], num_ranges[i]);
         internal_sizes[i] = range_sizes[i].data();
 
@@ -329,7 +329,6 @@ TEST_F(StreamerTest, Multiple_Files)
         }
         offset += sizes[file_index];
     }
-
 
     runai_end(streamer);
 }

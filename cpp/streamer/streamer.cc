@@ -251,11 +251,8 @@ _RUNAI_EXTERN_C int runai_response_multi(void * streamer, unsigned * file_index 
         auto * s = static_cast<impl::Streamer *>(streamer);
         auto r = s->response();
 
-        if (r.ret == common::ResponseCode::Success)
-        {
-            *index = r.index;
-            *file_index = r.file_index;
-        }
+        *index = r.index;
+        *file_index = r.file_index;
         return static_cast<int>(r.ret);
     }
     catch(...)

@@ -39,9 +39,9 @@ common::ResponseCode runai_create_s3_client(const common::s3::Path & path, const
     } while (__mock_clients.count(*client) || __mock_unused.count(*client));
 
     __mock_clients.insert(*client);
-    __mock_index[client][path.index] = 0;
+    __mock_index[*client][path.index] = 0;
 
-    LOG(DEBUG) << "created client " << *client << " - mock size is " << __mock_clients.size();
+    LOG(DEBUG) << "created client " << *client << " - mock size is " << __mock_index.size();
     return common::ResponseCode::Success;
 }
 
@@ -52,9 +52,10 @@ void runai_remove_s3_client(void * client)
     try
     {
         ASSERT(client) << "No client";
+        ASSERT(__mock_index.find(client) != __mock_index.end()) << "Client " << client << " not found";
         __mock_index.erase(client);
         __mock_unused.insert(client);
-        LOG(DEBUG) << "Removed S3 client " << client << " - mock size is " << __mock_clients.size();
+        LOG(DEBUG) << "Removed S3 client " << client << " - mock size is " << __mock_index.size();
     }
     catch(const std::exception& e)
     {
@@ -92,10 +93,9 @@ common::ResponseCode  runai_async_read_s3_client(void * client, const common::s3
     }
 
     auto r = get_response_code(client);
-    if (r == common::ResponseCode::Success)
-    {
-        __mock_index[client][path.index] = num_ranges;
-    }
+
+    ASSERT(__mock_index.find(client) != __mock_index.end()) << "Client " << client << " not found";
+    __mock_index[client][path.index] = num_ranges;
 
     return r;
 }
@@ -141,27 +141,27 @@ common::ResponseCode  runai_async_response_s3_client(void * client, unsigned * f
 
     auto r = get_response_code(client);
 
-    if (r == common::ResponseCode::Success)
+    auto & file_counters = __mock_index[client];
+    bool found = false;
+    for (auto & [current_file_index, counter] : file_counters)
     {
-        auto & file_counters = __mock_index[client];
-        bool found = false;
-        for (auto & [current_file_index, counter] : file_counters)
+        if (counter > 0)
         {
-            if (counter > 0)
-            {
-                counter--;
-                *index = counter;
-                *file_index = current_file_index;
-                found = true;
-                break;
-            }
-        }
-
-        if (!found)
-        {
-            r = common::ResponseCode::FinishedError;
+            --counter;
+            *index = counter;
+            *file_index = current_file_index;
+            found = true;
+            LOG(DEBUG) << "Returning range " << *index << " for file " << *file_index;
+            break;
         }
     }
+
+    if (!found)
+    {
+        LOG(DEBUG) << "No more ranges to return";
+        r = common::ResponseCode::FinishedError;
+    }
+
     return r;
 }
 

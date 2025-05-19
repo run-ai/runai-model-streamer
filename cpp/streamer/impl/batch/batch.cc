@@ -129,7 +129,7 @@ void Batch::handle_error(common::ResponseCode response_code)
         }
         else
         {
-            LOG(DEBUG) << "Terminated reading from file " << path;
+            LOG(SPAM) << "Finished reading from file " << path;
         }
 
         // Note:
@@ -241,17 +241,16 @@ void Batch::request_async_read(Reader * reader, std::atomic<bool> & stopped)
 
 void Batch::handle_response(const common::Response & response)
 {
-    LOG(SPAM) << "Received response " << response;
-
     ASSERT(response.file_index == file_index) << "Received response from a different file " << response.file_index << " expected " << file_index;
-
     ASSERT(response.index >= 0 && response.index < tasks.size()) << "Worker received out of range index " << response.index << " number of tasks is " << tasks.size();
 
     auto & task = tasks.at(response.index);
+
+    LOG(SPAM) << "Received response: File index " << response.file_index << " task index " << response.index << " request index " << task.request->index << " ret " << response.ret;
     if (task.finished_request(response.ret))
     {
-        common::Response response(file_index, task.request->index, task.request->ret());
-        responder->push(std::move(response), task.request->bytesize);
+        common::Response request_response(file_index, task.request->index, task.request->ret());
+        responder->push(std::move(request_response), task.request->bytesize);
     }
 }
 
