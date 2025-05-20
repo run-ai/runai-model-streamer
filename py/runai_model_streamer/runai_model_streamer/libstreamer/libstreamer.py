@@ -89,8 +89,12 @@ def runai_request_multi(
     c_paths = (ctypes.c_char_p * len(paths))(*[path.encode("utf-8") for path in paths])
     c_file_offsets = (ctypes.c_uint64 * len(file_offsets))(*file_offsets)
     c_bytesizes = (ctypes.c_uint64 * len(bytesizes))(*bytesizes)
-    c_dsts = (ctypes.c_void_p * len(dsts))(*[dst.tobytes() for dst in dsts])
- 
+    dst_addrs = [
+        ctypes.cast(ctypes.c_void_p(ctypes.addressof(ctypes.c_char.from_buffer(dst))), ctypes.c_void_p)
+        for dst in dsts
+    ]
+    c_dsts = (ctypes.c_void_p * len(dst_addrs))(*dst_addrs)
+    
     num_files = len(paths)
 
     # c_num_sizes: An array where each element is the number of ranges for the corresponding file.
