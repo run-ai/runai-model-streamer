@@ -29,28 +29,28 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL -o openssl-1.1.1o.tar.gz https://www.openssl.org/source/openssl-1.1.1o.tar.gz && \
-    tar zxf openssl-1.1.1o.tar.gz && \
-    cd openssl-1.1.1o && \
+RUN curl -fsSL -o openssl-3.5.0.tar.gz https://www.openssl.org/source/openssl-3.5.0.tar.gz && \
+    tar zxf openssl-3.5.0.tar.gz && \
+    cd openssl-3.5.0 && \
 
-    ./Configure no-ssl2 no-zlib no-shared no-comp no-dynamic-engine enable-ec_nistp_64_gcc_128 --cross-compile-prefix=/usr/bin/x86_64-linux-gnu- --prefix=/opt/x86_64-ssl --openssldir=/opt/x86_64-ssl linux-x86_64 && \
+    ./Configure no-ssl2 no-zlib no-shared no-comp no-dynamic-engine enable-ec_nistp_64_gcc_128 --cross-compile-prefix=/usr/bin/x86_64-linux-gnu- --prefix=/opt/x86_64-ssl --openssldir=/opt/x86_64-ssl --libdir=lib linux-x86_64 && \
         make -j4 > /dev/null && \
         make install_sw > /dev/null && \
         make clean > /dev/null && \
         make distclean > /dev/null && \
 
-    ./Configure no-ssl2 no-zlib no-shared no-comp no-dynamic-engine enable-ec_nistp_64_gcc_128 --cross-compile-prefix=/usr/bin/aarch64-linux-gnu- --prefix=/opt/aarch64-ssl --openssldir=/opt/aarch64-ssl linux-aarch64 && \
+    ./Configure no-ssl2 no-zlib no-shared no-comp no-dynamic-engine enable-ec_nistp_64_gcc_128 --libdir=lib --cross-compile-prefix=/usr/bin/aarch64-linux-gnu- --prefix=/opt/aarch64-ssl --openssldir=/opt/aarch64-ssl linux-aarch64 && \
         make -j4 > /dev/null && \
         make install_sw > /dev/null && \
         make clean > /dev/null && \
         make distclean > /dev/null && \
 
     cd - && \
-    rm -rf openssl-1.1.1o openssl-1.1.1o.tar.gz
+    rm -rf openssl-3.5.0 openssl-3.5.0.tar.gz
 
-RUN curl -fsSL -o curl-7.83.1.tar.gz https://github.com/curl/curl/releases/download/curl-7_83_1/curl-7.83.1.tar.gz && \
-    tar zxf curl-7.83.1.tar.gz && \
-    cd curl-7.83.1 && \
+RUN curl -fsSL -o curl-8.13.0.tar.gz https://github.com/curl/curl/releases/download/curl-8_13_0/curl-8.13.0.tar.gz && \
+    tar zxf curl-8.13.0.tar.gz && \
+    cd curl-8.13.0 && \
 
     AR=/usr/bin/x86_64-linux-gnu-ar \
     AS=/usr/bin/x86_64-linux-gnu-as \
@@ -58,8 +58,10 @@ RUN curl -fsSL -o curl-7.83.1.tar.gz https://github.com/curl/curl/releases/downl
     RANLIB=/usr/bin/x86_64-linux-gnu-ranlib \
     CC=/usr/bin/x86_64-linux-gnu-gcc \
     NM=/usr/bin/x86_64-linux-gnu-nm \
-    ./configure --host=x86_64-linux-gnu --build=x86_64-linux-gnu --disable-shared --with-openssl=/opt/x86_64-ssl --prefix=/opt/x86_64-curl && \
-        make -j4 > /dev/null && \
+    CPPFLAGS=-I/opt/x86_64-ssl/include \
+    LDFLAGS=-L/opt/x86_64-ssl/lib \
+    ./configure --host=x86_64-linux-gnu --build=x86_64-linux-gnu --disable-shared --without-libpsl --with-openssl=/opt/x86_64-ssl --prefix=/opt/x86_64-curl && \
+    make VERBOSE=1 -j4 > /dev/null && \
         make install > /dev/null && \
         make clean > /dev/null  && \
 
@@ -69,7 +71,7 @@ RUN curl -fsSL -o curl-7.83.1.tar.gz https://github.com/curl/curl/releases/downl
     RANLIB=/usr/bin/aarch64-linux-gnu-ranlib \
     CC=/usr/bin/aarch64-linux-gnu-gcc \
     NM=/usr/bin/aarch64-linux-gnu-nm \
-    ./configure --host=x86_64-linux-gnu --build=aarch64-linux-gnu --disable-shared --with-openssl=/opt/aarch64-ssl --prefix=/opt/aarch64-curl && \
+    ./configure --host=x86_64-linux-gnu --build=aarch64-linux-gnu --disable-shared --without-libpsl --with-openssl=/opt/aarch64-ssl --prefix=/opt/aarch64-curl && \
         make -j4 > /dev/null && \
         make install > /dev/null && \
         make clean > /dev/null && \
