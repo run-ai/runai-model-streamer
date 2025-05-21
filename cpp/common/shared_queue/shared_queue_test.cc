@@ -1,4 +1,4 @@
-#include "common/responder/responder.h"
+#include "common/shared_queue/shared_queue.h"
 
 #include <gtest/gtest.h>
 #include <set>
@@ -9,12 +9,14 @@
 #include "utils/thread/thread.h"
 #include "utils/semaphore/semaphore.h"
 
+#include "common/response/response.h"
+
 namespace runai::llm::streamer::common
 {
 
 TEST(Creation, Empty)
 {
-    auto responder = Responder(0);
+    auto responder = SharedQueue<Response>(0);
 
     auto times = utils::random::number(1, 10);
     for (unsigned i = 0; i < times; ++i)
@@ -27,7 +29,7 @@ TEST(Creation, Empty)
 TEST(Destruction, Sanity)
 {
     auto size = utils::random::number(1, 100);
-    auto responder = Responder(size);
+    auto responder = SharedQueue<Response>(size);
 
     for (unsigned i = 0; i < size; ++i)
     {
@@ -40,7 +42,7 @@ TEST(Destruction, Sanity)
 TEST(Pop, Sanity)
 {
     auto size = utils::random::number(1, 100);
-    auto responder = Responder(size);
+    auto responder = SharedQueue<Response>(size);
 
     for (unsigned i = 0; i < size; ++i)
     {
@@ -65,7 +67,7 @@ TEST(Pop, Sanity)
 TEST(Pop, Wait)
 {
     auto size = utils::random::number(1, 100);
-    auto responder = Responder(size);
+    auto responder = SharedQueue<Response>(size);
 
     // create threadpool to push
     auto pool = utils::ThreadPool<unsigned>([&](unsigned i, std::atomic<bool> &)
@@ -109,7 +111,7 @@ TEST(Pop, Error)
 
         // create a responder for the expected responses
 
-        auto responder = Responder(size);
+        auto responder = SharedQueue<Response>(size);
 
         // create threadpool to push
         auto pool = utils::ThreadPool<int>([&](int i, std::atomic<bool> &)
@@ -145,7 +147,7 @@ TEST(Pop, Unexpected_Responses)
 {
     auto size = utils::random::number(2, 100);
     const auto expected = utils::random::number(1, size-1);
-    auto responder = Responder(expected);
+    auto responder = SharedQueue<Response>(expected);
 
     // create threadpool to push
 
@@ -184,14 +186,14 @@ TEST(Pop, Unexpected_Responses)
         }
         else
         {
-            EXPECT_EQ(r.ret, ResponseCode::UnknownError);
+            EXPECT_EQ(r.ret, ResponseCode::FinishedError);
             ++error_responses;
         }
     }
 
     EXPECT_EQ(success_responses, expected);
     EXPECT_EQ(error_responses, size - expected);
-
+    EXPECT_EQ(responder.valid(), ResponseCode::UnknownError);
     auto times = utils::random::number(1, 10);
     for (unsigned i = 0; i < times; ++i)
     {
@@ -203,7 +205,7 @@ TEST(Pop, Unexpected_Responses)
 TEST(Stop, Sanity)
 {
     auto size = utils::random::number(1, 100);
-    auto responder = Responder(size);
+    auto responder = SharedQueue<Response>(size);
 
     // create a thread to wait
     auto waiting = utils::Thread([&]()
