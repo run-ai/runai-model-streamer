@@ -1,7 +1,7 @@
-load("//toolchain:rules.bzl", "runai_cc_configure_toolchain", "runai_cc_autoconf_impl_x86", "runai_cc_autoconf_impl_arm64")
-
-runai_cc_configure_toolchain("x86_64", runai_cc_autoconf_impl_x86)
-runai_cc_configure_toolchain("aarch64", runai_cc_autoconf_impl_arm64)
+load("//toolchain:configure.bzl", "configure_toolchain")
+configure_toolchain(name = "toolchain")
+load("//toolchain:deps.bzl", "load_toolchain_deps")
+load_toolchain_deps()
 
 new_local_repository(
     name = "aws",
@@ -18,15 +18,28 @@ config_setting(
     },
 )
 
+config_setting(
+    name = "cross_compiling",
+    define_values = {
+        "BASE_PATH": "aarch64",
+    },
+)
+
 cc_library(
     name = "aws",
-    hdrs = glob(["*aws/include/**/*.*"]),
-    includes = ["$(BASE_PATH)-aws/include"],
+    hdrs = select({
+        ":cross_compiling": glob(["aarch64-aws/include/**/*.*"]),
+        "//conditions:default": glob(["x86_64-aws/include/**/*.*"])
+    }),
+    strip_include_prefix = select({
+        ":cross_compiling": "aarch64-aws/include",
+        "//conditions:default": "x86_64-aws/include",
+    }),
+    includes = select({
+        ":cross_compiling": ["aarch64-aws/include"],
+        "//conditions:default": ["x86_64-aws/include"]
+    }),
     linkopts = [
-        "-L/opt/$(BASE_PATH)-zlib/lib",
-        "-lz",
-        "-L/opt/$(BASE_PATH)-aws/lib",
-        "-lpthread",
         "-l:libaws-cpp-sdk-s3-crt.a",
         "-l:libaws-cpp-sdk-core.a",
         "-l:libaws-crt-cpp.a",
@@ -44,11 +57,24 @@ cc_library(
         "-l:libaws-c-common.a",
         "-ldl -lm -lrt",
     ] + select({
+        ":cross_compiling": [
+            "-L/opt/aarch64-curl/lib",
+            "-L/opt/aarch64-ssl/lib",
+            "-L/opt/aarch64-zlib/lib",
+            "-L/opt/aarch64-aws/lib",
+        ],
+        "//conditions:default": [
+            "-L/opt/x86_64-curl/lib",
+            "-L/opt/x86_64-ssl/lib",
+            "-L/opt/x86_64-zlib/lib",
+            "-L/opt/x86_64-aws/lib",
+        ],
+    }) + select({
         ":dynamic_link": ["-lssl", "-lcrypto", "-lcurl"],
         "//conditions:default": [
-            "-l:/opt/$(BASE_PATH)-curl/lib/libcurl.a",
-            "-l:/opt/$(BASE_PATH)-ssl/lib/libssl.a",
-            "-l:/opt/$(BASE_PATH)-ssl/lib/libcrypto.a",
+            "-l:libcurl.a",
+            "-l:libssl.a",
+            "-l:libcrypto.a",
         ],
     }),
 )
