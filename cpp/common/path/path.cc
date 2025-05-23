@@ -3,9 +3,8 @@
 namespace runai::llm::streamer::common::s3
 {
 
-Path::Path(const StorageUri_C & path, unsigned index) :
-    uri(path),
-    index(index)
+Path::Path(const StorageUri_C & path) :
+    uri(path)
 {}
 
 }; //namespace runai::llm::streamer::common::s3

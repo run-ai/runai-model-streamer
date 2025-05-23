@@ -163,21 +163,31 @@ void Workload::wait_for_responses(std::atomic<bool> & stopped)
     // stopped flag was propagated to the storage backend when the request was made, and the storage backend is responsible for returning FinishedError when stopped flag is set
     while (true)
     {
-        auto r = _reader->async_response();
-        if (r.ret == common::ResponseCode::FinishedError)
+        std::vector<common::backend_api::Response> responses;
+        auto r = _reader->async_response(responses, 1);
+        if (r == common::ResponseCode::FinishedError)
         {
             LOG(DEBUG) << "FinishedError while waiting for responses";
             throw common::Exception(common::ResponseCode::FinishedError);
         }
 
-        auto & batch = _batches_by_file_index.at(r.file_index);
+        const auto & response = responses.back();
 
-        if (r.ret != common::ResponseCode::Success)
+        // TO do (Noa)
+        // safer approach is to use a map of request_id to task index, and verify the pointer is valid
+        // also replace request_id with handle
+        Task * task_ptr = reinterpret_cast<Task *>(response.handle);
+        ASSERT(task_ptr != nullptr) << "Received response from a null task";
+
+        auto file_index = task_ptr->request->file_index;
+        auto & batch = _batches_by_file_index.at(file_index);
+
+        if (response.ret != common::ResponseCode::Success)
         {
-            _error_by_file_index.at(r.file_index) = r.ret;
+            _error_by_file_index.at(file_index) = response.ret;
         }
 
-        batch.handle_response(r);
+        batch.handle_response(response);
     }
 
     LOG(DEBUG) << "Finished reading files "  << (stopped ? " - terminated" : " successfully");

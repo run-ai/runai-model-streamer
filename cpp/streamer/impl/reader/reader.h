@@ -6,8 +6,9 @@
 #include <vector>
 
 #include "common/range/range.h"
-#include "common/response/response.h"
 #include "common/s3_wrapper/s3_wrapper.h"
+#include "common/backend_api/response/response.h"
+
 namespace runai::llm::streamer::impl
 {
 
@@ -29,9 +30,9 @@ struct Reader
     virtual void seek(size_t offset) = 0;
 
     // asynchronous
-
-    virtual void async_read(const common::s3::S3ClientWrapper::Params & params, std::vector<common::Range> & ranges, char * buffer) = 0;
-    virtual common::Response async_response() = 0;
+    // request_handle is a handle to the request, it is used to identify the request when the response is received
+    virtual void async_read(const common::s3::S3ClientWrapper::Params & params, common::backend_api::ObjectRequestId_t request_handle, const common::Range & range, char * buffer) = 0;
+    virtual common::ResponseCode async_response(std::vector<common::backend_api::Response> & responses, unsigned max_responses) = 0;
 
     const Mode mode;
 };

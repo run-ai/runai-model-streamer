@@ -19,52 +19,27 @@
 namespace runai::llm::streamer::impl
 {
 
-Range::Range(size_t start_offset, size_t end_offset) :
-    common::Range(start_offset, end_offset - start_offset),
-    end(end_offset)
-{
-    if (end < start)
-    {
-        LOG(ERROR) << "Invalid range " << start << " - " << end;
-        throw common::Exception(common::ResponseCode::InvalidParameterError);
-    }
-}
-
-Range::Range(const Tasks & tasks) :
-    Range(calculate_start(tasks), calculate_end(tasks))
-{}
-
-size_t Range::calculate_start(const Tasks & tasks)
-{
-    if (tasks.empty())
-    {
-        return 0;
-    }
-
-    return tasks[0].info.offset;
-}
-
-size_t Range::calculate_end(const Tasks & tasks)
-{
-    if (tasks.empty())
-    {
-        return 0;
-    }
-
-    return tasks[tasks.size() - 1].info.end;
-}
-
-Batch::Batch(unsigned worker_index, unsigned file_index, const std::string & path, const common::s3::S3ClientWrapper::Params & params, Range && range, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config) :
+Batch::Batch(unsigned worker_index, unsigned file_index, const std::string & path, const common::s3::S3ClientWrapper::Params & params, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config) :
     worker_index(worker_index),
     file_index(file_index),
     path(path),
     params(params),
-    range(range),
     tasks(tasks),
+    range(tasks),
     responder(responder),
     config(config)
 {
-    LOG(DEBUG) << "Batch " << path << " range " << this->range.start << " - " << this->range.end << " ; " << this->tasks.size() << " tasks";
+    LOG(DEBUG) << "Batch " << path << " range " << range << " ; " << this->tasks.size() << " tasks";
+}
+
+size_t Batch::total_bytes() const
+{
+    return range.size;
+}
+
+size_t Batch::end_offset() const
+{
+    return range.end;
 }
 
 void Batch::request(std::shared_ptr<Reader> reader, std::atomic<bool> & stopped)
@@ -82,25 +57,10 @@ void Batch::execute(std::atomic<bool> & stopped)
     auto response_code = common::ResponseCode::Success;
     try
     {
-        // create reader
-        if (params.valid())
-        {
-            auto s3_client = std::make_shared<common::s3::S3ClientWrapper>(params);
-            _reader = std::make_unique<S3>(s3_client, *config);
-        }
-        else
-        {
-            _reader = std::make_unique<File>(path, *config);
-        }
+        ASSERT(!params.valid()) << "Unsupported reader mode for object storage backends";
 
-        if (_reader->mode == Reader::Mode::Sync)
-        {
-            read(*config, stopped);
-        }
-        else
-        {
-            async_read(stopped);
-        }
+        _reader = std::make_unique<File>(path, *config);
+        read(*config, stopped);
     }
     catch(const common::Exception & e)
     {
@@ -191,33 +151,6 @@ void Batch::read(const Config & config, std::atomic<bool> & stopped)
     }
 }
 
-// read the entire range and send notifications for each sub range
-void Batch::async_read(std::atomic<bool> & stopped)
-{
-    if (tasks.empty())
-    {
-        LOG(DEBUG) << "Empty batch";
-        return;
-    }
-
-    request_async_read(_reader.get(), stopped);
-
-    while (true)
-    {
-        auto r = _reader->async_response();
-
-        if (r.ret == common::ResponseCode::FinishedError)
-        {
-            LOG(DEBUG) << "Finished reading from file " << path << " - terminated";
-            throw common::Exception(common::ResponseCode::FinishedError);
-        }
-
-        handle_response(r);
-    }
-
-    LOG(DEBUG) << "Finished reading from file " << path << (stopped ? " - terminated" : " successfully");
-}
-
 void Batch::request_async_read(Reader * reader, std::atomic<bool> & stopped)
 {
     if (stopped)
@@ -226,31 +159,39 @@ void Batch::request_async_read(Reader * reader, std::atomic<bool> & stopped)
     }
 
     // For CPU buffer we assume that all the requests are written to a single continous buffer
-    auto dst =  tasks[0].destination();
 
-    std::vector<common::Range> ranges;
-    ranges.reserve(tasks.size());
-
-    for (size_t i = 0; i < tasks.size(); ++i)
+    // request asynchronous read for each task
+    for (auto & task : tasks)
     {
-        ranges.push_back({tasks[i].info.offset, tasks[i].info.bytesize});
+        auto dst = task.destination();
+        common::Range range(task.info.offset, task.info.bytesize);
+        common::backend_api::ObjectRequestId_t request_handle = reinterpret_cast<common::backend_api::ObjectRequestId_t>(&task);
+        reader->async_read(params, request_handle, range, dst);
     }
-
-    reader->async_read(params, ranges, dst);
 }
 
-void Batch::handle_response(const common::Response & response)
+void Batch::handle_response(const common::backend_api::Response & response)
 {
-    ASSERT(response.file_index == file_index) << "Received response from a different file " << response.file_index << " expected " << file_index;
-    ASSERT(response.index >= 0 && response.index < tasks.size()) << "Worker received out of range index " << response.index << " number of tasks is " << tasks.size();
-
-    auto & task = tasks.at(response.index);
-
-    LOG(SPAM) << "Received response: File index " << response.file_index << " task index " << response.index << " request index " << task.request->index << " ret " << response.ret;
-    if (task.finished_request(response.ret))
+    // Aborting if a single task failed, we should replace this by a retry mechanism
+    if (response.ret != common::ResponseCode::Success)
     {
-        common::Response request_response(file_index, task.request->index, task.request->ret());
-        responder->push(std::move(request_response), task.request->bytesize);
+        LOG(ERROR) << "Error " << response.ret << " while waiting for responses";
+        throw common::Exception(response.ret);
+    }
+
+    // TO do (Noa)
+    // safer approach is to use a map of request_id to task index, and verify the pointer is valid
+    // also replace request_id with handle
+    Task * task_ptr = reinterpret_cast<Task *>(response.handle);
+    ASSERT(task_ptr != nullptr) << "Received response from a null task";
+
+    ASSERT(task_ptr->request->file_index == file_index) << "Received response from a different file " << task_ptr->request->file_index << " expected " << file_index;
+
+    LOG(SPAM) << "Received object storage response: File index " << file_index << " request index " << task_ptr->request->index << " ret " << response.ret;
+    if (task_ptr->finished_request(response.ret))
+    {
+        common::Response request_response(file_index, task_ptr->request->index, task_ptr->request->ret());
+        responder->push(std::move(request_response), task_ptr->request->bytesize);
     }
 }
 
@@ -282,7 +223,47 @@ unsigned Batch::finished_until() const
 
 std::ostream & operator<<(std::ostream & os, const Batch & r)
 {
-    return os << r.path << " range " << r.range.start << " - " << r.range.end << " ; " << r.tasks.size() << " tasks";
+    return os << r.path << " range " << r.range << " ; " << r.tasks.size() << " tasks";
 }
+
+Batch::Range::Range(size_t start_offset, size_t end_offset) :
+    common::Range(start_offset, end_offset - start_offset),
+    end(end_offset)
+{
+    if (end < start)
+    {
+        LOG(ERROR) << "Invalid range " << start << " - " << end;
+        throw common::Exception(common::ResponseCode::InvalidParameterError);
+    }
+}
+
+Batch::Range::Range(const Tasks & tasks) :
+    Range(calculate_start(tasks), calculate_end(tasks))
+{}
+
+size_t Batch::Range::calculate_start(const Tasks & tasks)
+{
+    if (tasks.empty())
+    {
+        return 0;
+    }
+    return tasks[0].info.offset;
+}
+
+size_t Batch::Range::calculate_end(const Tasks & tasks)
+{
+    if (tasks.empty())
+    {
+        return 0;
+    }
+
+    return tasks[tasks.size() - 1].info.end;
+}
+
+std::ostream & operator<<(std::ostream & os, const Batch::Range & r)
+{
+    return os << "Range from " << r.start << " to " << r.end;
+}
+
 
 }; // namespace runai::llm::streamer::impl

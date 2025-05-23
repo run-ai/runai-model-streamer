@@ -53,13 +53,13 @@ void File::read(size_t bytesize, char * buffer)
     }
 }
 
-void File::async_read(const common::s3::S3ClientWrapper::Params & params, std::vector<common::Range> & ranges, char * buffer)
+void File::async_read(const common::s3::S3ClientWrapper::Params & params, common::backend_api::ObjectRequestId_t request_handle, const common::Range & range, char * buffer)
 {
     LOG(ERROR) << "Not implemented";
     throw common::Exception(common::ResponseCode::UnknownError);
 }
 
-common::Response File::async_response()
+common::ResponseCode File::async_response(std::vector<common::backend_api::Response> & responses, unsigned max_responses)
 {
     LOG(ERROR) << "Not implemented";
     throw common::Exception(common::ResponseCode::UnknownError);

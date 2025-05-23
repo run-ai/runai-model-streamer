@@ -89,7 +89,7 @@ TEST(Batches, Sanity)
                     }
                 }
 
-                batch.finished_until(batch.range.end);
+                batch.finished_until(batch.end_offset());
             }
 
             for (unsigned i = 0; i < num_chunks[file_idx]; ++i)
@@ -252,7 +252,7 @@ TEST(Batches, Zero_Size_Request)
                 }
             }
 
-            batch.finished_until(batch.range.end);
+            batch.finished_until(batch.end_offset());
         }
     }
 

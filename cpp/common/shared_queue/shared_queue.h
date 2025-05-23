@@ -6,6 +6,7 @@
 #include <mutex>
 #include <type_traits> // For std::is_constructible
 #include <typeinfo>
+#include <utility>
 
 #include "utils/semaphore/semaphore.h"
 #include "common/response_code/response_code.h"
@@ -219,7 +220,7 @@ void SharedQueue<ResponseType>::cancel()
         LOG(DEBUG) << "Responder canceled. Current running: " << _running << ", Responses in queue: " << _responses.size() << " (Type: " << typeid(ResponseType).name() << ")";
     }
     if (needs_post)
-    { 
+    {
         _ready.post();
     }
 }
@@ -243,7 +244,8 @@ void SharedQueue<ResponseType>::stop()
         // For our "single consumer" design, one post is okay.
         _ready.post();
         LOG(DEBUG) << "Responder stopped and semaphore posted (Type: " << typeid(ResponseType).name() << ")";
-    } else
+    }
+    else
     {
         LOG(DEBUG) << "Responder already stopped or stop initiated by another thread (Type: " << typeid(ResponseType).name() << ")";
     }
