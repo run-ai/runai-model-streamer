@@ -8,13 +8,10 @@ namespace runai::llm::streamer::common::s3
 struct Path
 {
     Path() = default;
-    Path(const StorageUri_C & path, unsigned index);
+    Path(const StorageUri_C & path);
 
     // File bucket and path
     common::s3::StorageUri_C uri;
-
-    // Index of file in the original files list
-    unsigned index;
 };
 
 }; //namespace runai::llm::streamer::common::s3

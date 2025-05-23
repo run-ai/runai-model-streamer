@@ -118,7 +118,6 @@ void Batches::build_tasks(std::shared_ptr<const Config> config, const std::strin
     const auto num_workers = _itr.workers();
     LOG(DEBUG) << "Building tasks for " <<num_workers << " workers";
     std::vector<Tasks> v_tasks(num_workers);
-    std::vector<Range> v_ranges(num_workers);
 
     auto num_sizes = internal_sizes.size();
     size_t request_file_offset = _itr.read_task(0).offset_in_file;
@@ -151,10 +150,12 @@ void Batches::build_tasks(std::shared_ptr<const Config> config, const std::strin
             continue;
         }
 
-        auto range = Range(tasks);
-        _total += range.size;
+        _batches.emplace_back(worker_index, _file_index, path, params, std::move(tasks), _responder, config);
+    }
 
-        _batches.emplace_back(worker_index, _file_index, path, params, std::move(range), std::move(tasks), _responder, config);
+    for (auto & batch : _batches)
+    {
+        _total += batch.total_bytes();
     }
 }
 
@@ -182,7 +183,7 @@ void Batches::handle_request(std::vector<Tasks> & v_tasks, unsigned request_inde
         destination_offset += to_read;
     } while (bytes_to_request > 0);
 
-    auto request_ptr = std::make_shared<Request>(request_file_offset, request_index, infos.size(), request_size, destination);
+    auto request_ptr = std::make_shared<Request>(request_file_offset, _file_index, request_index, infos.size(), request_size, destination);
 
     // create tasks
     for (auto & [batch_id, info] : infos)

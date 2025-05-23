@@ -17,7 +17,7 @@ namespace runai::llm::streamer::common::s3
 {
 
 std::set<void *> __mock_clients;
-std::map<void * /* client */, std::map<unsigned /* file index */, unsigned /* ranges counter */>> __mock_index; // for each client - ranges counter for each file index
+std::map<void * /* client */, std::set<common::backend_api::ObjectRequestId_t /* request id */>> __mock_client_requests;
 std::set<void *> __mock_unused;
 unsigned __mock_response_time_ms = 0;
 std::mutex __mutex;
@@ -29,7 +29,7 @@ void runai_mock_s3_set_response_time_ms(unsigned milliseconds)
     __mock_response_time_ms = milliseconds;
 }
 
-common::ResponseCode runai_create_s3_client(const common::s3::Path & path, const common::s3::Credentials_C & credentials, void ** client)
+common::ResponseCode runai_create_s3_client(const common::s3::Path * path, const common::s3::Credentials_C * credentials, void ** client)
 {
     const auto guard = std::unique_lock<std::mutex>(__mutex);
 
@@ -39,9 +39,16 @@ common::ResponseCode runai_create_s3_client(const common::s3::Path & path, const
     } while (__mock_clients.count(*client) || __mock_unused.count(*client));
 
     __mock_clients.insert(*client);
-    __mock_index[*client][path.index] = 0;
 
-    LOG(DEBUG) << "created client " << *client << " - mock size is " << __mock_index.size();
+    if (__mock_client_requests.find(*client) != __mock_client_requests.end())
+    {
+        LOG(ERROR) << "Client " << *client << " already exists";
+        return common::ResponseCode::UnknownError;
+    }
+
+    __mock_client_requests[*client] = {};
+
+    LOG(DEBUG) << "created client " << *client << " - mock size is " << __mock_client_requests.size();
     return common::ResponseCode::Success;
 }
 
@@ -52,10 +59,10 @@ void runai_remove_s3_client(void * client)
     try
     {
         ASSERT(client) << "No client";
-        ASSERT(__mock_index.find(client) != __mock_index.end()) << "Client " << client << " not found";
-        __mock_index.erase(client);
+        ASSERT(__mock_client_requests.find(client) != __mock_client_requests.end()) << "Client " << client << " not found";
+        __mock_client_requests.erase(client);
         __mock_unused.insert(client);
-        LOG(DEBUG) << "Removed S3 client " << client << " - mock size is " << __mock_index.size();
+        LOG(DEBUG) << "Removed S3 client " << client << " - mock size is " << __mock_client_requests.size();
     }
     catch(const std::exception& e)
     {
@@ -76,7 +83,7 @@ common::ResponseCode get_response_code(void * client)
     return common::ResponseCode::UnknownError;
 }
 
-common::ResponseCode  runai_async_read_s3_client(void * client, const common::s3::Path & path, unsigned num_ranges, common::Range * ranges, size_t chunk_bytesize, char * buffer)
+common::ResponseCode  runai_async_read_s3_client(void * client, common::backend_api::ObjectRequestId_t request_id, const common::s3::Path * path, common::Range * range, size_t chunk_bytesize, char * buffer)
 {
     const auto guard = std::unique_lock<std::mutex>(__mutex);
 
@@ -94,23 +101,23 @@ common::ResponseCode  runai_async_read_s3_client(void * client, const common::s3
 
     auto r = get_response_code(client);
 
-    ASSERT(__mock_index.find(client) != __mock_index.end()) << "Client " << client << " not found";
-    __mock_index[client][path.index] = num_ranges;
+    ASSERT(__mock_client_requests.find(client) != __mock_client_requests.end()) << "Client " << client << " not found";
+    __mock_client_requests[client].insert(request_id);
 
     return r;
 }
 
-common::ResponseCode  runai_async_response_s3_client(void * client, unsigned * file_index, unsigned * index)
+common::ResponseCode runai_async_response_s3_client(void * client, common::backend_api::ObjectCompletionEvent_t * event_buffer, unsigned max_events_to_retrieve, unsigned * out_num_events_retrieved)
 {
-    if (index == nullptr)
+    if (out_num_events_retrieved == nullptr)
     {
-        LOG(ERROR) << "output parameter index is null";
+        LOG(ERROR) << "output parameter out_num_events_retrieved is null";
         return common::ResponseCode::UnknownError;
     }
 
-    if (file_index == nullptr)
+    if (event_buffer == nullptr)
     {
-        LOG(ERROR) << "output parameter file_index is null";
+        LOG(ERROR) << "output parameter event_buffer is null";
         return common::ResponseCode::UnknownError;
     }
 
@@ -135,28 +142,28 @@ common::ResponseCode  runai_async_response_s3_client(void * client, unsigned * f
 
     if (__stopped)
     {
-        *index = 0;
         return common::ResponseCode::FinishedError;
     }
 
     auto r = get_response_code(client);
 
-    auto & file_counters = __mock_index[client];
-    bool found = false;
-    for (auto & [current_file_index, counter] : file_counters)
+    if (__mock_client_requests.find(client) == __mock_client_requests.end())
     {
-        if (counter > 0)
-        {
-            --counter;
-            *index = counter;
-            *file_index = current_file_index;
-            found = true;
-            LOG(DEBUG) << "Returning range " << *index << " for file " << *file_index;
-            break;
-        }
+        LOG(ERROR) << "Mock client " << client << " not found";
+        return common::ResponseCode::UnknownError;
     }
 
-    if (!found)
+    auto & client_requests = __mock_client_requests[client];
+
+    *out_num_events_retrieved = 0;
+    for (auto it = client_requests.begin(); it != client_requests.end() && *out_num_events_retrieved < max_events_to_retrieve; )
+    {
+        event_buffer[*out_num_events_retrieved].request_id = *it;
+        event_buffer[*out_num_events_retrieved].response_code = r;
+        it = client_requests.erase(it);
+        ++*out_num_events_retrieved;
+    }
+    if (*out_num_events_retrieved == 0)
     {
         LOG(DEBUG) << "No more ranges to return";
         r = common::ResponseCode::FinishedError;
@@ -179,7 +186,7 @@ void runai_release_s3_clients()
     {
         __mock_clients.clear();
         __mock_unused.clear();
-        __mock_index.clear();
+        __mock_client_requests.clear();
     }
 }
 

@@ -3,6 +3,8 @@
 #include <vector>
 
 #include "common/exception/exception.h"
+#include "common/s3_wrapper/s3_wrapper.h"
+#include "common/backend_api/response/response.h"
 #include "streamer/impl/s3/s3.h"
 
 #include "utils/logging/logging.h"
@@ -29,18 +31,30 @@ void S3::read(size_t bytesize, char * buffer)
     throw common::Exception(common::ResponseCode::UnknownError);
 }
 
-void S3::async_read(const common::s3::S3ClientWrapper::Params & params, std::vector<common::Range> & ranges, char * buffer)
+void S3::async_read(const common::s3::S3ClientWrapper::Params & params, common::backend_api::ObjectRequestId_t request_handle, const common::Range & range, char * buffer)
 {
-    auto response_code = _client->async_read(params, ranges, _config.s3_block_bytesize, buffer);
+    auto response_code = _client->async_read(params, request_handle, range, _config.s3_block_bytesize, buffer);
     if (response_code != common::ResponseCode::Success)
     {
         throw common::Exception(response_code);
     }
 }
 
-common::Response S3::async_response()
+common::ResponseCode S3::async_response(std::vector<common::backend_api::Response> & responses, unsigned max_responses)
 {
-    return _client->async_read_response();
+    std::vector<common::backend_api::ObjectCompletionEvent_t> event_buffer(max_responses);
+    auto response_code = _client->async_read_response(event_buffer, max_responses);
+    if (response_code != common::ResponseCode::Success)
+    {
+        return response_code;
+    }
+
+    responses.reserve(event_buffer.size());
+    for (unsigned i = 0; i < event_buffer.size(); ++i)
+    {
+        responses.emplace_back(event_buffer[i]);
+    }
+    return common::ResponseCode::Success;
 }
 
 S3Cleanup::~S3Cleanup()

@@ -42,9 +42,9 @@ void S3ClientWrapper::stop()
 
 S3ClientWrapper::S3ClientWrapper(const Params & params) :
     _s3_dylib(open_s3()),
-    _s3_client(create_client(params.file_index, *params.uri, params.credentials))
+    _s3_client(create_client(*params.uri, params.credentials))
 {
-    LOG(SPAM) << "Created client for file index " << params.file_index;
+    LOG(SPAM) << "Created client for uri " << *params.uri;
 }
 
 S3ClientWrapper::~S3ClientWrapper()
@@ -95,14 +95,15 @@ std::shared_ptr<utils::Dylib> S3ClientWrapper::open_s3_impl()
     return std::make_shared<utils::Dylib>("libstreamers3.so");
 }
 
-void * S3ClientWrapper::create_client(unsigned file_index, const StorageUri & uri, const Credentials & credentials)
+void * S3ClientWrapper::create_client(const StorageUri & uri, const Credentials & credentials)
 {
-    static auto __s3_gen = _s3_dylib->dlsym<ResponseCode(*)(const Path &, const Credentials_C &, void **)>("runai_create_s3_client");
+    static auto __s3_gen = _s3_dylib->dlsym<ResponseCode(*)(const Path *, const Credentials_C *, void **)>("runai_create_s3_client");
     auto start = std::chrono::steady_clock::now();
 
     void * client;
-    const Path s3_path(uri, file_index);
-    auto ret = __s3_gen(s3_path, credentials, &client);
+    const Path s3_path(uri);
+    Credentials_C creds(credentials);
+    auto ret = __s3_gen(&s3_path, &creds, &client);
     if (ret != ResponseCode::Success)
     {
         LOG(ERROR) << "Failed to create S3 client for uri " << uri;
@@ -113,21 +114,33 @@ void * S3ClientWrapper::create_client(unsigned file_index, const StorageUri & ur
     return client;
 }
 
-ResponseCode S3ClientWrapper::async_read(const Params & params, std::vector<Range>& ranges, size_t chunk_bytesize, char * buffer)
+ResponseCode S3ClientWrapper::async_read(const Params & params, common::backend_api::ObjectRequestId_t request_id, const Range & range, size_t chunk_bytesize, char * buffer)
 {
-    static auto _s3_async_read = _s3_dylib->dlsym<ResponseCode(*)(void *, const Path &, unsigned, Range*, size_t, char *)>("runai_async_read_s3_client");
-    const Path s3_path(*params.uri, params.file_index);
-    return _s3_async_read(_s3_client, s3_path, ranges.size(), ranges.data(), chunk_bytesize, buffer);
+    static auto _s3_async_read = _s3_dylib->dlsym<ResponseCode(*)(void *, common::backend_api::ObjectRequestId_t, const Path *, const Range *, size_t, char *)>("runai_async_read_s3_client");
+    const Path s3_path(*params.uri);
+    return _s3_async_read(_s3_client, request_id, &s3_path, &range, chunk_bytesize, buffer);
     return common::ResponseCode::Success;
 }
 
-Response S3ClientWrapper::async_read_response()
+common::ResponseCode S3ClientWrapper::async_read_response(std::vector<backend_api::ObjectCompletionEvent_t> & event_buffer, unsigned max_events_to_retrieve)
 {
-    Response r(common::ResponseCode::Success);
+    if (max_events_to_retrieve == 0)
+    {
+        LOG(WARNING) << "Max events to retrieve is 0";
+        return common::ResponseCode::Success;
+    }
 
-    static auto _s3_async_response = _s3_dylib->dlsym<ResponseCode(*)(void *, unsigned*, unsigned*)>("runai_async_response_s3_client");
-    r.ret = _s3_async_response(_s3_client, &r.file_index, &r.index);
-    return r;
+    event_buffer.resize(max_events_to_retrieve);
+    unsigned int out_num_events_retrieved;
+    static auto _s3_async_response = _s3_dylib->dlsym<ResponseCode(*)(void *, common::backend_api::ObjectCompletionEvent_t*, unsigned, unsigned*)>("runai_async_response_s3_client");
+    auto ret = _s3_async_response(_s3_client, event_buffer.data(), max_events_to_retrieve, &out_num_events_retrieved);
+
+    if (ret == common::ResponseCode::Success)
+    {
+        ASSERT(out_num_events_retrieved >= 0 && out_num_events_retrieved <= max_events_to_retrieve);
+        event_buffer.resize(out_num_events_retrieved);
+    }
+    return ret;
 }
 
 }; // namespace runai::llm::streamer::common::s3

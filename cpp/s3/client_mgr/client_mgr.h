@@ -139,7 +139,7 @@ T* ClientMgr<T>::pop(const common::s3::Path & path, const common::s3::Credential
 
     // create new client if there are no unused clients for this bucket
 
-    LOG(DEBUG) << "Creating client for path " << path.uri.path << " index " << path.index;
+    LOG(DEBUG) << "Creating client for path " << path.uri.path;
     auto client = std::make_unique<T>(path, credentials);
 
     const auto guard = std::unique_lock<std::mutex>(mgr._mutex);

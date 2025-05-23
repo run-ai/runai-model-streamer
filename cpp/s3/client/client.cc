@@ -136,7 +136,7 @@ S3Client::S3Client(const common::s3::Path & path, const common::s3::Credentials_
 }
 
 // returns response object that contains the index of the range in ranges vector  which was passed in the request (0... number of ranges - 1)
-common::Response S3Client::async_read_response()
+common::backend_api::Response S3Client::async_read_response()
 {
     if (_responder == nullptr)
     {
@@ -148,15 +148,15 @@ common::Response S3Client::async_read_response()
 }
 
 // aynchronously read consecutive ranges, producing a Response object per range in the ranges vector
-common::ResponseCode S3Client::async_read(const common::s3::Path & object_path, unsigned num_ranges, common::Range * ranges, size_t chunk_bytesize, char * buffer)
+common::ResponseCode S3Client::async_read(const common::s3::Path & object_path, common::backend_api::ObjectRequestId_t request_id, const common::Range & range, size_t chunk_bytesize, char * buffer)
 {
     if (_responder == nullptr)
     {
-        _responder = std::make_shared<common::Responder>(num_ranges);
+        _responder = std::make_shared<Responder>(1);
     }
     else
     {
-        _responder->increment(num_ranges);
+        _responder->increment(1);
     }
 
     ASSERT((!_endpoint.has_value()) || (object_path.uri.endpoint == nullptr) || (_endpoint.has_value() && _endpoint.value() == std::string(object_path.uri.endpoint))) << "Attempting to reuse client with a different endpoint " << object_path.uri.endpoint;
@@ -164,86 +164,79 @@ common::ResponseCode S3Client::async_read(const common::s3::Path & object_path, 
 
     Aws::String bucket_name(object_path.uri.bucket);
     Aws::String path(object_path.uri.path);
-    unsigned path_index(object_path.index);
 
     Aws::S3Crt::Model::GetObjectRequest request;
     request.SetBucket(bucket_name);
     request.SetKey(path);
 
     char * buffer_ = buffer;
-    common::Range * ranges_ = ranges;
-    for (unsigned ir = 0; ir < num_ranges && !_stop; ++ir)
+    // split range into chunks
+    size_t size = std::max(1UL, range.size/chunk_bytesize);
+    LOG(SPAM) <<"Number of chunks is " << size;
+
+    // each range is divided into chunks (size is the number of chunks)
+    // when all the chunks have been read successfuly the response for that range is pushed to the responder
+
+    auto counter = std::make_shared< std::atomic<unsigned> >(size);
+    // success flag for the current range is passed to the client
+    auto is_success = std::make_shared< std::atomic<bool> >(true);
+
+    size_t total_ = range.size;
+    size_t offset_ = range.start;
+    for (unsigned i = 0; i < size && !_stop; ++i)
     {
-        const auto & range_ = *ranges_;
+        size_t bytesize_ = (i == size - 1 ? total_ : chunk_bytesize);
 
-        // split range into chunks
-        size_t size = std::max(1UL, range_.size/chunk_bytesize);
-        LOG(SPAM) <<"Number of chunks is " << size;
+        // send async request
 
-        // each range is divided into chunks (size is the number of chunks)
-        // when all the chunks have been read successfuly the response for that range is pushed to the responder
-        auto counter = std::make_shared< std::atomic<unsigned> >(size);
-        // success flag for the current range is passed to the client
-        auto is_success = std::make_shared< std::atomic<bool> >(true);
+        std::string range_str = "bytes=" + std::to_string(offset_) + "-" + std::to_string(offset_ + bytesize_);
+        request.SetRange(range_str.c_str());
 
-        size_t total_ = range_.size;
-        size_t offset_ = range_.start;
-        for (unsigned i = 0; i < size && !_stop; ++i)
-        {
-            size_t bytesize_ = (i == size - 1 ? total_ : chunk_bytesize);
+        request.SetResponseStreamFactory(
+            [buffer_, bytesize_]()
+            {
+                std::unique_ptr<Aws::StringStream>
+                        stream(Aws::New<Aws::StringStream>("RunaiBuffer"));
 
-            // send async request
+                stream->rdbuf()->pubsetbuf(buffer_, bytesize_);
 
-            std::string range_str = "bytes=" + std::to_string(offset_) + "-" + std::to_string(offset_ + bytesize_);
-            request.SetRange(range_str.c_str());
-
-            request.SetResponseStreamFactory(
-                [buffer_, bytesize_]()
-                {
-                    std::unique_ptr<Aws::StringStream>
-                            stream(Aws::New<Aws::StringStream>("RunaiBuffer"));
-
-                    stream->rdbuf()->pubsetbuf(buffer_, bytesize_);
-
-                    return stream.release();
-                });
-
-            _client->GetObjectAsync(request, [responder = _responder, file_index = path_index, ir, counter, is_success](const Aws::S3Crt::S3CrtClient*, const Aws::S3Crt::Model::GetObjectRequest&,
-                                                                            const Aws::S3Crt::Model::GetObjectOutcome& outcome,
-                                                                            const std::shared_ptr<const Aws::Client::AsyncCallerContext>&) {
-                if (outcome.IsSuccess())
-                {
-                    const auto running = counter->fetch_sub(1);
-                    LOG(SPAM) << "Async read succeeded - " << running << " running";
-                    // send success response only if all the requests have succeeded
-                    // note that unsuccessful attempts do not update the counter
-                    if (running == 1)
-                    {
-                        common::Response r(file_index, ir, common::ResponseCode::Success);
-                        responder->push(std::move(r));
-                    }
-                }
-                else
-                {
-                    // Note: currently a failure to read any sub range fails the entire read request
-                    //       a retry mechanism should be added for failed reads
-                    bool previous = is_success->exchange(false);
-                    // send error response only once
-                    if (previous)
-                    {
-                        const auto & err = outcome.GetError();
-                        LOG(ERROR) << "Failed to download s3 object " << err.GetExceptionName() << ": " << err.GetMessage();
-                        common::Response r(ir, common::ResponseCode::FileAccessError);
-                        responder->push(std::move(r));
-                    }
-                }
+                return stream.release();
             });
 
-            total_ -= bytesize_;
-            offset_ += bytesize_;
-            buffer_ += bytesize_;
-        }
-        ranges_++;
+        _client->GetObjectAsync(request, [responder = _responder, request_id, counter, is_success](const Aws::S3Crt::S3CrtClient*, const Aws::S3Crt::Model::GetObjectRequest&,
+                                                                        const Aws::S3Crt::Model::GetObjectOutcome& outcome,
+                                                                        const std::shared_ptr<const Aws::Client::AsyncCallerContext>&) {
+            if (outcome.IsSuccess())
+            {
+                const auto running = counter->fetch_sub(1);
+                LOG(SPAM) << "Async read request " << request_id << " succeeded - " << running << " running";
+                // send success response only if all the requests have succeeded
+                // note that unsuccessful attempts do not update the counter
+                if (running == 1)
+                {
+                    common::backend_api::Response r(request_id, common::ResponseCode::Success);
+                    responder->push(std::move(r));
+                }
+            }
+            else
+            {
+                // Note: currently a failure to read any sub range fails the entire read request
+                //       a retry mechanism should be added for failed reads
+                bool previous = is_success->exchange(false);
+                // send error response only once
+                if (previous)
+                {
+                    const auto & err = outcome.GetError();
+                    LOG(ERROR) << "Failed to download s3 object of request " << request_id << " " << err.GetExceptionName() << ": " << err.GetMessage();
+                    common::backend_api::Response r(request_id, common::ResponseCode::FileAccessError);
+                    responder->push(std::move(r));
+                }
+            }
+        });
+
+        total_ -= bytesize_;
+        offset_ += bytesize_;
+        buffer_ += bytesize_;
     }
 
     return _stop ? common::ResponseCode::FinishedError : common::ResponseCode::Success;

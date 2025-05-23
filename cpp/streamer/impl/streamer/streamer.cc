@@ -148,7 +148,7 @@ common::ResponseCode Streamer::request_multi(
 
             const auto worker_index = batch.worker_index;
 
-            LOG(DEBUG) << "Batch: file index " << batch.file_index << " with " << batch.tasks.size() << " tasks for worker " << worker_index << " total bytes " << batch.range.size << " range " << batch.range.start << " to " << batch.range.end;
+            LOG(DEBUG) << "Batch: file index " << batch.file_index << " with " << batch.tasks.size() << " tasks for worker " << worker_index << " total bytes " << batch.total_bytes();
 
             const auto & result = workloads[worker_index].add_batch(std::move(batch));
             LOG(DEBUG) << "Added batch to worker " << worker_index << " with result " << result;
@@ -233,7 +233,7 @@ common::s3::S3ClientWrapper::Params Streamer::handle_s3(unsigned file_index, con
         _s3 = std::make_unique<S3Cleanup>();
     }
 
-    return common::s3::S3ClientWrapper::Params(file_index, uri, credentials);
+    return common::s3::S3ClientWrapper::Params(uri, credentials);
 }
 
 }; // namespace runai::llm::streamer::impl

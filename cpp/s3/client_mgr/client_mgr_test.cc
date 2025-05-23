@@ -60,7 +60,7 @@ struct ClientMgrTest : ::testing::Test
 {
     ClientMgrTest() :
         uri(create_uri()),
-        s3_path(uri, utils::random::number()),
+        s3_path(uri),
         credentials(
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
@@ -146,8 +146,7 @@ TEST_F(ClientMgrTest, Reuse_Client)
     {
         const std::string path = utils::random::string();
         uri.path = path;
-        const auto index = utils::random::number();
-        const common::s3::Path s3_path(uri, index);
+        const common::s3::Path s3_path(uri);
         Helper * helper = ClientMgr<Helper>::pop(s3_path, credentials);
         EXPECT_EQ(helper->bucket(), uri.bucket);
         EXPECT_EQ(ClientMgr<Helper>::current_bucket(), uri.bucket);
@@ -203,7 +202,7 @@ TEST_F(ClientMgrTest, Credentials_Changed)
         bool changed = !helper->verify_credentials(new_credentials);
         std::string path = utils::random::string();
         uri.path = path;
-        const common::s3::Path s3_path(uri, utils::random::number());
+        const common::s3::Path s3_path(uri);
         Helper * helper = ClientMgr<Helper>::pop(s3_path, new_credentials);
         EXPECT_EQ(helper->bucket(), uri.bucket);
         EXPECT_EQ(ClientMgr<Helper>::current_bucket(), uri.bucket);
@@ -260,10 +259,9 @@ TEST_F(ClientMgrTest, Change_Bucket)
     used.clear();
     for (unsigned i = 0; i < n; ++i)
     {
-        const unsigned index = utils::random::number();
         const std::string path = utils::random::string();
         uri_.path = path;
-        const common::s3::Path s3_path_(uri_, index);
+        const common::s3::Path s3_path_(uri_);
         Helper * helper = ClientMgr<Helper>::pop(s3_path_, credentials);
         EXPECT_EQ(ClientMgr<Helper>::unused(), 0);
 

@@ -1,7 +1,7 @@
 
 #pragma once
 
-#include <shared_queue/shared_queue.h>
+#include "common/shared_queue/shared_queue.h"
 #include "common/response/response.h"
 
 namespace runai::llm::streamer::common

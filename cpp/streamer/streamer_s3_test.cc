@@ -389,7 +389,12 @@ TEST_F(StreamerTest, Multiple_Files)
     {
         r = utils::random::number();
         file_index = utils::random::number();
-        EXPECT_EQ(runai_response_multi(streamer, &file_index, &r), static_cast<int>(common::ResponseCode::Success));
+        auto response_code = runai_response_multi(streamer, &file_index, &r);
+        EXPECT_EQ(response_code, static_cast<int>(common::ResponseCode::Success));
+        if (response_code != static_cast<int>(common::ResponseCode::Success))
+        {
+            break;
+        }
         EXPECT_LT(file_index, num_files);
         EXPECT_EQ(expected_response[file_index].count(r), 1);
         expected_response[file_index].erase(r);
@@ -438,6 +443,10 @@ TEST_F(StreamerTest, Multiple_Files_Error)
         EXPECT_EQ(response_code, static_cast<int>(error_code));
         EXPECT_LT(file_index, num_files);
         EXPECT_EQ(expected_response[file_index].count(r), 1);
+        if (response_code != static_cast<int>(error_code))
+        {
+            break;
+        }
         expected_response[file_index].erase(r);
     }
 

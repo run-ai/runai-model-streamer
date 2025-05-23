@@ -3,9 +3,10 @@ load("//:rules.bzl", "runai_cc_auto_library",  "runai_cc_test")
 runai_cc_auto_library(
     name = "s3_wrapper",
     deps = [
+        "//common/backend_api/object_storage",
         "//common/storage_uri",
         "//common/s3_credentials",
-        "//common/response",
+        "//common/backend_api/response",
         "//common/path",
         "//common/range",
         "//common/exception",

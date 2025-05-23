@@ -1,6 +1,7 @@
 #include "common/s3_wrapper/s3_wrapper.h"
 
 #include <gtest/gtest.h>
+#include <cstdint>
 
 #include "utils/dylib/dylib.h"
 #include "utils/random/random.h"
@@ -11,7 +12,6 @@ namespace runai::llm::streamer::common::s3
 struct S3WrappertTest : ::testing::Test
 {
     S3WrappertTest() :
-        index(utils::random::number()),
         uri("s3://" + utils::random::string() + "/" + utils::random::string()),
         credentials(
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
@@ -19,18 +19,21 @@ struct S3WrappertTest : ::testing::Test
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr)),
-        params(index, std::make_shared<StorageUri>(uri), credentials)
-    {}
+        params(std::make_shared<StorageUri>(uri), credentials)
+    {
+        auto ptr = utils::random::number<uintptr_t>();
+        request_id = reinterpret_cast<common::backend_api::ObjectRequestId_t>(ptr);
+    }
 
     void TearDown() override
     {
         S3ClientWrapper::shutdown();
     }
 
-    unsigned index;
     StorageUri uri;
     Credentials credentials;
     S3ClientWrapper::Params params;
+    common::backend_api::ObjectRequestId_t request_id;
 };
 
 TEST_F(S3WrappertTest, Creation_Sanity)
@@ -55,9 +58,24 @@ TEST_F(S3WrappertTest, Creation)
 TEST_F(S3WrappertTest, Read)
 {
     S3ClientWrapper wrapper(params);
-    std::vector<Range> ranges;
-    auto response_code = wrapper.async_read(params, ranges, utils::random::number<size_t>(), nullptr);
+    Range range;
+    auto response_code = wrapper.async_read(params, request_id, range, utils::random::number<size_t>(), nullptr);
     EXPECT_EQ(response_code, common::ResponseCode::Success);
+}
+
+TEST_F(S3WrappertTest, Response)
+{
+    S3ClientWrapper wrapper(params);
+    Range range;
+    auto response_code = wrapper.async_read(params, request_id, range, utils::random::number<size_t>(), nullptr);
+    EXPECT_EQ(response_code, common::ResponseCode::Success);
+
+    std::vector<backend_api::ObjectCompletionEvent_t> event_buffer;
+    response_code = wrapper.async_read_response(event_buffer, 1);
+    EXPECT_EQ(response_code, common::ResponseCode::Success);
+    EXPECT_EQ(event_buffer.size(), 1);
+    EXPECT_EQ(event_buffer.at(0).request_id, request_id);
+    EXPECT_EQ(event_buffer.at(0).response_code, common::ResponseCode::Success);
 }
 
 TEST_F(S3WrappertTest, Cleanup)
@@ -67,8 +85,8 @@ TEST_F(S3WrappertTest, Cleanup)
     EXPECT_EQ(verify_mock(), 0);
     {
         S3ClientWrapper wrapper(params);
-        std::vector<Range> ranges;
-        wrapper.async_read(params, ranges, utils::random::number<size_t>(), nullptr);
+        Range range;
+        wrapper.async_read(params, request_id, range, utils::random::number<size_t>(), nullptr);
 
         EXPECT_EQ(verify_mock(), 1);
 

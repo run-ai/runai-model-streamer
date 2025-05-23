@@ -7,7 +7,8 @@
 #include "common/range/range.h"
 #include "common/response_code/response_code.h"
 #include "common/storage_uri/storage_uri.h"
-#include "common/response/response.h"
+#include "common/backend_api/object_storage/object_storage.h"
+#include "common/backend_api/response/response.h"
 #include "common/s3_credentials/s3_credentials.h"
 
 #include "utils/dylib/dylib.h"
@@ -23,18 +24,16 @@ struct S3ClientWrapper
          Params()
          {}
 
-         Params(unsigned file_index, std::shared_ptr<StorageUri> uri, const Credentials & credentials) :
-            file_index(file_index),
+         Params(std::shared_ptr<StorageUri> uri, const Credentials & credentials) :
             uri(uri),
             credentials(credentials)
          {}
 
-         Params(std::shared_ptr<StorageUri> uri) : Params(0, uri, Credentials())
+         Params(std::shared_ptr<StorageUri> uri) : Params(uri, Credentials())
          {}
 
          bool valid() const { return (uri.get() != nullptr); }
 
-         unsigned file_index;
          std::shared_ptr<StorageUri> uri;
          Credentials credentials;
       };
@@ -47,8 +46,8 @@ struct S3ClientWrapper
       // ranges - list of sub ranges
       // chunk_bytesize - size of chunk for reading in multi parts (minimal size is 5 MB)
 
-      ResponseCode async_read(const Params & params, std::vector<Range>& ranges, size_t chunk_bytesize, char * buffer);
-      Response async_read_response();
+      common::ResponseCode async_read(const Params & params, backend_api::ObjectRequestId_t request_id, const Range & ranges, size_t chunk_bytesize, char * buffer);
+      common::ResponseCode async_read_response(std::vector<backend_api::ObjectCompletionEvent_t> & event_buffer, unsigned max_events_to_retrieve);
 
       // stop - stops the responder of each S3 client, in order to notify callers which sent a request and are waiting for a response
       //        required for stopping the threadpool workers, which are bloking on the client responder
@@ -61,7 +60,7 @@ struct S3ClientWrapper
       static constexpr size_t default_chunk_bytesize = 8 * 1024 * 1024;
 
  private:
-      void * create_client(unsigned file_index, const StorageUri & uri, const Credentials & credentials);
+      void * create_client(const StorageUri & uri, const Credentials & credentials);
       static std::shared_ptr<utils::Dylib> open_s3();
       static std::shared_ptr<utils::Dylib> open_s3_impl();
 
