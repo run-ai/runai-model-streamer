@@ -53,8 +53,8 @@ class SafetensorsStreamer:
         )
 
     def get_tensors(self) -> Iterator[torch.tensor]:
-        for file_path, ready_chunk_index, buffer, buffer_offset in self.file_streamer.get_chunks():
+        for file_path, ready_chunk_index, buffer in self.file_streamer.get_chunks():
             tensor_metadata = self.files_to_tensors_metadata[file_path][ready_chunk_index]
             yield tensor_metadata.name, safetensors_pytorch.create_torch_tensor(
-                buffer, buffer_offset, tensor_metadata
+                buffer, tensor_metadata
             )

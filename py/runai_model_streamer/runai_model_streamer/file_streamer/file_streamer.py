@@ -24,6 +24,27 @@ import humanize
 
 s3_credentials_module = get_s3_credentials_module()
 
+class RunaiStreamerInvalidInputException(Exception):
+    pass
+
+def homogeneous_paths(paths: List[str]) -> bool:
+    if not paths:
+        return True  # Empty list is homogeneous by default
+
+    def path_type_fn(path: str):
+        if is_s3_path(path):
+            return is_s3_path
+        elif is_gs_path(path):
+            return is_gs_path
+        else:
+            return None
+
+    first_type = path_type_fn(paths[0])
+    for path in paths[1:]:
+        if path_type_fn(path) != first_type:
+            return False
+    return True
+
 class FileStreamer:
     def __enter__(self) -> "FileStreamer":
         self.streamer = runai_start()
@@ -62,11 +83,15 @@ class FileStreamer:
                 self.s3_session, self.s3_credentials = s3_credentials_module.get_credentials(credentials)
         return path
 
+
     def stream_files(
             self,
             file_stream_requests: List[FileChunks],
             credentials: Optional[S3Credentials] = None,
 ) -> None:
+        if not homogeneous_paths([file_stream_request.path for file_stream_request in file_stream_requests]):
+            raise RunaiStreamerInvalidInputException("Cannot stream files from multiple source types in parallel") 
+
         for file_stream_request in file_stream_requests:
             self.total_size += sum(file_stream_request.chunks)
             file_stream_request.path = self.handle_object_store(file_stream_request.path, credentials)
@@ -121,6 +146,6 @@ class FileStreamer:
             if chunk_relative_index == None:
                 return
             
-            file_path, chunk_index, buffer = self.requests_iterator.get_global_file_and_chunk(file_relative_index, chunk_relative_index)
-            yield file_path, chunk_index, buffer, sum(self.active_request.files[file_relative_index].chunks[:chunk_relative_index])
+            file_path, chunk_index, chunk_buffer = self.requests_iterator.get_global_file_and_chunk(file_relative_index, chunk_relative_index)
+            yield file_path, chunk_index, chunk_buffer
 

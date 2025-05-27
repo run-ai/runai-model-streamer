@@ -55,15 +55,15 @@ class SafetensorsMetadata:
     def from_files(fs: FileStreamer, filenames: str) -> List[SafetensorsMetadata]:
         fs.stream_files([FileChunks(filename, 0, [SAFETENSORS_HEADER_BUFFER_SIZE]) for filename in filenames])
         header_sizes = {}
-        for file_path, ready_chunk_index, buffer, buffer_offset in fs.get_chunks():
+        for file_path, ready_chunk_index, buffer in fs.get_chunks():
             header_sizes[file_path] = struct.unpack(
-                LITTLE_ENDIAN_LONG_LONG_STRUCT_FORMAT, buffer[buffer_offset:buffer_offset + SAFETENSORS_HEADER_BUFFER_SIZE]
+                LITTLE_ENDIAN_LONG_LONG_STRUCT_FORMAT, buffer
             )[0]
             
         metadatas = {}
         fs.stream_files([FileChunks(filename, SAFETENSORS_HEADER_BUFFER_SIZE, [header_size]) for filename, header_size in header_sizes.items()])
-        for file_path, ready_chunk_index, buffer, buffer_offset in fs.get_chunks():
-            metadatas[file_path] = json.loads(bytearray(buffer[buffer_offset:buffer_offset + header_sizes[file_path]]))
+        for file_path, ready_chunk_index, buffer in fs.get_chunks():
+            metadatas[file_path] = json.loads(bytearray(buffer))
 
         return [SafetensorsMetadata(
             metadatas[filename], header_sizes[filename] + SAFETENSORS_HEADER_BUFFER_SIZE
@@ -111,7 +111,7 @@ def prepare_request(
 
 
 def create_torch_tensor(
-    buffer: memoryview, offset: int, tensor_metadata: SafetensorMetadata
+    buffer: memoryview, tensor_metadata: SafetensorMetadata
 ) -> torch.tensor:
     if tensor_metadata.get_item_count() == 0:
         return torch.empty(tensor_metadata.shape, dtype=tensor_metadata.get_torch_dtype())
@@ -120,6 +120,6 @@ def create_torch_tensor(
         buffer,
         dtype=tensor_metadata.get_torch_dtype(),
         count=tensor_metadata.get_item_count(),
-        offset=offset,
+        offset=0,
     )
     return tensor.view(tensor_metadata.shape)

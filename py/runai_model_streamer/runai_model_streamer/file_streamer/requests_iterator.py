@@ -43,11 +43,16 @@ class FilesRequestsIteratorWithBuffer:
         self.buffer = np.empty(buffer_size, dtype=np.uint8)
         self.file_buffers = []
 
-    def get_global_file_and_chunk(self, local_file_index: int, local_chunk_index: int) -> Tuple[str, int, int]:
+    def get_global_file_and_chunk(self, local_file_index: int, local_chunk_index: int) -> Tuple[str, int, memoryview]:
         file_path, global_chunk_index = self.files_requests_iterator.get_global_file_and_chunk(
             local_file_index, local_chunk_index
         )
-        return file_path, global_chunk_index, self.file_buffers[local_file_index]
+        file_buffer = self.file_buffers[local_file_index]
+
+        file_active_chunks = self.files_requests_iterator.active_request.files[local_file_index].chunks
+        chunk_offset_start = sum(file_active_chunks[:local_chunk_index])
+        chunk_offset_end = chunk_offset_start + file_active_chunks[local_chunk_index]
+        return file_path, global_chunk_index, file_buffer[chunk_offset_start: chunk_offset_end]
 
     def next_request(self) -> Optional[FilesRequest]:
         next_requests = self.files_requests_iterator.next_request()

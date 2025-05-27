@@ -57,7 +57,6 @@ def random_file_chunks(i, dir):
                 + initial_offset
             ]
         expected_id_to_results[i] = {
-            "expected_offset": sum(request_sizes[0:i]),
             "expected_content": expected_content,
         }
     return expected_id_to_results, FileChunks(file_path, initial_offset, request_sizes)
@@ -81,14 +80,13 @@ class TestFuzzing(unittest.TestCase):
 
         with FileStreamer() as fs:
             fs.stream_files(files_chunks)
-            for file, id, dst, offset in fs.get_chunks():
+            for file, id, dst in fs.get_chunks():
                 self.assertIn(file, [file_chunks.path for file_chunks in files_chunks])
 
                 file_chunks = file_to_file_chunks[file]
                 expected_id_to_results = expected_file_to_id_to_results[file]
-                self.assertEqual(offset, expected_id_to_results[id]["expected_offset"])
                 self.assertEqual(
-                    dst[offset : offset + file_chunks.chunks[id]].tobytes(),
+                    dst.tobytes(),
                     expected_id_to_results[id]["expected_content"],
                 )
 

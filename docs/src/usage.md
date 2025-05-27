@@ -30,6 +30,24 @@ To load tensors from object storage, replace the file path in the code above wit
 ```python
 file_path = "s3://my-bucket/my/file/path.safetensors"
 ```
+
+#### Streaming from multiple files
+
+To stream tensors from multiple files in parallel use the `streamer.stream_files()` API:
+
+```python
+from runai_model_streamer import SafetensorsStreamer
+
+file_paths = ["/path/to/file-1.safetensors", "/path/to/file-2.safetensors"]
+
+with SafetensorsStreamer() as streamer:
+    streamer.stream_file(file_path)
+    for name, tensor in streamer.get_tensors():
+        tensor.to('CUDA:0')
+```
+
+> **Note:** You can not mix S3 path and file system paths on same `streamer.stream_files()` call.
+
 ##### S3 authentication
 
 By default, the streamer performs authentication via boto3 to obtain credentials, which are then passed to the S3 client in `libstreamers3.so`.
