@@ -12,49 +12,61 @@ class TestChunksIterator(unittest.TestCase):
     def test_next_request_exact_limit(self):
         chunks_iterator = ChunksIterator([1, 2, 3, 4])
 
-        chunks, is_finished = chunks_iterator.next_chunks(6)
-        self.assertFalse(is_finished)
+        chunks = chunks_iterator.next_chunks(6)
+        self.assertFalse(chunks_iterator.is_finished())
         self.assertEqual(chunks, [1, 2, 3])
 
-        chunks, is_finished = chunks_iterator.next_chunks(4)
-        self.assertTrue(is_finished)
+        chunks = chunks_iterator.next_chunks(4)
+        self.assertTrue(chunks_iterator.is_finished())
         self.assertEqual(chunks, [4])
 
     def test_next_request_high_limit(self):
         chunks_iterator = ChunksIterator([1, 2, 3, 4])
 
-        chunks, is_finished = chunks_iterator.next_chunks(6)
-        self.assertFalse(is_finished)
+        chunks = chunks_iterator.next_chunks(6)
+        self.assertFalse(chunks_iterator.is_finished())
         self.assertEqual(chunks, [1, 2, 3])
         
-        chunks, is_finished = chunks_iterator.next_chunks(6)
-        self.assertTrue(is_finished)
+        chunks = chunks_iterator.next_chunks(6)
+        self.assertTrue(chunks_iterator.is_finished())
         self.assertEqual(chunks, [4])
 
     def test_next_request_low_limit(self):
         chunks_iterator = ChunksIterator([1, 2, 3, 4])
 
-        chunks, is_finished = chunks_iterator.next_chunks(6)
-        self.assertFalse(is_finished)
+        chunks = chunks_iterator.next_chunks(6)
+        self.assertFalse(chunks_iterator.is_finished())
         self.assertEqual(chunks, [1, 2, 3])
         
-        chunks, is_finished = chunks_iterator.next_chunks(2)
-        self.assertFalse(is_finished)
+        chunks = chunks_iterator.next_chunks(2)
+        self.assertFalse(chunks_iterator.is_finished())
         self.assertEqual(chunks, [])
     
+    def test_next_request_with_item_zero(self):
+        chunks_iterator = ChunksIterator([1, 0, 3, 4])
+
+        chunks = chunks_iterator.next_chunks(4)
+        self.assertFalse(chunks_iterator.is_finished())
+        self.assertEqual(chunks, [1, 0, 3])
+        
+        chunks = chunks_iterator.next_chunks(4)
+        self.assertTrue(chunks_iterator.is_finished())
+        self.assertEqual(chunks, [4])
+
+
 class TestFileChunksIterator(unittest.TestCase):
     def test_next_request_exact_limit(self):
         file_chunks_iterator = FileChunksIterator(FileChunks("a.txt", 10, [1, 2, 3, 4]))
 
-        file_chunks, is_finished = file_chunks_iterator.next_chunks(6)
-        self.assertFalse(is_finished)
+        file_chunks = file_chunks_iterator.next_chunks(6)
+        self.assertFalse(file_chunks_iterator.is_finished())
         self.assertIsNotNone(file_chunks)
         self.assertEqual(file_chunks.path, "a.txt")
         self.assertEqual(file_chunks.offset, 10)
         self.assertEqual(file_chunks.chunks, [1, 2, 3])
 
-        file_chunks, is_finished = file_chunks_iterator.next_chunks(6)
-        self.assertTrue(is_finished)
+        file_chunks = file_chunks_iterator.next_chunks(6)
+        self.assertTrue(file_chunks_iterator.is_finished())
         self.assertEqual(file_chunks.offset, 16)
         self.assertEqual(file_chunks.chunks, [4])
 
@@ -62,8 +74,8 @@ class TestFileChunksIterator(unittest.TestCase):
         file_chunks_iterator = FileChunksIterator(FileChunks("a.txt", 10, [1, 2, 3, 4]))
 
         file_chunks_iterator.next_chunks(5)
-        file_chunks, is_finished = file_chunks_iterator.next_chunks(6)
-        self.assertFalse(is_finished)
+        file_chunks = file_chunks_iterator.next_chunks(6)
+        self.assertFalse(file_chunks_iterator.is_finished())
         self.assertEqual(file_chunks.offset, 13)
 
 class TestFilesRequestsIterator(unittest.TestCase):
@@ -141,6 +153,24 @@ class TestFilesRequestsIterator(unittest.TestCase):
         self.assertEqual(files_requests.files[0].offset, 13)
         self.assertEqual(files_requests.files[0].chunks, [3])
 
+    def test_get_global_file_and_chunk(self):
+        files_requests_iterator = FilesRequestsIterator(3, [FileChunks("a.txt", 10, [1, 2, 3, 4])])
+
+        files_requests_iterator.next_request()
+
+        file_path, chunk_index = files_requests_iterator.get_global_file_and_chunk(0, 0)
+        self.assertEqual(file_path, "a.txt")
+        self.assertEqual(chunk_index, 0)
+
+        file_path, chunk_index = files_requests_iterator.get_global_file_and_chunk(0, 1)
+        self.assertEqual(file_path, "a.txt")
+        self.assertEqual(chunk_index, 1)
+
+        files_requests_iterator.next_request()
+
+        file_path, chunk_index = files_requests_iterator.get_global_file_and_chunk(0, 0)
+        self.assertEqual(file_path, "a.txt")
+        self.assertEqual(chunk_index, 2)
 
 class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
     def test_memory_cap_unlimited(self):

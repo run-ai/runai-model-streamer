@@ -89,16 +89,11 @@ class FileStreamer:
             file_stream_requests: List[FileChunks],
             credentials: Optional[S3Credentials] = None,
 ) -> None:
-        self.total_size = self.total_size + sum(sum(file_stream_request.chunks) for file_stream_request in file_stream_requests)
         for file_stream_request in file_stream_requests:
+            self.total_size += sum(file_stream_request.chunks)
             file_stream_request.path = self.handle_object_store(file_stream_request.path, credentials)
 
-        self.requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_mode(file_stream_requests)
-
-        self.file_to_current_chunk_index = {}
-        for file_stream_request in file_stream_requests:
-            self.file_to_current_chunk_index[file_stream_request.path] = 0
-
+        self.requests_iterator: FilesRequestsIteratorWithBuffer = FilesRequestsIteratorWithBuffer.with_memory_mode(file_stream_requests)
  
         self.active_request = self.requests_iterator.next_request()
         if self.active_request is None:
@@ -124,9 +119,6 @@ class FileStreamer:
         
         while True:
             yield from self.request_ready_chunks()
-
-            for active_request_file in self.active_request.files:
-                self.file_to_current_chunk_index[active_request_file.path] += len(active_request_file.chunks)
             
             self.active_request = self.requests_iterator.next_request()
             if self.active_request is None:
@@ -151,7 +143,6 @@ class FileStreamer:
             if chunk_relative_index == None:
                 return
             
-            file_path = self.active_request.files[file_relative_index].path
-            file_current_chunk_index = self.file_to_current_chunk_index[file_path]
-            yield file_path, file_current_chunk_index + chunk_relative_index, self.requests_iterator.file_buffers[file_relative_index], sum(self.active_request.files[file_relative_index].chunks[:chunk_relative_index])
+            file_path, chunk_index, buffer = self.requests_iterator.get_global_file_and_chunk(file_relative_index, chunk_relative_index)
+            yield file_path, chunk_index, buffer, sum(self.active_request.files[file_relative_index].chunks[:chunk_relative_index])
 

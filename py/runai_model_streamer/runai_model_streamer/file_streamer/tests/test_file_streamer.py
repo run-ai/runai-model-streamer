@@ -17,13 +17,13 @@ class TestBindings(unittest.TestCase):
         file_path = os.path.join(self.temp_dir, "test_file.txt")
         with open(file_path, "w") as file:
             file.write(file_content)
-        size = len(file_content) - 2
 
-        request_sizes = [10, 9, 10]
+        request_sizes = [10, 0, 9, 10]
         id_to_results = {
             0: {"expected_offset": 0, "expected_text": "Test Text1"},
-            1: {"expected_offset": 10, "expected_text": "TestText2"},
-            2: {"expected_offset": 19, "expected_text": "Test-Text3"},
+            1: {"expected_offset": 10, "expected_text": ""},
+            2: {"expected_offset": 10, "expected_text": "TestText2"},
+            3: {"expected_offset": 19, "expected_text": "Test-Text3"},
         }
         with FileStreamer() as fs:
             fs.stream_files([FileChunks(file_path, 1, request_sizes)])

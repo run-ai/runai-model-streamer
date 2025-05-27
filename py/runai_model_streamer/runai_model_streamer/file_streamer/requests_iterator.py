@@ -43,16 +43,23 @@ class FilesRequestsIteratorWithBuffer:
         self.buffer = np.empty(buffer_size, dtype=np.uint8)
         self.file_buffers = []
 
+    def get_global_file_and_chunk(self, local_file_index: int, local_chunk_index: int) -> Tuple[str, int, int]:
+        file_path, global_chunk_index = self.files_requests_iterator.get_global_file_and_chunk(
+            local_file_index, local_chunk_index
+        )
+        return file_path, global_chunk_index, self.file_buffers[local_file_index]
+
     def next_request(self) -> Optional[FilesRequest]:
         next_requests = self.files_requests_iterator.next_request()
         if next_requests is None:
             return None
 
         self.file_buffers = []
-        current_buffer_index = 0
+        global_buffer_offset = 0
         for file_request in next_requests.files:
-            self.file_buffers.append(self.buffer[current_buffer_index: current_buffer_index + sum(file_request.chunks)])
-            current_buffer_index += sum(file_request.chunks)
+            chunks_size = sum(file_request.chunks)
+            self.file_buffers.append(self.buffer[global_buffer_offset: global_buffer_offset + chunks_size])
+            global_buffer_offset += chunks_size
             
         return next_requests
 
@@ -99,24 +106,40 @@ class FilesRequestsIterator:
         self.q = deque(FileChunksIterator(file_chunks)
             for file_chunks in files_chunks)
         
+        self.file_to_current_chunk_index = {}
+        for file_chunks in files_chunks:
+            self.file_to_current_chunk_index[file_chunks.path] = 0
+
+        self.active_request: FilesRequest = None
+
+    def get_global_file_and_chunk(self, local_file_index: int, local_chunk_index: int) -> Tuple[str, int]:
+        file_path = self.active_request.files[local_file_index].path
+        return file_path, self.file_to_current_chunk_index[file_path] + local_chunk_index
+
     def next_request(self) -> Optional[FilesRequest]:
         if not self.q:
             return None
+        
+        if self.active_request is not None:
+            for file_chunks in self.active_request.files:
+                self.file_to_current_chunk_index[file_chunks.path] += len(file_chunks.chunks)
             
         files_request = FilesRequest()
         current_request_memory_size = 0
         while self.q:
             file_chunks_iterator = self.q[0]
-            file_chunks, is_finished = file_chunks_iterator.next_chunks(
+            file_chunks = file_chunks_iterator.next_chunks(
                 self.memory_limit - current_request_memory_size
             )
-            if is_finished:
+            if file_chunks_iterator.is_finished():
                 self.q.popleft()
             elif len(file_chunks.chunks) == 0:
                 break
+
             files_request.append(file_chunks)
             current_request_memory_size += sum(file_chunks.chunks)
 
+        self.active_request = files_request
         return files_request
 
 class FileChunksIterator:
@@ -127,11 +150,14 @@ class FileChunksIterator:
         self.next_request_offset = file_chunks.offset
         self.chunks_iterator = ChunksIterator(file_chunks.chunks)
 
-    def next_chunks(self, memory_limit: int) -> Tuple[FileChunks, bool]:
-        chunks, is_finished = self.chunks_iterator.next_chunks(memory_limit)
+    def is_finished(self) -> bool:
+        return self.chunks_iterator.is_finished()
+
+    def next_chunks(self, size: int) -> FileChunks:
+        chunks = self.chunks_iterator.next_chunks(size)
         starting_offset = self.next_request_offset
         self.next_request_offset += sum(chunks)
-        return FileChunks(self.path, starting_offset, chunks), is_finished
+        return FileChunks(self.path, starting_offset, chunks)
 
 class ChunksIterator:
     def __init__(
@@ -139,19 +165,22 @@ class ChunksIterator:
     ) -> None:
         self.q = deque(chunks)
 
-    def next_chunks(self, memory_limit: int) -> Tuple[List[int], bool]:
-        chunks = []
-        current_request_memory_size = 0
+    def is_finished(self) -> bool:
+        return len(self.q) == 0
 
-        while self.q:
+    def next_chunks(self, size: int) -> List[int]:
+        chunks = []
+        current_request_size = 0
+
+        while not self.is_finished():
             candidate_chunk = self.q[0]
-            if current_request_memory_size + candidate_chunk > memory_limit:
-                return chunks, False
+            if current_request_size + candidate_chunk > size:
+                return chunks
 
             chunks.append(self.q.popleft())
-            current_request_memory_size += candidate_chunk
+            current_request_size += candidate_chunk
 
-        return chunks, True
+        return chunks
 
 
 def _get_memory_mode(memory_limit: str | None) -> MemoryCapMode:
