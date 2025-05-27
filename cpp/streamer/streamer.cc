@@ -60,137 +60,17 @@ _RUNAI_EXTERN_C void runai_end(void * streamer)
     }
 }
 
-// send a read request and wait until finished
-// return true if the exact number of bytes was read
-
-_RUNAI_EXTERN_C int runai_read(void * streamer, const char * path, size_t file_offset, size_t bytesize, void * dst)
-{
-    try
-    {
-        auto s = static_cast<impl::Streamer *>(streamer);
-        if (s == nullptr)
-        {
-            return static_cast<int>(common::ResponseCode::InvalidParameterError);
-        }
-        common::s3::Credentials credentials;
-        return static_cast<int>(s->request(path, file_offset, bytesize, dst, credentials));
-    }
-    catch(...)
-    {
-    }
-    return static_cast<int>(common::ResponseCode::UnknownError);
-}
-
-_RUNAI_EXTERN_C int runai_read_with_credentials(
-    void * streamer,
-    const char * path,
-    size_t file_offset,
-    size_t bytesize,
-    void * dst,
-    const char * key,
-    const char * secret,
-    const char * token,
-    const char * region,
-    const char * endpoint
-)
-{
-    try
-    {
-        auto s = static_cast<impl::Streamer *>(streamer);
-        if (s == nullptr)
-        {
-            return static_cast<int>(common::ResponseCode::InvalidParameterError);
-        }
-
-        common::s3::Credentials credentials(key, secret, token, region, endpoint);
-        return static_cast<int>(s->request(path, file_offset, bytesize, dst, credentials));
-    }
-    catch(...)
-    {
-    }
-    return static_cast<int>(common::ResponseCode::UnknownError);
-}
-
-// send asynchronous read request with a list of consecutive sub requests, and receive response for each sub request when ready
-// num_sizes : number of sub requests
+// send asynchronous read request to read multiple files
+//
+// num_files : number of files to read
+// paths : list of files paths
+// file_offsets : offset for each file path, from which to start reading
+// bytesizes : size of each destination buffer
+// dsts : destination buffers
+//        for reading to CPU memory, dsts[0] only is used as a single buffer to contain all the files in the order specified by paths
+// num_sizes : number of sub requests for each file
 // internal_sizes : a list containing the size of each sub request, where the first sub request starts at the given file offset and each sub request starts at the end of the previous one
-
-_RUNAI_EXTERN_C int runai_request(void * streamer, const char * path, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes)
-{
-    try
-    {
-        auto s = static_cast<impl::Streamer *>(streamer);
-        if (s == nullptr)
-        {
-            return static_cast<int>(common::ResponseCode::InvalidParameterError);
-        }
-        common::s3::Credentials credentials;
-        return static_cast<int>(s->request(path, file_offset, bytesize, dst, num_sizes, internal_sizes, credentials));
-    }
-    catch(...)
-    {
-    }
-    return static_cast<int>(common::ResponseCode::UnknownError);
-}
-
-_RUNAI_EXTERN_C int runai_request_with_credentials(
-    void * streamer,
-    const char * path,
-    size_t file_offset,
-    size_t bytesize,
-    void * dst,
-    unsigned num_sizes,
-    size_t * internal_sizes,
-    const char * key,
-    const char * secret,
-    const char * token,
-    const char * region,
-    const char * endpoint
-)
-{
-    try
-    {
-        auto s = static_cast<impl::Streamer *>(streamer);
-        if (s == nullptr)
-        {
-            return static_cast<int>(common::ResponseCode::InvalidParameterError);
-        }
-
-        common::s3::Credentials credentials(key, secret, token, region, endpoint);
-        return static_cast<int>(s->request(path, file_offset, bytesize, dst, num_sizes, internal_sizes, credentials));
-    }
-    catch(...)
-    {
-    }
-    return static_cast<int>(common::ResponseCode::UnknownError);
-}
-
-
-// wait until the next sub request is ready
-// returns -1 when there are no more responses
-
-_RUNAI_EXTERN_C int runai_response(void * streamer, unsigned * index)
-{
-    try
-    {
-        if (streamer == nullptr || index == nullptr)
-        {
-            return static_cast<int>(common::ResponseCode::InvalidParameterError);
-        }
-
-        auto * s = static_cast<impl::Streamer *>(streamer);
-        auto r = s->response();
-        if (r.ret == common::ResponseCode::Success)
-        {
-            *index = r.index;
-        }
-        return static_cast<int>(r.ret);
-    }
-    catch(...)
-    {
-    }
-    return static_cast<int>(common::ResponseCode::UnknownError);
-}
+// return Success if request is valid
 
 _RUNAI_EXTERN_C int runai_request_multi(
     void * streamer,
@@ -238,6 +118,13 @@ _RUNAI_EXTERN_C int runai_request_multi(
     }
     return static_cast<int>(common::ResponseCode::UnknownError);
 }
+
+// receive response for each sub request when ready
+//
+// streamer : streamer object
+// file_index : index of the file that the response belongs to
+// index : index of the sub request that the response belongs to
+// return Success if response is valid
 
 _RUNAI_EXTERN_C int runai_response_multi(void * streamer, unsigned * file_index /* return parameter */, unsigned * index /* return parameter */)
 {

@@ -30,6 +30,41 @@ struct StreamerTest : ::testing::Test
         _chunk_bytesize("RUNAI_STREAMER_CHUNK_BYTESIZE", utils::random::number<int>(1, 1024))
     {}
 
+    int runai_request_file(void * streamer, const char * path, size_t offset, size_t size, void * dst)
+    {
+        std::vector<size_t> sizes;
+        sizes.push_back(size);
+        std::vector<size_t *> internal_sizes;
+        internal_sizes.push_back(sizes.data());
+        std::vector<unsigned> num_sizes;
+        num_sizes.push_back(1);
+        return runai::llm::streamer::runai_request_multi(streamer, 1, &path, &offset, &size, &dst, num_sizes.data(), internal_sizes.data(), nullptr, nullptr, nullptr, nullptr, nullptr);
+    }
+
+    int runai_response_file(void * streamer, unsigned * file_index, unsigned * index)
+    {
+        return runai::llm::streamer::runai_response_multi(streamer, file_index, index);
+    }
+
+    int runai_read_file(void * streamer, const char * path, size_t offset, size_t size, void * dst)
+    {
+        std::vector<size_t> sizes;
+        sizes.push_back(size);
+        std::vector<size_t *> internal_sizes;
+        internal_sizes.push_back(sizes.data());
+        std::vector<unsigned> num_sizes;
+        num_sizes.push_back(1);
+        auto res = runai::llm::streamer::runai_request_multi(streamer, 1, &path, &offset, &size, &dst, num_sizes.data(), internal_sizes.data(), nullptr, nullptr, nullptr, nullptr, nullptr);
+        if (res != static_cast<int>(runai::llm::streamer::common::ResponseCode::Success))
+        {
+            return res;
+        }
+
+        unsigned file_index;
+        unsigned index;
+        return runai_response_multi(streamer, &file_index, &index);
+    }
+
  protected:
     utils::temp::Env _size;
     utils::temp::Env _chunk_bytesize;
@@ -91,7 +126,7 @@ TEST_F(StreamerTest, Read)
     EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
 
     std::vector<unsigned char> v(size);
-    res = runai_read(streamer, file.path.c_str(), 0, size, v.data());
+    res = runai_read_file(streamer, file.path.c_str(), 0, size, v.data());
     EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
 
     for (size_t i = 0; i < size; ++i)
@@ -122,12 +157,13 @@ TEST_F(StreamerTest, Async)
     std::vector<unsigned char> dst(size);
     std::vector<size_t> sizes;
     sizes.push_back(size);
-    EXPECT_EQ(runai_request(streamer, file.path.c_str(), 0, size, dst.data(), 1, sizes.data()), static_cast<int>(common::ResponseCode::Success));
+    EXPECT_EQ(runai_request_file(streamer, file.path.c_str(), 0, size, dst.data()), static_cast<int>(common::ResponseCode::Success));
     unsigned r = utils::random::number();
-    EXPECT_EQ(runai_response(streamer, &r), static_cast<int>(common::ResponseCode::Success));
+    unsigned rfile = utils::random::number();
+    EXPECT_EQ(runai_response_file(streamer, &rfile, &r), static_cast<int>(common::ResponseCode::Success));
     EXPECT_EQ(r, 0);
-    EXPECT_EQ(runai_response(streamer, &r), static_cast<int>(common::ResponseCode::FinishedError));
-    EXPECT_EQ(r, 0);
+    EXPECT_EQ(rfile, 0);
+    EXPECT_EQ(runai_response_file(streamer, &rfile, &r), static_cast<int>(common::ResponseCode::FinishedError));
 
     for (size_t i = 0; i < size; ++i)
     {
@@ -154,7 +190,7 @@ TEST_F(StreamerTest, Error)
     std::vector<char> dst(size);
     std::vector<size_t> sizes;
     sizes.push_back(size);
-    const auto request_ret = runai_request(streamer, file.path.c_str(), 0, size, dst.data(), 1, sizes.data());
+    const auto request_ret = runai_request_file(streamer, file.path.c_str(), 0, size, dst.data());
     if (request_ret == static_cast<int>(common::ResponseCode::EofError))
     {
         return;
@@ -164,10 +200,11 @@ TEST_F(StreamerTest, Error)
 
     unsigned value = utils::random::number();
     unsigned r = value;
-    EXPECT_EQ(runai_response(streamer, &r), static_cast<int>(common::ResponseCode::EofError));
-    EXPECT_EQ(r, value);
-    EXPECT_EQ(runai_response(streamer, &r), static_cast<int>(common::ResponseCode::FinishedError));
-    EXPECT_EQ(r, value);
+    unsigned file_index = utils::random::number();
+    EXPECT_EQ(runai_response_file(streamer, &file_index, &r), static_cast<int>(common::ResponseCode::EofError));
+    EXPECT_EQ(r, 0);
+    EXPECT_EQ(file_index, 0);
+    EXPECT_EQ(runai_response_file(streamer, &file_index, &r), static_cast<int>(common::ResponseCode::FinishedError));
 
     runai_end(streamer);
 }
@@ -212,9 +249,9 @@ TEST_F(StreamerTest, S3_Library_Not_Found)
     std::vector<char> dst(size);
     std::vector<size_t> sizes;
     sizes.push_back(size);
-    EXPECT_EQ(runai_request(streamer, s3_path.c_str(), 0, size, dst.data(), 1, sizes.data()), static_cast<int>(common::ResponseCode::Success));
+    EXPECT_EQ(runai_request_file(streamer, s3_path.c_str(), 0, size, dst.data()), static_cast<int>(common::ResponseCode::Success));
     unsigned r = utils::random::number();
-    EXPECT_EQ(runai_response(streamer, &r), static_cast<int>(common::ResponseCode::S3NotSupported));
+    EXPECT_EQ(runai_response_file(streamer, &r, &r), static_cast<int>(common::ResponseCode::S3NotSupported));
 
     runai_end(streamer);
 }
@@ -233,7 +270,7 @@ TEST_F(StreamerTest, End_Before_Read)
     std::vector<size_t> sizes;
     sizes.push_back(size);
 
-    EXPECT_EQ(runai_request(streamer, file.path.c_str(), 0, size, dst.data(), 1, sizes.data()), static_cast<int>(common::ResponseCode::Success));
+    EXPECT_EQ(runai_request_file(streamer, file.path.c_str(), 0, size, dst.data()), static_cast<int>(common::ResponseCode::Success));
 
     ::usleep(utils::random::number(400));
 
