@@ -51,7 +51,7 @@ class FilesRequestsIteratorWithBuffer:
 
     def next_request(self) -> Optional[FilesRequest]:
         next_requests = self.files_requests_iterator.next_request()
-        if next_requests is None:
+        if next_requests is None or len(next_requests.files) == 0:
             return None
 
         self.file_buffers = []
@@ -133,7 +133,7 @@ class FilesRequestsIterator:
             )
             if file_chunks_iterator.is_finished():
                 self.q.popleft()
-            elif len(file_chunks.chunks) == 0:
+            elif len(file_chunks.chunks) == 0 or sum(file_chunks.chunks) == 0:
                 break
 
             files_request.append(file_chunks)

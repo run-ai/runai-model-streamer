@@ -8,6 +8,8 @@ from runai_model_streamer.file_streamer.requests_iterator import (
     RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME,
 )
 
+MIN_NUM_FILES = 1
+MAX_NUM_FILES = 20
 MIN_CHUNK_NUM = 1
 MAX_CHUNK_NUM = 500
 MIN_CHUNK_SIZE = 16
@@ -33,44 +35,60 @@ def random_memory_mode(chunks):
         memory_limit = random.randint(max(chunks), sum(chunks))
         os.environ[RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME] = str(memory_limit)
 
+def random_file_chunks(i, dir):
+    file_content, chunk_sizes = random_chunks()
+    file_path = os.path.join(dir, f"test_file-{i}.txt")
+    with open(file_path, "wb") as file:
+        file.write(file_content)
+        
+    initial_offset = chunk_sizes[0]
+    request_sizes = chunk_sizes[1:]
+
+    expected_id_to_results = {}
+    for i in range(len(request_sizes)):
+        if i == len(request_sizes):
+            expected_content = (
+                file_content[sum(request_sizes[0:i]) :] + initial_offset
+            )
+        else:
+            expected_content = file_content[
+                sum(request_sizes[0:i])
+                + initial_offset : sum(request_sizes[0 : i + 1])
+                + initial_offset
+            ]
+        expected_id_to_results[i] = {
+            "expected_offset": sum(request_sizes[0:i]),
+            "expected_content": expected_content,
+        }
+    return expected_id_to_results, FileChunks(file_path, initial_offset, request_sizes)
 
 class TestFuzzing(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
 
     def test_file_streamer(self):
-        file_content, chunk_sizes = random_chunks()
-        random_memory_mode(chunk_sizes)
-        file_path = os.path.join(self.temp_dir, "test_file.txt")
-        with open(file_path, "wb") as file:
-            file.write(file_content)
+        expected_file_to_id_to_results = {}
+        file_to_file_chunks = {}
+        files_chunks = []
+        
+        for i in range(random.randint(MIN_NUM_FILES, MAX_NUM_FILES)):
+            expected_id_to_results, file_chunks = random_file_chunks(i, self.temp_dir)
+            expected_file_to_id_to_results[file_chunks.path] = expected_id_to_results
+            file_to_file_chunks[file_chunks.path] = file_chunks
+            files_chunks.append(file_chunks)
 
-        initial_offset = chunk_sizes[0]
-        request_sizes = chunk_sizes[1:]
-        expected_id_to_results = {}
-        for i in range(len(request_sizes)):
-            if i == len(request_sizes):
-                expected_content = (
-                    file_content[sum(request_sizes[0:i]) :] + initial_offset
-                )
-            else:
-                expected_content = file_content[
-                    sum(request_sizes[0:i])
-                    + initial_offset : sum(request_sizes[0 : i + 1])
-                    + initial_offset
-                ]
-            expected_id_to_results[i] = {
-                "expected_offset": sum(request_sizes[0:i]),
-                "expected_content": expected_content,
-            }
+        random_memory_mode([chunk for chunk in file_chunks.chunks for file_chunks in files_chunks])
 
         with FileStreamer() as fs:
-            fs.stream_files([FileChunks(file_path, initial_offset, request_sizes)])
+            fs.stream_files(files_chunks)
             for file, id, dst, offset in fs.get_chunks():
-                self.assertEqual(file, file_path)
+                self.assertIn(file, [file_chunks.path for file_chunks in files_chunks])
+
+                file_chunks = file_to_file_chunks[file]
+                expected_id_to_results = expected_file_to_id_to_results[file]
                 self.assertEqual(offset, expected_id_to_results[id]["expected_offset"])
                 self.assertEqual(
-                    dst[offset : offset + request_sizes[id]].tobytes(),
+                    dst[offset : offset + file_chunks.chunks[id]].tobytes(),
                     expected_id_to_results[id]["expected_content"],
                 )
 
