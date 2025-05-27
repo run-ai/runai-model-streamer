@@ -3,7 +3,7 @@ import torch
 import struct
 import json
 from typing import List, Tuple
-from runai_model_streamer.file_streamer.file_streamer import FileStreamer
+from runai_model_streamer.file_streamer.file_streamer import (FileStreamer, FileChunks)
 
 
 SAFETENSORS_DATA_OFFSETS_KEY = "data_offsets"
@@ -52,18 +52,22 @@ class SafetensorsMetadata:
                 self.read_sizes.append(self.tensors_metadata[i].get_bytesize())
 
     @staticmethod
-    def from_file(fs: FileStreamer, filename: str) -> SafetensorsMetadata:
-        header_size_buffer = fs.read_file(filename, 0, SAFETENSORS_HEADER_BUFFER_SIZE)
-        header_size = struct.unpack(
-            LITTLE_ENDIAN_LONG_LONG_STRUCT_FORMAT, header_size_buffer
-        )[0]
-        header_buffer = fs.read_file(
-            filename, SAFETENSORS_HEADER_BUFFER_SIZE, header_size
-        )
-        metadata = json.loads(bytearray(header_buffer))
-        return SafetensorsMetadata(
-            metadata, header_size + SAFETENSORS_HEADER_BUFFER_SIZE
-        )
+    def from_files(fs: FileStreamer, filenames: str) -> List[SafetensorsMetadata]:
+        fs.stream_files([FileChunks(filename, 0, [SAFETENSORS_HEADER_BUFFER_SIZE]) for filename in filenames])
+        header_sizes = {}
+        for file_path, ready_chunk_index, buffer, buffer_offset in fs.get_chunks():
+            header_sizes[file_path] = struct.unpack(
+                LITTLE_ENDIAN_LONG_LONG_STRUCT_FORMAT, buffer[buffer_offset:buffer_offset + SAFETENSORS_HEADER_BUFFER_SIZE]
+            )[0]
+            
+        metadatas = {}
+        fs.stream_files([FileChunks(filename, SAFETENSORS_HEADER_BUFFER_SIZE, [header_size]) for filename, header_size in header_sizes.items()])
+        for file_path, ready_chunk_index, buffer, buffer_offset in fs.get_chunks():
+            metadatas[file_path] = json.loads(bytearray(buffer[buffer_offset:buffer_offset + header_sizes[file_path]]))
+
+        return [SafetensorsMetadata(
+            metadatas[filename], header_sizes[filename] + SAFETENSORS_HEADER_BUFFER_SIZE
+        ) for filename in filenames]
 
 
 class SafetensorMetadata:
@@ -96,14 +100,14 @@ class Offsets:
 
 
 def prepare_request(
-    fs: FileStreamer, path: str
-) -> Tuple[int, List[SafetensorMetadata], List[int]]:
-    safetensors_metadata = SafetensorsMetadata.from_file(fs, path)
-    return (
+    fs: FileStreamer, paths: str
+) -> List[Tuple[str, int, List[SafetensorMetadata], List[int]]]:
+    safetensors_metadatas = SafetensorsMetadata.from_files(fs, paths)
+    return [(
         safetensors_metadata.offset,
         safetensors_metadata.tensors_metadata,
         safetensors_metadata.read_sizes,
-    )
+    ) for safetensors_metadata in safetensors_metadatas]
 
 
 def create_torch_tensor(

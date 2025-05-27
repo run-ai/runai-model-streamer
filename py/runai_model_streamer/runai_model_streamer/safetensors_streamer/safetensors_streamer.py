@@ -39,10 +39,11 @@ class SafetensorsStreamer:
         self.files_to_tensors_metadata = {}
 
         file_stream_requests: List[FileChunks] = []
-        for path in paths:
-            file_offset, tensors_metadata, tensor_sizes = (
-                safetensors_pytorch.prepare_request(self.file_streamer, path)
-            )
+
+        safetensors_metadatas = safetensors_pytorch.prepare_request(self.file_streamer, paths)
+        for i in range(len(paths)):
+            (file_offset, tensors_metadata, tensor_sizes) = safetensors_metadatas[i]
+            path = paths[i]
             self.files_to_tensors_metadata[path] = tensors_metadata
             file_stream_requests.append(FileChunks(path, file_offset, tensor_sizes))
 

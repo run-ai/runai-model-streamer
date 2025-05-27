@@ -1,10 +1,8 @@
 from typing import List, Iterator, Optional
-import numpy as np
 from timeit import default_timer as timer
 from runai_model_streamer.libstreamer.libstreamer import (
     runai_start,
     runai_end,
-    runai_read,
     runai_request_multi,
     runai_response_multi
 )
@@ -63,26 +61,6 @@ class FileStreamer:
                 # check for s3 path and init sessions and credentials           
                 self.s3_session, self.s3_credentials = s3_credentials_module.get_credentials(credentials)
         return path
-
-    def read_file(
-            self,
-            path: str,
-            offset: int,
-            len: int,
-            credentials: Optional[S3Credentials] = None,
-    ) -> memoryview:
-        dst_buffer = np.empty(len, dtype=np.uint8)
-      
-        path = self.handle_object_store(path, credentials)
-        runai_read(
-            self.streamer,
-            path,
-            offset,
-            len,
-            dst_buffer,
-            self.s3_credentials,
-        )
-        return dst_buffer
 
     def stream_files(
             self,

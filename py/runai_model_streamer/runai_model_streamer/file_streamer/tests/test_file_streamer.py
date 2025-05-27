@@ -35,16 +35,6 @@ class TestBindings(unittest.TestCase):
                     id_to_results[id]["expected_text"],
                 )
 
-    def test_runai_read(self):
-        file_content = "MyTensorHelloTest"
-        file_path = os.path.join(self.temp_dir, "runai_read_test.txt")
-        with open(file_path, "w") as file:
-            file.write(file_content)
-
-        with FileStreamer() as fs:
-            dst = fs.read_file(file_path, 2, len(file_content) - 2)
-            self.assertEqual(bytearray(dst).decode("utf-8"), "TensorHelloTest")
-
     @patch("runai_model_streamer.file_streamer.requests_iterator._get_memory_mode")
     def test_min_memory_cap(self, mock_get_memory_mode):
         mock_get_memory_mode.return_value = MemoryCapMode.largest_chunk
