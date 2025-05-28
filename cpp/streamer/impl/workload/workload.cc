@@ -46,11 +46,6 @@ common::ResponseCode Workload::verify_batch(const common::s3::S3ClientWrapper::P
 
         return common::ResponseCode::InvalidParameterError;
     }
-    if (_params.valid() && params.uri->bucket != _params.uri->bucket)
-    {
-        LOG(ERROR) << "Workload contains paths of different buckets";
-        return common::ResponseCode::InvalidParameterError;
-    }
 
     return common::ResponseCode::Success;
 }
@@ -173,11 +168,17 @@ void Workload::wait_for_responses(std::atomic<bool> & stopped)
 
         const auto & response = responses.back();
 
+        if (response.ret == common::ResponseCode::FinishedError)
+        {
+            LOG(DEBUG) << "FinishedError while waiting for responses";
+            throw common::Exception(common::ResponseCode::FinishedError);
+        }
+
         // TO do (Noa)
         // safer approach is to use a map of request_id to task index, and verify the pointer is valid
         // also replace request_id with handle
         Task * task_ptr = reinterpret_cast<Task *>(response.handle);
-        ASSERT(task_ptr != nullptr) << "Received response from a null task";
+        ASSERT(task_ptr != nullptr) << "Received response from a null task ; response: " << response;
 
         auto file_index = task_ptr->request->file_index;
         auto & batch = _batches_by_file_index.at(file_index);

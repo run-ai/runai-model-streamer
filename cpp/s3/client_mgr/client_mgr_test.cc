@@ -20,7 +20,6 @@ struct Helper : S3ClientBase
     {
     }
 
-    using S3ClientBase::bucket;
     using S3ClientBase::verify_credentials;
 
     const std::optional<std::string> & key()
@@ -76,7 +75,6 @@ struct ClientMgrTest : ::testing::Test
 
         EXPECT_EQ(ClientMgr<Helper>::size(), 0);
         EXPECT_EQ(ClientMgr<Helper>::unused(), 0);
-        EXPECT_EQ(ClientMgr<Helper>::current_bucket(), "");
     }
 
     static common::s3::StorageUri create_uri()
@@ -93,14 +91,11 @@ TEST_F(ClientMgrTest, Creation_Sanity)
 {
     EXPECT_EQ(ClientMgr<Helper>::size(), 0);
     EXPECT_EQ(ClientMgr<Helper>::unused(), 0);
-    EXPECT_EQ(ClientMgr<Helper>::current_bucket(), "");
 }
 
 TEST_F(ClientMgrTest, Create_Client)
 {
     Helper * helper = ClientMgr<Helper>::pop(s3_path, credentials);
-    EXPECT_EQ(helper->bucket(), uri.bucket);
-    EXPECT_EQ(ClientMgr<Helper>::current_bucket(), uri.bucket);
 
     EXPECT_EQ(helper->key(), credentials.access_key_id);
     EXPECT_EQ(helper->secret(), credentials.secret_access_key);
@@ -123,8 +118,6 @@ TEST_F(ClientMgrTest, Create_Client)
 TEST_F(ClientMgrTest, Reuse_Client)
 {
     Helper * helper = ClientMgr<Helper>::pop(s3_path, credentials);
-    EXPECT_EQ(helper->bucket(), uri.bucket);
-    EXPECT_EQ(ClientMgr<Helper>::current_bucket(), uri.bucket);
 
     EXPECT_EQ(helper->key(), credentials.access_key_id);
     EXPECT_EQ(helper->secret(), credentials.secret_access_key);
@@ -148,8 +141,6 @@ TEST_F(ClientMgrTest, Reuse_Client)
         uri.path = path;
         const common::s3::Path s3_path(uri);
         Helper * helper = ClientMgr<Helper>::pop(s3_path, credentials);
-        EXPECT_EQ(helper->bucket(), uri.bucket);
-        EXPECT_EQ(ClientMgr<Helper>::current_bucket(), uri.bucket);
         EXPECT_EQ(helper->key(), credentials.access_key_id);
         EXPECT_EQ(helper->secret(), credentials.secret_access_key);
         EXPECT_EQ(helper->token(), credentials.session_token);
@@ -171,8 +162,6 @@ TEST_F(ClientMgrTest, Reuse_Client)
 TEST_F(ClientMgrTest, Credentials_Changed)
 {
     Helper * helper = ClientMgr<Helper>::pop(s3_path, credentials);
-    EXPECT_EQ(helper->bucket(), uri.bucket);
-    EXPECT_EQ(ClientMgr<Helper>::current_bucket(), uri.bucket);
 
     EXPECT_EQ(helper->key(), credentials.access_key_id);
     EXPECT_EQ(helper->secret(), credentials.secret_access_key);
@@ -204,8 +193,6 @@ TEST_F(ClientMgrTest, Credentials_Changed)
         uri.path = path;
         const common::s3::Path s3_path(uri);
         Helper * helper = ClientMgr<Helper>::pop(s3_path, new_credentials);
-        EXPECT_EQ(helper->bucket(), uri.bucket);
-        EXPECT_EQ(ClientMgr<Helper>::current_bucket(), uri.bucket);
         EXPECT_EQ(helper->key(), new_credentials.access_key_id);
         EXPECT_EQ(helper->secret(), new_credentials.secret_access_key);
         EXPECT_EQ(helper->token(), new_credentials.session_token);
@@ -234,8 +221,6 @@ TEST_F(ClientMgrTest, Change_Bucket)
     for (unsigned i = 0; i < m; ++i)
     {
         Helper * helper = ClientMgr<Helper>::pop(s3_path, credentials);
-        EXPECT_EQ(helper->bucket(), uri.bucket);
-        EXPECT_EQ(ClientMgr<Helper>::current_bucket(), uri.bucket);
 
         EXPECT_EQ(ClientMgr<Helper>::size(), i + 1);
         EXPECT_EQ(ClientMgr<Helper>::unused(), 0);
@@ -262,13 +247,12 @@ TEST_F(ClientMgrTest, Change_Bucket)
         const std::string path = utils::random::string();
         uri_.path = path;
         const common::s3::Path s3_path_(uri_);
+        LOG(INFO)<< "before m = " << m << " i = " << i << " unused = " << ClientMgr<Helper>::unused();
         Helper * helper = ClientMgr<Helper>::pop(s3_path_, credentials);
-        EXPECT_EQ(ClientMgr<Helper>::unused(), 0);
+        LOG(INFO)<< "after m = " << m << " i = " << i << " unused = " << ClientMgr<Helper>::unused();
+        EXPECT_EQ(ClientMgr<Helper>::unused(), (m > i + 1 ? m - i - 1 : 0));
 
-        EXPECT_EQ(helper->bucket(), uri_.bucket);
-        EXPECT_EQ(ClientMgr<Helper>::current_bucket(), uri_.bucket);
-
-        EXPECT_EQ(ClientMgr<Helper>::size(), i + 1);
+        EXPECT_EQ(ClientMgr<Helper>::size(), (m > i + 1 ? m : i + 1));
         used.insert(helper);
     }
 
@@ -282,9 +266,6 @@ TEST_F(ClientMgrTest, Remove_Client)
 {
     Helper * helper = ClientMgr<Helper>::pop(s3_path, credentials);
 
-    EXPECT_EQ(helper->bucket(), uri.bucket);
-    EXPECT_EQ(ClientMgr<Helper>::current_bucket(), uri.bucket);
-
     EXPECT_EQ(ClientMgr<Helper>::size(), 1);
     EXPECT_EQ(ClientMgr<Helper>::unused(), 0);
 
@@ -294,9 +275,6 @@ TEST_F(ClientMgrTest, Remove_Client)
 TEST_F(ClientMgrTest, Remove_Client_Is_Reentrant)
 {
     Helper * helper = ClientMgr<Helper>::pop(s3_path, credentials);
-
-    EXPECT_EQ(helper->bucket(), uri.bucket);
-    EXPECT_EQ(ClientMgr<Helper>::current_bucket(), uri.bucket);
 
     EXPECT_EQ(ClientMgr<Helper>::size(), 1);
     EXPECT_EQ(ClientMgr<Helper>::unused(), 0);

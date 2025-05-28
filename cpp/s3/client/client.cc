@@ -29,7 +29,6 @@ std::optional<Aws::String> convert(const char * input) {
 }
 
 S3ClientBase::S3ClientBase(const common::s3::Path & path, const common::s3::Credentials_C & credentials) :
-    _bucket_name(path.uri.bucket),
     _key(convert(credentials.access_key_id)),
     _secret(convert(credentials.secret_access_key)),
     _token(convert(credentials.session_token)),
@@ -37,11 +36,6 @@ S3ClientBase::S3ClientBase(const common::s3::Path & path, const common::s3::Cred
     _endpoint(convert(credentials.endpoint)),
     _client_credentials(_key.has_value() && _secret.has_value() ? std::make_unique<Aws::Auth::AWSCredentials>(_key.value(), _secret.value(), (_token.has_value() ? _token.value() : Aws::String(""))) : nullptr)
 {
-}
-
-std::string S3ClientBase::bucket() const
-{
-    return std::string(_bucket_name.c_str(), _bucket_name.size());
 }
 
 bool S3ClientBase::verify_credentials_member(const std::optional<Aws::String>& member, const char* value, const char * name) const
@@ -160,7 +154,6 @@ common::ResponseCode S3Client::async_read(const common::s3::Path & object_path, 
     }
 
     ASSERT((!_endpoint.has_value()) || (object_path.uri.endpoint == nullptr) || (_endpoint.has_value() && _endpoint.value() == std::string(object_path.uri.endpoint))) << "Attempting to reuse client with a different endpoint " << object_path.uri.endpoint;
-    ASSERT(object_path.uri.bucket == _bucket_name) << "Attempting to reuse client of bucket " << _bucket_name << " with a different bucket " << object_path.uri.bucket;
 
     Aws::String bucket_name(object_path.uri.bucket);
     Aws::String path(object_path.uri.path);
