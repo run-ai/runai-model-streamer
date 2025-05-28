@@ -122,7 +122,7 @@ TEST_F(StreamerTest, Async_Read)
 
     if (use_credentials)
     {
-        res = runai_request_multi(streamer,
+        res = runai_request(streamer,
                         num_files,
                         file_names.data(),
                         file_offsets.data(),
@@ -138,7 +138,7 @@ TEST_F(StreamerTest, Async_Read)
     }
     else
     {
-        res = runai_request_multi(streamer,
+        res = runai_request(streamer,
                         num_files,
                         file_names.data(),
                         file_offsets.data(),
@@ -162,7 +162,7 @@ TEST_F(StreamerTest, Async_Read)
     {
         r = utils::random::number();
         file_index = utils::random::number();
-        auto response_code = runai_response_multi(streamer, &file_index, &r);
+        auto response_code = runai_response(streamer, &file_index, &r);
         EXPECT_EQ(response_code, static_cast<int>(common::ResponseCode::Success));
         if (response_code != static_cast<int>(common::ResponseCode::Success))
         {
@@ -195,7 +195,7 @@ TEST_F(StreamerTest, Increase_Insufficient_Fd_Limit)
 
         if (use_credentials)
         {
-            res = runai_request_multi(streamer,
+            res = runai_request(streamer,
                             num_files,
                             file_names.data(),
                             file_offsets.data(),
@@ -211,7 +211,7 @@ TEST_F(StreamerTest, Increase_Insufficient_Fd_Limit)
         }
         else
         {
-            res = runai_request_multi(streamer,
+            res = runai_request(streamer,
                             num_files,
                             file_names.data(),
                             file_offsets.data(),
@@ -253,7 +253,7 @@ TEST_F(StreamerTest, Stop_Before_Async_Read)
 
         if (use_credentials)
         {
-            res = runai_request_multi(streamer,
+            res = runai_request(streamer,
                             num_files,
                             file_names.data(),
                             file_offsets.data(),
@@ -269,7 +269,7 @@ TEST_F(StreamerTest, Stop_Before_Async_Read)
         }
         else
         {
-            res = runai_request_multi(streamer,
+            res = runai_request(streamer,
                             num_files,
                             file_names.data(),
                             file_offsets.data(),
@@ -287,7 +287,7 @@ TEST_F(StreamerTest, Stop_Before_Async_Read)
         // request was not sent to the S3 server
         unsigned r;
         unsigned file_index;
-        EXPECT_EQ(runai_response_multi(streamer, &file_index, &r), static_cast<int>(common::ResponseCode::FinishedError));
+        EXPECT_EQ(runai_response(streamer, &file_index, &r), static_cast<int>(common::ResponseCode::FinishedError));
 
         runai_end(streamer);
         EXPECT_EQ(verify_mock(), 0);
@@ -314,7 +314,7 @@ TEST_F(StreamerTest, End_During_Async_Read)
 
         if (use_credentials)
         {
-            res = runai_request_multi(streamer,
+            res = runai_request(streamer,
                             num_files,
                             file_names.data(),
                             file_offsets.data(),
@@ -330,7 +330,7 @@ TEST_F(StreamerTest, End_During_Async_Read)
         }
         else
         {
-            res = runai_request_multi(streamer,
+            res = runai_request(streamer,
                             num_files,
                             file_names.data(),
                             file_offsets.data(),
@@ -363,19 +363,19 @@ TEST_F(StreamerTest, Multiple_Files)
     void * streamer;
     EXPECT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
 
-    auto res = runai_request_multi(streamer,
-                                   num_files,
-                                   file_names.data(),
-                                   file_offsets.data(),
-                                   sizes.data(),
-                                   dsts.data(),
-                                   num_ranges.data(),
-                                   internal_sizes.data(),
-                                   credentials_c.access_key_id,
-                                   credentials_c.secret_access_key,
-                                   credentials_c.session_token,
-                                   credentials_c.region,
-                                   credentials_c.endpoint);
+    auto res = runai_request(streamer,
+                             num_files,
+                             file_names.data(),
+                             file_offsets.data(),
+                             sizes.data(),
+                             dsts.data(),
+                             num_ranges.data(),
+                             internal_sizes.data(),
+                             credentials_c.access_key_id,
+                             credentials_c.secret_access_key,
+                             credentials_c.session_token,
+                             credentials_c.region,
+                             credentials_c.endpoint);
 
     EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
 
@@ -386,7 +386,7 @@ TEST_F(StreamerTest, Multiple_Files)
     {
         r = utils::random::number();
         file_index = utils::random::number();
-        auto response_code = runai_response_multi(streamer, &file_index, &r);
+        auto response_code = runai_response(streamer, &file_index, &r);
         EXPECT_EQ(response_code, static_cast<int>(common::ResponseCode::Success));
         if (response_code != static_cast<int>(common::ResponseCode::Success))
         {
@@ -413,19 +413,19 @@ TEST_F(StreamerTest, Multiple_Files_Error)
     EXPECT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
 
 
-    auto res = runai_request_multi(streamer,
-                                   num_files,
-                                   file_names.data(),
-                                   file_offsets.data(),
-                                   sizes.data(),
-                                   dsts.data(),
-                                   num_ranges.data(),
-                                   internal_sizes.data(),
-                                   credentials_c.access_key_id,
-                                   credentials_c.secret_access_key,
-                                   credentials_c.session_token,
-                                   credentials_c.region,
-                                   credentials_c.endpoint);
+    auto res = runai_request(streamer,
+                             num_files,
+                             file_names.data(),
+                             file_offsets.data(),
+                             sizes.data(),
+                             dsts.data(),
+                             num_ranges.data(),
+                             internal_sizes.data(),
+                             credentials_c.access_key_id,
+                             credentials_c.secret_access_key,
+                             credentials_c.session_token,
+                             credentials_c.region,
+                             credentials_c.endpoint);
 
     EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
 
@@ -436,7 +436,7 @@ TEST_F(StreamerTest, Multiple_Files_Error)
     {
         r = utils::random::number();
         file_index = utils::random::number();
-        const auto response_code = runai_response_multi(streamer, &file_index, &r);
+        const auto response_code = runai_response(streamer, &file_index, &r);
         EXPECT_EQ(response_code, static_cast<int>(error_code));
         EXPECT_LT(file_index, num_files);
         EXPECT_EQ(expected_response[file_index].count(r), 1);
@@ -447,7 +447,7 @@ TEST_F(StreamerTest, Multiple_Files_Error)
         expected_response[file_index].erase(r);
     }
 
-    const auto response_code = runai_response_multi(streamer, &file_index, &r);
+    const auto response_code = runai_response(streamer, &file_index, &r);
     EXPECT_EQ(response_code, static_cast<int>(common::ResponseCode::FinishedError));
 
     runai_end(streamer);

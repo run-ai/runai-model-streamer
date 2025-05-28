@@ -88,63 +88,7 @@ extern "C" void runai_end(void * streamer)
 {
 }
 
-extern "C" int runai_read(void * streamer, const char * path, size_t file_offset, size_t bytesize, char * dst)
-{
-    auto file = utils::Fd(::open(path, O_RDONLY));
-    if (file.fd() == -1) {
-        LOG(ERROR) << "Error opening file: " << path;
-        return -1;
-    }
-
-    try
-    {
-        file.seek(file_offset);
-    }
-    catch(const std::exception& e)
-    {
-        LOG(ERROR) << "Error seek in file: " << path << " to: " << file_offset;
-        return -1;
-    }
-
-    try
-    {
-        size_t result = file.read(bytesize, dst, utils::Fd::Read::Eof);
-        if (result != bytesize)
-        {
-            LOG(ERROR) << "Reached EOF";
-            return -1;
-        }
-    }
-    catch(const std::exception& e)
-    {
-        LOG(ERROR) << "Failed to read from file";
-        return -1;
-    }
-    return 0;
-}
-
-extern "C" int runai_read_with_credentials(void * streamer, const char * path, size_t file_offset, size_t bytesize, char * dst, const char * key, const char * secret, const char * token, const char * region,  const char * endpoint)
-{
-    return runai_read(streamer, path, file_offset, bytesize, dst);
-}
-
-
-extern "C" int runai_request(void * streamer, const char * path, size_t file_offset, size_t bytesize, char * dst, unsigned num_sizes, size_t * internal_sizes)
-{
-    return request(streamer, path, file_offset, bytesize, dst, num_sizes, internal_sizes, &__state);
-}
-
-extern "C" int runai_request_with_credentials(void * streamer, const char * path, size_t file_offset, size_t bytesize, char * dst, unsigned num_sizes, size_t * internal_sizes, const char * key, const char * secret, const char * token, const char * region, const char * endpoint)
-{
-    return request(streamer, path, file_offset, bytesize, dst, num_sizes, internal_sizes, &__state);
-}
-
-extern "C" int runai_response(void * streamer, unsigned * index)
-{
-    return response(streamer, index, &__state);
-}
-
-extern "C" int runai_request_multi(
+extern "C" int runai_request(
     void * streamer,
     unsigned num_files,
     const char ** paths,
@@ -175,7 +119,7 @@ extern "C" int runai_request_multi(
     return 0;
 }
 
-extern "C" int runai_response_multi(void * streamer, unsigned * file_index, unsigned * index)
+extern "C" int runai_response(void * streamer, unsigned * file_index, unsigned * index)
 {
     if (__current_multi_file >= __multi_state.size()) {
         return -1; // All files processed
@@ -185,7 +129,7 @@ extern "C" int runai_response_multi(void * streamer, unsigned * file_index, unsi
 
     if (state.current_item >= state.total_items) {
         ++__current_multi_file;
-        return runai_response_multi(streamer, file_index, index); // recurse to next file
+        return runai_response(streamer, file_index, index); // recurse to next file
     }
 
     *file_index = __current_multi_file;
