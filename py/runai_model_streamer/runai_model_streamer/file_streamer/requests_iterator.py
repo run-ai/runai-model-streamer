@@ -37,7 +37,7 @@ class FilesRequestsIteratorWithBuffer:
     def __init__(self, buffer_size: int, files_chunks: List[FileChunks]) -> None:
         self.files_requests_iterator = FilesRequestsIterator(buffer_size, files_chunks)
         print(
-            f"[RunAI Streamer] CPU Buffer size: {humanize.naturalsize(buffer_size, binary=True)} for files: {[os.path.basename(file_chunks.path) for file_chunks in files_chunks]}",
+            f"[RunAI Streamer] CPU Buffer size: {humanize.naturalsize(buffer_size, binary=True)} for files: {[file_chunks.path for file_chunks in files_chunks]}",
             flush=True,
         )
         self.buffer = np.empty(buffer_size, dtype=np.uint8)
