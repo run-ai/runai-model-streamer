@@ -6,80 +6,8 @@ load_toolchain_deps()
 new_local_repository(
     name = "aws",
     path = "/opt",
-    build_file_content = """
-package(default_visibility = ["//visibility:public"])
-
-# s3 crt dependency diagram: https://docs.aws.amazon.com/sdkref/latest/guide/common-runtime.html
-
-config_setting(
-    name = "dynamic_link",
-    define_values = {
-        "USE_SYSTEM_LIBS": "1",
-    },
+    build_file = "//third_party:aws.BUILD"
 )
-
-config_setting(
-    name = "cross_compiling",
-    define_values = {
-        "BASE_PATH": "aarch64",
-    },
-)
-
-cc_library(
-    name = "aws",
-    hdrs = select({
-        ":cross_compiling": glob(["aarch64-aws/include/**/*.*"]),
-        "//conditions:default": glob(["x86_64-aws/include/**/*.*"])
-    }),
-    strip_include_prefix = select({
-        ":cross_compiling": "aarch64-aws/include",
-        "//conditions:default": "x86_64-aws/include",
-    }),
-    includes = select({
-        ":cross_compiling": ["aarch64-aws/include"],
-        "//conditions:default": ["x86_64-aws/include"]
-    }),
-    linkopts = [
-        "-l:libaws-cpp-sdk-s3-crt.a",
-        "-l:libaws-cpp-sdk-core.a",
-        "-l:libaws-crt-cpp.a",
-        "-l:libaws-c-mqtt.a",
-        "-l:libaws-c-event-stream.a",
-        "-l:libaws-c-s3.a",
-        "-l:libaws-c-auth.a",
-        "-l:libaws-c-http.a",
-        "-l:libaws-c-io.a",
-        "-l:libs2n.a",
-        "-l:libaws-c-compression.a",
-        "-l:libaws-c-cal.a",
-        "-l:libaws-c-sdkutils.a",
-        "-l:libaws-checksums.a",
-        "-l:libaws-c-common.a",
-        "-ldl -lm -lrt",
-    ] + select({
-        ":cross_compiling": [
-            "-L/opt/aarch64-curl/lib",
-            "-L/opt/aarch64-ssl/lib",
-            "-L/opt/aarch64-zlib/lib",
-            "-L/opt/aarch64-aws/lib",
-        ],
-        "//conditions:default": [
-            "-L/opt/x86_64-curl/lib",
-            "-L/opt/x86_64-ssl/lib",
-            "-L/opt/x86_64-zlib/lib",
-            "-L/opt/x86_64-aws/lib",
-        ],
-    }) + select({
-        ":dynamic_link": ["-lssl", "-lcrypto", "-lcurl"],
-        "//conditions:default": [
-            "-l:libcurl.a",
-            "-l:libssl.a",
-            "-l:libcrypto.a",
-        ],
-    }),
-)
-
-""")
 
 load("//:rules.bzl", "runai_cc_test_dependencies")
 runai_cc_test_dependencies()

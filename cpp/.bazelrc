@@ -7,6 +7,8 @@ build --force_pic
 build --action_env=BAZEL_LINKOPTS=-static-libstdc++
 build --action_env=BAZEL_LINKLIBS=-l%:libstdc++.a
 
+# Disable bzlmod Modules, as this workspace uses WORKSPACE
+# dependency management. See https://bazel.build/external/migration
 build --noenable_bzlmod
 
 # Setting platform_suffix allows the build-cache to be maintained
