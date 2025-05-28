@@ -10,6 +10,8 @@ from runai_model_streamer.safetensors_streamer.safetensors_streamer import (
     SafetensorsStreamer,
 )
 
+MIN_NUM_FILES = 1
+MAX_NUM_FILES = 20
 MIN_NUM_TENSORS = 1
 MAX_NUM_TENSORS = 5
 MIN_TENSOR_SIZE = 16
@@ -85,6 +87,37 @@ class TestSafetensorStreamerFuzzing(unittest.TestCase):
         with safe_open(file_path, framework="pt", device="cpu") as f:
             for name in f.keys():
                 their[name] = f.get_tensor(name)
+
+        self.assertEqual(len(our.items()), len(their.items()))
+        for name, our_tensor in our.items():
+            self.assertTrue(our_tensor.is_contiguous())
+            self.assertEqual(our_tensor.dtype, their[name].dtype)
+            self.assertEqual(our_tensor.shape, their[name].shape)
+            res = torch.all(our_tensor.eq(their[name]))
+            self.assertTrue(res)
+
+    def test_safetensors_streamer_stream_files(self):
+        file_paths = []
+        for i in range(random.randint(MIN_NUM_FILES, MAX_NUM_FILES)):
+            file_path = os.path.join(self.temp_dir, f"model-{i}.safetensors")
+            create_random_safetensors(file_path)
+            file_paths.append(file_path)
+
+        files_size = sum([os.path.getsize(file_path) for file_path in file_paths])
+
+        print(f"Files total size: {files_size} bytes", flush=True)
+
+        our = {}
+        with SafetensorsStreamer() as run_sf:
+            run_sf.stream_files(file_paths)
+            for name, tensor in run_sf.get_tensors():
+                our[name] = tensor
+
+        their = {}
+        for file_path in file_paths:
+            with safe_open(file_path, framework="pt", device="cpu") as f:
+                for name in f.keys():
+                    their[name] = f.get_tensor(name)
 
         self.assertEqual(len(our.items()), len(their.items()))
         for name, our_tensor in our.items():

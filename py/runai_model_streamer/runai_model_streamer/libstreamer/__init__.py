@@ -20,59 +20,6 @@ class LibstreamerDLLWrapper:
         self.fn_runai_end = self.lib.runai_end
         self.fn_runai_end.argtypes = [t_streamer]
 
-        self.fn_runai_read = self.lib.runai_read
-        self.fn_runai_read.argtypes = [
-            t_streamer,
-            ctypes.c_char_p,
-            ctypes.c_size_t,
-            ctypes.c_size_t,
-            ctypes.c_void_p,
-        ]
-        self.fn_runai_read.restype = ctypes.c_int
-
-        self.fn_runai_read_with_credentials = self.lib.runai_read_with_credentials
-        self.fn_runai_read_with_credentials.argtypes = [
-            t_streamer,
-            ctypes.c_char_p,
-            ctypes.c_size_t,
-            ctypes.c_size_t,
-            ctypes.c_void_p,
-            ctypes.c_char_p,
-            ctypes.c_char_p,
-            ctypes.c_char_p,
-            ctypes.c_char_p,
-        ]
-        self.fn_runai_read_with_credentials.restype = ctypes.c_int
-
-        self.fn_runai_request = self.lib.runai_request
-        self.fn_runai_request.argtypes = [
-            t_streamer,
-            ctypes.c_char_p, # path
-            ctypes.c_size_t, # file_offset
-            ctypes.c_size_t, # bytesize
-            ctypes.c_void_p, # dst
-            ctypes.c_uint32, # num_sizes
-            ctypes.POINTER(ctypes.c_size_t), # internal_sizes
-        ]
-        self.fn_runai_request.restype = ctypes.c_int
-
-        self.fn_runai_request_with_credentials = self.lib.runai_request_with_credentials
-        self.fn_runai_request_with_credentials.argtypes = [
-            t_streamer,
-            ctypes.c_char_p, # path
-            ctypes.c_size_t, # file_offset
-            ctypes.c_size_t, # bytesize
-            ctypes.c_void_p, # dst
-            ctypes.c_uint32, # num_sizes
-            ctypes.POINTER(ctypes.c_size_t), # internal_sizes
-            ctypes.c_char_p, # key
-            ctypes.c_char_p, # secret
-            ctypes.c_char_p, # token
-            ctypes.c_char_p, # region
-            ctypes.c_char_p, # endpoint
-        ]
-        self.fn_runai_request_with_credentials.restype = ctypes.c_int
-
         self.fn_runai_request_multi = self.lib.runai_request_multi
         self.fn_runai_request_multi.argtypes = [
             t_streamer, 
@@ -82,7 +29,7 @@ class LibstreamerDLLWrapper:
             ctypes.POINTER(ctypes.c_size_t), # bytesizes
             ctypes.POINTER(ctypes.c_void_p), # dsts
             ctypes.POINTER(ctypes.c_uint32), # num_sizes
-            ctypes.POINTER(ctypes.c_size_t), # internal_sizes
+            ctypes.POINTER(ctypes.POINTER(ctypes.c_size_t)), # internal_sizes
             ctypes.c_char_p, # key
             ctypes.c_char_p, # secret
             ctypes.c_char_p, # token
@@ -90,10 +37,6 @@ class LibstreamerDLLWrapper:
             ctypes.c_char_p, # endpoint
         ]
         self.fn_runai_request_multi.restype = ctypes.c_int
-
-        self.fn_runai_response = self.lib.runai_response
-        self.fn_runai_response.argtypes = [t_streamer, ctypes.POINTER(ctypes.c_uint32)]
-        self.fn_runai_response.restype = ctypes.c_int
 
         self.fn_runai_response_multi = self.lib.runai_response_multi
         self.fn_runai_response_multi.argtypes = [t_streamer, ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_uint32)]
