@@ -24,14 +24,10 @@ struct S3ClientBase
 
     S3ClientBase(const common::s3::Path & path, const common::s3::Credentials_C & credentials);
 
-    // get client's bucket name
-    std::string bucket() const;
-
-    // verify that clien's credentials have not change
+     // verify that clien's credentials have not change
     bool verify_credentials(const common::s3::Credentials_C & credentials) const;
 
  protected:
-    const Aws::String _bucket_name;
     const std::optional<Aws::String> _key;
     const std::optional<Aws::String> _secret;
     const std::optional<Aws::String> _token;
@@ -58,7 +54,6 @@ struct S3Client : S3ClientBase
     // The S3CrtClient d'tor will wait for response of all teh sent requests, which can take a while
     void stop();
 
-    using S3ClientBase::bucket;
     using S3ClientBase::verify_credentials;
 
  private:
