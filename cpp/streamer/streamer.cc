@@ -72,7 +72,7 @@ _RUNAI_EXTERN_C void runai_end(void * streamer)
 // internal_sizes : a list containing the size of each sub request, where the first sub request starts at the given file offset and each sub request starts at the end of the previous one
 // return Success if request is valid
 
-_RUNAI_EXTERN_C int runai_request_multi(
+_RUNAI_EXTERN_C int runai_request(
     void * streamer,
     unsigned num_files,
     const char ** paths,
@@ -126,7 +126,7 @@ _RUNAI_EXTERN_C int runai_request_multi(
 // index : index of the sub request that the response belongs to
 // return Success if response is valid
 
-_RUNAI_EXTERN_C int runai_response_multi(void * streamer, unsigned * file_index /* return parameter */, unsigned * index /* return parameter */)
+_RUNAI_EXTERN_C int runai_response(void * streamer, unsigned * file_index /* return parameter */, unsigned * index /* return parameter */)
 {
     try
     {

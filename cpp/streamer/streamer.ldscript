@@ -2,8 +2,8 @@
     global:
         runai_start;
         runai_end;
-        runai_request_multi;
-        runai_response_multi;
+        runai_request;
+        runai_response;
         runai_response_str;
     local: *;
 };
