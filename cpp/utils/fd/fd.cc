@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <cstdint>
 #include <algorithm>
 #include <map>
 
