@@ -3,8 +3,8 @@ from timeit import default_timer as timer
 from runai_model_streamer.libstreamer.libstreamer import (
     runai_start,
     runai_end,
-    runai_request_multi,
-    runai_response_multi
+    runai_request,
+    runai_response
 )
 from runai_model_streamer.file_streamer.requests_iterator import (
     FilesRequestsIteratorWithBuffer,
@@ -102,7 +102,7 @@ class FileStreamer:
         if self.active_request is None:
             return 
 
-        runai_request_multi(
+        runai_request(
             self.streamer,
             [file_request.path for file_request in self.active_request.files],
             [file_request.offset for file_request in self.active_request.files],
@@ -127,7 +127,7 @@ class FileStreamer:
             if self.active_request is None:
                 break
 
-            runai_request_multi(
+            runai_request(
                 self.streamer,
                 [file_request.path for file_request in self.active_request.files],
                 [file_request.offset for file_request in self.active_request.files],
@@ -142,7 +142,7 @@ class FileStreamer:
     # And need to be translated to global index in the chunks list
     def request_ready_chunks(self) -> Iterator:
         for i in range(sum(len(file_request.chunks) for file_request in self.active_request.files)):
-            file_relative_index, chunk_relative_index = runai_response_multi(self.streamer)
+            file_relative_index, chunk_relative_index = runai_response(self.streamer)
             if chunk_relative_index == None:
                 return
             

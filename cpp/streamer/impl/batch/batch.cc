@@ -165,6 +165,13 @@ void Batch::request_async_read(Reader * reader, std::atomic<bool> & stopped)
     {
         auto dst = task.destination();
         common::Range range(task.info.offset, task.info.bytesize);
+        if (range.size == 0)
+        {
+            // tensors of size zero are valid, but empty request scan be invalid in the storage backend
+            LOG(DEBUG) << "Found task of zero size - return response and don't pass to backend";
+            handle_task_response(common::ResponseCode::Success, &task);
+            continue;
+        }
         common::backend_api::ObjectRequestId_t request_handle = reinterpret_cast<common::backend_api::ObjectRequestId_t>(&task);
         reader->async_read(params, request_handle, range, dst);
     }
@@ -185,10 +192,17 @@ void Batch::handle_response(const common::backend_api::Response & response)
     Task * task_ptr = reinterpret_cast<Task *>(response.handle);
     ASSERT(task_ptr != nullptr) << "Received response from a null task";
 
+    handle_task_response(response.ret, task_ptr);
+}
+
+void Batch::handle_task_response(const common::ResponseCode response_code, Task * task_ptr)
+{
+    // Aborting if a single task failed, we should replace this by a retry mechanism
+
     ASSERT(task_ptr->request->file_index == file_index) << "Received response from a different file " << task_ptr->request->file_index << " expected " << file_index;
 
-    LOG(SPAM) << "Received object storage response: File index " << file_index << " request index " << task_ptr->request->index << " ret " << response.ret;
-    if (task_ptr->finished_request(response.ret))
+    LOG(SPAM) << "Received object storage response: File index " << file_index << " request index " << task_ptr->request->index << " ret " << response_code;
+    if (task_ptr->finished_request(response_code))
     {
         common::Response request_response(file_index, task_ptr->request->index, task_ptr->request->ret());
         responder->push(std::move(request_response), task_ptr->request->bytesize);

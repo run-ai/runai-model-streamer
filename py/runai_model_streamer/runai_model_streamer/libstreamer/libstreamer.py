@@ -22,7 +22,7 @@ def runai_start() -> t_streamer:
 def runai_end(streamer: t_streamer) -> None:
     return dll.fn_runai_end(streamer)
 
-def runai_request_multi(
+def runai_request(
     streamer: t_streamer,
     paths: List[str],
     file_offsets: List[int],
@@ -63,7 +63,7 @@ def runai_request_multi(
     for i, individual_c_array_obj in enumerate(_c_internal_sizes_data_arrays):
         c_internal_sizes[i] = ctypes.cast(individual_c_array_obj, PtrToUint64ArrayType)
     
-    error_code = dll.fn_runai_request_multi(
+    error_code = dll.fn_runai_request(
         streamer,
         len(paths),
         c_paths,
@@ -80,18 +80,18 @@ def runai_request_multi(
     )
     if error_code != SUCCESS_ERROR_CODE:
         raise Exception(
-            f"Could not send runai_request_multi to libstreamer due to: {runai_response_str(error_code)}"
+            f"Could not send runai_request to libstreamer due to: {runai_response_str(error_code)}"
         )
 
-def runai_response_multi(streamer: t_streamer) -> Optional[Tuple[int, int]]:
+def runai_response(streamer: t_streamer) -> Optional[Tuple[int, int]]:
     file_index = ctypes.c_uint32()
     range_index = ctypes.c_uint32()
-    error_code = dll.fn_runai_response_multi(streamer, ctypes.byref(file_index), ctypes.byref(range_index))
+    error_code = dll.fn_runai_response(streamer, ctypes.byref(file_index), ctypes.byref(range_index))
     if error_code == FINISHED_ERROR_CODE:
         return None
     if error_code != SUCCESS_ERROR_CODE:
         raise Exception(
-            f"Could not receive runai_response_multi from libstreamer due to: {runai_response_str(error_code)}"
+            f"Could not receive runai_response from libstreamer due to: {runai_response_str(error_code)}"
         )
     return file_index.value, range_index.value
 
