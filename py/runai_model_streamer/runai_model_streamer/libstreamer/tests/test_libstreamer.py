@@ -5,8 +5,8 @@ import os
 import mmap
 from runai_model_streamer.libstreamer.libstreamer import (
     runai_start,
-    runai_request_multi,
-    runai_response_multi,
+    runai_request,
+    runai_response,
 )
 from runai_model_streamer.s3_utils.s3_utils import (
     S3Credentials,
@@ -45,27 +45,27 @@ class TestBindings(unittest.TestCase):
                     session_token="your_session_token",
                     region_name="us-west-2",
                     endpoint="optional_endpoint")
-                runai_request_multi(streamer, [file_path_1, file_path_2], [1, 1], [19, 19], [buffer], items, credentials)
+                runai_request(streamer, [file_path_1, file_path_2], [1, 1], [19, 19], [buffer], items, credentials)
             else:
-                runai_request_multi(streamer, [file_path_1, file_path_2], [1, 1], [19, 19], [buffer], items)
+                runai_request(streamer, [file_path_1, file_path_2], [1, 1], [19, 19], [buffer], items)
 
             # Read both file contents
-            result_file, result = runai_response_multi(streamer)
+            result_file, result = runai_response(streamer)
             self.assertEqual(result_file, 0)
             self.assertEqual(result, 0)
             self.assertEqual(bytes(buffer[:10]), b"Test Text1")
 
-            result_file, result = runai_response_multi(streamer)
+            result_file, result = runai_response(streamer)
             self.assertEqual(result_file, 0)
             self.assertEqual(result, 1)
             self.assertEqual(bytes(buffer[10:19]), b"TestText2")
 
-            result_file, result = runai_response_multi(streamer)
+            result_file, result = runai_response(streamer)
             self.assertEqual(result_file, 1)
             self.assertEqual(result, 0)
             self.assertEqual(bytes(buffer[19:30]), b"Test Text44")
 
-            result_file, result = runai_response_multi(streamer)
+            result_file, result = runai_response(streamer)
             self.assertEqual(result_file, 1)
             self.assertEqual(result, 1)
             self.assertEqual(bytes(buffer[30:38]), b"TestText")

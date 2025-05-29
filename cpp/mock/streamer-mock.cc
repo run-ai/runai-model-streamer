@@ -111,7 +111,7 @@ extern "C" int runai_request(
     int buffer_start = 0;
     for (unsigned i = 0; i < num_files; ++i) {
         State state;
-        request(streamer, paths[i], file_offsets[i], bytesizes[i], (char*)((char*)dsts[0] + buffer_start), num_sizes[i], internal_sizes[i], &state);
+        request(streamer, paths[i], file_offsets[i], bytesizes[i], reinterpret_cast<char*>(dsts[0] + buffer_start), num_sizes[i], internal_sizes[i], &state);
         buffer_start = buffer_start + bytesizes[i];
         __multi_state.push_back(std::move(state));
     }

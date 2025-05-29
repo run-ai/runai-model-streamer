@@ -104,6 +104,10 @@ struct Batch
   void async_wait(Reader * reader, std::atomic<bool> & stopped);
 
   void request_async_read(Reader * reader, std::atomic<bool> & stopped);
+
+  // handle response from a single task
+  void handle_task_response(const common::ResponseCode response_code, Task * task_ptr);
+
  private:
   // index of first unfinished task
   unsigned _unfinished = 0;
