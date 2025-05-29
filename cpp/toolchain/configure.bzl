@@ -5,19 +5,22 @@ load("//toolchain:rules.bzl", "get_target_triplet", "runai_crosstool_tools")
 # This should map to the devcontainer Dockerfile
 # We install gcc-x86-64-linux-gnu and gcc-aarch64-linux-gnu toolchains
 ARCHITECTURES = ["x86_64", "aarch64"]
-HOST_ARCH = "x86_64"
 OS = "linux-gnu"
 
 def _get_gcc_version(repository_ctx, arch):
     gcc_tool = runai_crosstool_tools(get_target_triplet(OS, arch))["gcc"]
     return repository_ctx.execute([gcc_tool, "-dumpversion"]).stdout.strip()
 
+def _get_host_arch(repository_ctx):
+    return repository_ctx.execute(["/usr/bin/uname", "-m"]).stdout.strip()
+
 def _cc_autoconf_toolchain_impl(repository_ctx):
     define_statements = []
     for arch in ARCHITECTURES:
         gcc_version = _get_gcc_version(repository_ctx, arch)
+        host_arch = _get_host_arch(repository_ctx)
         toolchain_name = arch
-        define_statements.append('define_toolchain(name = "%s", os = "%s", host_arch = "%s", arch = "%s", gcc_version = "%s")' % (toolchain_name, OS, HOST_ARCH, arch, gcc_version))
+        define_statements.append('define_toolchain(name = "%s", os = "%s", host_arch = "%s", arch = "%s", gcc_version = "%s")' % (toolchain_name, OS, host_arch, arch, gcc_version))
 
     repository_ctx.template(
         "BUILD",
