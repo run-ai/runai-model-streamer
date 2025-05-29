@@ -4,7 +4,13 @@ load("@rules_cc//cc:cc_toolchain_config_lib.bzl", "tool_path")  # buildifier: di
 load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load("@rules_cc//cc/toolchains:cc_toolchain.bzl", "cc_toolchain")
 load(":rules.bzl", "get_target_triplet", "runai_crosstool_tools")
-
+load("@bazel_tools//tools/build_defs/cc:action_names.bzl", "ACTION_NAMES")
+load(
+    "@bazel_tools//tools/cpp:cc_toolchain_config_lib.bzl",
+    "feature",
+    "flag_group",
+    "flag_set",
+)
 
 def _builtin_include_directories(target_triplet, gcc_version):
     return [
@@ -34,6 +40,34 @@ def _get_include_directories(target_triplet, gcc_version, use_cross):
 def _toolchain_identifier(name):
     return "%s-toolchain" % name
 
+all_link_actions = [
+    ACTION_NAMES.cpp_link_executable,
+    ACTION_NAMES.cpp_link_dynamic_library,
+    ACTION_NAMES.cpp_link_nodeps_dynamic_library,
+]
+
+# Statically link c++ standard library
+# https://bazel.build/tutorials/ccp-toolchain-config
+features = [
+    feature(
+        name = "default_linker_flags",
+        enabled = True,
+        flag_sets = [
+            flag_set(
+                actions = all_link_actions,
+                flag_groups = ([
+                    flag_group(
+                        flags = [
+                            "-static-libstdc++",
+                            "-l:libstdc++.a"
+                        ],
+                    ),
+                ]),
+            ),
+        ],
+    ),
+]
+
 
 def _impl(ctx):
     target_triplet = get_target_triplet(ctx.attr.os, ctx.attr.arch)
@@ -55,7 +89,8 @@ def _impl(ctx):
         abi_version = "unknown",
         abi_libc_version = "unknown",
         tool_paths = tool_paths,
-        cxx_builtin_include_directories = _get_include_directories(target_triplet, ctx.attr.gcc_version, ctx.attr.use_cross)
+        cxx_builtin_include_directories = _get_include_directories(target_triplet, ctx.attr.gcc_version, ctx.attr.use_cross),
+        features = features
     )
 
 

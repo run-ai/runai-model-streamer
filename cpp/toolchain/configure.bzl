@@ -16,7 +16,7 @@ def _cc_autoconf_toolchain_impl(repository_ctx):
     define_statements = []
     for arch in ARCHITECTURES:
         gcc_version = _get_gcc_version(repository_ctx, arch)
-        toolchain_name = "%s" % arch
+        toolchain_name = arch
         define_statements.append('define_toolchain(name = "%s", os = "%s", host_arch = "%s", arch = "%s", gcc_version = "%s")' % (toolchain_name, OS, HOST_ARCH, arch, gcc_version))
 
     repository_ctx.template(
@@ -43,7 +43,7 @@ def configure_toolchain(name):
     Args:
       name: The name of the toolchain repository.
     """
-    _cc_autoconf_toolchain(name = name)      
+    _cc_autoconf_toolchain(name = name)
     native.register_toolchains(
         "@%s//:all" % name,
     )

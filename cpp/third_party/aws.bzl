@@ -9,6 +9,8 @@ def aws_library(name, arch):
         ],
         strip_include_prefix = "%s-aws/include" % arch,
         linkopts = [
+            "-lpthread",
+            "-lz",
             "-l:libaws-cpp-sdk-s3-crt.a",
             "-l:libaws-cpp-sdk-core.a",
             "-l:libaws-crt-cpp.a",

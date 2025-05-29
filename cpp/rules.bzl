@@ -56,8 +56,6 @@ def _runai_portable_binary(rule, deps=[], linkopts=[], **kwargs):
             "//cc/portability",
         ],
         linkopts = linkopts + [
-            "-l:libstdc++.a", # TODO(raz): is this needed now that we have .bazelrc?
-            "-static-libgcc",
             "-Wl,--wrap=memcpy,--wrap=__fdelt_chk",
 
             # we link against librt.so in order to cause `clock_gettime()`
