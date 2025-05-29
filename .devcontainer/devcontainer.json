@@ -6,7 +6,8 @@
     "features": {
         "ghcr.io/rocker-org/devcontainer-features/apt-packages:1": {
             "packages": "less,ssh,vim"
-        }
+        },
+        "ghcr.io/devcontainers-community/features/bazel:1": {}
     },
     "customizations": {
         "vscode": {

@@ -20,11 +20,6 @@ RUN pip install --upgrade \
     boto3 \
     cpplint==1.5.4
 
-ARG BAZEL=4.2.1
-RUN ARCH=$([ "$(uname -m)" = "aarch64" ] && echo "arm64" || uname -m); \
-    wget -O /usr/local/bin/bazel "https://github.com/bazelbuild/bazel/releases/download/$BAZEL/bazel-$BAZEL-linux-$ARCH" && \
-    chmod +x /usr/local/bin/bazel
-
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     cmake \
     git \
@@ -64,7 +59,8 @@ RUN curl -fsSL -o curl-8.13.0.tar.gz https://github.com/curl/curl/releases/downl
     NM=/usr/bin/x86_64-linux-gnu-nm \
     CPPFLAGS=-I/opt/x86_64-ssl/include \
     LDFLAGS=-L/opt/x86_64-ssl/lib \
-    ./configure --host=x86_64-linux-gnu --build=x86_64-linux-gnu --disable-shared --without-libpsl --with-openssl=/opt/x86_64-ssl --prefix=/opt/x86_64-curl && \
+    CFLAGS="-fPIC" \
+    ./configure --host=$(gcc -print-multiarch) --host=x86_64-linux-gnu --build=x86_64-linux-gnu --disable-shared --without-libpsl --with-openssl=/opt/x86_64-ssl --prefix=/opt/x86_64-curl && \
     make VERBOSE=1 -j4 > /dev/null && \
         make install > /dev/null && \
         make clean > /dev/null  && \
@@ -75,7 +71,8 @@ RUN curl -fsSL -o curl-8.13.0.tar.gz https://github.com/curl/curl/releases/downl
     RANLIB=/usr/bin/aarch64-linux-gnu-ranlib \
     CC=/usr/bin/aarch64-linux-gnu-gcc \
     NM=/usr/bin/aarch64-linux-gnu-nm \
-    ./configure --host=x86_64-linux-gnu --build=aarch64-linux-gnu --disable-shared --without-libpsl --with-openssl=/opt/aarch64-ssl --prefix=/opt/aarch64-curl && \
+    CFLAGS="-fPIC" \
+    ./configure --host=$(gcc -print-multiarch) --host=x86_64-linux-gnu --build=aarch64-linux-gnu --disable-shared --without-libpsl --with-openssl=/opt/aarch64-ssl --prefix=/opt/aarch64-curl && \
         make -j4 > /dev/null && \
         make install > /dev/null && \
         make clean > /dev/null && \
