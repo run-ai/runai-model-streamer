@@ -10,7 +10,7 @@ Positive integer value
 
 #### Default value
 
-20
+16
 
 ### RUNAI_STREAMER_CHUNK_BYTESIZE
 
