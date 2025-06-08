@@ -13,4 +13,4 @@ build_mock:
 	bazel build mock:libstreamer-mock.so
 
 test:
-	echo bazel test //...:all
+	bazel test //...:all
