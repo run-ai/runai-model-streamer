@@ -1,4 +1,4 @@
-FROM ubuntu:24.04
+FROM ubuntu:20.04
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     python3 \
@@ -12,11 +12,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/aarch64-linux-gnu-ld.gold /usr/bin/ld.gold
 
-RUN mkdir -p /root/.config/pip \
-    && echo "[global]\nbreak-system-packages = true" > /root/.config/pip/pip.conf
-
-
-RUN pip install --upgrade \
+RUN pip install \
     boto3 \
     cpplint==1.5.4
 
