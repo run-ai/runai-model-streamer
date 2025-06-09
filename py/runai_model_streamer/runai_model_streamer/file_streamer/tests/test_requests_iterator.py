@@ -66,6 +66,21 @@ class TestRequestsIterator(unittest.TestCase):
         request = requests_iterator.next_request()
         self.assertIsNone(request)
 
+    def test_limited_memory_cap_and_smaller_chunks(self):
+        requests_iterator, memory_size = RequestsIterator.with_memory_cap(
+            MemoryCapMode.limited, 100, [1, 2, 3, 4], 50
+        )
+
+        self.assertEqual(memory_size, 10)
+
+        request = requests_iterator.next_request()
+        self.assertIsNotNone(request)
+        self.assertEqual(request.file_offset, 100)
+        self.assertEqual(request.chunks, [1, 2, 3, 4])
+
+        request = requests_iterator.next_request()
+        self.assertIsNone(request)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -60,7 +60,7 @@ RUN curl -fsSL -o curl-8.13.0.tar.gz https://github.com/curl/curl/releases/downl
     CPPFLAGS=-I/opt/x86_64-ssl/include \
     LDFLAGS=-L/opt/x86_64-ssl/lib \
     CFLAGS="-fPIC" \
-    ./configure --host=$(gcc -print-multiarch) --host=x86_64-linux-gnu --build=x86_64-linux-gnu --disable-shared --without-libpsl --with-openssl=/opt/x86_64-ssl --prefix=/opt/x86_64-curl && \
+    ./configure --host=$(gcc -print-multiarch) --build=x86_64-linux-gnu --disable-shared --without-libpsl --with-openssl=/opt/x86_64-ssl --prefix=/opt/x86_64-curl && \
     make VERBOSE=1 -j4 > /dev/null && \
         make install > /dev/null && \
         make clean > /dev/null  && \
@@ -72,7 +72,7 @@ RUN curl -fsSL -o curl-8.13.0.tar.gz https://github.com/curl/curl/releases/downl
     CC=/usr/bin/aarch64-linux-gnu-gcc \
     NM=/usr/bin/aarch64-linux-gnu-nm \
     CFLAGS="-fPIC" \
-    ./configure --host=$(gcc -print-multiarch) --host=x86_64-linux-gnu --build=aarch64-linux-gnu --disable-shared --without-libpsl --with-openssl=/opt/aarch64-ssl --prefix=/opt/aarch64-curl && \
+    ./configure --host=$(gcc -print-multiarch) --build=aarch64-linux-gnu --disable-shared --without-libpsl --with-openssl=/opt/aarch64-ssl --prefix=/opt/aarch64-curl && \
         make -j4 > /dev/null && \
         make install > /dev/null && \
         make clean > /dev/null && \

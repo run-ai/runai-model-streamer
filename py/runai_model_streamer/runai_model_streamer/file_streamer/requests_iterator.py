@@ -76,7 +76,7 @@ class RequestsIterator:
                 raise RunaiStreamerMemoryLimitException(
                     f"Memory limit supplied: {user_memory_limit} cannot be smaller than: {largest_chunk}"
                 )
-            memory_limit = user_memory_limit
+            memory_limit = min(user_memory_limit, sum(chunks))
         return RequestsIterator(memory_limit, initial_offset, chunks), memory_limit
 
     @staticmethod
