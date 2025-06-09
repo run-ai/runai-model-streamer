@@ -7,6 +7,7 @@
 #include <set>
 #include <string>
 #include <vector>
+#include <cstdint>
 
 #define DEFAULT_COUNT() (number(10, 100))
 

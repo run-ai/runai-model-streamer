@@ -10,7 +10,6 @@ def aws_library(name, arch):
         strip_include_prefix = "%s-aws/include" % arch,
         linkopts = [
             "-lpthread",
-            "-lz",
             "-l:libaws-cpp-sdk-s3-crt.a",
             "-l:libaws-cpp-sdk-core.a",
             "-l:libaws-crt-cpp.a",
@@ -32,8 +31,9 @@ def aws_library(name, arch):
             "-L/opt/%s-zlib/lib" % arch,
             "-L/opt/%s-aws/lib" % arch,
         ] + select({
-            "//:dynamic_link": ["-lssl", "-lcrypto", "-lcurl"],
+            "//:dynamic_link": ["-lz", "-lssl", "-lcrypto", "-lcurl"],
             "//conditions:default": [
+                "-l:libz.a",
                 "-l:libcurl.a",
                 "-l:libssl.a",
                 "-l:libcrypto.a",
