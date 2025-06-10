@@ -33,7 +33,7 @@ Positive integer value
 
 ### RUNAI_STREAMER_MEMORY_LIMIT
 
-Controls how the CPU Memory buffer to which tensors are read from the file is being limited. Read more about it [here](#MemoryCapModesSection).
+Controls how the CPU Memory buffer to which tensors are read from the file is being limited. Read more about it [here](usage.md#cpu-memory-capping).
 
 #### Values accepted
 
