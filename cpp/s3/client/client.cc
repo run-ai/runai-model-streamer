@@ -195,10 +195,6 @@ common::ResponseCode S3Client::async_read(unsigned num_ranges, common::Range * r
 
     _responder = std::make_shared<common::Responder>(num_ranges);
 
-    Aws::S3Crt::Model::GetObjectRequest request;
-    request.SetBucket(_bucket_name);
-    request.SetKey(_path);
-
     char * buffer_ = buffer;
     common::Range * ranges_ = ranges;
     for (unsigned ir = 0; ir < num_ranges && !_stop; ++ir)
@@ -222,11 +218,15 @@ common::ResponseCode S3Client::async_read(unsigned num_ranges, common::Range * r
             size_t bytesize_ = (i == size - 1 ? total_ : chunk_bytesize);
 
             // send async request
+            auto request = std::make_shared<Aws::S3Crt::Model::GetObjectRequest>(); 
+
+            request->SetBucket(_bucket_name);
+            request->SetKey(_path);
 
             std::string range_str = "bytes=" + std::to_string(offset_) + "-" + std::to_string(offset_ + bytesize_);
-            request.SetRange(range_str.c_str());
+            request->SetRange(range_str.c_str());
 
-            request.SetResponseStreamFactory(
+            request->SetResponseStreamFactory(
                 [buffer_, bytesize_]()
                 {
                     std::unique_ptr<Aws::StringStream>
@@ -237,7 +237,7 @@ common::ResponseCode S3Client::async_read(unsigned num_ranges, common::Range * r
                     return stream.release();
                 });
 
-            _client->GetObjectAsync(request, [responder = _responder, ir, counter, is_success](const Aws::S3Crt::S3CrtClient*, const Aws::S3Crt::Model::GetObjectRequest&,
+            _client->GetObjectAsync(*request, [request, responder = _responder, ir, counter, is_success](const Aws::S3Crt::S3CrtClient*, const Aws::S3Crt::Model::GetObjectRequest&,
                                                                             const Aws::S3Crt::Model::GetObjectOutcome& outcome,
                                                                             const std::shared_ptr<const Aws::Client::AsyncCallerContext>&) {
                 if (outcome.IsSuccess())
