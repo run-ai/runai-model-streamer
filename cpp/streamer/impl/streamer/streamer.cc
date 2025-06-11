@@ -22,7 +22,7 @@ Streamer::Streamer(Config config) :
     _pool([&](Batch batch, std::atomic<bool> & stopped)
         {
             batch.execute(stopped);
-        }, _config->concurrency)
+        }, _config->max_concurrency())
 {
     LOG(DEBUG) << config;
 }
@@ -114,16 +114,16 @@ void Streamer::create_request(const std::string & path, size_t file_offset, size
     {
         // adjust fd limit acording to concurrency
         auto fd_limit = utils::get_cur_file_descriptors();
-        LOG(DEBUG) << "Process file descriptors limit is " << fd_limit << " and concurrency level is " << _config->concurrency;
-        const auto desired_fd_limit = _config->concurrency * 64;
+        LOG(DEBUG) << "Process file descriptors limit is " << fd_limit << " and concurrency level is " << _config->s3_concurrency;
+        const auto desired_fd_limit = _config->s3_concurrency * 128;
         if (fd_limit < desired_fd_limit)
         {
             if (desired_fd_limit > utils::get_max_file_descriptors())
             {
-                LOG(ERROR) << "Insufficient file descriptors limit " << fd_limit << " for concurrency level " << _config->concurrency << " ; increase fd limit to " << desired_fd_limit << " or higher, depending on your application fd usage";
+                LOG(ERROR) << "Insufficient file descriptors limit " << fd_limit << " for concurrency level " << _config->s3_concurrency << " ; increase fd limit to " << desired_fd_limit << " or higher, depending on your application fd usage";
                 throw common::Exception(common::ResponseCode::InsufficientFdLimit);
             }
-            LOG(INFO) << "Increasing fd soft limit to " << desired_fd_limit << " for concurrency level " << _config->concurrency;
+            LOG(INFO) << "Increasing fd soft limit to " << desired_fd_limit << " for concurrency level " << _config->s3_concurrency;
             _fd_limit = std::make_unique<utils::FdLimitSetter>(desired_fd_limit);
         }
         _s3_stop = std::make_unique<S3Stop>();

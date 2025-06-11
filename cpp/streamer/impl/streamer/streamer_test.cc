@@ -46,7 +46,7 @@ TEST(Sync, Sanity)
 
     const auto chunk_size = utils::random::number<size_t>(1, 1024);
     const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
-    Config config(utils::random::number(2, 30), chunk_size, bulk_size, false /* do not enforce minimum */);
+    Config config(utils::random::number(2, 30), utils::random::number(2, 30), chunk_size, bulk_size, false /* do not enforce minimum */);
     Streamer streamer(config);
 
     std::vector<unsigned char> v(size);
@@ -69,7 +69,7 @@ TEST(Sync, File_Not_Found_Error)
 
     const auto chunk_size = utils::random::number<size_t>(1, 1024);
     const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
-    Config config(utils::random::number(2, 30), chunk_size, bulk_size, false /* do not enforce minimum */);
+    Config config(utils::random::number(2, 30), utils::random::number(2, 30), chunk_size, bulk_size, false /* do not enforce minimum */);
     Streamer streamer(config);
     common::s3::Credentials credentials(
         (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
@@ -91,7 +91,7 @@ TEST(Sync, End_Of_File_Error)
 
     const auto chunk_size = utils::random::number<size_t>(1, 1024);
     const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
-    Config config(utils::random::number(2, 30), chunk_size, bulk_size, false /* do not enforce minimum */);
+    Config config(utils::random::number(2, 30), utils::random::number(2, 30), chunk_size, bulk_size, false /* do not enforce minimum */);
     common::s3::Credentials credentials;
 
     Streamer streamer(config);
@@ -131,7 +131,7 @@ TEST(Sync, Offset)
 
     std::vector<unsigned char> v(size_to_read);
     {
-        Config config(utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
+        Config config(utils::random::number(1, 20), utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
         Streamer streamer(config);
 
         auto r = streamer.request(file.path, offset_start, size_to_read, v.data(), credentials);
@@ -159,7 +159,7 @@ TEST(Async, Sanity)
 
     const auto chunk_size = utils::random::number<size_t>(1, 1024);
     const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
-    Config config(utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
+    Config config(utils::random::number(1, 20), utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
     common::s3::Credentials credentials;
 
     Streamer streamer(config);
@@ -200,7 +200,7 @@ TEST(Async, Requests)
 
     const auto chunk_size = utils::random::number<size_t>(1, 1024);
     const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
-    Config config(utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
+    Config config(utils::random::number(1, 20), utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
     Streamer streamer(config);
 
     common::s3::Credentials credentials;
@@ -250,7 +250,7 @@ TEST(Async, File_Not_Found_Error)
 
     const auto chunk_size = utils::random::number<size_t>(1, 1024);
     const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
-    Config config(utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
+    Config config(utils::random::number(1, 20), utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
     common::s3::Credentials credentials;
 
     Streamer streamer(config);
@@ -299,7 +299,7 @@ TEST(Async, End_Of_File_Error)
         ++expected;
     }
 
-    Config config(utils::random::number(1, 20), chunk_size, block_size, false /* do not enforce minimum */);
+    Config config(utils::random::number(1, 20), utils::random::number(1, 20), chunk_size, block_size, false /* do not enforce minimum */);
     Streamer streamer(config);
 
     std::vector<char> dst(size);
@@ -344,7 +344,7 @@ TEST(Async, Zero_Requests_Error)
 
     const auto chunk_size = utils::random::number<size_t>(1, 1024);
     const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
-    Config config(utils::random::number(1, 10), chunk_size, bulk_size, false /* do not enforce minimum */);
+    Config config(utils::random::number(1, 10), utils::random::number(1, 10), chunk_size, bulk_size, false /* do not enforce minimum */);
 
     common::s3::Credentials credentials;
 
@@ -372,7 +372,7 @@ TEST(Async, Zero_Bytes_To_Read_Error)
 
     const auto chunk_size = utils::random::number<size_t>(1, 1024);
     const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
-    Config config(utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
+    Config config(utils::random::number(1, 20), utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
 
     common::s3::Credentials credentials;
 
@@ -411,7 +411,7 @@ TEST(Async, Busy_Error)
 
     const auto chunk_size = utils::random::number<size_t>(1, 1024);
     const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
-    Config config(utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
+    Config config(utils::random::number(1, 20), utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
 
     common::s3::Credentials credentials;
 

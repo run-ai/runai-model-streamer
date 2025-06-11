@@ -16,12 +16,15 @@ namespace runai::llm::streamer::impl
 
 struct Config
 {
-    Config(unsigned concurrency, size_t s3_block_bytesize, size_t fs_block_bytesize, bool enforce_minimum = true);
+    Config(unsigned concurrency, unsigned s3_concurrency, size_t s3_block_bytesize, size_t fs_block_bytesize, bool enforce_minimum = true);
     Config(bool enforce_minimum = true);
+
+    unsigned max_concurrency() const;
 
     static constexpr size_t min_fs_block_bytesize = 2 * 1024 * 1024;
 
     unsigned concurrency;
+    unsigned s3_concurrency;
     size_t s3_block_bytesize;
     size_t fs_block_bytesize;
 };

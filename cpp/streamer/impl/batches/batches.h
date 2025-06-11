@@ -51,7 +51,7 @@ struct Batches
     // create tasks of a given request
     void handle_request(std::vector<Tasks> & v_tasks, unsigned request_index, size_t request_file_offset, size_t request_size);
 
-    unsigned _size;
+    unsigned _concurrency;
 
     BatchItr _itr;
 

@@ -106,11 +106,12 @@ RUN curl -fsSL -o zlib-1.3.1.tar.gz https://github.com/madler/zlib/releases/down
 
 ADD aarch64-linux-gnu.cmake /opt/toolchains/aarch64-linux-gnu.cmake
 ADD x86_64-linux-gnu.cmake /opt/toolchains/x86_64-linux-gnu.cmake
-RUN git clone --recurse-submodules --depth 1 --branch "1.11.321" https://github.com/aws/aws-sdk-cpp /opt/aws-sdk-cpp && \
+RUN git clone --recurse-submodules --depth 1 --branch "1.11.584" https://github.com/aws/aws-sdk-cpp /opt/aws-sdk-cpp && \
     cd /opt/aws-sdk-cpp && \
     
     cmake -DCMAKE_TOOLCHAIN_FILE=/opt/toolchains/x86_64-linux-gnu.cmake \
           -DBUILD_ONLY="s3-crt" \
+          -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
           -DCMAKE_PREFIX_PATH="/opt/x86_64-ssl;/opt/x86_64-curl" \
           -DCMAKE_INSTALL_PREFIX="/opt/x86_64-aws" \
           -DFORCE_SHARED_CRT=OFF \
@@ -133,6 +134,7 @@ RUN git clone --recurse-submodules --depth 1 --branch "1.11.321" https://github.
     
     cmake -DCMAKE_TOOLCHAIN_FILE=/opt/toolchains/aarch64-linux-gnu.cmake \
           -DBUILD_ONLY="s3-crt" \
+          -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
           -DCMAKE_PREFIX_PATH="/opt/aarch64-ssl;/opt/aarch64-curl" \
           -DCMAKE_INSTALL_PREFIX="/opt/aarch64-aws" \
           -DFORCE_SHARED_CRT=OFF \

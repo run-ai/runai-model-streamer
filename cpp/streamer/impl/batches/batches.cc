@@ -54,7 +54,8 @@ size_t Batches::BatchItr::consume(size_t bytesize)
 }
 
 Batches::Batches(std::shared_ptr<const Config> config, std::shared_ptr<common::Responder> responder, const std::string & path, const common::s3::S3ClientWrapper::Params & params, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes) :
-    _itr(config->concurrency, batch_bytesize(bytesize, *config, params.uri)),
+    _concurrency(params.uri != nullptr ? config->s3_concurrency : config->concurrency),
+    _itr(_concurrency, batch_bytesize(bytesize, *config, params.uri)),
     _responder(responder)
 {
     LOG(DEBUG) << "worker maximal range size is " << utils::logging::human_readable_size(_itr.worker_bytesize());
@@ -69,7 +70,7 @@ unsigned Batches::size() const
 
 size_t Batches::batch_bytesize(size_t bytesize, const Config & config, std::shared_ptr<common::s3::StorageUri> uri)
 {
-    size_t result = std::ceil(static_cast<double>(bytesize) / static_cast<double>(config.concurrency));
+    size_t result = std::ceil(static_cast<double>(bytesize) / static_cast<double>(_concurrency));
 
     // round up to the configured chunk byte size
     const auto chunk_bytesize = (uri.get() == nullptr ? config.fs_block_bytesize : config.s3_block_bytesize);
@@ -95,8 +96,8 @@ size_t Batches::total() const
 
 void Batches::build_tasks(std::shared_ptr<const Config> config, const std::string & path, const common::s3::S3ClientWrapper::Params & params, size_t file_offset, void * dst, unsigned num_sizes, size_t * internal_sizes)
 {
-    std::vector<Tasks> v_tasks(config->concurrency);
-    std::vector<Range> v_ranges(config->concurrency);
+    std::vector<Tasks> v_tasks(_concurrency);
+    std::vector<Range> v_ranges(_concurrency);
 
     size_t * size_ptr = internal_sizes;
     size_t request_file_offset = file_offset;
@@ -115,7 +116,7 @@ void Batches::build_tasks(std::shared_ptr<const Config> config, const std::strin
 
     auto dst_ = static_cast<char *>(dst);
 
-    for (unsigned i = 0; i < config->concurrency; ++i)
+    for (unsigned i = 0; i < _concurrency; ++i)
     {
         auto & tasks = v_tasks[i];
         auto size = tasks.size();
