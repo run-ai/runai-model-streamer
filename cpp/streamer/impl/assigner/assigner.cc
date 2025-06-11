@@ -26,7 +26,8 @@ Assigner::Assigner(
         const std::vector<void*> & dsts,
         std::shared_ptr<const Config> config) :
 _config(config),
-_num_workers(_config->concurrency)
+_is_object_storage(check_object_storage(paths)),
+_num_workers(_is_object_storage ? _config->s3_concurrency : _config->concurrency)
 {
     LOG(DEBUG) << "Assigning " << paths.size() << " files to " << _num_workers << " workers";
     const size_t num_files = paths.size();
@@ -61,8 +62,8 @@ _num_workers(_config->concurrency)
     }
 
     // Determine Workload per Worker
-    size_t base_bytes_per_worker = bytes_per_worker(total_bytes_to_read, paths[0]);
-    size_t base_bytes_remainder = total_bytes_to_read % _num_workers;
+    size_t base_bytes_remainder;
+    size_t base_bytes_per_worker = bytes_per_worker(total_bytes_to_read, paths[0], base_bytes_remainder);
     LOG(DEBUG) << "base_bytes_per_worker: " << base_bytes_per_worker << " base_bytes_remainder: " << base_bytes_remainder;
 
     _worker_assignments.resize(_num_workers);
@@ -186,6 +187,26 @@ _num_workers(_config->concurrency)
     }
 }
 
+bool Assigner::check_object_storage(const std::vector<std::string> & paths) const
+{
+    if (paths.size() == 0)
+    {
+        return false;
+    }
+
+    std::shared_ptr<common::s3::StorageUri> uri;
+    try
+    {
+        uri = std::make_shared<common::s3::StorageUri>(paths[0]);
+        return true;
+    }
+    catch(const std::exception& e)
+    {
+    }
+
+    return false;
+}
+
 // Access the assignments of a given file by the original file index
 const std::vector<FileReadTask> & Assigner::file_assignments(unsigned file_index) const
 {
@@ -198,36 +219,31 @@ unsigned Assigner::get_num_workers() const
     return _num_workers;
 }
 
-size_t Assigner::bytes_per_worker(size_t total_bytes_to_read, const std::string & path)
+size_t Assigner::bytes_per_worker(size_t total_bytes_to_read, const std::string & path, size_t & remainder_bytesize)
 {
-    size_t base_bytes_per_worker = total_bytes_to_read / _num_workers;
+    size_t block_bytesize = _is_object_storage ? _config->s3_block_bytesize : _config->fs_block_bytesize;
+    size_t num_blocks = total_bytes_to_read / block_bytesize;
 
-    if (_num_workers > 1)
-    {
-        // round up to the configured chunk byte size
+    // zero size files are assigned to one worker
+    // this is because zero size files may contain zero size tensors, which we still need to send response for
+    _num_workloads = std::max(std::min(num_blocks, static_cast<size_t>(_num_workers)), 1UL);
+    size_t base_bytes_per_worker = num_blocks / _num_workloads * block_bytesize;
 
-        std::shared_ptr<common::s3::StorageUri> uri;
-        try
-        {
-            uri = std::make_shared<common::s3::StorageUri>(path);
-        }
-        catch(const std::exception& e)
-        {
-        }
-
-        const auto chunk_bytesize = (uri.get() == nullptr ? _config->fs_block_bytesize : _config->s3_block_bytesize);
-        auto chunk_remainder = total_bytes_to_read % chunk_bytesize;
-        if (chunk_remainder)
-        {
-            base_bytes_per_worker += (chunk_bytesize - chunk_remainder);
-        }
-    }
+    remainder_bytesize = total_bytes_to_read - _num_workloads * base_bytes_per_worker;
 
     LOG(DEBUG) << "Total bytes: " << total_bytes_to_read
-                << ", Workers: " << _num_workers
-                << ", Base bytes/worker: " << base_bytes_per_worker;
+                << ", Block bytesize: " << block_bytesize
+                << ", Num blocks: " << num_blocks
+                << ", Num workers: " << _num_workloads << " out of " << _num_workers
+                << ", Base bytes/worker: " << base_bytes_per_worker
+                << ", Remainder bytesize: " << remainder_bytesize;
 
     return base_bytes_per_worker;
+}
+
+unsigned Assigner::num_workloads() const
+{
+    return _num_workloads;
 }
 
 } // namespace runai::llm::streamer::impl

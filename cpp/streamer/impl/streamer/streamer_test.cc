@@ -50,7 +50,7 @@ TEST(Sync, Sanity)
     Streamer streamer(config);
 
     std::vector<unsigned char> v(size);
-    auto result = streamer.request(file.path, 0, size, v.data(), credentials);
+    auto result = streamer.sync_read(file.path, 0, size, v.data(), credentials);
     EXPECT_EQ(result, common::ResponseCode::Success);
 
     for (size_t i = 0; i < size; ++i)
@@ -79,7 +79,7 @@ TEST(Sync, File_Not_Found_Error)
         (utils::random::boolean() ? utils::random::string().c_str() : nullptr));
 
     std::vector<char> v(size);
-    auto r = streamer.request(utils::random::string(), 0, size, v.data(), credentials);
+    auto r = streamer.sync_read(utils::random::string(), 0, size, v.data(), credentials);
     EXPECT_EQ(r, common::ResponseCode::FileAccessError);
 }
 
@@ -100,13 +100,13 @@ TEST(Sync, End_Of_File_Error)
 
     for (size_t file_offset : {0UL, utils::random::number<size_t>(size, 100 * size)})
     {
-        auto r = streamer.request(file.path, file_offset, size, v.data(), credentials);
+        auto r = streamer.sync_read(file.path, file_offset, size, v.data(), credentials);
         EXPECT_EQ(r, common::ResponseCode::EofError);
     }
 
     for (size_t file_offset : {utils::random::number<size_t>(size/2, size), utils::random::number<size_t>(size, 100 * size)})
     {
-        auto r = streamer.request(file.path, file_offset, utils::random::number<size_t>(1, size/2), v.data(), credentials);
+        auto r = streamer.sync_read(file.path, file_offset, utils::random::number<size_t>(1, size/2), v.data(), credentials);
         EXPECT_EQ(r, common::ResponseCode::EofError);
     }
 }
@@ -134,7 +134,7 @@ TEST(Sync, Offset)
         Config config(utils::random::number(1, 20), utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
         Streamer streamer(config);
 
-        auto r = streamer.request(file.path, offset_start, size_to_read, v.data(), credentials);
+        auto r = streamer.sync_read(file.path, offset_start, size_to_read, v.data(), credentials);
         EXPECT_EQ(r, common::ResponseCode::Success);
     }
 
@@ -167,7 +167,7 @@ TEST(Async, Sanity)
     std::vector<unsigned char> dst(size);
     std::vector<size_t> sizes;
     sizes.push_back(size);
-    EXPECT_EQ(streamer.request(file.path, 0, size, dst.data(), 1, sizes.data(), credentials), common::ResponseCode::Success);
+    EXPECT_EQ(streamer.async_read(file.path, 0, size, dst.data(), 1, sizes.data(), credentials), common::ResponseCode::Success);
     auto r = streamer.response();
     EXPECT_EQ(r.ret, common::ResponseCode::Success);
     EXPECT_EQ(r.index, 0);
@@ -206,7 +206,7 @@ TEST(Async, Requests)
     common::s3::Credentials credentials;
 
     std::vector<unsigned char> dst(size);
-    EXPECT_EQ(streamer.request(file.path, 0, size, dst.data(), num_chunks, chunks.data(), credentials), common::ResponseCode::Success);
+    EXPECT_EQ(streamer.async_read(file.path, 0, size, dst.data(), num_chunks, chunks.data(), credentials), common::ResponseCode::Success);
 
     // wait for all the requests to finish
     std::set<int> expected_responses;
@@ -256,7 +256,7 @@ TEST(Async, File_Not_Found_Error)
     Streamer streamer(config);
 
     std::vector<char> dst(size);
-    EXPECT_EQ(streamer.request(utils::random::string(), 0, size, dst.data(), num_chunks, chunks.data(), credentials), common::ResponseCode::Success);
+    EXPECT_EQ(streamer.async_read(utils::random::string(), 0, size, dst.data(), num_chunks, chunks.data(), credentials), common::ResponseCode::Success);
 
     for (unsigned i = 0; i < num_chunks; ++i)
     {
@@ -291,7 +291,7 @@ TEST(Async, End_Of_File_Error)
 
     common::s3::Credentials credentials;
 
-    auto request_ret = streamer.request(file.path, 0, size, dst.data(), num_chunks, chunks.data(), credentials);
+    auto request_ret = streamer.async_read(file.path, 0, size, dst.data(), num_chunks, chunks.data(), credentials);
 
     EXPECT_EQ(request_ret, common::ResponseCode::Success);
 
@@ -337,7 +337,7 @@ TEST(Async, Zero_Requests_Error)
 
     std::vector<char> dst(size);
     // sending zero instead of num_chunks
-    EXPECT_EQ(streamer.request(utils::random::string(), 0, size, dst.data(), 0, chunks.data(), credentials), common::ResponseCode::InvalidParameterError);
+    EXPECT_EQ(streamer.async_read(utils::random::string(), 0, size, dst.data(), 0, chunks.data(), credentials), common::ResponseCode::InvalidParameterError);
 
     // wait for all the requests to finish
 
@@ -368,7 +368,7 @@ TEST(Async, Zero_Bytes_To_Read_Error)
 
     for (unsigned num_chunks_ : {0U, num_chunks})
     {
-        auto result = streamer.request(utils::random::string(), 0, 0, dst.data(), num_chunks_, chunks.data(), credentials);
+        auto result = streamer.async_read(utils::random::string(), 0, 0, dst.data(), num_chunks_, chunks.data(), credentials);
         if (num_chunks_ > 0)
         {
             EXPECT_EQ(result, common::ResponseCode::InvalidParameterError);
@@ -407,10 +407,10 @@ TEST(Async, Busy_Error)
     sizes.push_back(size);
 
     // first request succeeds
-    EXPECT_EQ(streamer.request(file.path, 0, size, dst.data(), 1, sizes.data(), credentials), common::ResponseCode::Success);
+    EXPECT_EQ(streamer.async_read(file.path, 0, size, dst.data(), 1, sizes.data(), credentials), common::ResponseCode::Success);
 
     // second request fails
-    EXPECT_EQ(streamer.request(file.path, 0, size, dst.data(), 1, sizes.data(), credentials), common::ResponseCode::BusyError);
+    EXPECT_EQ(streamer.async_read(file.path, 0, size, dst.data(), 1, sizes.data(), credentials), common::ResponseCode::BusyError);
 
     // read response of the first request
     EXPECT_EQ(streamer.response().ret, common::ResponseCode::Success);

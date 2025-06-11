@@ -40,7 +40,7 @@ TEST(Workload, Sanity)
     std::vector<std::set<int>> expected_responses(num_files);
 
     const auto chunk_size = utils::random::number<size_t>(1, 1024);
-    auto config = std::make_shared<Config>(utils::random::number(1, 20), utils::random::number<size_t>(1, 1024), chunk_size, false /* do not force minimum chunk size */);
+    auto config = std::make_shared<Config>(utils::random::number(1, 20), utils::random::number(1, 20), utils::random::number<size_t>(1, 1024), chunk_size, false /* do not force minimum chunk size */);
     auto responder = std::make_shared<common::Responder>(0);
 
     size_t total_bytes = 0;
@@ -67,9 +67,9 @@ TEST(Workload, Sanity)
 
         EXPECT_GT(assigner.file_assignments(0).size(), 0);
         EXPECT_LE(assigner.file_assignments(0).size(), config->concurrency);
+        EXPECT_LE(assigner.num_workloads(), config->concurrency);
 
-
-        std::vector<Workload> workloads(config->concurrency);
+        std::vector<Workload> workloads(assigner.num_workloads());
 
         for (unsigned file_idx = 0; file_idx < num_files; ++file_idx)
         {
@@ -146,7 +146,7 @@ TEST(Workload, Stopped)
     std::vector<std::set<int>> expected_responses(num_files);
 
     const auto chunk_size = utils::random::number<size_t>(1, 1024);
-    auto config = std::make_shared<Config>(1, utils::random::number<size_t>(1, 1024), chunk_size, false /* do not force minimum chunk size */);
+    auto config = std::make_shared<Config>(1, 1, utils::random::number<size_t>(1, 1024), chunk_size, false /* do not force minimum chunk size */);
     auto responder = std::make_shared<common::Responder>(0);
 
     size_t total_bytes = 0;
@@ -261,7 +261,7 @@ TEST(Workload, Stopped_Async)
     std::vector<std::set<int>> expected_responses(num_files);
 
     const auto chunk_size = utils::random::number<size_t>(1, 1024);
-    auto config = std::make_shared<Config>(1, utils::random::number<size_t>(1, 1024), chunk_size, false /* do not force minimum chunk size */);
+    auto config = std::make_shared<Config>(1, 1, utils::random::number<size_t>(1, 1024), chunk_size, false /* do not force minimum chunk size */);
     auto responder = std::make_shared<common::Responder>(0);
 
     size_t total_bytes = 0;
@@ -285,7 +285,7 @@ TEST(Workload, Stopped_Async)
     Assigner assigner(paths, file_offsets, bytesizes, dsts, config);
 
     EXPECT_GT(assigner.file_assignments(0).size(), 0);
-    EXPECT_LE(assigner.file_assignments(0).size(), config->concurrency);
+    EXPECT_LE(assigner.file_assignments(0).size(), config->s3_concurrency);
 
     Workload workload;
     for (unsigned file_idx = 0; file_idx < num_files; ++file_idx)

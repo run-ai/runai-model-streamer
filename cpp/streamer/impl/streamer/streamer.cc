@@ -40,11 +40,11 @@ Streamer::~Streamer()
     {}
 }
 
-common::ResponseCode Streamer::request(const std::string & path, size_t file_offset, size_t bytesize, void * dst, const common::s3::Credentials & credentials)
+common::ResponseCode Streamer::sync_read(const std::string & path, size_t file_offset, size_t bytesize, void * dst, const common::s3::Credentials & credentials)
 {
     LOG(SPAM) << "Requested to read " << bytesize << " bytes from " << path << " offset " << file_offset;
 
-    auto r = request(path, file_offset, bytesize, dst, 1, &bytesize, credentials);
+    auto r = async_read(path, file_offset, bytesize, dst, 1, &bytesize, credentials);
     if (r != common::ResponseCode::Success)
     {
         return r;
@@ -53,7 +53,7 @@ common::ResponseCode Streamer::request(const std::string & path, size_t file_off
     return _responder->pop().ret;
 }
 
-common::ResponseCode Streamer::request(const std::string & path, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes, const common::s3::Credentials & credentials)
+common::ResponseCode Streamer::async_read(const std::string & path, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes, const common::s3::Credentials & credentials)
 {
     common::ResponseCode ret = common::ResponseCode::Success;
 
@@ -76,7 +76,7 @@ common::ResponseCode Streamer::request(const std::string & path, size_t file_off
 
         internal_sizes_vv.push_back(internal_sizes_v);
 
-        request_multi(paths, file_offsets, bytesizes, dsts, num_sizes_v, internal_sizes_vv, credentials);
+        async_request(paths, file_offsets, bytesizes, dsts, num_sizes_v, internal_sizes_vv, credentials);
     }
     catch(const common::Exception & e)
     {
@@ -97,7 +97,7 @@ common::Response Streamer::response()
     return _responder->pop();
 }
 
-common::ResponseCode Streamer::request_multi(
+common::ResponseCode Streamer::async_request(
     std::vector<std::string> & paths,
     std::vector<size_t> & file_offsets,
     std::vector<size_t> & bytesizes,
@@ -123,10 +123,11 @@ common::ResponseCode Streamer::request_multi(
     // cancel responder in case of an error - cancelled response will not delay sending the next request
     utils::ScopeGuard __responder_release([&](){_responder->cancel();});
 
-    std::vector<Workload> workloads(_config->concurrency);
 
     // divide reading between workers
     Assigner assigner(paths, file_offsets, bytesizes, dsts, _config);
+
+    std::vector<Workload> workloads(assigner.num_workloads());
 
     // Create batches for each file
 
@@ -217,16 +218,16 @@ common::s3::S3ClientWrapper::Params Streamer::handle_s3(unsigned file_index, con
     {
         // adjust fd limit acording to concurrency
         auto fd_limit = utils::get_cur_file_descriptors();
-        LOG(DEBUG) << "Process file descriptors limit is " << fd_limit << " and concurrency level is " << _config->concurrency;
-        const auto desired_fd_limit = _config->concurrency * 64;
+        LOG(DEBUG) << "Process file descriptors limit is " << fd_limit << " and concurrency level is " << _config->s3_concurrency;
+        const auto desired_fd_limit = _config->s3_concurrency * 64;
         if (fd_limit < desired_fd_limit)
         {
             if (desired_fd_limit > utils::get_max_file_descriptors())
             {
-                LOG(ERROR) << "Insufficient file descriptors limit " << fd_limit << " for concurrency level " << _config->concurrency << " ; increase fd limit to " << desired_fd_limit << " or higher, depending on your application fd usage";
+                LOG(ERROR) << "Insufficient file descriptors limit " << fd_limit << " for concurrency level " << _config->s3_concurrency << " ; increase fd limit to " << desired_fd_limit << " or higher, depending on your application fd usage";
                 throw common::Exception(common::ResponseCode::InsufficientFdLimit);
             }
-            LOG(INFO) << "Increasing fd soft limit to " << desired_fd_limit << " for concurrency level " << _config->concurrency;
+            LOG(INFO) << "Increasing fd soft limit to " << desired_fd_limit << " for concurrency level " << _config->s3_concurrency;
             _fd_limit = std::make_unique<utils::FdLimitSetter>(desired_fd_limit);
         }
         _s3_stop = std::make_unique<S3Stop>();

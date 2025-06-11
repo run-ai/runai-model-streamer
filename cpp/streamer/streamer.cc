@@ -111,7 +111,7 @@ _RUNAI_EXTERN_C int runai_request(
             internal_sizes_vv[i] = std::vector<size_t>(internal_sizes_v[i], internal_sizes_v[i] + num_sizes_v[i]);
         }
 
-        return static_cast<int>(s->request_multi(paths_v, file_offsets_v, bytesizes_v, dsts_v, num_sizes_v, internal_sizes_vv, credentials));
+        return static_cast<int>(s->async_request(paths_v, file_offsets_v, bytesizes_v, dsts_v, num_sizes_v, internal_sizes_vv, credentials));
     }
     catch(...)
     {

@@ -177,7 +177,7 @@ common::ResponseCode S3Client::async_read(const common::s3::Path & object_path, 
         size_t bytesize_ = (i == size - 1 ? total_ : chunk_bytesize);
 
         // send async request
-        auto request = std::make_shared<Aws::S3Crt::Model::GetObjectRequest>(); 
+        auto request = std::make_shared<Aws::S3Crt::Model::GetObjectRequest>();
 
         std::string range_str = "bytes=" + std::to_string(offset_) + "-" + std::to_string(offset_ + bytesize_);
         request->SetRange(range_str.c_str());

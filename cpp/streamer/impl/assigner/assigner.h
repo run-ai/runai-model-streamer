@@ -41,14 +41,19 @@ struct Assigner
 
     unsigned get_num_workers() const;
 
+    unsigned num_workloads() const;
+
  private:
-    size_t bytes_per_worker(size_t total_bytes_to_read, const std::string & path);
+    size_t bytes_per_worker(size_t total_bytes_to_read, const std::string & path, size_t & remainder_bytesize);
+    bool check_object_storage(const std::vector<std::string> & paths) const;
 
  private:
     std::shared_ptr<const Config> _config;
+    bool _is_object_storage;
     unsigned _num_workers;
     std::map<unsigned, std::vector<FileReadTask>> _assignments; // assigned work for each file (key is the file index)
     std::vector<WorkerTasks> _worker_assignments; // ordered by worker index
+    unsigned _num_workloads;
 };
 
 } // namespace runai::llm::streamer::impl
