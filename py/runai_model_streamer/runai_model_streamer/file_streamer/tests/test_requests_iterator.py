@@ -214,7 +214,7 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
 
     def test_limited_memory_cap_and_smaller_chunks(self):
         requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
-            MemoryCapMode.limited, 100, [FileChunks("a.txt", 10, [1, 2]), FileChunks("b.txt", 10, [3, 4])], 50
+            MemoryCapMode.limited, [FileChunks("a.txt", 10, [1, 2]), FileChunks("b.txt", 10, [3, 4])], 50
         )
         self.assertEqual(len(requests_iterator.buffer), 10)
 
