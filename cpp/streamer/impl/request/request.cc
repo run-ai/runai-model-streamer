@@ -9,10 +9,12 @@
 namespace runai::llm::streamer::impl
 {
 
-Request::Request(size_t offset, unsigned index, unsigned tasks, size_t bytesize) :
+Request::Request(size_t offset, unsigned file_index, unsigned index, unsigned tasks, size_t bytesize, char * dst) :
     offset(offset),
+    file_index(file_index),
     index(index),
     bytesize(bytesize),
+    dst(dst),
     _tasks(tasks)
 {}
 

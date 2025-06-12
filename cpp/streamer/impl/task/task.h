@@ -16,19 +16,27 @@ struct Task
     // file offsets to read
     struct Info
     {
-        Info(size_t offset, size_t bytesize);
+        Info(size_t offset, size_t bytesize, size_t relative_offset);
+        // offset from the beginning of the file
         size_t offset;
+        // number of bytes to read
         size_t bytesize;
+        // end from the beginning of the file
         size_t end;
+        // relative offset from the beginning of the request (e.g. zero for the request's first task)
+        size_t relative_offset;
     };
 
     Task(std::shared_ptr<Request> request, Info && info);
-    Task(std::shared_ptr<Request> request, size_t offset, size_t bytesize);
+    Task(std::shared_ptr<Request> request, size_t offset, size_t bytesize, size_t relative_offset);
 
     bool finished_request(common::ResponseCode ret);
 
+    char * destination() const;
+
     std::shared_ptr<Request> request;
     Info info;
+
  private:
     bool _finished = false;
 };

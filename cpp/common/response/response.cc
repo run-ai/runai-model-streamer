@@ -4,9 +4,14 @@
 namespace runai::llm::streamer::common
 {
 
-Response::Response(unsigned index, ResponseCode ret) :
+Response::Response(unsigned file_index, unsigned index, common::ResponseCode ret) :
+    file_index(file_index),
     index(index),
     ret(ret)
+{}
+
+Response::Response(unsigned index, ResponseCode ret) :
+    Response(0, index, ret)
 {}
 
 Response::Response(unsigned index) : Response(index, ResponseCode::Success)
@@ -28,7 +33,7 @@ bool Response::operator!=(const ResponseCode other)
 
 std::ostream & operator<<(std::ostream & os, const Response & response)
 {
-    return os << "request index: " << response.index << " Response code: " << response.ret;
+    return os << "File index: " << response.file_index << " Request index: " << response.index << " Response code: " << response.ret;
 }
 
 }; // namespace runai::llm::streamer::common

@@ -4,6 +4,7 @@ runai_cc_auto_library(
     name = "batch",
     deps = [
         "//common/responder",
+        "//common/shared_queue",
         "//streamer/impl/config",
         "//streamer/impl/file",
         "//streamer/impl/s3",
@@ -16,6 +17,7 @@ runai_cc_test(
     srcs = ["batch_test.cc"],
     deps = [":batch",
             "//streamer/impl/file",
+            "//streamer/impl/workload",
             "//utils/random",
             "//utils/temp/file",
             "//utils/thread",

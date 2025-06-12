@@ -42,7 +42,7 @@ std::ostream & operator<<(std::ostream & os, const StorageUri & uri)
 StorageUri_C::StorageUri_C(const StorageUri & uri) :
     bucket(uri.bucket.c_str()),
     path(uri.path.c_str()),
-    endpoint(uri.endpoint.c_str())
+    endpoint(uri.endpoint.empty() ? nullptr : uri.endpoint.c_str())
 {}
 
 }; // namespace runai::llm::streamer::common::s3

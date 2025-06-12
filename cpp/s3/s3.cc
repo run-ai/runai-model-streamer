@@ -22,12 +22,12 @@
 namespace runai::llm::streamer::impl::s3
 {
 
-common::ResponseCode runai_create_s3_client(const common::s3::StorageUri_C & uri, const common::s3::Credentials_C & credentials, void ** client)
+common::ResponseCode runai_create_s3_client(const common::s3::Path * path, const common::s3::Credentials_C * credentials, void ** client)
 {
     common::ResponseCode ret = common::ResponseCode::Success;
     try
     {
-        *client = static_cast<void *>(S3ClientMgr::pop(uri, credentials));
+        *client = static_cast<void *>(S3ClientMgr::pop(*path, *credentials));
     }
     catch(const common::Exception & e)
     {
@@ -82,7 +82,7 @@ void runai_stop_s3_clients()
     }
 }
 
-common::ResponseCode  runai_async_read_s3_client(void * client, unsigned num_ranges, common::Range * ranges, size_t chunk_bytesize, char * buffer)
+common::ResponseCode runai_async_read_s3_client(void * client, common::backend_api::ObjectRequestId_t request_id, const common::s3::Path * path, common::Range * range, size_t chunk_bytesize, char * buffer)
 {
     try
     {
@@ -92,7 +92,7 @@ common::ResponseCode  runai_async_read_s3_client(void * client, unsigned num_ran
             return common::ResponseCode::UnknownError;
         }
         auto ptr = static_cast<S3Client *>(client);
-        return ptr->async_read(num_ranges, ranges, chunk_bytesize, buffer);
+        return ptr->async_read(*path, request_id, *range, chunk_bytesize, buffer);
     }
     catch(const std::exception& e)
     {
@@ -101,7 +101,10 @@ common::ResponseCode  runai_async_read_s3_client(void * client, unsigned num_ran
     return common::ResponseCode::UnknownError;
 }
 
-common::ResponseCode runai_async_response_s3_client(void * client, unsigned * index)
+common::ResponseCode runai_async_response_s3_client(void * client,
+                                                    common::backend_api::ObjectCompletionEvent_t* event_buffer,
+                                                    unsigned int max_events_to_retrieve,
+                                                    unsigned int* out_num_events_retrieved)
 {
     try
     {
@@ -110,10 +113,25 @@ common::ResponseCode runai_async_response_s3_client(void * client, unsigned * in
             LOG(ERROR) << "Attempt to get read response with null s3 client";
             return common::ResponseCode::UnknownError;
         }
+        if (max_events_to_retrieve == 0)
+        {
+            LOG(ERROR) << "Attempt to get read response with max_events_to_retrieve = 0";
+            return common::ResponseCode::UnknownError;
+        }
+        if (!event_buffer || !out_num_events_retrieved)
+        {
+            LOG(ERROR) << "Attempt to get read response with null event_buffer or out_num_events_retrieved";
+            return common::ResponseCode::UnknownError;
+        }
+
+        // for now reads a single event
+
         auto ptr = static_cast<S3Client *>(client);
         auto response = ptr->async_read_response();
-        *index = response.index;
-        return response.ret;
+        *out_num_events_retrieved = 1;
+        event_buffer[0].request_id = response.handle;
+        event_buffer[0].response_code = response.ret;
+        return common::ResponseCode::Success;
     }
     catch(const std::exception& e)
     {

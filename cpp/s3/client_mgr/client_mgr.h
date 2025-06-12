@@ -24,7 +24,7 @@ struct ClientMgr
 
     ClientMgr<T> & operator=(const ClientMgr<T> &) = delete;
 
-    static T* pop(const common::s3::StorageUri_C & uri, const common::s3::Credentials_C & credentials);
+    static T* pop(const common::s3::Path & path, const common::s3::Credentials_C & credentials);
     static void push(T* client);
 
     static void clear();
@@ -35,7 +35,6 @@ struct ClientMgr
     // for testing:
     static unsigned size();
     static unsigned unused();
-    static std::string current_bucket();
 
  private:
     ClientMgr();
@@ -48,8 +47,7 @@ struct ClientMgr
     mutable std::mutex _mutex;
 
     // reuse clients of the same bucket
-    std::string _current_bucket;
-    std::set<T*> _bucket_unused_clients;
+    std::set<T*> _unused_clients;
     std::map<T*, std::unique_ptr<T>> _clients;
 };
 
@@ -83,63 +81,39 @@ unsigned ClientMgr<T>::unused()
     auto & mgr = get();
 
     const auto guard = std::unique_lock<std::mutex>(mgr._mutex);
-    return mgr._bucket_unused_clients.size();
+    return mgr._unused_clients.size();
 }
 
 template <typename T>
-std::string ClientMgr<T>::current_bucket()
-{
-    auto & mgr = get();
-
-    const auto guard = std::unique_lock<std::mutex>(mgr._mutex);
-    return mgr._current_bucket;
-}
-
-
-template <typename T>
-T* ClientMgr<T>::pop(const common::s3::StorageUri_C & uri, const common::s3::Credentials_C & credentials)
+T* ClientMgr<T>::pop(const common::s3::Path & path, const common::s3::Credentials_C & credentials)
 {
     auto & mgr = get();
 
     {
         const auto guard = std::unique_lock<std::mutex>(mgr._mutex);
 
-        auto & unused = mgr._bucket_unused_clients;
-        bool is_bucket = uri.bucket == mgr._current_bucket;
-        if (is_bucket)
+        auto & unused = mgr._unused_clients;
+        while (!unused.empty())
         {
-            while (!unused.empty())
-            {
-                auto ptr = *unused.begin();
-                ptr->path(uri.path);
-                unused.erase(unused.begin());
+            auto ptr = *unused.begin();
+            unused.erase(unused.begin());
 
-                // Reuse client only if credentials have not changed
-                if (ptr->verify_credentials(credentials))
-                {
-                    LOG(DEBUG) << "Reusing S3 client";
-                    return ptr;
-                }
-
-                // release the stale client
-                mgr._clients.erase(ptr);
-            }
-        }
-        else
-        {
-            // remove unused clients of other buckets
-            for (T* client : unused)
+            // Reuse client only if credentials have not changed
+            if (ptr->verify_credentials(credentials))
             {
-                mgr._clients.erase(client);
+                LOG(DEBUG) << "Reusing S3 client";
+                return ptr;
             }
-            unused.clear();
-            mgr._current_bucket = uri.bucket;
+
+            // release the stale client
+            mgr._clients.erase(ptr);
         }
     }
 
     // create new client if there are no unused clients for this bucket
 
-    auto client = std::make_unique<T>(uri, credentials);
+    LOG(DEBUG) << "Creating client for path " << path.uri.path;
+    auto client = std::make_unique<T>(path, credentials);
 
     const auto guard = std::unique_lock<std::mutex>(mgr._mutex);
     auto ptr = client.get();
@@ -153,14 +127,7 @@ void ClientMgr<T>::push(T* client)
     LOG(DEBUG) << "Releasing S3 client";
     auto & mgr = get();
     const auto guard = std::unique_lock<std::mutex>(mgr._mutex);
-    if (mgr._current_bucket == client->bucket())
-    {
-        mgr._bucket_unused_clients.insert(client);
-    }
-    else
-    {
-        mgr._clients.erase(client);
-    }
+    mgr._unused_clients.insert(client);
 }
 
 template <typename T>
@@ -172,7 +139,7 @@ void ClientMgr<T>::clear()
     const auto guard = std::unique_lock<std::mutex>(mgr._mutex);
 
     // verify that all clients are unused
-    unsigned count = mgr._bucket_unused_clients.size();
+    unsigned count = mgr._unused_clients.size();
 
     if (count != mgr._clients.size())
     {
@@ -181,8 +148,7 @@ void ClientMgr<T>::clear()
     }
 
     mgr._clients.clear();
-    mgr._bucket_unused_clients.clear();
-    mgr._current_bucket.clear();
+    mgr._unused_clients.clear();
 }
 
 template <typename T>

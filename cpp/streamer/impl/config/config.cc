@@ -1,5 +1,7 @@
 #include "streamer/impl/config/config.h"
 
+#include <algorithm>
+
 #include "common/s3_wrapper/s3_wrapper.h"
 
 #include "utils/env/env.h"
