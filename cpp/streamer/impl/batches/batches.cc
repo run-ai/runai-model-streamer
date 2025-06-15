@@ -171,7 +171,6 @@ void Batches::handle_request(std::vector<Tasks> & v_tasks, unsigned request_inde
     auto bytes_to_request = request_size;
     size_t task_offset = request_file_offset;
     size_t destination_offset = 0;
-
     do
     {
         auto to_read = _itr.consume(bytes_to_request);

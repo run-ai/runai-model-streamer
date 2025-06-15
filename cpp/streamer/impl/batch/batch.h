@@ -71,7 +71,7 @@ struct Batch
   void request(std::shared_ptr<Reader> reader, std::atomic<bool> & stopped);
 
   // handle response from the reader
-  void handle_response(const common::backend_api::Response & response);
+  void handle_response(const common::backend_api::Response & response, const Task * task_ptr);
 
   // handle error
   void handle_error(common::ResponseCode response_code);
@@ -89,7 +89,7 @@ struct Batch
   // s3 parameters
   common::s3::S3ClientWrapper::Params params;
 
-  Tasks tasks;
+  const Tasks tasks;
 
   // range in file
   Range range;
@@ -106,7 +106,7 @@ struct Batch
   void request_async_read(Reader * reader, std::atomic<bool> & stopped);
 
   // handle response from a single task
-  void handle_task_response(const common::ResponseCode response_code, Task * task_ptr);
+  void handle_task_response(const common::ResponseCode response_code, const Task * task_ptr);
 
  private:
   // index of first unfinished task

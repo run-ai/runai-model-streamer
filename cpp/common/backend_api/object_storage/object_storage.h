@@ -5,7 +5,7 @@
 namespace runai::llm::streamer::common::backend_api
 {
 
-using ObjectRequestId_t = void*;
+using ObjectRequestId_t = uint64_t;
 
 struct ObjectCompletionEvent_t
 {

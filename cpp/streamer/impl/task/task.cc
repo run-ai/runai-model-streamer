@@ -23,7 +23,7 @@ Task::Task(std::shared_ptr<Request> request, Info && info) :
 {}
 
 // returns true if the request is completed (i.e. all its tasks were finished)
-bool Task::finished_request(common::ResponseCode ret)
+bool Task::finished_request(common::ResponseCode ret) const
 {
     if (_finished)
     {
@@ -43,7 +43,7 @@ char * Task::destination() const
 
 std::ostream & operator<<(std::ostream & os, const Task & task)
 {
-    os << "task to read " << task.info.bytesize << " bytes from file offset " << task.info.offset << " to " << task.info.end << " offset (relative to request start) " << task.info.relative_offset;
+    os << "task to read " << task.info.bytesize << " bytes from file offset " << task.info.offset << " to " << task.info.end << " offset (relative to request start) " << task.info.relative_offset << " global id " << task.info.global_id;
     return os;
 }
 

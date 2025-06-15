@@ -22,7 +22,7 @@ Streamer::Streamer() : Streamer(Config())
 
 Streamer::Streamer(Config config) :
     _config(std::make_shared<Config>(config)),
-    _pool([&](Workload workload, std::atomic<bool> & stopped)
+    _pool([&](Workload&& workload, std::atomic<bool> & stopped)
         {
             workload.execute(stopped);
         }, _config->max_concurrency())

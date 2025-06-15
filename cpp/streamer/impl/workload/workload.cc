@@ -14,6 +14,8 @@
 namespace runai::llm::streamer::impl
 {
 
+std::atomic<common::backend_api::ObjectRequestId_t> Workload::_async_handle_counter {0};
+
 size_t Workload::size() const
 {
     return _batches_by_file_index.size();
@@ -33,6 +35,7 @@ common::ResponseCode Workload::add_batch(Batch && batch)
         return res;
     }
 
+    _total_tasks += batch.tasks.size();
     _batches_by_file_index.emplace(file_index, std::move(batch));
 
     return common::ResponseCode::Success;
@@ -58,7 +61,7 @@ void Workload::execute(std::atomic<bool> & stopped)
     }
 
     // create reader
-    if (_params.valid())
+    if (_params.valid()) // reading from s3
     {
         async_read(stopped);
     }
@@ -72,11 +75,31 @@ void Workload::execute(std::atomic<bool> & stopped)
     }
 }
 
+void Workload::assign_global_ids()
+{
+    _global_id_base = _async_handle_counter.fetch_add(_total_tasks);
+    LOG(DEBUG) << "Assigned global ids for " << _total_tasks << " tasks starting from " << _global_id_base;
+    _tasks.resize(_total_tasks);
+    size_t counter = 0;
+    auto base_id = _global_id_base;
+
+    for (auto & [file_index, batch] : _batches_by_file_index)
+    {
+        for (const auto & task : batch.tasks)
+        {
+            task.info.global_id = base_id++;
+            _tasks[counter++] = &task;
+        }
+    }
+}
+
 void Workload::async_read(std::atomic<bool> & stopped)
 {
     auto response_code = common::ResponseCode::Success;
     try
     {
+        assign_global_ids();
+
         const auto & config = _batches_by_file_index.begin()->second.config;
 
         auto s3_client = std::make_shared<common::s3::S3ClientWrapper>(_params);
@@ -174,10 +197,12 @@ void Workload::wait_for_responses(std::atomic<bool> & stopped)
             throw common::Exception(common::ResponseCode::FinishedError);
         }
 
-        // TO do (Noa)
-        // safer approach is to use a map of request_id to task index, and verify the pointer is valid
-        // also replace request_id with handle
-        Task * task_ptr = reinterpret_cast<Task *>(response.handle);
+        ASSERT(response.handle >= _global_id_base) << "Received response with invalid handle " << response.handle << " expected at least " << _global_id_base;
+
+        auto index = response.handle - _global_id_base;
+        ASSERT(index < _tasks.size()) << "Received response with invalid handle " << response.handle << " expected at most " << _global_id_base + _tasks.size();
+
+        const Task * task_ptr = _tasks[index];
         ASSERT(task_ptr != nullptr) << "Received response from a null task ; response: " << response;
 
         auto file_index = task_ptr->request->file_index;
@@ -188,7 +213,7 @@ void Workload::wait_for_responses(std::atomic<bool> & stopped)
             _error_by_file_index.at(file_index) = response.ret;
         }
 
-        batch.handle_response(response);
+        batch.handle_response(response, task_ptr);
     }
 
     LOG(DEBUG) << "Finished reading files "  << (stopped ? " - terminated" : " successfully");

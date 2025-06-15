@@ -167,17 +167,16 @@ void Batch::request_async_read(Reader * reader, std::atomic<bool> & stopped)
         common::Range range(task.info.offset, task.info.bytesize);
         if (range.size == 0)
         {
-            // tensors of size zero are valid, but empty request scan be invalid in the storage backend
+            // tensors of size zero are valid, but empty request can be invalid in the storage backend
             LOG(DEBUG) << "Found task of zero size - return response and don't pass to backend";
             handle_task_response(common::ResponseCode::Success, &task);
             continue;
         }
-        common::backend_api::ObjectRequestId_t request_handle = reinterpret_cast<common::backend_api::ObjectRequestId_t>(&task);
-        reader->async_read(params, request_handle, range, dst);
+        reader->async_read(params, task.info.global_id, range, dst);
     }
 }
 
-void Batch::handle_response(const common::backend_api::Response & response)
+void Batch::handle_response(const common::backend_api::Response & response, const Task * task_ptr)
 {
     // Aborting if a single task failed, we should replace this by a retry mechanism
     if (response.ret != common::ResponseCode::Success)
@@ -186,16 +185,12 @@ void Batch::handle_response(const common::backend_api::Response & response)
         throw common::Exception(response.ret);
     }
 
-    // TO do (Noa)
-    // safer approach is to use a map of request_id to task index, and verify the pointer is valid
-    // also replace request_id with handle
-    Task * task_ptr = reinterpret_cast<Task *>(response.handle);
     ASSERT(task_ptr != nullptr) << "Received response from a null task";
 
     handle_task_response(response.ret, task_ptr);
 }
 
-void Batch::handle_task_response(const common::ResponseCode response_code, Task * task_ptr)
+void Batch::handle_task_response(const common::ResponseCode response_code, const Task * task_ptr)
 {
     // Aborting if a single task failed, we should replace this by a retry mechanism
 

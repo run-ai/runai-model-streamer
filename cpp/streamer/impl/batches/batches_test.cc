@@ -193,13 +193,16 @@ TEST(Batches, Zero_Size_Request)
     // add zero size chunks
     std::vector<size_t> chunks;
 
-    unsigned j = 0;
-    for (unsigned i = 0; i < num_chunks; ++j)
+    unsigned num_zero_chunks = utils::random::number(0, 2);
+
+
+    for (unsigned i = 0; i < num_chunks;)
     {
         bool add_zero = utils::random::boolean();
-        if (add_zero)
+        if (num_zero_chunks > 0 && add_zero)
         {
             chunks.push_back(0);
+            --num_zero_chunks;
         }
         else
         {

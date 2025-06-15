@@ -309,8 +309,29 @@ TEST_F(StreamerTest, Multiple_Files)
         expected[i] = utils::Fd::read(files[i].path);
         EXPECT_EQ(expected[i].size(), sizes[i]);
 
-        num_ranges[i] = utils::random::number(1, 100);
-        range_sizes[i] =  utils::random::chunks(sizes[i], num_ranges[i]);
+        auto num_non_zero_chunks = utils::random::number(1, 100);
+        auto num_zero_chunks = utils::random::number(0, 2);
+        num_ranges[i] = num_non_zero_chunks + num_zero_chunks;
+        auto chunks = utils::random::chunks(sizes[i], num_non_zero_chunks);
+
+        // add zero size chunks
+        for (unsigned k = 0; k < num_non_zero_chunks || num_zero_chunks > 0;)
+        {
+            bool add_zero = utils::random::boolean();
+            if (num_zero_chunks > 0 && add_zero)
+            {
+                range_sizes[i].push_back(0);
+                --num_zero_chunks;
+            }
+            else if (k < num_non_zero_chunks)
+            {
+                range_sizes[i].push_back(chunks[k]);
+                ++k;
+            }
+        }
+
+        ASSERT_EQ(range_sizes[i].size(), num_ranges[i]);
+
         internal_sizes[i] = range_sizes[i].data();
 
         num_expected_responses += num_ranges[i];
@@ -356,6 +377,7 @@ TEST_F(StreamerTest, Multiple_Files)
             EXPECT_EQ(dst[offset + j], expected[file_index][j]);
             if (dst[offset + j] != expected[file_index][j])
             {
+                LOG(ERROR) << "offset = " << offset + j << " expected = " << expected[file_index][j] << " dst = " << dst[offset + j];
                 break;
             }
         }

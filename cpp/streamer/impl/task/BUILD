@@ -5,5 +5,6 @@ runai_cc_auto_library(
     deps = [
         "//streamer/impl/request",
         "//utils/logging",
+        "//common/backend_api/object_storage",
     ],
 )
