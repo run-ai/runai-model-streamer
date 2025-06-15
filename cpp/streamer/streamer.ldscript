@@ -2,10 +2,7 @@
     global:
         runai_start;
         runai_end;
-        runai_read;
-        runai_read_with_credentials;
         runai_request;
-        runai_request_with_credentials;
         runai_response;
         runai_response_str;
     local: *;
