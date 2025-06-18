@@ -80,6 +80,8 @@ struct Batch
   void finished_until(size_t file_offset, common::ResponseCode ret = common::ResponseCode::Success);
   unsigned finished_until() const;
 
+  bool is_object_storage() const;
+
   unsigned worker_index;
 
   // source file
@@ -87,7 +89,7 @@ struct Batch
   std::string path;
 
   // s3 parameters
-  common::s3::S3ClientWrapper::Params params;
+  const common::s3::S3ClientWrapper::Params object_storage_params;
 
   const Tasks tasks;
 

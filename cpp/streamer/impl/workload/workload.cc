@@ -28,9 +28,9 @@ common::ResponseCode Workload::add_batch(Batch && batch)
 
     if (size() == 0)
     {
-        _params = batch.params;
+        _is_object_storage = batch.is_object_storage();
     }
-    else if  (auto res = verify_batch(batch.params); res != common::ResponseCode::Success)
+    else if  (auto res = verify_batch(batch); res != common::ResponseCode::Success)
     {
         return res;
     }
@@ -41,9 +41,14 @@ common::ResponseCode Workload::add_batch(Batch && batch)
     return common::ResponseCode::Success;
 }
 
-common::ResponseCode Workload::verify_batch(const common::s3::S3ClientWrapper::Params & params)
+bool Workload::is_object_storage() const
 {
-    if (_params.valid() != params.valid())
+    return _is_object_storage;
+}
+
+common::ResponseCode Workload::verify_batch(const Batch & batch)
+{
+    if (batch.is_object_storage() != is_object_storage())
     {
          LOG(ERROR) << "Workload contains paths of different storage backends";
 
@@ -61,7 +66,7 @@ void Workload::execute(std::atomic<bool> & stopped)
     }
 
     // create reader
-    if (_params.valid()) // reading from s3
+    if (is_object_storage())
     {
         async_read(stopped);
     }
@@ -102,7 +107,7 @@ void Workload::async_read(std::atomic<bool> & stopped)
 
         const auto & config = _batches_by_file_index.begin()->second.config;
 
-        auto s3_client = std::make_shared<common::s3::S3ClientWrapper>(_params);
+        auto s3_client = std::make_shared<common::s3::S3ClientWrapper>(_batches_by_file_index.begin()->second.object_storage_params);
         _reader = std::make_shared<S3>(s3_client, *config);
 
         unsigned requested_batches = 0;

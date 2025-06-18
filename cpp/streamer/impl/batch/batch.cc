@@ -23,7 +23,7 @@ Batch::Batch(unsigned worker_index, unsigned file_index, const std::string & pat
     worker_index(worker_index),
     file_index(file_index),
     path(path),
-    params(params),
+    object_storage_params(params),
     tasks(tasks),
     range(tasks),
     responder(responder),
@@ -45,7 +45,7 @@ size_t Batch::end_offset() const
 void Batch::request(std::shared_ptr<Reader> reader, std::atomic<bool> & stopped)
 {
     ASSERT(reader != nullptr) << "Reader is not initialized";
-    ASSERT(params.valid()) << "S3 params are not initialized";
+    ASSERT(is_object_storage()) << "S3 params are not initialized";
 
     request_async_read(reader.get(), stopped);
 }
@@ -57,7 +57,7 @@ void Batch::execute(std::atomic<bool> & stopped)
     auto response_code = common::ResponseCode::Success;
     try
     {
-        ASSERT(!params.valid()) << "Unsupported reader mode for object storage backends";
+        ASSERT(!is_object_storage()) << "Unsupported reader mode for object storage backends";
 
         _reader = std::make_unique<File>(path, *config);
         read(*config, stopped);
@@ -172,7 +172,7 @@ void Batch::request_async_read(Reader * reader, std::atomic<bool> & stopped)
             handle_task_response(common::ResponseCode::Success, &task);
             continue;
         }
-        reader->async_read(params, task.info.global_id, range, dst);
+        reader->async_read(object_storage_params, task.info.global_id, range, dst);
     }
 }
 
@@ -228,6 +228,11 @@ void Batch::finished_until(size_t file_offset, common::ResponseCode ret /*= comm
 unsigned Batch::finished_until() const
 {
     return _unfinished;
+}
+
+bool Batch::is_object_storage() const
+{
+    return object_storage_params.valid();
 }
 
 std::ostream & operator<<(std::ostream & os, const Batch & r)
