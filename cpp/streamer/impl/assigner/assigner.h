@@ -44,7 +44,7 @@ struct Assigner
     unsigned num_workloads() const;
 
  private:
-    size_t bytes_per_worker(size_t total_bytes_to_read, const std::string & path, size_t & remainder_bytesize);
+    size_t bytes_per_worker(size_t total_bytes_to_read, size_t & remainder_bytesize);
     bool check_object_storage(const std::vector<std::string> & paths) const;
 
  private:

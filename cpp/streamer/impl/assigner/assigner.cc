@@ -63,7 +63,7 @@ _num_workers(_is_object_storage ? _config->s3_concurrency : _config->concurrency
 
     // Determine Workload per Worker
     size_t base_bytes_remainder;
-    size_t base_bytes_per_worker = bytes_per_worker(total_bytes_to_read, paths[0], base_bytes_remainder);
+    size_t base_bytes_per_worker = bytes_per_worker(total_bytes_to_read, base_bytes_remainder);
     LOG(DEBUG) << "base_bytes_per_worker: " << base_bytes_per_worker << " base_bytes_remainder: " << base_bytes_remainder;
 
     _worker_assignments.resize(_num_workers);
@@ -219,7 +219,7 @@ unsigned Assigner::get_num_workers() const
     return _num_workers;
 }
 
-size_t Assigner::bytes_per_worker(size_t total_bytes_to_read, const std::string & path, size_t & remainder_bytesize)
+size_t Assigner::bytes_per_worker(size_t total_bytes_to_read, size_t & remainder_bytesize)
 {
     size_t block_bytesize = _is_object_storage ? _config->s3_block_bytesize : _config->fs_block_bytesize;
     size_t num_blocks = total_bytes_to_read / block_bytesize;
