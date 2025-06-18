@@ -1,12 +1,15 @@
 RUN_TIMES := 10
 
-.PHONY: fuzzing all
+.PHONY: e2e fuzzing all
+
+e2e:
+	pytest e2e/
 
 fuzzing:
 	for i in $(shell seq 1 ${RUN_TIMES}); \
 	do \
 		echo "Running test iteration $$i"; \
-		python3 -m unittest discover -b fuzzing; \
+		pytest fuzzing/; \
 	done
 
-all: fuzzing
+all: fuzzing e2e
