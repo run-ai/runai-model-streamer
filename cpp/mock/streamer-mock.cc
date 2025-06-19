@@ -19,29 +19,22 @@ struct State {
 };
 
 State __state;
+std::vector<State> __multi_state;
+unsigned __multi_file_count = 0;
+unsigned __current_multi_file = 0;
 
-extern "C" int runai_start(void ** streamer)
-{
-    __state = State{};
-    *streamer = reinterpret_cast<void*>(0x123456789ABCDEF0);
-    return 0;
-}
 
-extern "C" void runai_end(void * streamer)
+int request(void * streamer, const char * path, size_t file_offset, size_t bytesize, char * dst, unsigned num_sizes, size_t * internal_sizes, State * state)
 {
-}
-
-extern "C" int runai_read(void * streamer, const char * path, size_t file_offset, size_t bytesize, char * dst)
-{
-    auto file = utils::Fd(::open(path, O_RDONLY));
-    if (file.fd() == -1) {
+    state->file = utils::Fd(::open(path, O_RDONLY));
+    if (state->file.fd() == -1) {
         LOG(ERROR) << "Error opening file: " << path;
         return -1;
     }
 
     try
     {
-        file.seek(file_offset);
+        state->file.seek(file_offset);
     }
     catch(const std::exception& e)
     {
@@ -49,69 +42,22 @@ extern "C" int runai_read(void * streamer, const char * path, size_t file_offset
         return -1;
     }
 
-    try
-    {
-        size_t result = file.read(bytesize, dst, utils::Fd::Read::Eof);
-        if (result != bytesize)
-        {
-            LOG(ERROR) << "Reached EOF";
-            return -1;
-        }
-    }
-    catch(const std::exception& e)
-    {
-        LOG(ERROR) << "Failed to read from file";
-        return -1;
-    }
+    state->read_item_sizes.resize(num_sizes);
+    std::memcpy(state->read_item_sizes.data(), internal_sizes, num_sizes * sizeof(size_t));
+
+    state->total_items = num_sizes;
+    state->destination = dst;
     return 0;
 }
 
-extern "C" int runai_read_with_credentials(void * streamer, const char * path, size_t file_offset, size_t bytesize, char * dst, const char * key, const char * secret, const char * token, const char * region,  const char * endpoint)
-{
-    return runai_read(streamer, path, file_offset, bytesize, dst);
-}
-
-
-extern "C" int runai_request(void * streamer, const char * path, size_t file_offset, size_t bytesize, char * dst, unsigned num_sizes, size_t * internal_sizes)
-{
-    __state = State{};
-    __state.file = utils::Fd(::open(path, O_RDONLY));
-    if (__state.file.fd() == -1) {
-        LOG(ERROR) << "Error opening file: " << path;
-        return -1;
-    }
-
-    try
-    {
-        __state.file.seek(file_offset);
-    }
-    catch(const std::exception& e)
-    {
-        LOG(ERROR) << "Error seek in file: " << path << " to: " << file_offset;
-        return -1;
-    }
-
-    __state.read_item_sizes.resize(num_sizes);
-    std::memcpy(__state.read_item_sizes.data(), internal_sizes, num_sizes * sizeof(size_t));
-
-    __state.total_items = num_sizes;
-    __state.destination = dst;
-    return 0;
-}
-
-extern "C" int runai_request_with_credentials(void * streamer, const char * path, size_t file_offset, size_t bytesize, char * dst, unsigned num_sizes, size_t * internal_sizes, const char * key, const char * secret, const char * token, const char * region, const char * endpoint)
-{
-    return runai_request(streamer, path, file_offset, bytesize, dst, num_sizes, internal_sizes);
-}
-
-extern "C" int runai_response(void * streamer, unsigned * index)
+int response(void * streamer, unsigned * index, State * state)
 {
     size_t result = 0;
-    auto to_read = __state.read_item_sizes[__state.current_item];
-    auto to_dst = __state.destination + __state.current_dst_offset;
+    auto to_read = state->read_item_sizes[state->current_item];
+    auto to_dst = state->destination + state->current_dst_offset;
     try
     {
-        result = __state.file.read(to_read, to_dst, utils::Fd::Read::Eof);
+        result = state->file.read(to_read, to_dst, utils::Fd::Read::Eof);
     }
     catch(const std::exception& e)
     {
@@ -125,10 +71,69 @@ extern "C" int runai_response(void * streamer, unsigned * index)
         return -1;
     }
 
-    __state.current_dst_offset += to_read;
-    *index = __state.current_item;
-    __state.current_item++;
+    state->current_dst_offset += to_read;
+    *index = state->current_item;
+    state->current_item++;
     return 0;
+}
+
+extern "C" int runai_start(void ** streamer)
+{
+    __state = State{};
+    *streamer = reinterpret_cast<void*>(0x123456789ABCDEF0);
+    return 0;
+}
+
+extern "C" void runai_end(void * streamer)
+{
+}
+
+extern "C" int runai_request(
+    void * streamer,
+    unsigned num_files,
+    const char ** paths,
+    size_t * file_offsets,
+    size_t * bytesizes,
+    void ** dsts,
+    unsigned * num_sizes,
+    size_t ** internal_sizes,
+    const char * key,
+    const char * secret,
+    const char * token,
+    const char * region,
+    const char * endpoint
+)
+{
+    __multi_state.clear();
+    __current_multi_file = 0;
+    __multi_file_count = num_files;
+
+    int buffer_start = 0;
+    for (unsigned i = 0; i < num_files; ++i) {
+        State state;
+        request(streamer, paths[i], file_offsets[i], bytesizes[i], reinterpret_cast<char*>(dsts[0]) + buffer_start, num_sizes[i], internal_sizes[i], &state);
+        buffer_start = buffer_start + bytesizes[i];
+        __multi_state.push_back(std::move(state));
+    }
+
+    return 0;
+}
+
+extern "C" int runai_response(void * streamer, unsigned * file_index, unsigned * index)
+{
+    if (__current_multi_file >= __multi_state.size()) {
+        return -1; // All files processed
+    }
+
+    State& state = __multi_state[__current_multi_file];
+
+    if (state.current_item >= state.total_items) {
+        ++__current_multi_file;
+        return runai_response(streamer, file_index, index); // recurse to next file
+    }
+
+    *file_index = __current_multi_file;
+    return response(streamer, index, &state);
 }
 
 extern "C" const char * runai_response_str(int response_code)

@@ -6,11 +6,13 @@
 #include <optional>
 
 #include "s3/client_configuration/client_configuration.h"
+#include "common/backend_api/response/response.h"
 
+#include "common/path/path.h"
 #include "common/storage_uri/storage_uri.h"
 #include "common/s3_credentials/s3_credentials.h"
-#include "common/responder/responder.h"
-#include "common/response/response.h"
+#include "common/s3_wrapper/s3_wrapper.h"
+#include "common/shared_queue/shared_queue.h"
 #include "common/range/range.h"
 
 namespace runai::llm::streamer::impl::s3
@@ -18,20 +20,14 @@ namespace runai::llm::streamer::impl::s3
 
 struct S3ClientBase
 {
-    S3ClientBase(const common::s3::StorageUri_C & path);
+    S3ClientBase(const common::s3::Path & path);
 
-    S3ClientBase(const common::s3::StorageUri_C & path, const common::s3::Credentials_C & credentials);
+    S3ClientBase(const common::s3::Path & path, const common::s3::Credentials_C & credentials);
 
-    std::string bucket() const;
-
-    void path(const char * path);
-
-    // verify that clien's credentials have not change
+     // verify that clien's credentials have not change
     bool verify_credentials(const common::s3::Credentials_C & credentials) const;
 
  protected:
-    const Aws::String _bucket_name;
-    Aws::String _path;
     const std::optional<Aws::String> _key;
     const std::optional<Aws::String> _secret;
     const std::optional<Aws::String> _token;
@@ -45,23 +41,19 @@ struct S3ClientBase
 
 struct S3Client : S3ClientBase
 {
-    S3Client(const common::s3::StorageUri_C & path);
+    S3Client(const common::s3::Path & path);
 
-    S3Client(const common::s3::StorageUri_C & path, const common::s3::Credentials_C & credentials);
+    S3Client(const common::s3::Path & path, const common::s3::Credentials_C & credentials);
 
-    common::ResponseCode read(size_t offset, size_t bytesize, char * buffer);
+    common::ResponseCode async_read(const common::s3::Path & path, common::backend_api::ObjectRequestId_t request_id,  const common::Range & range, size_t chunk_bytesize, char * buffer);
 
-    common::ResponseCode async_read(unsigned num_ranges, common::Range * ranges, size_t chunk_bytesize, char * buffer);
-
-    common::Response async_read_response();
+    common::backend_api::Response async_read_response();
 
     // Stop sending requests to the object store
     // Requests that were already sent cannot be cancelled, since the Aws S3CrtClient does not support aborting requests
     // The S3CrtClient d'tor will wait for response of all teh sent requests, which can take a while
     void stop();
 
-    using S3ClientBase::bucket;
-    using S3ClientBase::path;
     using S3ClientBase::verify_credentials;
 
  private:
@@ -70,7 +62,8 @@ struct S3Client : S3ClientBase
     std::unique_ptr<Aws::S3Crt::S3CrtClient> _client;
 
     // queue of asynchronous responses
-    std::shared_ptr<common::Responder> _responder;
+    using Responder = common::SharedQueue<common::backend_api::Response>;
+    std::shared_ptr<Responder> _responder;
 };
 
 }; //namespace runai::llm::streamer::impl::s3

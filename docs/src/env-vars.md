@@ -10,7 +10,9 @@ Positive integer value
 
 #### Default value
 
-16
+16 for reading from file system
+
+8 for reading from object storage
 
 ### RUNAI_STREAMER_CHUNK_BYTESIZE
 

@@ -7,7 +7,8 @@
 #include "common/range/range.h"
 #include "common/response_code/response_code.h"
 #include "common/storage_uri/storage_uri.h"
-#include "common/response/response.h"
+#include "common/backend_api/object_storage/object_storage.h"
+#include "common/backend_api/response/response.h"
 #include "common/s3_credentials/s3_credentials.h"
 
 #include "utils/dylib/dylib.h"
@@ -45,8 +46,8 @@ struct S3ClientWrapper
       // ranges - list of sub ranges
       // chunk_bytesize - size of chunk for reading in multi parts (minimal size is 5 MB)
 
-      ResponseCode async_read(std::vector<Range>& ranges, size_t chunk_bytesize, char * buffer);
-      Response async_read_response();
+      common::ResponseCode async_read(const Params & params, backend_api::ObjectRequestId_t request_id, const Range & ranges, size_t chunk_bytesize, char * buffer);
+      common::ResponseCode async_read_response(std::vector<backend_api::ObjectCompletionEvent_t> & event_buffer, unsigned max_events_to_retrieve);
 
       // stop - stops the responder of each S3 client, in order to notify callers which sent a request and are waiting for a response
       //        required for stopping the threadpool workers, which are bloking on the client responder

@@ -6,8 +6,10 @@ runai_portable_so(
             "s3_mock.cc",
     ],
     deps = [
+        "//common/backend_api/response",
+        "//common/backend_api/object_storage",
         "//common/response_code",
-        "//common/storage_uri",
+        "//common/path",
         "//common/s3_credentials",
         "//common/range",
         "//utils/env",
