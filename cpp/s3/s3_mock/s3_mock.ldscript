@@ -9,5 +9,7 @@
         runai_release_s3_clients;
         runai_mock_s3_set_response_time_ms;
         runai_mock_s3_cleanup;
+        obj_open_backend;
+        obj_close_backend;
     local: *;
 };

@@ -22,6 +22,49 @@ std::set<void *> __mock_unused;
 unsigned __mock_response_time_ms = 0;
 std::mutex __mutex;
 std::atomic<bool> __stopped(false);
+std::atomic<bool> __opened(false);
+
+common::backend_api::ResponseCode_t obj_open_backend(common::backend_api::ObjectBackendHandle_t* out_backend_handle)
+{
+    const auto guard = std::unique_lock<std::mutex>(__mutex);
+
+    auto response_code = common::response_code_from(utils::getenv<int>("RUNAI_STREAMER_S3_MOCK_RESPONSE_CODE", static_cast<int>(common::ResponseCode::Success)));
+    if (response_code != common::ResponseCode::Success)
+    {
+        LOG(ERROR) << "S3 mock backend not opened";
+        return response_code;
+    }
+
+    if (__opened)
+    {
+        LOG(ERROR) << "S3 mock backend already opened";
+        return common::ResponseCode::UnknownError;
+    }
+
+    __opened = true;
+    return response_code;
+}
+
+common::backend_api::ResponseCode_t obj_close_backend(common::backend_api::ObjectBackendHandle_t backend_handle)
+{
+    const auto guard = std::unique_lock<std::mutex>(__mutex);
+
+    auto response_code = common::response_code_from(utils::getenv<int>("RUNAI_STREAMER_S3_MOCK_RESPONSE_CODE", static_cast<int>(common::ResponseCode::Success)));
+    if (response_code != common::ResponseCode::Success)
+    {
+        LOG(ERROR) << "S3 mock backend not closed";
+        return response_code;
+    }
+
+    if (!__opened)
+    {
+        LOG(ERROR) << "S3 mock backend not opened";
+        return common::ResponseCode::UnknownError;
+    }
+
+    __opened = false;
+    return response_code;
+}
 
 void runai_mock_s3_set_response_time_ms(unsigned milliseconds)
 {

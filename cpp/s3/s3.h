@@ -34,6 +34,13 @@
 namespace runai::llm::streamer::impl::s3
 {
 
+// --- Backend API ---  
+
+extern "C" common::backend_api::ResponseCode_t obj_open_backend(common::backend_api::ObjectBackendHandle_t* out_backend_handle);
+extern "C" common::backend_api::ResponseCode_t obj_close_backend(common::backend_api::ObjectBackendHandle_t backend_handle);
+
+// --- Client API ---
+
 // create client
 extern "C" common::ResponseCode runai_create_s3_client(const common::s3::Path * path,
                                                        const common::s3::Credentials_C * credentials,

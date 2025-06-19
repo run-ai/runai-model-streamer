@@ -9,7 +9,6 @@
 
 #include "utils/logging/logging.h"
 
-#include "s3/s3_init/s3_init.h"
 #include "s3/client/client.h"
 
 namespace runai::llm::streamer::impl::s3
@@ -40,9 +39,6 @@ struct ClientMgr
     ClientMgr();
 
     static ClientMgr<T> & get();
-
-    // shutdown of S3 will occur when the main process exits
-    S3Init _s3;
 
     mutable std::mutex _mutex;
 

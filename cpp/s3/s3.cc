@@ -2,6 +2,7 @@
 #include "s3/client_mgr/client_mgr.h"
 
 #include "common/exception/exception.h"
+#include "utils/env/env.h"
 
 // For connecting to s3 providers other then aws:
 // 1. uri should be in the format s3://bucket/path
@@ -21,6 +22,77 @@
 
 namespace runai::llm::streamer::impl::s3
 {
+
+// --- Backend API ---
+
+const utils::Semver min_glibc_semver = utils::Semver(common::description(static_cast<int>(common::ResponseCode::GlibcPrerequisite)));
+const size_t min_chunk_bytesize = 5 * 1024 * 1024;
+
+common::backend_api::ResponseCode_t obj_open_backend(common::backend_api::ObjectBackendHandle_t* out_backend_handle)
+{
+    common::ResponseCode ret = common::ResponseCode::Success;
+
+    try 
+    {
+        // verify prerequisites
+        auto glibc_version = utils::get_glibc_version();
+        if (min_glibc_semver > glibc_version)
+        {
+            LOG(ERROR) << "GLIBC version must be at least " << min_glibc_semver << ", instead of " << glibc_version;
+            return common::ResponseCode::GlibcPrerequisite;
+        }
+
+        size_t chunk_size;
+        if (utils::try_getenv("RUNAI_STREAMER_CHUNK_BYTESIZE", chunk_size))
+        {
+            LOG_IF(INFO, (chunk_size < min_chunk_bytesize)) << "Minimal chunk size to read from S3 is 5 MiB";
+        }
+
+        Aws::SDKOptions options;
+
+        options.httpOptions.installSigPipeHandler = true;
+        auto trace_aws = utils::getenv<bool>("RUNAI_STREAMER_S3_TRACE", false);
+        if (trace_aws)
+        {
+            // aws trace logs are written to a file
+            options.loggingOptions.logLevel = Aws::Utils::Logging::LogLevel::Trace;
+        }
+
+        Aws::InitAPI(options);
+    }
+    catch(const std::exception & e)
+    {
+        LOG(ERROR) << "Failed to init S3 backend";
+        ret = common::ResponseCode::S3NotSupported;
+    }
+    return ret;
+}
+
+common::backend_api::ResponseCode_t obj_close_backend(common::backend_api::ObjectBackendHandle_t backend_handle)
+{
+    common::ResponseCode ret = common::ResponseCode::Success;
+
+    try 
+    {
+        Aws::SDKOptions options;
+
+        options.httpOptions.installSigPipeHandler = true;
+        auto trace_aws = utils::getenv<bool>("RUNAI_STREAMER_S3_TRACE", false);
+        if (trace_aws)
+        {
+            // aws trace logs are written to a file
+            options.loggingOptions.logLevel = Aws::Utils::Logging::LogLevel::Trace;
+        }
+    }
+    catch(const std::exception & e)
+    {
+        LOG(ERROR) << "Failed to close S3 backend";
+        ret = common::ResponseCode::UnknownError;
+    }
+    return ret;
+}
+
+// --- Client API ---
 
 common::ResponseCode runai_create_s3_client(const common::s3::Path * path, const common::s3::Credentials_C * credentials, void ** client)
 {

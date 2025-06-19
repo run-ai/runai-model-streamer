@@ -38,6 +38,20 @@ struct S3ClientWrapper
          Credentials credentials;
       };
 
+      struct BackendHandle
+      {
+         BackendHandle(const Params & params);
+
+         ~BackendHandle();
+
+         std::shared_ptr<utils::Dylib> open_object_storage_impl(const Params & params);
+
+         std::shared_ptr<utils::Dylib> dylib_ptr;
+
+         private:
+            common::backend_api::ObjectBackendHandle_t _backend_handle;
+      };
+
       S3ClientWrapper(const Params & params);
       ~S3ClientWrapper();
 
@@ -61,11 +75,10 @@ struct S3ClientWrapper
 
  private:
       void * create_client(const StorageUri & uri, const Credentials & credentials);
-      static std::shared_ptr<utils::Dylib> open_s3();
-      static std::shared_ptr<utils::Dylib> open_s3_impl();
+      static std::shared_ptr<BackendHandle> create_backend_handle(const Params & params);
 
  private:
-      std::shared_ptr<utils::Dylib> _s3_dylib;
+      std::shared_ptr<BackendHandle> _backend_handle;
 
       // Handle to s3 client
       void * _s3_client;

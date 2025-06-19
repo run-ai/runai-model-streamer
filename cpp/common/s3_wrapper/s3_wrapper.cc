@@ -7,19 +7,65 @@
 #include "common/exception/exception.h"
 
 #include "utils/logging/logging.h"
-#include "utils/env/env.h"
 
 namespace runai::llm::streamer::common::s3
 {
 
 const utils::Semver min_glibc_semver = utils::Semver(description(static_cast<int>(ResponseCode::GlibcPrerequisite)));
 
+S3ClientWrapper::BackendHandle::BackendHandle(const Params & params) :
+    dylib_ptr(open_object_storage_impl(params))
+{
+    ASSERT(dylib_ptr != nullptr) << "Failed to open libstreamers3.so"; // should never happen
+
+    static auto __open_object_storage = dylib_ptr->dlsym<ResponseCode(*)(common::backend_api::ObjectBackendHandle_t*)>("obj_open_backend");
+    auto ret = __open_object_storage(&_backend_handle);
+    if (ret != ResponseCode::Success)
+    {
+        LOG(ERROR) << "Failed to open object storage";
+        throw Exception(ret);
+    }
+}
+
+S3ClientWrapper::BackendHandle::~BackendHandle()
+{
+    try
+    {
+        static auto __close_object_storage = dylib_ptr->dlsym<ResponseCode(*)(common::backend_api::ObjectBackendHandle_t)>("obj_close_backend");
+        auto ret = __close_object_storage(_backend_handle);
+        if (ret != ResponseCode::Success)
+        {
+            LOG(ERROR) << "Failed to close object storage";
+            throw Exception(ret);
+        }
+    }
+    catch(const std::exception& e)
+    {
+        LOG(ERROR) << "Caught exception while closing object storage";
+    }
+}
+
+std::shared_ptr<utils::Dylib> S3ClientWrapper::BackendHandle::open_object_storage_impl(const Params & params)
+{
+    // lazy load the s3 library once
+    try
+    {
+        return std::make_shared<utils::Dylib>("libstreamers3.so");
+    }
+    catch (...)
+    {
+        LOG(ERROR) << "Failed to open libstreamers3.so";
+    }
+    throw Exception(ResponseCode::S3NotSupported);
+    return nullptr; 
+}
+
 void S3ClientWrapper::shutdown()
 {
     try
     {
-        std::shared_ptr<utils::Dylib> s3_dylib(open_s3());
-        static auto __release_s3_clients = s3_dylib->dlsym<void(*)()>("runai_release_s3_clients");
+        std::shared_ptr<BackendHandle> handle = create_backend_handle(Params());
+        static auto __release_s3_clients = handle->dylib_ptr->dlsym<void(*)()>("runai_release_s3_clients");
         __release_s3_clients();
     }
     catch(...)
@@ -31,8 +77,8 @@ void S3ClientWrapper::stop()
 {
     try
     {
-        std::shared_ptr<utils::Dylib> s3_dylib(open_s3());
-        static auto __stop_s3_clients = s3_dylib->dlsym<void(*)()>("runai_stop_s3_clients");
+        std::shared_ptr<BackendHandle> handle = create_backend_handle(Params());
+        static auto __stop_s3_clients = handle->dylib_ptr->dlsym<void(*)()>("runai_stop_s3_clients");
         __stop_s3_clients();
     }
     catch(...)
@@ -41,7 +87,7 @@ void S3ClientWrapper::stop()
 }
 
 S3ClientWrapper::S3ClientWrapper(const Params & params) :
-    _s3_dylib(open_s3()),
+    _backend_handle(create_backend_handle(params)),
     _s3_client(create_client(*params.uri, params.credentials))
 {
     LOG(SPAM) << "Created client for uri " << *params.uri;
@@ -51,7 +97,7 @@ S3ClientWrapper::~S3ClientWrapper()
 {
     try
     {
-        static auto __s3_remove = _s3_dylib->dlsym<void(*)(void *)>("runai_remove_s3_client");
+        static auto __s3_remove = _backend_handle->dylib_ptr->dlsym<void(*)(void *)>("runai_remove_s3_client");
         __s3_remove(_s3_client);
     }
     catch(...)
@@ -60,44 +106,18 @@ S3ClientWrapper::~S3ClientWrapper()
     }
 }
 
-std::shared_ptr<utils::Dylib> S3ClientWrapper::open_s3()
+
+std::shared_ptr<S3ClientWrapper::BackendHandle> S3ClientWrapper::create_backend_handle(const Params & params)
 {
-    // lazy load the s3 library once
-    try
-    {
-        static auto __s3_dylib = open_s3_impl();
-        return __s3_dylib;
-    }
-    catch (...)
-    {
-        LOG(ERROR) << "Failed to open libstreamers3.so";
-    }
-    throw Exception(ResponseCode::S3NotSupported);
-    return nullptr;
-}
-
-std::shared_ptr<utils::Dylib> S3ClientWrapper::open_s3_impl()
-{
-    // verify prerequisites
-    auto glibc_version = utils::get_glibc_version();
-    if (min_glibc_semver > glibc_version)
-    {
-        LOG(ERROR) << "GLIBC version must be at least " << min_glibc_semver << ", instead of " << glibc_version;
-        throw Exception(ResponseCode::GlibcPrerequisite);
-    }
-
-    size_t chunk_size;
-    if (utils::try_getenv("RUNAI_STREAMER_CHUNK_BYTESIZE", chunk_size))
-    {
-        LOG_IF(INFO, (chunk_size < min_chunk_bytesize)) << "Minimal chunk size to read from S3 is 5 MiB";
-    }
-
-    return std::make_shared<utils::Dylib>("libstreamers3.so");
+    // the backend is closed when the process exits
+    static auto __backend_handle = std::make_shared<BackendHandle>(params);
+ 
+    return __backend_handle;
 }
 
 void * S3ClientWrapper::create_client(const StorageUri & uri, const Credentials & credentials)
 {
-    static auto __s3_gen = _s3_dylib->dlsym<ResponseCode(*)(const Path *, const Credentials_C *, void **)>("runai_create_s3_client");
+    static auto __s3_gen = _backend_handle->dylib_ptr->dlsym<ResponseCode(*)(const Path *, const Credentials_C *, void **)>("runai_create_s3_client");
     auto start = std::chrono::steady_clock::now();
 
     void * client;
@@ -116,7 +136,7 @@ void * S3ClientWrapper::create_client(const StorageUri & uri, const Credentials 
 
 ResponseCode S3ClientWrapper::async_read(const Params & params, common::backend_api::ObjectRequestId_t request_id, const Range & range, size_t chunk_bytesize, char * buffer)
 {
-    static auto _s3_async_read = _s3_dylib->dlsym<ResponseCode(*)(void *, common::backend_api::ObjectRequestId_t, const Path *, const Range *, size_t, char *)>("runai_async_read_s3_client");
+    static auto _s3_async_read = _backend_handle->dylib_ptr->dlsym<ResponseCode(*)(void *, common::backend_api::ObjectRequestId_t, const Path *, const Range *, size_t, char *)>("runai_async_read_s3_client");
     const Path s3_path(*params.uri);
     return _s3_async_read(_s3_client, request_id, &s3_path, &range, chunk_bytesize, buffer);
     return common::ResponseCode::Success;
@@ -132,7 +152,7 @@ common::ResponseCode S3ClientWrapper::async_read_response(std::vector<backend_ap
 
     event_buffer.resize(max_events_to_retrieve);
     unsigned int out_num_events_retrieved;
-    static auto _s3_async_response = _s3_dylib->dlsym<ResponseCode(*)(void *, common::backend_api::ObjectCompletionEvent_t*, unsigned, unsigned*)>("runai_async_response_s3_client");
+    static auto _s3_async_response = _backend_handle->dylib_ptr->dlsym<ResponseCode(*)(void *, common::backend_api::ObjectCompletionEvent_t*, unsigned, unsigned*)>("runai_async_response_s3_client");
     auto ret = _s3_async_response(_s3_client, event_buffer.data(), max_events_to_retrieve, &out_num_events_retrieved);
 
     if (ret == common::ResponseCode::Success)
