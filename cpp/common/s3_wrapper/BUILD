@@ -13,6 +13,7 @@ runai_cc_auto_library(
         "//utils/dylib",
         "//utils/env",
         "//utils/semver",
+        "//utils/logging",
     ],
 )
 
@@ -23,6 +24,7 @@ runai_cc_test(
         ":s3_wrapper",
         "//s3/s3_mock:libstreamers3.so",
         "//utils/random",
+        "//utils/temp/env",
     ],
     data = ["//s3/s3_mock:libstreamers3.so"],
     linkopts = [

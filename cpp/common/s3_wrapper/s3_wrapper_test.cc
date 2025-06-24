@@ -5,7 +5,7 @@
 
 #include "utils/dylib/dylib.h"
 #include "utils/random/random.h"
-
+#include "utils/temp/env/env.h"
 namespace runai::llm::streamer::common::s3
 {
 
@@ -97,5 +97,29 @@ TEST_F(S3WrappertTest, Cleanup)
     S3ClientWrapper::shutdown();
     EXPECT_EQ(verify_mock(), 0);
 }
+
+TEST_F(S3WrappertTest, Endpoint_Exists)
+{
+    auto endpoint = utils::random::string();
+    utils::temp::Env endpoint_env("AWS_ENDPOINT_URL", endpoint);
+
+    Credentials credentials_;
+    S3ClientWrapper::Params params_(std::make_shared<StorageUri>(uri), credentials_);
+    S3ClientWrapper wrapper(params);
+
+    EXPECT_EQ(params_.config.endpoint_url, endpoint);
+}
+
+TEST_F(S3WrappertTest, Endpoint_In_Credentials)
+{
+    auto endpoint = utils::random::string();
+    Credentials credentials_(nullptr, nullptr, nullptr, nullptr, endpoint.c_str());
+
+    S3ClientWrapper::Params params_(std::make_shared<StorageUri>(uri), credentials_);
+    S3ClientWrapper wrapper(params);
+
+    EXPECT_EQ(params_.config.endpoint_url, endpoint);
+}
+
 
 }; // namespace runai::llm::streamer::common::s3

@@ -24,18 +24,21 @@ struct S3ClientWrapper
          Params()
          {}
 
-         Params(std::shared_ptr<StorageUri> uri, const Credentials & credentials) :
-            uri(uri),
-            credentials(credentials)
-         {}
+         Params(std::shared_ptr<StorageUri> uri, const Credentials & credentials);
 
          Params(std::shared_ptr<StorageUri> uri) : Params(uri, Credentials())
          {}
 
          bool valid() const { return (uri.get() != nullptr); }
 
+
          std::shared_ptr<StorageUri> uri;
          Credentials credentials;
+         common::backend_api::ObjectClientConfig_t config;
+
+       private:
+         std::string _endpoint;
+         std::vector<common::backend_api::ObjectConfigParam_t> _initial_params;
       };
 
       struct BackendHandle
@@ -44,12 +47,14 @@ struct S3ClientWrapper
 
          ~BackendHandle();
 
+         common::backend_api::ObjectBackendHandle_t backend_handle() const;
+
          std::shared_ptr<utils::Dylib> open_object_storage_impl(const Params & params);
 
          std::shared_ptr<utils::Dylib> dylib_ptr;
 
-         private:
-            common::backend_api::ObjectBackendHandle_t _backend_handle;
+       private:
+         common::backend_api::ObjectBackendHandle_t _backend_handle;
       };
 
       S3ClientWrapper(const Params & params);
@@ -74,7 +79,7 @@ struct S3ClientWrapper
       static constexpr size_t default_chunk_bytesize = 8 * 1024 * 1024;
 
  private:
-      void * create_client(const StorageUri & uri, const Credentials & credentials);
+      void * create_client(const Params & params);
       static std::shared_ptr<BackendHandle> create_backend_handle(const Params & params);
 
  private:

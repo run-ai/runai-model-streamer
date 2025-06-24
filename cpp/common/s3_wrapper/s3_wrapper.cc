@@ -3,13 +3,48 @@
 #include <chrono>
 
 #include "common/s3_wrapper/s3_wrapper.h"
+#include "common/s3_credentials/s3_credentials.h"
 #include "common/path/path.h"
 #include "common/exception/exception.h"
 
+#include "utils/env/env.h"
 #include "utils/logging/logging.h"
 
 namespace runai::llm::streamer::common::s3
 {
+
+S3ClientWrapper::Params::Params(std::shared_ptr<StorageUri> uri, const Credentials & credentials) :
+    uri(uri),
+    credentials(credentials)
+{
+    if (credentials.endpoint.has_value()) // endpoint passed as parameter by user application (in credentials)
+    {
+        _endpoint = credentials.endpoint.value();
+        LOG(DEBUG) <<"Using credentials endpoint " << credentials.endpoint.value();
+    }
+    else
+    {
+        std::string endpoint;
+        bool override_endpoint = utils::try_getenv("AWS_ENDPOINT_URL", endpoint);
+        bool override_endpoint_flag = utils::getenv<bool>("RUNAI_STREAMER_OVERRIDE_ENDPOINT_URL", true);
+        if (override_endpoint) // endpoint passed as environment variable
+        {
+            LOG(DEBUG) << "direct override of url endpoint in client configuration";
+            if (override_endpoint_flag)
+            {
+                _endpoint = endpoint;
+            }
+            LOG(DEBUG) <<"Using environment variable endpoint " << endpoint << (override_endpoint_flag ? " , using configuration parameter endpointOverride" : "");
+        }
+    }
+
+    config.endpoint_url = _endpoint.empty() ? nullptr : _endpoint.c_str();
+
+    credentials.to_object_client_config(_initial_params);
+
+    config.num_initial_params = _initial_params.size();
+    config.initial_params = _initial_params.data();
+}
 
 const utils::Semver min_glibc_semver = utils::Semver(description(static_cast<int>(ResponseCode::GlibcPrerequisite)));
 
@@ -57,7 +92,12 @@ std::shared_ptr<utils::Dylib> S3ClientWrapper::BackendHandle::open_object_storag
         LOG(ERROR) << "Failed to open libstreamers3.so";
     }
     throw Exception(ResponseCode::S3NotSupported);
-    return nullptr; 
+    return nullptr;
+}
+
+common::backend_api::ObjectBackendHandle_t S3ClientWrapper::BackendHandle::backend_handle() const
+{
+    return _backend_handle;
 }
 
 void S3ClientWrapper::shutdown()
@@ -88,7 +128,7 @@ void S3ClientWrapper::stop()
 
 S3ClientWrapper::S3ClientWrapper(const Params & params) :
     _backend_handle(create_backend_handle(params)),
-    _s3_client(create_client(*params.uri, params.credentials))
+    _s3_client(create_client(params))
 {
     LOG(SPAM) << "Created client for uri " << *params.uri;
 }
@@ -111,22 +151,20 @@ std::shared_ptr<S3ClientWrapper::BackendHandle> S3ClientWrapper::create_backend_
 {
     // the backend is closed when the process exits
     static auto __backend_handle = std::make_shared<BackendHandle>(params);
- 
     return __backend_handle;
 }
 
-void * S3ClientWrapper::create_client(const StorageUri & uri, const Credentials & credentials)
+void * S3ClientWrapper::create_client(const Params & params)
 {
-    static auto __s3_gen = _backend_handle->dylib_ptr->dlsym<ResponseCode(*)(const Path *, const Credentials_C *, void **)>("runai_create_s3_client");
+    static auto __s3_gen = _backend_handle->dylib_ptr->dlsym<ResponseCode(*)(common::backend_api::ObjectBackendHandle_t, const common::backend_api::ObjectClientConfig_t*, common::backend_api::ObjectClientHandle_t*)>("obj_create_client");
     auto start = std::chrono::steady_clock::now();
 
-    void * client;
-    const Path s3_path(uri);
-    Credentials_C creds(credentials);
-    auto ret = __s3_gen(&s3_path, &creds, &client);
+    common::backend_api::ObjectClientHandle_t client;
+
+    auto ret = __s3_gen(_backend_handle->backend_handle(), &params.config, &client);
     if (ret != ResponseCode::Success)
     {
-        LOG(ERROR) << "Failed to create S3 client for uri " << uri;
+        LOG(ERROR) << "Failed to create S3 client for uri " << *params.uri << " and endpoint " << params.config.endpoint_url;
         throw Exception(ret);
     }
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);

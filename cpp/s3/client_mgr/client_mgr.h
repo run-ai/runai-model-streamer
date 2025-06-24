@@ -23,7 +23,7 @@ struct ClientMgr
 
     ClientMgr<T> & operator=(const ClientMgr<T> &) = delete;
 
-    static T* pop(const common::s3::Path & path, const common::s3::Credentials_C & credentials);
+    static T* pop(const common::backend_api::ObjectClientConfig_t & config);
     static void push(T* client);
 
     static void clear();
@@ -81,7 +81,7 @@ unsigned ClientMgr<T>::unused()
 }
 
 template <typename T>
-T* ClientMgr<T>::pop(const common::s3::Path & path, const common::s3::Credentials_C & credentials)
+T* ClientMgr<T>::pop(const common::backend_api::ObjectClientConfig_t & config)
 {
     auto & mgr = get();
 
@@ -95,7 +95,7 @@ T* ClientMgr<T>::pop(const common::s3::Path & path, const common::s3::Credential
             unused.erase(unused.begin());
 
             // Reuse client only if credentials have not changed
-            if (ptr->verify_credentials(credentials))
+            if (ptr->verify_credentials(config))
             {
                 LOG(DEBUG) << "Reusing S3 client";
                 return ptr;
@@ -108,8 +108,8 @@ T* ClientMgr<T>::pop(const common::s3::Path & path, const common::s3::Credential
 
     // create new client if there are no unused clients for this bucket
 
-    LOG(DEBUG) << "Creating client for path " << path.uri.path;
-    auto client = std::make_unique<T>(path, credentials);
+    LOG(DEBUG) << "Creating client for endpoint " << config.endpoint_url;
+    auto client = std::make_unique<T>(config);
 
     const auto guard = std::unique_lock<std::mutex>(mgr._mutex);
     auto ptr = client.get();

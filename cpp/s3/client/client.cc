@@ -1,6 +1,7 @@
 
 #include <aws/s3-crt/model/GetObjectRequest.h>
 
+#include <cstring>
 #include <algorithm>
 #include <string>
 #include <utility>
@@ -17,43 +18,66 @@
 namespace runai::llm::streamer::impl::s3
 {
 
-S3ClientBase::S3ClientBase(const common::s3::Path & path) : S3ClientBase(path, common::s3::Credentials())
-{}
-
-std::optional<Aws::String> convert(const char * input) {
+std::optional<Aws::String> convert(const char * input)
+{
+    std::optional<Aws::String> result = std::nullopt;
     if (input)
     {
-        return Aws::String(input);
+        result = Aws::String(input);
     }
-    return std::nullopt;
+    return result;
 }
 
-S3ClientBase::S3ClientBase(const common::s3::Path & path, const common::s3::Credentials_C & credentials) :
-    _key(convert(credentials.access_key_id)),
-    _secret(convert(credentials.secret_access_key)),
-    _token(convert(credentials.session_token)),
-    _region(convert(credentials.region)),
-    _endpoint(convert(credentials.endpoint)),
-    _client_credentials(_key.has_value() && _secret.has_value() ? std::make_unique<Aws::Auth::AWSCredentials>(_key.value(), _secret.value(), (_token.has_value() ? _token.value() : Aws::String(""))) : nullptr)
+S3ClientBase::S3ClientBase(const common::backend_api::ObjectClientConfig_t & config) :
+    _endpoint(convert(config.endpoint_url))
 {
+    auto ptr = config.initial_params;
+    if (ptr)
+    {
+        for (size_t i = 0; i < config.num_initial_params; ++i, ++ptr)
+        {
+            const char* key = ptr->key;
+            const char* value = ptr->value;
+            if (strcmp(key, common::s3::Credentials::ACCESS_KEY_ID_KEY) == 0)
+            {
+                _key = convert(value);
+            }
+            else if (strcmp(key, common::s3::Credentials::SECRET_ACCESS_KEY_KEY) == 0)
+            {
+                _secret = convert(value);
+            }
+            else if (strcmp(key, common::s3::Credentials::SESSION_TOKEN_KEY) == 0)
+            {
+                _token = convert(value);
+            }
+            else if (strcmp(key, common::s3::Credentials::REGION_KEY) == 0)
+            {
+                _region = convert(value);
+            }
+            else
+            {
+                LOG(WARNING) << "Unknown initial parameter: " << key;
+            }
+        }
+    }
 }
 
-bool S3ClientBase::verify_credentials_member(const std::optional<Aws::String>& member, const char* value, const char * name) const
+bool S3ClientBase::verify_credentials_member(const std::optional<Aws::String>& member, const std::optional<Aws::String>& value, const char * name) const
 {
     if (member.has_value())
     {
-        if (value == nullptr)
+        if (!value.has_value())
         {
             LOG(DEBUG) << "credentials member " << name << " is set, but provided member is nullptr";
             return false;
         }
-        if (member.value() != value)
+        if (member.value() != value.value())
         {
             LOG(DEBUG) << "credentials member " << name << " doesn't match the provided value";
             return false;
         }
     }
-    else if (value != nullptr) // must be nullptr and not empty string
+    else if (value.has_value()) // must be nullptr and not empty string
     {
         LOG(DEBUG) << "credentials member " << name << " is not set, but provided member is not nullptr";
         return false;
@@ -62,36 +86,24 @@ bool S3ClientBase::verify_credentials_member(const std::optional<Aws::String>& m
     return true;
 }
 
-bool S3ClientBase::verify_credentials(const common::s3::Credentials_C & credentials) const
+bool S3ClientBase::verify_credentials(const common::backend_api::ObjectClientConfig_t & config) const
 {
-    return (verify_credentials_member(_key, credentials.access_key_id, " access key") &&
-            verify_credentials_member(_secret, credentials.secret_access_key, "secret") &&
-            verify_credentials_member(_token, credentials.session_token, "session token") &&
-            verify_credentials_member(_region, credentials.region, "region") &&
-            verify_credentials_member(_endpoint, credentials.endpoint, "endpoint"));
+    S3ClientBase other(config);
+    return (verify_credentials_member(_key, other._key, "access key") &&
+            verify_credentials_member(_secret, other._secret, "secret") &&
+            verify_credentials_member(_token, other._token, "session token") &&
+            verify_credentials_member(_region, other._region, "region") &&
+            verify_credentials_member(_endpoint, other._endpoint, "endpoint"));
 }
 
-S3Client::S3Client(const common::s3::Path & path) : S3Client(path, common::s3::Credentials())
-{}
-
-S3Client::S3Client(const common::s3::Path & path, const common::s3::Credentials_C & credentials) :
-    S3ClientBase(path, credentials),
+S3Client::S3Client(const common::backend_api::ObjectClientConfig_t & config) :
+    S3ClientBase(config),
     _stop(false),
     _responder(nullptr)
 {
-    if (_endpoint.has_value()) // endpoint passed as parameter by user application
+    if (_endpoint.has_value()) // endpoint passed as parameter by user application (in credentials)
     {
-        LOG(DEBUG) <<"Using credentials endpoint " << credentials.endpoint;
         _client_config.config.endpointOverride = _endpoint.value();
-    }
-    else if (path.uri.endpoint != nullptr) // endpoint passed as environment variable
-    {
-        bool override_endpoint_flag = utils::getenv<bool>("RUNAI_STREAMER_OVERRIDE_ENDPOINT_URL", true);
-        if (override_endpoint_flag)
-        {
-            _client_config.config.endpointOverride = Aws::String(path.uri.endpoint);
-        }
-        LOG(DEBUG) <<"Using environment variable endpoint " << path.uri.endpoint << (override_endpoint_flag ? " , using configuration parameter endpointOverride" : "");
     }
 
     if (utils::try_getenv("RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING", _client_config.config.useVirtualAddressing))
@@ -142,7 +154,7 @@ common::backend_api::Response S3Client::async_read_response()
 }
 
 // aynchronously read consecutive ranges, producing a Response object per range in the ranges vector
-common::ResponseCode S3Client::async_read(const common::s3::Path & object_path, common::backend_api::ObjectRequestId_t request_id, const common::Range & range, size_t chunk_bytesize, char * buffer)
+common::ResponseCode S3Client::async_read(const common::s3::StorageUri_C * uri, common::backend_api::ObjectRequestId_t request_id, const common::Range & range, size_t chunk_bytesize, char * buffer)
 {
     if (_responder == nullptr)
     {
@@ -153,10 +165,11 @@ common::ResponseCode S3Client::async_read(const common::s3::Path & object_path, 
         _responder->increment(1);
     }
 
-    ASSERT((!_endpoint.has_value()) || (object_path.uri.endpoint == nullptr) || (_endpoint.has_value() && _endpoint.value() == std::string(object_path.uri.endpoint))) << "Attempting to reuse client with a different endpoint " << object_path.uri.endpoint;
+    // TO DO(Noa) - is this needed?
+    //ASSERT((!_endpoint.has_value()) || (uri->endpoint == nullptr) || (_endpoint.has_value() && _endpoint.value() == std::string(uri->endpoint))) << "Attempting to reuse client with a different endpoint " << uri->endpoint;
 
-    Aws::String bucket_name(object_path.uri.bucket);
-    Aws::String path(object_path.uri.path);
+    Aws::String bucket_name(uri->bucket);
+    Aws::String path(uri->path);
 
     char * buffer_ = buffer;
     // split range into chunks

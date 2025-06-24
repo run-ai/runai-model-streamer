@@ -72,26 +72,29 @@ void runai_mock_s3_set_response_time_ms(unsigned milliseconds)
     __mock_response_time_ms = milliseconds;
 }
 
-common::ResponseCode runai_create_s3_client(const common::s3::Path * path, const common::s3::Credentials_C * credentials, void ** client)
+common::backend_api::ResponseCode_t obj_create_client(
+    common::backend_api::ObjectBackendHandle_t backend_handle,
+    const common::backend_api::ObjectClientConfig_t* client_initial_config,
+    common::backend_api::ObjectClientHandle_t* out_client_handle)
 {
     const auto guard = std::unique_lock<std::mutex>(__mutex);
 
     do
     {
-        *client = reinterpret_cast<void *>(utils::random::number());
-    } while (__mock_clients.count(*client) || __mock_unused.count(*client));
+        *out_client_handle = reinterpret_cast<common::backend_api::ObjectClientHandle_t>(utils::random::number());
+    } while (__mock_clients.count(*out_client_handle) || __mock_unused.count(*out_client_handle));
 
-    __mock_clients.insert(*client);
+    __mock_clients.insert(*out_client_handle);
 
-    if (__mock_client_requests.find(*client) != __mock_client_requests.end())
+    if (__mock_client_requests.find(*out_client_handle) != __mock_client_requests.end())
     {
-        LOG(ERROR) << "Client " << *client << " already exists";
+        LOG(ERROR) << "Client " << *out_client_handle << " already exists";
         return common::ResponseCode::UnknownError;
     }
 
-    __mock_client_requests[*client] = {};
+    __mock_client_requests[*out_client_handle] = {};
 
-    LOG(DEBUG) << "created client " << *client << " - mock size is " << __mock_client_requests.size();
+    LOG(DEBUG) << "created client " << *out_client_handle << " - mock size is " << __mock_client_requests.size();
     return common::ResponseCode::Success;
 }
 
@@ -126,7 +129,7 @@ common::ResponseCode get_response_code(void * client)
     return common::ResponseCode::UnknownError;
 }
 
-common::ResponseCode  runai_async_read_s3_client(void * client, common::backend_api::ObjectRequestId_t request_id, const common::s3::Path * path, common::Range * range, size_t chunk_bytesize, char * buffer)
+common::ResponseCode  runai_async_read_s3_client(void * client, common::backend_api::ObjectRequestId_t request_id, const common::s3::StorageUri_C * path, common::Range * range, size_t chunk_bytesize, char * buffer)
 {
     const auto guard = std::unique_lock<std::mutex>(__mutex);
 

@@ -11,7 +11,6 @@ struct StorageUri
 
     std::string bucket;
     std::string path;
-    std::string endpoint;
 };
 
 struct StorageUri_C
@@ -20,7 +19,6 @@ struct StorageUri_C
 
     const char * bucket;
     const char * path;
-    const char * endpoint;
 };
 
 std::ostream & operator<<(std::ostream &, const StorageUri &);

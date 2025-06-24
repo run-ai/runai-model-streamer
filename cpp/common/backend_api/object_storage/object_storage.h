@@ -149,7 +149,7 @@ ResponseCode_t obj_request_read(
     const char* path,
     ObjectRange_t range,
     char* destination_buffer,
-    size_t buffer_capacity, 
+    size_t buffer_capacity,
     ObjectRequestId_t request_id
 );
 

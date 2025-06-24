@@ -32,7 +32,7 @@ common::backend_api::ResponseCode_t obj_open_backend(common::backend_api::Object
 {
     common::ResponseCode ret = common::ResponseCode::Success;
 
-    try 
+    try
     {
         // verify prerequisites
         auto glibc_version = utils::get_glibc_version();
@@ -72,7 +72,7 @@ common::backend_api::ResponseCode_t obj_close_backend(common::backend_api::Objec
 {
     common::ResponseCode ret = common::ResponseCode::Success;
 
-    try 
+    try
     {
         Aws::SDKOptions options;
 
@@ -94,23 +94,19 @@ common::backend_api::ResponseCode_t obj_close_backend(common::backend_api::Objec
 
 // --- Client API ---
 
-common::ResponseCode runai_create_s3_client(const common::s3::Path * path, const common::s3::Credentials_C * credentials, void ** client)
+common::backend_api::ResponseCode_t obj_create_client(common::backend_api::ObjectBackendHandle_t backend_handle,
+                                                       const common::backend_api::ObjectClientConfig_t* client_initial_config,
+                                                       common::backend_api::ObjectClientHandle_t* out_client_handle)
 {
     common::ResponseCode ret = common::ResponseCode::Success;
     try
     {
-        *client = static_cast<void *>(S3ClientMgr::pop(*path, *credentials));
-    }
-    catch(const common::Exception & e)
-    {
-        ret = e.error();
-        *client = nullptr;
+        *out_client_handle = S3ClientMgr::pop(*client_initial_config);
     }
     catch(const std::exception & e)
     {
         LOG(ERROR) << "Failed to create S3 client";
-        ret = common::ResponseCode::FileAccessError;
-        *client = nullptr;
+        ret = common::ResponseCode::UnknownError;
     }
     return ret;
 }
@@ -154,7 +150,7 @@ void runai_stop_s3_clients()
     }
 }
 
-common::ResponseCode runai_async_read_s3_client(void * client, common::backend_api::ObjectRequestId_t request_id, const common::s3::Path * path, common::Range * range, size_t chunk_bytesize, char * buffer)
+common::ResponseCode runai_async_read_s3_client(void * client, common::backend_api::ObjectRequestId_t request_id, const common::s3::StorageUri_C * path, common::Range * range, size_t chunk_bytesize, char * buffer)
 {
     try
     {
@@ -164,7 +160,7 @@ common::ResponseCode runai_async_read_s3_client(void * client, common::backend_a
             return common::ResponseCode::UnknownError;
         }
         auto ptr = static_cast<S3Client *>(client);
-        return ptr->async_read(*path, request_id, *range, chunk_bytesize, buffer);
+        return ptr->async_read(path, request_id, *range, chunk_bytesize, buffer);
     }
     catch(const std::exception& e)
     {

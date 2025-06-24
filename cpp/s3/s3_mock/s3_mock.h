@@ -17,11 +17,16 @@ extern "C" common::backend_api::ResponseCode_t obj_close_backend(common::backend
 
 // --- Client API ---
 
-extern "C" common::ResponseCode runai_create_s3_client(const common::s3::Path * path, const common::s3::Credentials_C * credentials, void ** client);
+extern "C" common::backend_api::ResponseCode_t obj_create_client(
+    common::backend_api::ObjectBackendHandle_t backend_handle,
+    const common::backend_api::ObjectClientConfig_t* client_initial_config,
+    common::backend_api::ObjectClientHandle_t* out_client_handle
+);
+
 extern "C" void runai_remove_s3_client(void * client);
 extern "C" common::ResponseCode  runai_async_read_s3_client(void * client,
                                                             common::backend_api::ObjectRequestId_t request_id,
-                                                            const common::s3::Path * path,
+                                                            const common::s3::StorageUri_C * path,
                                                             common::Range * range,
                                                             size_t chunk_bytesize,
                                                             char * buffer);
