@@ -88,8 +88,7 @@ class TestS3Compatibility(unittest.TestCase):
         self.minio_process = start_minio(self.minio_dir)
 
     def test_safetensors_streamer(self):
-        file_path = os.path.join(self.temp_dir, "model.safetensors")
-        create_random_safetensors(file_path)
+        file_path = create_random_safetensors(self.temp_dir)
         upload_file_to_minio(file_path)
 
         our = {}

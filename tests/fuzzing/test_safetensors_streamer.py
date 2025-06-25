@@ -4,20 +4,21 @@ import shutil
 import os
 import torch
 from safetensors.torch import safe_open
-from tests.safetensors.generator import create_random_safetensors
+from tests.safetensors.generator import (create_random_safetensors, create_random_multi_safetensors)
 from tests.safetensors.comparison import tensor_maps_are_equal
 from runai_model_streamer.safetensors_streamer.safetensors_streamer import (
     SafetensorsStreamer,
 )
 
+MIN_NUM_FILES = 1
+MAX_NUM_FILES = 20
 
 class TestSafetensorStreamerFuzzing(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
 
     def test_safetensors_streamer(self):
-        file_path = os.path.join(self.temp_dir, "model.safetensors")
-        create_random_safetensors(file_path)
+        file_path = create_random_safetensors(self.temp_dir)
 
         file_size = os.path.getsize(file_path)
 
@@ -39,11 +40,7 @@ class TestSafetensorStreamerFuzzing(unittest.TestCase):
             self.fail(f"Tensor mismatch: {message}")
 
     def test_safetensors_streamer_stream_files(self):
-        file_paths = []
-        for i in range(random.randint(MIN_NUM_FILES, MAX_NUM_FILES)):
-            file_path = os.path.join(self.temp_dir, f"model-{i}.safetensors")
-            create_random_safetensors(file_path)
-            file_paths.append(file_path)
+        file_paths = create_random_multi_safetensors(self.temp_dir)
 
         files_size = sum([os.path.getsize(file_path) for file_path in file_paths])
 
