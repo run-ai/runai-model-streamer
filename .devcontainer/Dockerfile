@@ -14,7 +14,8 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
 
 RUN pip install \
     boto3 \
-    cpplint==1.5.4
+    cpplint==1.5.4 \
+    pytest
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     cmake \
@@ -23,6 +24,10 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     libssl-dev \
     libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
+
+RUN wget https://dl.min.io/server/minio/release/linux-$([ "$(uname -m)" = "aarch64" ] && echo "arm64" || echo "amd64")/minio \
+    && chmod +x minio \
+    && mv minio /usr/local/bin/minio
 
 RUN curl -fsSL -o openssl-3.5.0.tar.gz https://www.openssl.org/source/openssl-3.5.0.tar.gz && \
     tar zxf openssl-3.5.0.tar.gz && \
