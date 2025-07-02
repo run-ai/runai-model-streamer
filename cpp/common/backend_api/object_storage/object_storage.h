@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #include "common/response/response.h"
 
 namespace runai::llm::streamer::common::backend_api
