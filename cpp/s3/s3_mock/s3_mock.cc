@@ -16,9 +16,9 @@
 namespace runai::llm::streamer::common::s3
 {
 
-std::set<void *> __mock_clients;
-std::map<void * /* client */, std::set<common::backend_api::ObjectRequestId_t /* request id */>> __mock_client_requests;
-std::set<void *> __mock_unused;
+std::set<common::backend_api::ObjectClientHandle_t> __mock_clients;
+std::map<common::backend_api::ObjectClientHandle_t /* client */, std::set<common::backend_api::ObjectRequestId_t /* request id */>> __mock_client_requests;
+std::set<common::backend_api::ObjectClientHandle_t> __mock_unused;
 unsigned __mock_response_time_ms = 0;
 std::mutex __mutex;
 std::atomic<bool> __stopped(false);
@@ -98,22 +98,24 @@ common::backend_api::ResponseCode_t obj_create_client(
     return common::ResponseCode::Success;
 }
 
-void runai_remove_s3_client(void * client)
+common::backend_api::ResponseCode_t obj_remove_client(common::backend_api::ObjectClientHandle_t client_handle)
 {
     const auto guard = std::unique_lock<std::mutex>(__mutex);
 
     try
     {
-        ASSERT(client) << "No client";
-        ASSERT(__mock_client_requests.find(client) != __mock_client_requests.end()) << "Client " << client << " not found";
-        __mock_client_requests.erase(client);
-        __mock_unused.insert(client);
-        LOG(DEBUG) << "Removed S3 client " << client << " - mock size is " << __mock_client_requests.size();
+        ASSERT(client_handle) << "No client";
+        ASSERT(__mock_client_requests.find(client_handle) != __mock_client_requests.end()) << "Client " << client_handle << " not found";
+        __mock_client_requests.erase(client_handle);
+        __mock_unused.insert(client_handle);
+        LOG(DEBUG) << "Removed S3 client " << client_handle << " - mock size is " << __mock_client_requests.size();
     }
     catch(const std::exception& e)
     {
-        LOG(ERROR) << "Client not found";
+        LOG(ERROR) << "Failed to remove object storage client " << client_handle;
+        return common::ResponseCode::UnknownError;
     }
+    return common::ResponseCode::Success;
 }
 
 common::ResponseCode get_response_code(void * client)

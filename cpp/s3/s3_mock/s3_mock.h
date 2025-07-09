@@ -23,7 +23,10 @@ extern "C" common::backend_api::ResponseCode_t obj_create_client(
     common::backend_api::ObjectClientHandle_t* out_client_handle
 );
 
-extern "C" void runai_remove_s3_client(void * client);
+extern "C" common::backend_api::ResponseCode_t obj_remove_client(
+    common::backend_api::ObjectClientHandle_t client_handle
+);
+
 extern "C" common::ResponseCode  runai_async_read_s3_client(void * client,
                                                             common::backend_api::ObjectRequestId_t request_id,
                                                             const common::s3::StorageUri_C * path,

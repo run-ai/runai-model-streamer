@@ -137,7 +137,7 @@ S3ClientWrapper::~S3ClientWrapper()
 {
     try
     {
-        static auto __s3_remove = _backend_handle->dylib_ptr->dlsym<void(*)(void *)>("runai_remove_s3_client");
+        static auto __s3_remove = _backend_handle->dylib_ptr->dlsym<common::ResponseCode(*)(common::backend_api::ObjectClientHandle_t)>("obj_remove_client");
         __s3_remove(_s3_client);
     }
     catch(...)

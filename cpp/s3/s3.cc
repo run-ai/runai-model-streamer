@@ -111,19 +111,22 @@ common::backend_api::ResponseCode_t obj_create_client(common::backend_api::Objec
     return ret;
 }
 
-void runai_remove_s3_client(void * client)
+common::backend_api::ResponseCode_t obj_remove_client(common::backend_api::ObjectClientHandle_t client_handle)
 {
+    common::ResponseCode ret = common::ResponseCode::Success;
     try
     {
-        if (client)
+        if (client_handle)
         {
-           S3ClientMgr::push(static_cast<S3Client *>(client));
+           S3ClientMgr::push(static_cast<S3Client *>(client_handle));
         }
     }
     catch(const std::exception & e)
     {
         LOG(ERROR) << "Failed to remove S3 client";
+        ret = common::ResponseCode::UnknownError;
     }
+    return ret;
 }
 
 void runai_release_s3_clients()
