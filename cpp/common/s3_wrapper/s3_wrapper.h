@@ -24,9 +24,9 @@ struct S3ClientWrapper
          Params()
          {}
 
-         Params(std::shared_ptr<StorageUri> uri, const Credentials & credentials);
+         Params(std::shared_ptr<StorageUri> uri, const Credentials & credentials, size_t chunk_bytesize);
 
-         Params(std::shared_ptr<StorageUri> uri) : Params(uri, Credentials())
+         Params(std::shared_ptr<StorageUri> uri, size_t chunk_bytesize) : Params(uri, Credentials(), chunk_bytesize)
          {}
 
          bool valid() const { return (uri.get() != nullptr); }
@@ -65,7 +65,7 @@ struct S3ClientWrapper
       // ranges - list of sub ranges
       // chunk_bytesize - size of chunk for reading in multi parts (minimal size is 5 MB)
 
-      common::ResponseCode async_read(const Params & params, backend_api::ObjectRequestId_t request_id, const Range & ranges, size_t chunk_bytesize, char * buffer);
+      common::ResponseCode async_read(const Params & params, backend_api::ObjectRequestId_t request_id, const Range & ranges, char * buffer);
       common::ResponseCode async_read_response(std::vector<backend_api::ObjectCompletionEvent_t> & event_buffer, unsigned max_events_to_retrieve);
 
       // stop - stops the responder of each S3 client, in order to notify callers which sent a request and are waiting for a response

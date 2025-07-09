@@ -387,7 +387,7 @@ TEST(Read, Stopped_During_Async_Read)
         (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
         (utils::random::boolean() ? utils::random::string().c_str() : nullptr));
 
-    common::s3::S3ClientWrapper::Params params(uri, credentials);
+    common::s3::S3ClientWrapper::Params params(uri, credentials, utils::random::number<size_t>());
 
     // divide range into chunks - a chunk per request
 

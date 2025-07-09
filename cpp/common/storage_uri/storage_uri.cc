@@ -8,7 +8,7 @@
 namespace runai::llm::streamer::common::s3
 {
 
-StorageUri::StorageUri(const std::string & uri)
+StorageUri::StorageUri(const std::string & uri) : uri(uri)
 {
     static const std::regex awsRegex("^s3://([^/]+)/(.+)$");
 

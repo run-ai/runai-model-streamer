@@ -19,7 +19,7 @@ struct S3WrappertTest : ::testing::Test
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr)),
-        params(std::make_shared<StorageUri>(uri), credentials)
+        params(std::make_shared<StorageUri>(uri), credentials, utils::random::number<size_t>())
     {
         auto ptr = utils::random::number<uintptr_t>();
         request_id = reinterpret_cast<common::backend_api::ObjectRequestId_t>(ptr);
@@ -59,7 +59,7 @@ TEST_F(S3WrappertTest, Read)
 {
     S3ClientWrapper wrapper(params);
     Range range;
-    auto response_code = wrapper.async_read(params, request_id, range, utils::random::number<size_t>(), nullptr);
+    auto response_code = wrapper.async_read(params, request_id, range, nullptr);
     EXPECT_EQ(response_code, common::ResponseCode::Success);
 }
 
@@ -67,7 +67,7 @@ TEST_F(S3WrappertTest, Response)
 {
     S3ClientWrapper wrapper(params);
     Range range;
-    auto response_code = wrapper.async_read(params, request_id, range, utils::random::number<size_t>(), nullptr);
+    auto response_code = wrapper.async_read(params, request_id, range, nullptr);
     EXPECT_EQ(response_code, common::ResponseCode::Success);
 
     std::vector<backend_api::ObjectCompletionEvent_t> event_buffer;
@@ -86,7 +86,7 @@ TEST_F(S3WrappertTest, Cleanup)
     {
         S3ClientWrapper wrapper(params);
         Range range;
-        wrapper.async_read(params, request_id, range, utils::random::number<size_t>(), nullptr);
+        wrapper.async_read(params, request_id, range, nullptr);
 
         EXPECT_EQ(verify_mock(), 1);
 
@@ -104,7 +104,7 @@ TEST_F(S3WrappertTest, Endpoint_Exists)
     utils::temp::Env endpoint_env("AWS_ENDPOINT_URL", endpoint);
 
     Credentials credentials_;
-    S3ClientWrapper::Params params_(std::make_shared<StorageUri>(uri), credentials_);
+    S3ClientWrapper::Params params_(std::make_shared<StorageUri>(uri), credentials_, utils::random::number<size_t>());
     S3ClientWrapper wrapper(params);
 
     EXPECT_EQ(params_.config.endpoint_url, endpoint);
@@ -115,7 +115,7 @@ TEST_F(S3WrappertTest, Endpoint_In_Credentials)
     auto endpoint = utils::random::string();
     Credentials credentials_(nullptr, nullptr, nullptr, nullptr, endpoint.c_str());
 
-    S3ClientWrapper::Params params_(std::make_shared<StorageUri>(uri), credentials_);
+    S3ClientWrapper::Params params_(std::make_shared<StorageUri>(uri), credentials_, utils::random::number<size_t>());
     S3ClientWrapper wrapper(params);
 
     EXPECT_EQ(params_.config.endpoint_url, endpoint);

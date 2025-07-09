@@ -31,6 +31,7 @@ struct S3ClientBase
     std::optional<Aws::String> _region;
     const std::optional<Aws::String> _endpoint;
     std::unique_ptr<Aws::Auth::AWSCredentials> _client_credentials;
+    const size_t _chunk_bytesize;
 
  private:
     bool verify_credentials_member(const std::optional<Aws::String>& client_member, const std::optional<Aws::String>& input_member, const char * name) const;
@@ -40,7 +41,10 @@ struct S3Client : S3ClientBase
 {
     S3Client(const common::backend_api::ObjectClientConfig_t & config);
 
-    common::ResponseCode async_read(const common::s3::StorageUri_C * uri, common::backend_api::ObjectRequestId_t request_id,  const common::Range & range, size_t chunk_bytesize, char * buffer);
+    common::backend_api::ResponseCode_t async_read(const char* path,
+                                                   common::backend_api::ObjectRange_t range,
+                                                   char* destination_buffer,
+                                                   common::backend_api::ObjectRequestId_t request_id);
 
     common::backend_api::Response async_read_response();
 

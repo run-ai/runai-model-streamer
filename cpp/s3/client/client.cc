@@ -29,7 +29,8 @@ std::optional<Aws::String> convert(const char * input)
 }
 
 S3ClientBase::S3ClientBase(const common::backend_api::ObjectClientConfig_t & config) :
-    _endpoint(convert(config.endpoint_url))
+    _endpoint(convert(config.endpoint_url)),
+    _chunk_bytesize(config.default_storage_chunk_size)
 {
     auto ptr = config.initial_params;
     if (ptr)
@@ -153,8 +154,11 @@ common::backend_api::Response S3Client::async_read_response()
     return _responder->pop();
 }
 
-// aynchronously read consecutive ranges, producing a Response object per range in the ranges vector
-common::ResponseCode S3Client::async_read(const common::s3::StorageUri_C * uri, common::backend_api::ObjectRequestId_t request_id, const common::Range & range, size_t chunk_bytesize, char * buffer)
+
+common::backend_api::ResponseCode_t S3Client::async_read(const char* path,
+                                                         common::backend_api::ObjectRange_t range,
+                                                         char* destination_buffer,
+                                                         common::backend_api::ObjectRequestId_t request_id)
 {
     if (_responder == nullptr)
     {
@@ -165,15 +169,14 @@ common::ResponseCode S3Client::async_read(const common::s3::StorageUri_C * uri, 
         _responder->increment(1);
     }
 
-    // TO DO(Noa) - is this needed?
-    //ASSERT((!_endpoint.has_value()) || (uri->endpoint == nullptr) || (_endpoint.has_value() && _endpoint.value() == std::string(uri->endpoint))) << "Attempting to reuse client with a different endpoint " << uri->endpoint;
+    const auto uri = common::s3::StorageUri(path);
 
-    Aws::String bucket_name(uri->bucket);
-    Aws::String path(uri->path);
+    Aws::String bucket_name(uri.bucket);
+    Aws::String path_name(uri.path);
 
-    char * buffer_ = buffer;
+    char * buffer_ = destination_buffer;
     // split range into chunks
-    size_t size = std::max(1UL, range.size/chunk_bytesize);
+    size_t size = std::max(1UL, range.length/_chunk_bytesize);
     LOG(SPAM) <<"Number of chunks is " << size;
 
     // each range is divided into chunks (size is the number of chunks)
@@ -183,17 +186,17 @@ common::ResponseCode S3Client::async_read(const common::s3::StorageUri_C * uri, 
     // success flag for the current range is passed to the client
     auto is_success = std::make_shared< std::atomic<bool> >(true);
 
-    size_t total_ = range.size;
-    size_t offset_ = range.start;
+    size_t total_ = range.length;
+    size_t offset_ = range.offset;
     for (unsigned i = 0; i < size && !_stop; ++i)
     {
-        size_t bytesize_ = (i == size - 1 ? total_ : chunk_bytesize);
+        size_t bytesize_ = (i == size - 1 ? total_ : _chunk_bytesize);
 
         // send async request
         auto request = std::make_shared<Aws::S3Crt::Model::GetObjectRequest>();
 
         request->SetBucket(bucket_name);
-        request->SetKey(path);
+        request->SetKey(path_name);
         std::string range_str = "bytes=" + std::to_string(offset_) + "-" + std::to_string(offset_ + bytesize_ - 1);
         request->SetRange(range_str.c_str());
 

@@ -1,7 +1,6 @@
 #pragma once
 
 #include "common/backend_api/object_storage/object_storage.h"
-#include "common/path/path.h"
 #include "common/response/response.h"
 #include "common/range/range.h"
 
@@ -50,13 +49,14 @@ extern "C" common::backend_api::ResponseCode_t obj_remove_client(
     common::backend_api::ObjectClientHandle_t client_handle
 );
 
-// asynchronous read
-extern "C" common::ResponseCode  runai_async_read_s3_client(void * client,
-                                                            common::backend_api::ObjectRequestId_t request_id,
-                                                            const common::s3::StorageUri_C * path,
-                                                            common::Range * range,
-                                                            size_t chunk_bytesize,
-                                                            char * buffer);
+extern "C" common::backend_api::ResponseCode_t obj_request_read(
+    common::backend_api::ObjectClientHandle_t client_handle,
+    const char* path,
+    common::backend_api::ObjectRange_t range,
+    char* destination_buffer,
+    common::backend_api::ObjectRequestId_t request_id
+);
+
 // wait for asynchronous read response
 extern "C" common::ResponseCode  runai_async_response_s3_client(void * client,
                                                                 common::backend_api::ObjectCompletionEvent_t* event_buffer,

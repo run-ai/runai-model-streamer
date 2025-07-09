@@ -153,17 +153,21 @@ void runai_stop_s3_clients()
     }
 }
 
-common::ResponseCode runai_async_read_s3_client(void * client, common::backend_api::ObjectRequestId_t request_id, const common::s3::StorageUri_C * path, common::Range * range, size_t chunk_bytesize, char * buffer)
+common::backend_api::ResponseCode_t obj_request_read(common::backend_api::ObjectClientHandle_t client_handle,
+                                                     const char* path,
+                                                     common::backend_api::ObjectRange_t range,
+                                                     char* destination_buffer,
+                                                     common::backend_api::ObjectRequestId_t request_id)
 {
     try
     {
-        if (!client)
+        if (!client_handle)
         {
             LOG(ERROR) << "Attempt to read with null s3 client";
             return common::ResponseCode::UnknownError;
         }
-        auto ptr = static_cast<S3Client *>(client);
-        return ptr->async_read(path, request_id, *range, chunk_bytesize, buffer);
+        auto ptr = static_cast<S3Client *>(client_handle);
+        return ptr->async_read(path, range, destination_buffer, request_id);
     }
     catch(const std::exception& e)
     {

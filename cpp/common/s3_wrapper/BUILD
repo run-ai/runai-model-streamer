@@ -7,7 +7,6 @@ runai_cc_auto_library(
         "//common/storage_uri",
         "//common/s3_credentials",
         "//common/backend_api/response",
-        "//common/path",
         "//common/range",
         "//common/exception",
         "//utils/dylib",

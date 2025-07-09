@@ -9,6 +9,7 @@ struct StorageUri
 {
     StorageUri(const std::string & uri);
 
+    std::string uri;
     std::string bucket;
     std::string path;
 };

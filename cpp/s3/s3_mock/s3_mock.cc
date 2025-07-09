@@ -131,13 +131,18 @@ common::ResponseCode get_response_code(void * client)
     return common::ResponseCode::UnknownError;
 }
 
-common::ResponseCode  runai_async_read_s3_client(void * client, common::backend_api::ObjectRequestId_t request_id, const common::s3::StorageUri_C * path, common::Range * range, size_t chunk_bytesize, char * buffer)
+common::backend_api::ResponseCode_t obj_request_read(
+    common::backend_api::ObjectClientHandle_t client_handle,
+    const char* path,
+    common::backend_api::ObjectRange_t range,
+    char* destination_buffer,
+    common::backend_api::ObjectRequestId_t request_id)
 {
     const auto guard = std::unique_lock<std::mutex>(__mutex);
 
-    if (!__mock_clients.count(client) || __mock_unused.count(client))
+    if (!__mock_clients.count(client_handle) || __mock_unused.count(client_handle))
     {
-        LOG(ERROR) << "Mock client " << client << " not found or unused";
+        LOG(ERROR) << "Mock client " << client_handle << " not found or unused";
         return common::ResponseCode::UnknownError;
     }
 
@@ -147,10 +152,10 @@ common::ResponseCode  runai_async_read_s3_client(void * client, common::backend_
         return common::ResponseCode::FinishedError;
     }
 
-    auto r = get_response_code(client);
+    auto r = get_response_code(client_handle);
 
-    ASSERT(__mock_client_requests.find(client) != __mock_client_requests.end()) << "Client " << client << " not found";
-    __mock_client_requests[client].insert(request_id);
+    ASSERT(__mock_client_requests.find(client_handle) != __mock_client_requests.end()) << "Client " << client_handle << " not found";
+    __mock_client_requests[client_handle].insert(request_id);
 
     return r;
 }

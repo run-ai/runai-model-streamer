@@ -4,7 +4,6 @@
 
 #include "common/s3_wrapper/s3_wrapper.h"
 #include "common/s3_credentials/s3_credentials.h"
-#include "common/path/path.h"
 #include "common/exception/exception.h"
 
 #include "utils/env/env.h"
@@ -13,7 +12,7 @@
 namespace runai::llm::streamer::common::s3
 {
 
-S3ClientWrapper::Params::Params(std::shared_ptr<StorageUri> uri, const Credentials & credentials) :
+S3ClientWrapper::Params::Params(std::shared_ptr<StorageUri> uri, const Credentials & credentials, size_t chunk_bytesize) :
     uri(uri),
     credentials(credentials)
 {
@@ -44,6 +43,7 @@ S3ClientWrapper::Params::Params(std::shared_ptr<StorageUri> uri, const Credentia
 
     config.num_initial_params = _initial_params.size();
     config.initial_params = _initial_params.data();
+    config.default_storage_chunk_size = chunk_bytesize;
 }
 
 const utils::Semver min_glibc_semver = utils::Semver(description(static_cast<int>(ResponseCode::GlibcPrerequisite)));
@@ -137,7 +137,7 @@ S3ClientWrapper::~S3ClientWrapper()
 {
     try
     {
-        static auto __s3_remove = _backend_handle->dylib_ptr->dlsym<common::ResponseCode(*)(common::backend_api::ObjectClientHandle_t)>("obj_remove_client");
+        static auto __s3_remove = _backend_handle->dylib_ptr->dlsym<common::backend_api::ResponseCode_t(*)(common::backend_api::ObjectClientHandle_t)>("obj_remove_client");
         __s3_remove(_s3_client);
     }
     catch(...)
@@ -172,11 +172,10 @@ void * S3ClientWrapper::create_client(const Params & params)
     return client;
 }
 
-ResponseCode S3ClientWrapper::async_read(const Params & params, common::backend_api::ObjectRequestId_t request_id, const Range & range, size_t chunk_bytesize, char * buffer)
+ResponseCode S3ClientWrapper::async_read(const Params & params, common::backend_api::ObjectRequestId_t request_id, const Range & range, char * buffer)
 {
-    static auto _s3_async_read = _backend_handle->dylib_ptr->dlsym<ResponseCode(*)(void *, common::backend_api::ObjectRequestId_t, const Path *, const Range *, size_t, char *)>("runai_async_read_s3_client");
-    const Path s3_path(*params.uri);
-    return _s3_async_read(_s3_client, request_id, &s3_path, &range, chunk_bytesize, buffer);
+    static auto _s3_async_read = _backend_handle->dylib_ptr->dlsym<ResponseCode(*)(common::backend_api::ObjectClientHandle_t, const char*, common::backend_api::ObjectRange_t, char*, common::backend_api::ObjectRequestId_t)>("obj_request_read");
+    return _s3_async_read(_s3_client, params.uri->uri.c_str(), range.to_backend_api_range(), buffer, request_id);
     return common::ResponseCode::Success;
 }
 
