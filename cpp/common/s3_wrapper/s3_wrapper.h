@@ -3,7 +3,7 @@
 #include <memory>
 #include <string>
 #include <vector>
-
+#include <mutex>
 #include "common/range/range.h"
 #include "common/response_code/response_code.h"
 #include "common/storage_uri/storage_uri.h"
@@ -80,9 +80,16 @@ struct S3ClientWrapper
 
  private:
       void * create_client(const Params & params);
-      static std::shared_ptr<BackendHandle> create_backend_handle(const Params & params);
+      enum class ManageBackendHandleOp
+      {
+         CREATE,
+         DESTROY,
+      };
+      static std::shared_ptr<BackendHandle> manage_backend_handle(const Params & params, ManageBackendHandleOp op);
+      static common::backend_api::ObjectShutdownPolicy_t get_backend_shutdown_policy(std::shared_ptr<BackendHandle> handle);
 
  private:
+      static std::mutex _backend_handle_mutex;
       std::shared_ptr<BackendHandle> _backend_handle;
 
       // Handle to s3 client

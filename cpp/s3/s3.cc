@@ -92,6 +92,11 @@ common::backend_api::ResponseCode_t obj_close_backend(common::backend_api::Objec
     return ret;
 }
 
+common::backend_api::ObjectShutdownPolicy_t obj_get_backend_shutdown_policy()
+{
+    return common::backend_api::OBJECT_SHUTDOWN_POLICY_ON_PROCESS_EXIT;
+}
+
 // --- Client API ---
 
 common::backend_api::ResponseCode_t obj_create_client(common::backend_api::ObjectBackendHandle_t backend_handle,

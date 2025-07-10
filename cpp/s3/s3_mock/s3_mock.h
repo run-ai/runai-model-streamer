@@ -13,7 +13,7 @@ namespace runai::llm::streamer::common::s3
 
 extern "C" common::backend_api::ResponseCode_t obj_open_backend(common::backend_api::ObjectBackendHandle_t* out_backend_handle);
 extern "C" common::backend_api::ResponseCode_t obj_close_backend(common::backend_api::ObjectBackendHandle_t backend_handle);
-
+extern "C" common::backend_api::ObjectShutdownPolicy_t obj_get_backend_shutdown_policy();
 // --- Client API ---
 
 extern "C" common::backend_api::ResponseCode_t obj_create_client(
@@ -46,7 +46,9 @@ extern "C" common::backend_api::ResponseCode_t obj_cancel_all_reads();
 extern "C" common::backend_api::ResponseCode_t obj_remove_all_clients();
 
 extern "C" void runai_mock_s3_set_response_time_ms(unsigned milliseconds);
+extern "C" void runai_s3_mock_set_backend_shutdown_policy(common::backend_api::ObjectShutdownPolicy_t policy);
 extern "C" int runai_mock_s3_clients();
 extern "C" void runai_mock_s3_cleanup();
+extern "C" bool runai_mock_s3_is_shutdown();
 
 }; //namespace runai::llm::streamer::common::s3

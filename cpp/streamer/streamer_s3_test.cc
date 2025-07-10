@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "common/backend_api/object_storage/object_storage.h"
 #include "common/response_code/response_code.h"
 #include "common/s3_credentials/s3_credentials.h"
 
@@ -108,12 +109,13 @@ struct StreamerTest : ::testing::Test
 
 } // namespace
 
-
 TEST_F(StreamerTest, Async_Read)
 {
     utils::Dylib dylib("libstreamers3.so");
     auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
     auto mock_cleanup = dylib.dlsym<void(*)()>("runai_mock_s3_cleanup");
+    auto set_backend_shutdown_policy = dylib.dlsym<void(*)(common::backend_api::ObjectShutdownPolicy_t)>("runai_s3_mock_set_backend_shutdown_policy");
+    set_backend_shutdown_policy(utils::random::boolean() ? common::backend_api::ObjectShutdownPolicy_t::OBJECT_SHUTDOWN_POLICY_ON_STREAMER_SHUTDOWN : common::backend_api::ObjectShutdownPolicy_t::OBJECT_SHUTDOWN_POLICY_ON_PROCESS_EXIT);
 
     bool use_credentials = utils::random::boolean();
     void * streamer;
@@ -182,6 +184,8 @@ TEST_F(StreamerTest, Increase_Insufficient_Fd_Limit)
     utils::Dylib dylib("libstreamers3.so");
     auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
     auto mock_cleanup = dylib.dlsym<void(*)()>("runai_mock_s3_cleanup");
+    auto set_backend_shutdown_policy = dylib.dlsym<void(*)(common::backend_api::ObjectShutdownPolicy_t)>("runai_s3_mock_set_backend_shutdown_policy");
+    set_backend_shutdown_policy(common::backend_api::ObjectShutdownPolicy_t::OBJECT_SHUTDOWN_POLICY_ON_PROCESS_EXIT);
 
     for (bool use_credentials : { true, false })
     {
@@ -242,6 +246,8 @@ TEST_F(StreamerTest, Stop_Before_Async_Read)
     auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
     auto stop_mock = dylib.dlsym<common::backend_api::ResponseCode_t(*)()>("obj_cancel_all_reads");
     auto mock_cleanup = dylib.dlsym<void(*)()>("runai_mock_s3_cleanup");
+    auto set_backend_shutdown_policy = dylib.dlsym<void(*)(common::backend_api::ObjectShutdownPolicy_t)>("runai_s3_mock_set_backend_shutdown_policy");
+    set_backend_shutdown_policy(utils::random::boolean() ? common::backend_api::ObjectShutdownPolicy_t::OBJECT_SHUTDOWN_POLICY_ON_STREAMER_SHUTDOWN : common::backend_api::ObjectShutdownPolicy_t::OBJECT_SHUTDOWN_POLICY_ON_PROCESS_EXIT);
 
     for (bool use_credentials : { true, false })
     {
@@ -289,6 +295,7 @@ TEST_F(StreamerTest, Stop_Before_Async_Read)
         unsigned file_index;
         EXPECT_EQ(runai_response(streamer, &file_index, &r), static_cast<int>(common::ResponseCode::FinishedError));
 
+        LOG(INFO) << "******************************* Ending streamer";
         runai_end(streamer);
         EXPECT_EQ(verify_mock(), 0);
 
@@ -301,6 +308,8 @@ TEST_F(StreamerTest, End_During_Async_Read)
     utils::Dylib dylib("libstreamers3.so");
     auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
     auto mock_cleanup = dylib.dlsym<common::backend_api::ResponseCode_t(*)()>("obj_remove_all_clients");
+    auto set_backend_shutdown_policy = dylib.dlsym<void(*)(common::backend_api::ObjectShutdownPolicy_t)>("runai_s3_mock_set_backend_shutdown_policy");
+    set_backend_shutdown_policy(utils::random::boolean() ? common::backend_api::ObjectShutdownPolicy_t::OBJECT_SHUTDOWN_POLICY_ON_STREAMER_SHUTDOWN : common::backend_api::ObjectShutdownPolicy_t::OBJECT_SHUTDOWN_POLICY_ON_PROCESS_EXIT);
 
     for (bool use_credentials : { true, false })
     {
@@ -359,6 +368,8 @@ TEST_F(StreamerTest, Multiple_Files)
 {
     utils::Dylib dylib("libstreamers3.so");
     auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
+    auto set_backend_shutdown_policy = dylib.dlsym<void(*)(common::backend_api::ObjectShutdownPolicy_t)>("runai_s3_mock_set_backend_shutdown_policy");
+    set_backend_shutdown_policy(utils::random::boolean() ? common::backend_api::ObjectShutdownPolicy_t::OBJECT_SHUTDOWN_POLICY_ON_STREAMER_SHUTDOWN : common::backend_api::ObjectShutdownPolicy_t::OBJECT_SHUTDOWN_POLICY_ON_PROCESS_EXIT);
 
     void * streamer;
     EXPECT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
@@ -405,6 +416,8 @@ TEST_F(StreamerTest, Multiple_Files_Error)
 {
     utils::Dylib dylib("libstreamers3.so");
     auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
+    auto set_backend_shutdown_policy = dylib.dlsym<void(*)(common::backend_api::ObjectShutdownPolicy_t)>("runai_s3_mock_set_backend_shutdown_policy");
+    set_backend_shutdown_policy(utils::random::boolean() ? common::backend_api::ObjectShutdownPolicy_t::OBJECT_SHUTDOWN_POLICY_ON_STREAMER_SHUTDOWN : common::backend_api::ObjectShutdownPolicy_t::OBJECT_SHUTDOWN_POLICY_ON_PROCESS_EXIT);
 
     const auto error_code = common::ResponseCode::FileAccessError;
     utils::temp::Env env_rc("RUNAI_STREAMER_S3_MOCK_RESPONSE_CODE", static_cast<int>(error_code));

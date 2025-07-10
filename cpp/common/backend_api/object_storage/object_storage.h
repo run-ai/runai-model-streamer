@@ -18,6 +18,11 @@ typedef enum {
     OBJECT_WAIT_MODE_TIMED_BLOCK        // Waits for a specified duration for events.
 } ObjectWaitMode_t;
 
+typedef enum {
+    OBJECT_SHUTDOWN_POLICY_ON_PROCESS_EXIT,
+    OBJECT_SHUTDOWN_POLICY_ON_STREAMER_SHUTDOWN,
+} ObjectShutdownPolicy_t;
+
 using ResponseCode_t = common::ResponseCode;
 
 // --- Config Params ---
@@ -66,6 +71,11 @@ ResponseCode_t obj_open_backend(ObjectBackendHandle_t* out_backend_handle);
  * Closes an opened backend instance and releases all associated resources.
  */
 ResponseCode_t obj_close_backend(ObjectBackendHandle_t backend_handle);
+
+/**
+ * Gets the shutdown policy for the backend.
+ */
+ObjectShutdownPolicy_t obj_get_backend_shutdown_policy();
 
 /**
  * Sets backend-wide configuration parameters.

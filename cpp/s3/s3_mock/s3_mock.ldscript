@@ -3,6 +3,8 @@
         runai_mock_s3_clients;
         runai_mock_s3_set_response_time_ms;
         runai_mock_s3_cleanup;
+        runai_s3_mock_set_backend_shutdown_policy;
+        runai_mock_s3_is_shutdown;
         obj_open_backend;
         obj_close_backend;
         obj_create_client;
@@ -11,6 +13,7 @@
         obj_wait_for_completions;
         obj_cancel_all_reads;
         obj_remove_all_clients;
+        obj_get_backend_shutdown_policy;
 
     local: *;
 };

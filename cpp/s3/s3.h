@@ -36,7 +36,7 @@ namespace runai::llm::streamer::impl::s3
 
 extern "C" common::backend_api::ResponseCode_t obj_open_backend(common::backend_api::ObjectBackendHandle_t* out_backend_handle);
 extern "C" common::backend_api::ResponseCode_t obj_close_backend(common::backend_api::ObjectBackendHandle_t backend_handle);
-
+extern "C" common::backend_api::ObjectShutdownPolicy_t obj_get_backend_shutdown_policy();
 // --- Client API ---
 
 extern "C" common::backend_api::ResponseCode_t obj_create_client(

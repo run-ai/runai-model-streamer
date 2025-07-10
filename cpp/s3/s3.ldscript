@@ -8,5 +8,6 @@
         obj_wait_for_completions;
         obj_cancel_all_reads;
         obj_remove_all_clients;
+        obj_get_backend_shutdown_policy;
     local: *;
 };

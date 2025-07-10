@@ -23,6 +23,12 @@ unsigned __mock_response_time_ms = 0;
 std::mutex __mutex;
 std::atomic<bool> __stopped(false);
 std::atomic<bool> __opened(false);
+common::backend_api::ObjectShutdownPolicy_t __shutdown_policy = common::backend_api::OBJECT_SHUTDOWN_POLICY_ON_PROCESS_EXIT;
+
+void runai_s3_mock_set_backend_shutdown_policy(common::backend_api::ObjectShutdownPolicy_t policy)
+{
+    __shutdown_policy = policy;
+}
 
 common::backend_api::ResponseCode_t obj_open_backend(common::backend_api::ObjectBackendHandle_t* out_backend_handle)
 {
@@ -64,6 +70,11 @@ common::backend_api::ResponseCode_t obj_close_backend(common::backend_api::Objec
 
     __opened = false;
     return response_code;
+}
+
+common::backend_api::ObjectShutdownPolicy_t obj_get_backend_shutdown_policy()
+{
+    return __shutdown_policy;
 }
 
 void runai_mock_s3_set_response_time_ms(unsigned milliseconds)
@@ -259,6 +270,12 @@ void runai_mock_s3_cleanup()
 {
     runai_mock_s3_set_response_time_ms(0);
     __stopped = false;
+    runai_s3_mock_set_backend_shutdown_policy(common::backend_api::OBJECT_SHUTDOWN_POLICY_ON_PROCESS_EXIT);
+}
+
+bool runai_mock_s3_is_shutdown()
+{
+    return !__opened;
 }
 
 }; //namespace runai::llm::streamer::common::s3

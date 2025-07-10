@@ -82,6 +82,7 @@ TEST_F(S3WrappertTest, Cleanup)
 {
     utils::Dylib dylib("libstreamers3.so");
     auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
+    auto is_shutdown = dylib.dlsym<bool(*)(void)>("runai_mock_s3_is_shutdown");
     EXPECT_EQ(verify_mock(), 0);
     {
         S3ClientWrapper wrapper(params);
@@ -92,10 +93,12 @@ TEST_F(S3WrappertTest, Cleanup)
 
         S3ClientWrapper::shutdown();
         EXPECT_EQ(verify_mock(), 1);
+        EXPECT_EQ(is_shutdown(), false); // client still holds reference to backend handle
     }
 
     S3ClientWrapper::shutdown();
     EXPECT_EQ(verify_mock(), 0);
+    EXPECT_EQ(is_shutdown(), false); // backend handle is closed when the process exits
 }
 
 TEST_F(S3WrappertTest, Endpoint_Exists)
@@ -119,6 +122,33 @@ TEST_F(S3WrappertTest, Endpoint_In_Credentials)
     S3ClientWrapper wrapper(params);
 
     EXPECT_EQ(params_.config.endpoint_url, endpoint);
+}
+
+TEST_F(S3WrappertTest, Shutdown_Policy)
+{
+    utils::Dylib dylib("libstreamers3.so");
+    auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
+    auto is_shutdown = dylib.dlsym<bool(*)(void)>("runai_mock_s3_is_shutdown");
+    // set shutdown policy to on process exit
+    auto set_shutdown_policy = dylib.dlsym<void(*)(common::backend_api::ObjectShutdownPolicy_t)>("runai_s3_mock_set_backend_shutdown_policy");
+    set_shutdown_policy(common::backend_api::OBJECT_SHUTDOWN_POLICY_ON_STREAMER_SHUTDOWN);
+
+    EXPECT_EQ(verify_mock(), 0);
+    {
+        S3ClientWrapper wrapper(params);
+        Range range;
+        wrapper.async_read(params, request_id, range, nullptr);
+
+        EXPECT_EQ(verify_mock(), 1);
+
+        EXPECT_EQ(is_shutdown(), false);
+
+        EXPECT_NO_THROW(S3ClientWrapper::shutdown());
+        EXPECT_EQ(is_shutdown(), false); // client still holds reference to backend handle
+    }
+
+    EXPECT_NO_THROW(S3ClientWrapper::shutdown());
+    EXPECT_EQ(is_shutdown(), true);
 }
 
 
