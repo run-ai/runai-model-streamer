@@ -129,8 +129,9 @@ common::backend_api::ResponseCode_t obj_remove_client(common::backend_api::Objec
     return ret;
 }
 
-void runai_release_s3_clients()
+common::backend_api::ResponseCode_t obj_remove_all_clients()
 {
+    common::ResponseCode ret = common::ResponseCode::Success;
     try
     {
         S3ClientMgr::clear();
@@ -138,11 +139,14 @@ void runai_release_s3_clients()
     catch(const std::exception & e)
     {
         LOG(ERROR) << "Failed to remove all S3 clients";
+        ret = common::ResponseCode::UnknownError;
     }
+    return ret;
 }
 
-void runai_stop_s3_clients()
+common::backend_api::ResponseCode_t obj_cancel_all_reads()
 {
+    common::ResponseCode ret = common::ResponseCode::Success;
     try
     {
         S3ClientMgr::stop();
@@ -150,7 +154,9 @@ void runai_stop_s3_clients()
     catch(const std::exception & e)
     {
         LOG(ERROR) << "Failed to stop all S3 clients";
+        ret = common::ResponseCode::UnknownError;
     }
+    return ret;
 }
 
 common::backend_api::ResponseCode_t obj_request_read(common::backend_api::ObjectClientHandle_t client_handle,

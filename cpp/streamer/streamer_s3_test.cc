@@ -240,7 +240,7 @@ TEST_F(StreamerTest, Stop_Before_Async_Read)
 {
     utils::Dylib dylib("libstreamers3.so");
     auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
-    auto stop_mock = dylib.dlsym<void(*)(void)>("runai_stop_s3_clients");
+    auto stop_mock = dylib.dlsym<common::backend_api::ResponseCode_t(*)()>("obj_cancel_all_reads");
     auto mock_cleanup = dylib.dlsym<void(*)()>("runai_mock_s3_cleanup");
 
     for (bool use_credentials : { true, false })
@@ -300,7 +300,7 @@ TEST_F(StreamerTest, End_During_Async_Read)
 {
     utils::Dylib dylib("libstreamers3.so");
     auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
-    auto mock_cleanup = dylib.dlsym<void(*)()>("runai_mock_s3_cleanup");
+    auto mock_cleanup = dylib.dlsym<common::backend_api::ResponseCode_t(*)()>("obj_remove_all_clients");
 
     for (bool use_credentials : { true, false })
     {

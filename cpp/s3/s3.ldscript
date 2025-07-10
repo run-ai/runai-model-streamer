@@ -1,12 +1,12 @@
 {
     global:
-        runai_stop_s3_clients;
-        runai_release_s3_clients;
         obj_open_backend;
         obj_close_backend;
         obj_create_client;
         obj_remove_client;
         obj_request_read;
         obj_wait_for_completions;
+        obj_cancel_all_reads;
+        obj_remove_all_clients;
     local: *;
 };

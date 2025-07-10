@@ -42,8 +42,8 @@ extern "C" common::backend_api::ResponseCode_t obj_wait_for_completions(
     common::backend_api::ObjectWaitMode_t wait_mode
 );
 
-extern "C" void runai_stop_s3_clients();
-extern "C" void runai_release_s3_clients();
+extern "C" common::backend_api::ResponseCode_t obj_cancel_all_reads();
+extern "C" common::backend_api::ResponseCode_t obj_remove_all_clients();
 
 extern "C" void runai_mock_s3_set_response_time_ms(unsigned milliseconds);
 extern "C" int runai_mock_s3_clients();

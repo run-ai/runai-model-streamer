@@ -236,7 +236,7 @@ int runai_mock_s3_clients()
     return __mock_clients.size();
 }
 
-void runai_release_s3_clients()
+common::backend_api::ResponseCode_t obj_remove_all_clients()
 {
     const auto guard = std::unique_lock<std::mutex>(__mutex);
     if (__mock_clients.size() == __mock_unused.size())
@@ -245,12 +245,14 @@ void runai_release_s3_clients()
         __mock_unused.clear();
         __mock_client_requests.clear();
     }
+    return common::ResponseCode::Success;
 }
 
-void runai_stop_s3_clients()
+common::backend_api::ResponseCode_t obj_cancel_all_reads()
 {
     __stopped = true;
     LOG(DEBUG) << "Stopped S3 clients ";
+    return common::ResponseCode::Success;
 }
 
 void runai_mock_s3_cleanup()

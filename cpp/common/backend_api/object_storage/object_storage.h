@@ -174,29 +174,19 @@ ResponseCode_t obj_wait_for_completions(
     ObjectWaitMode_t wait_mode
 );
 
-/*
-* Attempts to cancel a pending asynchronous read request.
-* - client_handle - Handle to the client instance that issued the request.
-* - request_id - The ID of the request to cancel.
-* return success if the cancellation request was accepted
-*/
-ResponseCode_t obj_cancel_read(
-    ObjectClientHandle_t client_handle,
-    ObjectRequestId_t request_id
-);
-
 /**
  * Attempts to cancel all currently active/pending asynchronous read requests
- * associated with the given client handle.
- * Cancellation is best-effort. Completion events (possibly with status CANCELLED)
- * should still be expected for requests that were already in flight or too late to cancel.
+ * associated with all the client handle.
+ * Cancellation is best-effort. Completion events should still be expected for requests that were already in flight or too late to cancel.
  * e.g. S3 backend cannot cancel an already requested reads
- * - client_handle - Handle to the client instance whose read requests are to be cancelled.
- *                   Must be a valid, non-NULL handle.
  * Return success if the request to cancel all operations was successfully initiated.
  */
-ResponseCode_t obj_cancel_all_reads(
-    ObjectClientHandle_t client_handle
-);
+ResponseCode_t obj_cancel_all_reads();
+
+/**
+ * Attempts to remove all clients.
+ * Return success if the request to remove all clients was successfully initiated.
+ */
+ResponseCode_t obj_remove_all_clients();
 
 } // namespace runai::llm::streamer::common::backend_api

@@ -66,8 +66,9 @@ extern "C" common::backend_api::ResponseCode_t obj_wait_for_completions(common::
 
 // stop clients
 // Stops the responder of each client, in order to notify callers which sent a request and are waiting for a response
-extern "C" void runai_stop_s3_clients();
+extern "C" common::backend_api::ResponseCode_t obj_cancel_all_reads();
+
 // release clients
-extern "C" void runai_release_s3_clients();
+extern "C" common::backend_api::ResponseCode_t obj_remove_all_clients();
 
 }; //namespace runai::llm::streamer::impl::s3

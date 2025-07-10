@@ -105,7 +105,7 @@ void S3ClientWrapper::shutdown()
     try
     {
         std::shared_ptr<BackendHandle> handle = create_backend_handle(Params());
-        static auto __release_s3_clients = handle->dylib_ptr->dlsym<void(*)()>("runai_release_s3_clients");
+        static auto __release_s3_clients = handle->dylib_ptr->dlsym<common::backend_api::ResponseCode_t(*)()>("obj_remove_all_clients");
         __release_s3_clients();
     }
     catch(...)
@@ -118,7 +118,7 @@ void S3ClientWrapper::stop()
     try
     {
         std::shared_ptr<BackendHandle> handle = create_backend_handle(Params());
-        static auto __stop_s3_clients = handle->dylib_ptr->dlsym<void(*)()>("runai_stop_s3_clients");
+        static auto __stop_s3_clients = handle->dylib_ptr->dlsym<common::backend_api::ResponseCode_t(*)()>("obj_cancel_all_reads");
         __stop_s3_clients();
     }
     catch(...)
