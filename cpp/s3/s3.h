@@ -57,11 +57,13 @@ extern "C" common::backend_api::ResponseCode_t obj_request_read(
     common::backend_api::ObjectRequestId_t request_id
 );
 
-// wait for asynchronous read response
-extern "C" common::ResponseCode  runai_async_response_s3_client(void * client,
-                                                                common::backend_api::ObjectCompletionEvent_t* event_buffer,
-                                                                unsigned int max_events_to_retrieve,
-                                                                unsigned int* out_num_events_retrieved);
+extern "C" common::backend_api::ResponseCode_t obj_wait_for_completions(common::backend_api::ObjectClientHandle_t client_handle,
+                                                                        common::backend_api::ObjectCompletionEvent_t* event_buffer,
+                                                                        unsigned int max_events_to_retrieve,
+                                                                        unsigned int* out_num_events_retrieved,
+                                                                        common::backend_api::ObjectWaitMode_t wait_mode);
+
+
 // stop clients
 // Stops the responder of each client, in order to notify callers which sent a request and are waiting for a response
 extern "C" void runai_stop_s3_clients();

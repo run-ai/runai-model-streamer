@@ -34,10 +34,14 @@ extern "C" common::backend_api::ResponseCode_t obj_request_read(
     common::backend_api::ObjectRequestId_t request_id
 );
 
-extern "C" common::ResponseCode  runai_async_response_s3_client(void * client,
-                                                                common::backend_api::ObjectCompletionEvent_t * event_buffer,
-                                                                unsigned max_events_to_retrieve,
-                                                                unsigned * out_num_events_retrieved);
+extern "C" common::backend_api::ResponseCode_t obj_wait_for_completions(
+    common::backend_api::ObjectClientHandle_t client_handle,
+    common::backend_api::ObjectCompletionEvent_t* event_buffer,
+    unsigned int max_events_to_retrieve,
+    unsigned int* out_num_events_retrieved,
+    common::backend_api::ObjectWaitMode_t wait_mode
+);
+
 extern "C" void runai_stop_s3_clients();
 extern "C" void runai_release_s3_clients();
 

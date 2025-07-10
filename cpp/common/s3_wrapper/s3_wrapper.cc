@@ -189,8 +189,8 @@ common::ResponseCode S3ClientWrapper::async_read_response(std::vector<backend_ap
 
     event_buffer.resize(max_events_to_retrieve);
     unsigned int out_num_events_retrieved;
-    static auto _s3_async_response = _backend_handle->dylib_ptr->dlsym<ResponseCode(*)(void *, common::backend_api::ObjectCompletionEvent_t*, unsigned, unsigned*)>("runai_async_response_s3_client");
-    auto ret = _s3_async_response(_s3_client, event_buffer.data(), max_events_to_retrieve, &out_num_events_retrieved);
+    static auto _s3_async_response = _backend_handle->dylib_ptr->dlsym<ResponseCode(*)(common::backend_api::ObjectClientHandle_t, common::backend_api::ObjectCompletionEvent_t*, unsigned int, unsigned int*, common::backend_api::ObjectWaitMode_t)>("obj_wait_for_completions");
+    auto ret = _s3_async_response(_s3_client, event_buffer.data(), max_events_to_retrieve, &out_num_events_retrieved, common::backend_api::OBJECT_WAIT_MODE_BLOCK);
 
     if (ret == common::ResponseCode::Success)
     {

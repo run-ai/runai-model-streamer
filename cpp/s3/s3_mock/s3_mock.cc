@@ -160,7 +160,11 @@ common::backend_api::ResponseCode_t obj_request_read(
     return r;
 }
 
-common::ResponseCode runai_async_response_s3_client(void * client, common::backend_api::ObjectCompletionEvent_t * event_buffer, unsigned max_events_to_retrieve, unsigned * out_num_events_retrieved)
+common::backend_api::ResponseCode_t obj_wait_for_completions(common::backend_api::ObjectClientHandle_t client_handle,
+                                                              common::backend_api::ObjectCompletionEvent_t* event_buffer,
+                                                              unsigned int max_events_to_retrieve,
+                                                              unsigned int* out_num_events_retrieved,
+                                                              common::backend_api::ObjectWaitMode_t wait_mode)
 {
     if (out_num_events_retrieved == nullptr)
     {
@@ -176,9 +180,9 @@ common::ResponseCode runai_async_response_s3_client(void * client, common::backe
 
     const auto guard = std::unique_lock<std::mutex>(__mutex);
 
-    if (!__mock_clients.count(client) || __mock_unused.count(client))
+    if (!__mock_clients.count(client_handle) || __mock_unused.count(client_handle))
     {
-        LOG(ERROR) << "Mock client " << client << " not found or unused";
+        LOG(ERROR) << "Mock client " << client_handle << " not found or unused";
         return common::ResponseCode::UnknownError;
     }
 
@@ -198,15 +202,15 @@ common::ResponseCode runai_async_response_s3_client(void * client, common::backe
         return common::ResponseCode::FinishedError;
     }
 
-    auto r = get_response_code(client);
+    auto r = get_response_code(client_handle);
 
-    if (__mock_client_requests.find(client) == __mock_client_requests.end())
+    if (__mock_client_requests.find(client_handle) == __mock_client_requests.end())
     {
-        LOG(ERROR) << "Mock client " << client << " not found";
+        LOG(ERROR) << "Mock client " << client_handle << " not found";
         return common::ResponseCode::UnknownError;
     }
 
-    auto & client_requests = __mock_client_requests[client];
+    auto & client_requests = __mock_client_requests[client_handle];
 
     *out_num_events_retrieved = 0;
     for (auto it = client_requests.begin(); it != client_requests.end() && *out_num_events_retrieved < max_events_to_retrieve; )

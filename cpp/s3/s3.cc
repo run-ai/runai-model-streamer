@@ -176,14 +176,15 @@ common::backend_api::ResponseCode_t obj_request_read(common::backend_api::Object
     return common::ResponseCode::UnknownError;
 }
 
-common::ResponseCode runai_async_response_s3_client(void * client,
-                                                    common::backend_api::ObjectCompletionEvent_t* event_buffer,
-                                                    unsigned int max_events_to_retrieve,
-                                                    unsigned int* out_num_events_retrieved)
+common::backend_api::ResponseCode_t obj_wait_for_completions(common::backend_api::ObjectClientHandle_t client_handle,
+                                                              common::backend_api::ObjectCompletionEvent_t* event_buffer,
+                                                              unsigned int max_events_to_retrieve,
+                                                              unsigned int* out_num_events_retrieved,
+                                                              common::backend_api::ObjectWaitMode_t wait_mode)
 {
     try
     {
-        if (!client)
+        if (!client_handle)
         {
             LOG(ERROR) << "Attempt to get read response with null s3 client";
             return common::ResponseCode::UnknownError;
@@ -201,7 +202,7 @@ common::ResponseCode runai_async_response_s3_client(void * client,
 
         // for now reads a single event
 
-        auto ptr = static_cast<S3Client *>(client);
+        auto ptr = static_cast<S3Client *>(client_handle);
         auto response = ptr->async_read_response();
         *out_num_events_retrieved = 1;
         event_buffer[0].request_id = response.handle;
