@@ -31,14 +31,13 @@ struct S3ClientWrapper
 
          bool valid() const { return (uri.get() != nullptr); }
 
-
+         size_t chunk_bytesize;
          std::shared_ptr<StorageUri> uri;
          Credentials credentials;
-         common::backend_api::ObjectClientConfig_t config;
+         const common::backend_api::ObjectClientConfig_t to_config(std::vector<common::backend_api::ObjectConfigParam_t> & initial_params) const;
 
        private:
          std::string _endpoint;
-         std::vector<common::backend_api::ObjectConfigParam_t> _initial_params;
       };
 
       struct BackendHandle

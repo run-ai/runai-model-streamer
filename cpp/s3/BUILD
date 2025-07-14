@@ -7,6 +7,7 @@ runai_portable_so(
     ],
     deps = [
         "//s3/client_mgr",
+        "//s3/s3_init",
     ],
     ldscript = ":s3.ldscript",
 )

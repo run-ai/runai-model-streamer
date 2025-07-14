@@ -1,5 +1,6 @@
 #include "s3/s3.h"
 #include "s3/client_mgr/client_mgr.h"
+#include "s3/s3_init/s3_init.h"
 
 #include "common/exception/exception.h"
 #include "utils/env/env.h"
@@ -48,17 +49,9 @@ common::backend_api::ResponseCode_t obj_open_backend(common::backend_api::Object
             LOG_IF(INFO, (chunk_size < min_chunk_bytesize)) << "Minimal chunk size to read from S3 is 5 MiB";
         }
 
-        Aws::SDKOptions options;
-
-        options.httpOptions.installSigPipeHandler = true;
-        auto trace_aws = utils::getenv<bool>("RUNAI_STREAMER_S3_TRACE", false);
-        if (trace_aws)
-        {
-            // aws trace logs are written to a file
-            options.loggingOptions.logLevel = Aws::Utils::Logging::LogLevel::Trace;
-        }
-
-        Aws::InitAPI(options);
+        // shutdown of S3 will occur when the main process exits, and the s3 library is destructed
+        // attemting to shutdown outside the s3 library cause race and segmantation fault e.g. when the s3 trace logs are enabled
+        static S3Init s3_init;
     }
     catch(const std::exception & e)
     {
@@ -70,25 +63,8 @@ common::backend_api::ResponseCode_t obj_open_backend(common::backend_api::Object
 
 common::backend_api::ResponseCode_t obj_close_backend(common::backend_api::ObjectBackendHandle_t backend_handle)
 {
+    // shutdown of S3 will occur when the main process exits
     common::ResponseCode ret = common::ResponseCode::Success;
-
-    try
-    {
-        Aws::SDKOptions options;
-
-        options.httpOptions.installSigPipeHandler = true;
-        auto trace_aws = utils::getenv<bool>("RUNAI_STREAMER_S3_TRACE", false);
-        if (trace_aws)
-        {
-            // aws trace logs are written to a file
-            options.loggingOptions.logLevel = Aws::Utils::Logging::LogLevel::Trace;
-        }
-    }
-    catch(const std::exception & e)
-    {
-        LOG(ERROR) << "Failed to close S3 backend";
-        ret = common::ResponseCode::UnknownError;
-    }
     return ret;
 }
 

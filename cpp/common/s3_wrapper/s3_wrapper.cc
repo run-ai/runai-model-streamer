@@ -15,6 +15,7 @@ namespace runai::llm::streamer::common::s3
 std::mutex S3ClientWrapper::_backend_handle_mutex;
 
 S3ClientWrapper::Params::Params(std::shared_ptr<StorageUri> uri, const Credentials & credentials, size_t chunk_bytesize) :
+    chunk_bytesize(chunk_bytesize),
     uri(uri),
     credentials(credentials)
 {
@@ -38,14 +39,18 @@ S3ClientWrapper::Params::Params(std::shared_ptr<StorageUri> uri, const Credentia
             LOG(DEBUG) <<"Using environment variable endpoint " << endpoint << (override_endpoint_flag ? " , using configuration parameter endpointOverride" : "");
         }
     }
+}
 
+const common::backend_api::ObjectClientConfig_t S3ClientWrapper::Params::to_config(std::vector<common::backend_api::ObjectConfigParam_t> & initial_params) const
+{
+    common::backend_api::ObjectClientConfig_t config;
     config.endpoint_url = _endpoint.empty() ? nullptr : _endpoint.c_str();
 
-    credentials.to_object_client_config(_initial_params);
-
-    config.num_initial_params = _initial_params.size();
-    config.initial_params = _initial_params.data();
+    credentials.to_object_client_config(initial_params);
+    config.num_initial_params = initial_params.size();
+    config.initial_params = initial_params.data();
     config.default_storage_chunk_size = chunk_bytesize;
+    return config;
 }
 
 const utils::Semver min_glibc_semver = utils::Semver(description(static_cast<int>(ResponseCode::GlibcPrerequisite)));
@@ -55,8 +60,8 @@ S3ClientWrapper::BackendHandle::BackendHandle(const Params & params) :
 {
     ASSERT(dylib_ptr != nullptr) << "Failed to open libstreamers3.so"; // should never happen
 
-    auto __open_object_storage = dylib_ptr->dlsym<ResponseCode(*)(common::backend_api::ObjectBackendHandle_t*)>("obj_open_backend");
-    auto ret = __open_object_storage(&_backend_handle);
+    auto open_object_storage_ = dylib_ptr->dlsym<ResponseCode(*)(common::backend_api::ObjectBackendHandle_t*)>("obj_open_backend");
+    auto ret = open_object_storage_(&_backend_handle);
     if (ret != ResponseCode::Success)
     {
         LOG(ERROR) << "Failed to open object storage";
@@ -69,8 +74,8 @@ S3ClientWrapper::BackendHandle::~BackendHandle()
 {
     try
     {
-        auto __close_object_storage = dylib_ptr->dlsym<ResponseCode(*)(common::backend_api::ObjectBackendHandle_t)>("obj_close_backend");
-        auto ret = __close_object_storage(_backend_handle);
+        auto close_object_storage_ = dylib_ptr->dlsym<ResponseCode(*)(common::backend_api::ObjectBackendHandle_t)>("obj_close_backend");
+        auto ret = close_object_storage_(_backend_handle);
         if (ret != ResponseCode::Success)
         {
             LOG(ERROR) << "Failed to close object storage";
@@ -109,8 +114,8 @@ void S3ClientWrapper::shutdown()
     {
         LOG(DEBUG) << "Shutting down S3 client wrapper";
         std::shared_ptr<BackendHandle> handle = manage_backend_handle(Params(), ManageBackendHandleOp::CREATE);
-        auto __release_s3_clients = handle->dylib_ptr->dlsym<common::backend_api::ResponseCode_t(*)()>("obj_remove_all_clients");
-        __release_s3_clients();
+        auto release_s3_clients_ = handle->dylib_ptr->dlsym<common::backend_api::ResponseCode_t(*)()>("obj_remove_all_clients");
+        release_s3_clients_();
 
        // destroy according to backend shutdown policy
        manage_backend_handle(Params(), ManageBackendHandleOp::DESTROY);
@@ -126,8 +131,8 @@ void S3ClientWrapper::stop()
     {
         std::shared_ptr<BackendHandle> handle = manage_backend_handle(Params(), ManageBackendHandleOp::CREATE);
         ASSERT(handle != nullptr) << "Backend handle is already closed";
-        auto __stop_s3_clients = handle->dylib_ptr->dlsym<common::backend_api::ResponseCode_t(*)()>("obj_cancel_all_reads");
-        __stop_s3_clients();
+        auto stop_s3_clients_ = handle->dylib_ptr->dlsym<common::backend_api::ResponseCode_t(*)()>("obj_cancel_all_reads");
+        stop_s3_clients_();
     }
     catch(...)
     {
@@ -147,8 +152,8 @@ S3ClientWrapper::~S3ClientWrapper()
     try
     {
         ASSERT(_backend_handle != nullptr) << "Backend handle is alreday closed";
-        auto __s3_remove = _backend_handle->dylib_ptr->dlsym<common::backend_api::ResponseCode_t(*)(common::backend_api::ObjectClientHandle_t)>("obj_remove_client");
-        __s3_remove(_s3_client);
+        auto remove_client_ = _backend_handle->dylib_ptr->dlsym<common::backend_api::ResponseCode_t(*)(common::backend_api::ObjectClientHandle_t)>("obj_remove_client");
+        remove_client_(_s3_client);
     }
     catch(...)
     {
@@ -192,15 +197,18 @@ std::shared_ptr<S3ClientWrapper::BackendHandle> S3ClientWrapper::manage_backend_
 
 void * S3ClientWrapper::create_client(const Params & params)
 {
-    auto __s3_gen = _backend_handle->dylib_ptr->dlsym<ResponseCode(*)(common::backend_api::ObjectBackendHandle_t, const common::backend_api::ObjectClientConfig_t*, common::backend_api::ObjectClientHandle_t*)>("obj_create_client");
+    auto s3_gen_ = _backend_handle->dylib_ptr->dlsym<ResponseCode(*)(common::backend_api::ObjectBackendHandle_t, const common::backend_api::ObjectClientConfig_t*, common::backend_api::ObjectClientHandle_t*)>("obj_create_client");
     auto start = std::chrono::steady_clock::now();
 
     common::backend_api::ObjectClientHandle_t client;
 
-    auto ret = __s3_gen(_backend_handle->backend_handle(), &params.config, &client);
+    std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
+    const auto config = params.to_config(initial_params);
+
+    auto ret = s3_gen_(_backend_handle->backend_handle(), &config, &client);
     if (ret != ResponseCode::Success)
     {
-        LOG(ERROR) << "Failed to create S3 client for uri " << *params.uri << " and endpoint " << params.config.endpoint_url;
+        LOG(ERROR) << "Failed to create S3 client for uri " << *params.uri << " and endpoint " << config.endpoint_url;
         throw Exception(ret);
     }
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
@@ -210,8 +218,8 @@ void * S3ClientWrapper::create_client(const Params & params)
 
 ResponseCode S3ClientWrapper::async_read(const Params & params, common::backend_api::ObjectRequestId_t request_id, const Range & range, char * buffer)
 {
-    auto _s3_async_read = _backend_handle->dylib_ptr->dlsym<ResponseCode(*)(common::backend_api::ObjectClientHandle_t, const char*, common::backend_api::ObjectRange_t, char*, common::backend_api::ObjectRequestId_t)>("obj_request_read");
-    return _s3_async_read(_s3_client, params.uri->uri.c_str(), range.to_backend_api_range(), buffer, request_id);
+    auto s3_async_read_ = _backend_handle->dylib_ptr->dlsym<ResponseCode(*)(common::backend_api::ObjectClientHandle_t, const char*, common::backend_api::ObjectRange_t, char*, common::backend_api::ObjectRequestId_t)>("obj_request_read");
+    return s3_async_read_(_s3_client, params.uri->uri.c_str(), range.to_backend_api_range(), buffer, request_id);
     return common::ResponseCode::Success;
 }
 
@@ -225,8 +233,8 @@ common::ResponseCode S3ClientWrapper::async_read_response(std::vector<backend_ap
 
     event_buffer.resize(max_events_to_retrieve);
     unsigned int out_num_events_retrieved;
-    auto _s3_async_response = _backend_handle->dylib_ptr->dlsym<ResponseCode(*)(common::backend_api::ObjectClientHandle_t, common::backend_api::ObjectCompletionEvent_t*, unsigned int, unsigned int*, common::backend_api::ObjectWaitMode_t)>("obj_wait_for_completions");
-    auto ret = _s3_async_response(_s3_client, event_buffer.data(), max_events_to_retrieve, &out_num_events_retrieved, common::backend_api::OBJECT_WAIT_MODE_BLOCK);
+    auto s3_async_response_ = _backend_handle->dylib_ptr->dlsym<ResponseCode(*)(common::backend_api::ObjectClientHandle_t, common::backend_api::ObjectCompletionEvent_t*, unsigned int, unsigned int*, common::backend_api::ObjectWaitMode_t)>("obj_wait_for_completions");
+    auto ret = s3_async_response_(_s3_client, event_buffer.data(), max_events_to_retrieve, &out_num_events_retrieved, common::backend_api::OBJECT_WAIT_MODE_BLOCK);
 
     if (ret == common::ResponseCode::Success)
     {
@@ -239,8 +247,8 @@ common::ResponseCode S3ClientWrapper::async_read_response(std::vector<backend_ap
 common::backend_api::ObjectShutdownPolicy_t S3ClientWrapper::get_backend_shutdown_policy(std::shared_ptr<S3ClientWrapper::BackendHandle> handle)
 {
     ASSERT(handle != nullptr) << "object storage backend handle is not initialized";
-    auto __get_backend_shutdown_policy = handle->dylib_ptr->dlsym<common::backend_api::ObjectShutdownPolicy_t(*)()>("obj_get_backend_shutdown_policy");
-    return __get_backend_shutdown_policy();
+    auto get_backend_shutdown_policy_ = handle->dylib_ptr->dlsym<common::backend_api::ObjectShutdownPolicy_t(*)()>("obj_get_backend_shutdown_policy");
+    return get_backend_shutdown_policy_();
 }
 
 }; // namespace runai::llm::streamer::common::s3

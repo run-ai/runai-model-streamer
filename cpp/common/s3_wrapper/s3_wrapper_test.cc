@@ -110,7 +110,9 @@ TEST_F(S3WrappertTest, Endpoint_Exists)
     S3ClientWrapper::Params params_(std::make_shared<StorageUri>(uri), credentials_, utils::random::number<size_t>());
     S3ClientWrapper wrapper(params);
 
-    EXPECT_EQ(params_.config.endpoint_url, endpoint);
+    std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
+
+    EXPECT_EQ(params_.to_config(initial_params).endpoint_url, endpoint);
 }
 
 TEST_F(S3WrappertTest, Endpoint_In_Credentials)
@@ -121,7 +123,8 @@ TEST_F(S3WrappertTest, Endpoint_In_Credentials)
     S3ClientWrapper::Params params_(std::make_shared<StorageUri>(uri), credentials_, utils::random::number<size_t>());
     S3ClientWrapper wrapper(params);
 
-    EXPECT_EQ(params_.config.endpoint_url, endpoint);
+    std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
+    EXPECT_EQ(params_.to_config(initial_params).endpoint_url, endpoint);
 }
 
 TEST_F(S3WrappertTest, Shutdown_Policy)
