@@ -171,6 +171,12 @@ class TestFilesRequestsIterator(unittest.TestCase):
         file_path, chunk_index = files_requests_iterator.get_global_file_and_chunk(0, 0)
         self.assertEqual(file_path, "a.txt")
         self.assertEqual(chunk_index, 2)
+    
+    def test_file_chunks_zero_chunks(self):
+        requests_iterator = FilesRequestsIterator(10, [FileChunks("a.txt", 10, [])])
+
+        res = requests_iterator.next_request()
+        self.assertIsNone(res)
 
 class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
     def test_memory_cap_unlimited(self):
