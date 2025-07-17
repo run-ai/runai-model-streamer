@@ -41,7 +41,7 @@ from runai_model_streamer import SafetensorsStreamer
 file_paths = ["/path/to/file-1.safetensors", "/path/to/file-2.safetensors"]
 
 with SafetensorsStreamer() as streamer:
-    streamer.stream_file(file_path)
+    streamer.stream_files(file_paths)
     for name, tensor in streamer.get_tensors():
         tensor.to('CUDA:0')
 ```
