@@ -11,6 +11,7 @@ runai_cc_auto_library(
         "//common/s3_wrapper",
         "//common/exception",
         "//common/storage_uri",
+        "//common/client_mgr",
         "//common/backend_api/object_storage",
         "//utils/env",
         "//utils/fd",

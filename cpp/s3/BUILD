@@ -6,7 +6,11 @@ runai_portable_so(
             "s3.cc",
     ],
     deps = [
-        "//s3/client_mgr",
+        "//common/exception",
+        "//common/range",
+        "//common/client_mgr",
+        "//utils/semver",
+        "//s3/client",
         "//s3/s3_init",
     ],
     ldscript = ":s3.ldscript",
