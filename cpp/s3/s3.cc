@@ -1,9 +1,11 @@
 #include "s3/s3.h"
-#include "s3/client_mgr/client_mgr.h"
 #include "s3/s3_init/s3_init.h"
+#include "s3/client/client.h"
 
+#include "common/client_mgr/client_mgr.h"
 #include "common/exception/exception.h"
 #include "utils/env/env.h"
+#include "utils/semver/semver.h"
 
 // For connecting to s3 providers other then aws:
 // 1. uri should be in the format s3://bucket/path
@@ -23,6 +25,8 @@
 
 namespace runai::llm::streamer::impl::s3
 {
+
+using S3ClientMgr = common::ClientMgr<S3Client>;
 
 // --- Backend API ---
 

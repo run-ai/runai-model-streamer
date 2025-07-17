@@ -7,18 +7,38 @@
 #include <string>
 #include <utility>
 
+#include "common/backend_api/object_storage/object_storage.h"
 #include "utils/logging/logging.h"
 
-#include "s3/client/client.h"
-
-namespace runai::llm::streamer::impl::s3
+namespace runai::llm::streamer::common
 {
 
-// Singleton clients manager for reusing clients of the current S3 bucket
+class IClient
+{
+public:
+    /**
+     * @brief Virtual destructor.
+     * Essential for any base class that will be managed via a pointer.
+     */
+    virtual ~IClient() = default;
+
+    /**
+     * @brief Verifies that the client's credentials have not changed.
+     * @param config The current configuration to check against.
+     * @return True if credentials match, false otherwise.
+     */
+    virtual bool verify_credentials(const common::backend_api::ObjectClientConfig_t& config) const = 0;
+};
+
+// Singleton clients manager for reusing clients of the current object storage bucket
 
 template <typename T>
 struct ClientMgr
 {
+    // This check is performed at compile-time
+    static_assert(std::is_base_of<IClient, T>::value, 
+                  "Template parameter T must be a class derived from IClient.");
+
     ~ClientMgr();
 
     ClientMgr<T> & operator=(const ClientMgr<T> &) = delete;
@@ -97,7 +117,7 @@ T* ClientMgr<T>::pop(const common::backend_api::ObjectClientConfig_t & config)
             // Reuse client only if credentials have not changed
             if (ptr->verify_credentials(config))
             {
-                LOG(DEBUG) << "Reusing S3 client";
+                LOG(DEBUG) << "Reusing object storage client";
                 return ptr;
             }
 
@@ -120,7 +140,7 @@ T* ClientMgr<T>::pop(const common::backend_api::ObjectClientConfig_t & config)
 template <typename T>
 void ClientMgr<T>::push(T* client)
 {
-    LOG(DEBUG) << "Releasing S3 client";
+    LOG(DEBUG) << "Releasing object storage client";
     auto & mgr = get();
     const auto guard = std::unique_lock<std::mutex>(mgr._mutex);
     mgr._unused_clients.insert(client);
@@ -129,7 +149,7 @@ void ClientMgr<T>::push(T* client)
 template <typename T>
 void ClientMgr<T>::clear()
 {
-    LOG(DEBUG) << "Releasing all S3 clients";
+    LOG(DEBUG) << "Releasing all object storage clients";
     auto & mgr = get();
 
     const auto guard = std::unique_lock<std::mutex>(mgr._mutex);
@@ -139,7 +159,7 @@ void ClientMgr<T>::clear()
 
     if (count != mgr._clients.size())
     {
-        LOG(ERROR) << "There are used S3 clients - number of clients is " << mgr._clients.size() << " while number of unused clients is " << count;
+        LOG(ERROR) << "There are used object storage clients - number of clients is " << mgr._clients.size() << " while number of unused clients is " << count;
         return;
     }
 
@@ -150,7 +170,7 @@ void ClientMgr<T>::clear()
 template <typename T>
 void ClientMgr<T>::stop()
 {
-    LOG(DEBUG) << "Stopping all S3 clients";
+    LOG(DEBUG) << "Stopping all object storage clients";
     auto & mgr = get();
 
     const auto guard = std::unique_lock<std::mutex>(mgr._mutex);
@@ -161,6 +181,4 @@ void ClientMgr<T>::stop()
     }
 }
 
-using S3ClientMgr = ClientMgr<S3Client>;
-
-}; //namespace runai::llm::streamer::impl::s3
+}; //namespace runai::llm::streamer::common
