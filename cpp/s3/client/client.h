@@ -9,6 +9,7 @@
 #include "common/backend_api/response/response.h"
 
 #include "common/backend_api/object_storage/object_storage.h"
+#include "common/client_mgr/client_mgr.h"
 #include "common/storage_uri/storage_uri.h"
 #include "common/s3_wrapper/s3_wrapper.h"
 #include "common/shared_queue/shared_queue.h"
@@ -17,7 +18,7 @@
 namespace runai::llm::streamer::impl::s3
 {
 
-struct S3ClientBase
+struct S3ClientBase : common::IClient
 {
     S3ClientBase(const common::backend_api::ObjectClientConfig_t & config);
 
