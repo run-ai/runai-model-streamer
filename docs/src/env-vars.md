@@ -89,3 +89,28 @@ Boolean `0` or `1`
 #### Default value
 
 `1`
+
+### RUNAI_STREAMER_OVERRIDE_OBJ_PLUGIN
+
+Overrides the object storage backend plugin to use
+
+#### Values accepted
+
+String `s3` or `gcs`
+
+#### Default value
+
+(Empty). Object Plugin is auto-determined based on the Object
+Storage URI (eg: `s3://`).
+
+### RUNAI_STREAMER_OVERRIDE_ENDPOINT_URL
+
+Overrides endpoint url used by the object storage plugin backend
+
+#### Values accepted
+
+String
+
+#### Default value
+
+(Empty). When unset, `AWS_ENDPOINT_URL` is used.
