@@ -1,6 +1,8 @@
 from __future__ import annotations
 from typing import Iterator, Optional
 import torch
+import glob
+import os
 from typing import List
 from runai_model_streamer.file_streamer import (
     FileStreamer,
@@ -10,7 +12,16 @@ import runai_model_streamer.safetensors_streamer.safetensors_pytorch as safetens
 
 from runai_model_streamer.s3_utils.s3_utils import (
     S3Credentials,
+    is_s3_path,
+    s3_glob,
 )
+
+SAFETENSORS_PATTERN = "*.safetensors"
+
+def list_safetensors(path: str) -> List[str]:
+    if is_s3_path(path):
+        return s3_glob(path, [SAFETENSORS_PATTERN])
+    return glob.glob(os.path.join(path, SAFETENSORS_PATTERN))
 
 class SafetensorsStreamer:
     def __init__(self) -> None:
