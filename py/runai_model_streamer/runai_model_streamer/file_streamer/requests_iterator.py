@@ -138,16 +138,20 @@ class FilesRequestsIterator:
             )
             if file_chunks_iterator.is_finished():
                 self.q.popleft()
-            elif len(file_chunks.chunks) == 0 or sum(file_chunks.chunks) == 0:
+            
+            if len(file_chunks.chunks) == 0 or sum(file_chunks.chunks) == 0:
                 break
 
             files_request.append(file_chunks)
             current_request_memory_size += sum(file_chunks.chunks)
 
+        if len(files_request.files) == 0:
+            files_request = None
         self.active_request = files_request
         return files_request
 
 class FileChunksIterator:
+
     def __init__(
         self, file_chunks: FileChunks
     ) -> None:
