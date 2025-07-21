@@ -181,7 +181,7 @@ common::ResponseCode S3Client::async_read(const common::s3::Path & object_path, 
 
         request->SetBucket(bucket_name);
         request->SetKey(path);
-        std::string range_str = "bytes=" + std::to_string(offset_) + "-" + std::to_string(offset_ + bytesize_);
+        std::string range_str = "bytes=" + std::to_string(offset_) + "-" + std::to_string(offset_ + bytesize_ - 1);
         request->SetRange(range_str.c_str());
 
         request->SetResponseStreamFactory(
