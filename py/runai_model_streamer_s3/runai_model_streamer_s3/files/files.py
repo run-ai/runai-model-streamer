@@ -1,6 +1,8 @@
 from typing import Optional, List, Tuple
 import fnmatch
+import os
 import boto3
+from pathlib import Path
 
 def glob(path: str, allow_pattern: Optional[List[str]] = None) -> List[str]:
     """
@@ -73,6 +75,29 @@ def _filter_ignore(paths: List[str], patterns: List[str]) -> List[str]:
         path for path in paths
         if not any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
     ]
+
+def pull_files(model_path: str,
+                dst: str,
+                allow_pattern: Optional[List[str]] = None,
+                ignore_pattern: Optional[List[str]] = None,) -> None:
+    if not model_path.endswith("/"):
+        model_path = model_path + "/"
+
+    s3 = boto3.client("s3")
+
+    bucket_name, base_dir, files = list_files(s3, model_path,
+                                                allow_pattern,
+                                                ignore_pattern)
+    if len(files) == 0:
+        return
+
+    for file in files:
+        destination_file = os.path.join(
+            dst,
+            file.removeprefix(base_dir).lstrip("/"))
+        local_dir = Path(destination_file).parent
+        os.makedirs(local_dir, exist_ok=True)
+        s3.download_file(bucket_name, file, destination_file)
 
 def removeprefix(s: str, prefix: str) -> str:
     if s.startswith(prefix):
