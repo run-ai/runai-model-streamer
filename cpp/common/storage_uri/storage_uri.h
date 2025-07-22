@@ -9,9 +9,12 @@ struct StorageUri
 {
     StorageUri(const std::string & uri);
 
+    std::string scheme;
+    std::string uri;
     std::string bucket;
     std::string path;
-    std::string endpoint;
+
+    bool is_gcs() const;
 };
 
 struct StorageUri_C
@@ -20,7 +23,6 @@ struct StorageUri_C
 
     const char * bucket;
     const char * path;
-    const char * endpoint;
 };
 
 std::ostream & operator<<(std::ostream &, const StorageUri &);

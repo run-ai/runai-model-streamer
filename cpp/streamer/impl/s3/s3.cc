@@ -33,7 +33,7 @@ void S3::read(size_t bytesize, char * buffer)
 
 void S3::async_read(const common::s3::S3ClientWrapper::Params & params, common::backend_api::ObjectRequestId_t request_handle, const common::Range & range, char * buffer)
 {
-    auto response_code = _client->async_read(params, request_handle, range, _config.s3_block_bytesize, buffer);
+    auto response_code = _client->async_read(params, request_handle, range, buffer);
     if (response_code != common::ResponseCode::Success)
     {
         throw common::Exception(response_code);

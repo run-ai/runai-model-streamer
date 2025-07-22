@@ -4,7 +4,6 @@ runai_cc_auto_library(
     name = "storage_uri",
     deps = [
         "//utils/logging",
-        "//utils/env",
     ],
 )
 
@@ -13,6 +12,6 @@ runai_cc_test(
     srcs = ["storage_uri_test.cc"],
     deps = [
         ":storage_uri",
-        "//utils/temp/env",
+        "//utils/random",
     ],
 )

@@ -13,6 +13,7 @@
 #include "streamer/impl/workload/workload.h"
 #include "streamer/impl/assigner/assigner.h"
 #include "common/exception/exception.h"
+#include "common/storage_uri/storage_uri.h"
 
 namespace runai::llm::streamer::impl
 {
@@ -185,14 +186,39 @@ void Streamer::verify_requests(std::vector<std::string> & paths, std::vector<siz
         throw common::Exception(common::ResponseCode::InvalidParameterError);
     }
 
+    std::string firstScheme;
+
     for (size_t i = 0; i < paths.size(); ++i)
     {
         LOG(SPAM) << "Requested to read asynchronously " << bytesizes[i] << " bytes from " << paths[i] << " offset " << file_offsets[i] << " in " << num_sizes[i] << " chunks";
+
+
+        std::string scheme;
+        try
+        {
+            auto uri = common::s3::StorageUri(paths[i]);
+            scheme = uri.scheme;
+        }
+        catch(const std::exception& e)
+        {
+        }
+        if (i == 0) {
+            firstScheme = scheme;
+        } else if (scheme != firstScheme) {
+            LOG(ERROR) << "Scheme for path: " << paths[i] << " differs from initial scheme: " << firstScheme;
+            throw common::Exception(common::ResponseCode::InvalidParameterError);
+        }
 
         if (bytesizes[i] == 0 && num_sizes[i] == 0)
         {
             LOG(ERROR) << "Empty request - no response will be sent";
             throw common::Exception(common::ResponseCode::EmptyRequestError);
+        }
+
+        if (num_sizes[i] == 0 || bytesizes[i] == 0)
+        {
+            LOG(ERROR) << "Total bytes to read is " << bytesizes[i] << " but number of sub requests is " << num_sizes[i];
+            throw common::Exception(common::ResponseCode::InvalidParameterError);
         }
 
         if (num_sizes[i] == 0 || bytesizes[i] == 0)
@@ -234,7 +260,7 @@ common::s3::S3ClientWrapper::Params Streamer::handle_s3(unsigned file_index, con
         _s3 = std::make_unique<S3Cleanup>();
     }
 
-    return common::s3::S3ClientWrapper::Params(uri, credentials);
+    return common::s3::S3ClientWrapper::Params(uri, credentials, _config->s3_block_bytesize);
 }
 
 }; // namespace runai::llm::streamer::impl

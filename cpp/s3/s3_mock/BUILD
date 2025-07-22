@@ -9,7 +9,6 @@ runai_portable_so(
         "//common/backend_api/response",
         "//common/backend_api/object_storage",
         "//common/response_code",
-        "//common/path",
         "//common/s3_credentials",
         "//common/range",
         "//utils/env",

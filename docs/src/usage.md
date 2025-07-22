@@ -82,11 +82,32 @@ To check if IAM role assumption is needed run `aws s3 ls s3://your-bucket-name -
 
 ##### Streaming from Google cloud storage
 
-To load tensors from GCS pass credentials as environment variables `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
+###### SDK Authentication
+
+To load from GCS, the Model Streamer leverages Application Default Credentials from the google-cloud-cpp SDK.
+
+1. If you set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable, the google-cloud-cpp SDK will
+   read credentials from a JSON file at the path specified.
+2. Metadata Server: When running on a GCE VM or GKE node, the SDK attempts to fetch an auth token from the
+   metadata server.
+
+See [How Application Default Credentials works](https://cloud.google.com/docs/authentication/application-default-credentials)
+for more information.
+
+###### HMAC Authentication
+
+To use HMAC credentials, you can use the S3 backend library, and AWS environment variables. You should set
+the following variables:
+ * `RUNAI_STREAMER_OVERRIDE_OBJ_PLUGIN`: Set this to `s3` to use the S3 compatible XML API when connecting to GCS
+ * `AWS_ACCESS_KEY_ID`: Set this to the Interoperability Access ID for your GCS bucket
+ * `AWS_SECRET_ACCESS_KEY`: Set this to the Interoperability Secret for your GCS bucket
+ * `AWS_ENDPOINT_URL`: Set this to `https://storage.googleapis.com`
+
+See [HMAC keys](https://cloud.google.com/storage/docs/authentication/hmackeys) for more information.
 
 The streamer supports GCS url `gs://my-bucket/my/file/path.safetensors`
 
-> **Note:** If using GCS url with prefix `gs://` there is no need to pass additional environment variables for S3 compatible storage 
+> **Note:** If using GCS url with prefix `gs://` there is no need to set the `AWS_ENDPOINT_URL` environment variable. 
 
 ##### Streaming from S3 compatible storage
 
