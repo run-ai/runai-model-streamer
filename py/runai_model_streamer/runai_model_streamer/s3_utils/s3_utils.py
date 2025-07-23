@@ -59,26 +59,3 @@ def is_gs_path(path: str) -> bool:
     """
     is_gcs_endpoint = os.environ.get(AWS_ENDPOINT_URL_ENV) == DEFAULT_GCS_ENDPOINT_URL
     return is_gcs_endpoint or path.startswith(GCS_PROTOCOL_PREFIX)
-
-def set_gs_environment_variables() -> None:
-    """
-    Sets default GCS url endpoint
-    Sets AWS_EC2_METADATA to speed authentication
-    """
-
-    os.environ.setdefault(AWS_ENDPOINT_URL_ENV, DEFAULT_GCS_ENDPOINT_URL)
-    os.environ.setdefault(AWS_EC2_METADATA_DISABLED_ENV, DEFAULT_AWS_EC2_METADATA_DISABLED)
-
-
-def convert_gs_path(path : str) -> str:
-    """
-    Replace GCS prefix with the unified object store prefix which is used by the libstreamer
-
-    :param credentials: Original path
-    :return: Modified path
-    """
-    if path.startswith(GCS_PROTOCOL_PREFIX):
-        stripped_path = path.removeprefix(GCS_PROTOCOL_PREFIX)
-        converted_path = f"{S3_PROTOCOL_PREFIX}{stripped_path}"
-        return converted_path
-    return path
