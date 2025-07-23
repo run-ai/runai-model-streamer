@@ -1,23 +1,29 @@
 #include "gcs/client_configuration/client_configuration.h"
 
 #include "google/cloud/storage/client.h"
+#include "google/cloud/opentelemetry_options.h"
+#include "google/cloud/grpc_options.h"
 
+#include "common/exception/exception.h"
+#include "common/response_code/response_code.h"
 #include "utils/logging/logging.h"
 #include "utils/env/env.h"
+
+#include <fstream>
 
 namespace runai::llm::streamer::impl::gcs
 {
 
 ClientConfiguration::ClientConfiguration()
 {
-    unsigned max_connections = utils::getenv<bool>("RUNAI_STREAMER_S3_MAX_CONNECTIONS", 0);
+    const auto max_connections = utils::getenv<unsigned long>("RUNAI_STREAMER_S3_MAX_CONNECTIONS", 0);
     if (max_connections)
     {
-        options.set<google::cloud::storage::ConnectionPoolSizeOption>(max_connections);
+        options.set<google::cloud::GrpcBackgroundThreadPoolSizeOption>(max_connections);
     }
 
     // if the transfer speed is less than the low speed limit for request_timeout_ms milliseconds the transfer is aborted and retried
-    const auto request_timeout_ms = utils::getenv<unsigned long>("RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS", 60000);
+    const auto request_timeout_ms = utils::getenv<unsigned long>("RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS", 600000);
     if (request_timeout_ms)
     {
         LOG(DEBUG) << "GCS request timeout is set to " << request_timeout_ms << " ms";
@@ -42,6 +48,30 @@ ClientConfiguration::ClientConfiguration()
         logging_components.insert("http");
 
         options.set<google::cloud::LoggingComponentsOption>(std::move(logging_components));
+    }
+
+    const auto sa_key_file_name = utils::getenv<std::string>("RUNAI_STREAMER_GCS_SA_KEY_FILE", "");
+    if (!sa_key_file_name.empty()) {
+        LOG(DEBUG) << "Loading credentials for Service Account from file: " << sa_key_file_name;
+        try {
+            // Open the file stream.
+            auto is = std::ifstream(sa_key_file_name);
+
+            // Configure the stream to throw an exception on any failure (e.g., file not found, read error).
+            is.exceptions(std::ifstream::failbit | std::ifstream::badbit);
+
+            // Read the entire file into the 'contents' string.
+            auto contents = std::string(std::istreambuf_iterator<char>(is.rdbuf()), {});
+
+            // Use the contents to set the credentials.
+            options.set<google::cloud::UnifiedCredentialsOption>(
+                google::cloud::MakeServiceAccountCredentials(contents));
+        } catch (const std::ios_base::failure& ex) {
+            // Catch the standard I/O exception and re-throw it as your desired exception type.
+            // This effectively converts the file error into a more specific application error.
+            LOG(ERROR) << "Failed to read service account key file: " << sa_key_file_name;
+            throw common::Exception(common::ResponseCode::InvalidParameterError);
+        }
     }
 }
 

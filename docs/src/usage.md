@@ -84,12 +84,14 @@ To check if IAM role assumption is needed run `aws s3 ls s3://your-bucket-name -
 
 ###### SDK Authentication
 
-To load from GCS, the Model Streamer leverages Application Default Credentials from the google-cloud-cpp SDK.
+To authentication to GCS, there are multiple configuration options:
 
-1. If you set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable, the google-cloud-cpp SDK will
-   read credentials from a JSON file at the path specified.
-2. Metadata Server: When running on a GCE VM or GKE node, the SDK attempts to fetch an auth token from the
-   metadata server.
+1. Service Account Credentials: If you set the `RUNAI_STREAMER_GCS_SA_KEY_FILE` environment variable, the
+   SDK will load Service Account credentials from a JSON file at the path specified.
+2. Default Credentials: If you set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable, the google-cloud-cpp
+   SDK will read application default credentials from a JSON file at the path specified.
+3. Metadata Server: If neither above environment variables are set, the SDK attempts to fetch an auth token from
+   the GCP metadata server. This is applicable when running on a GCE, GKE or GAE environment.
 
 See [How Application Default Credentials works](https://cloud.google.com/docs/authentication/application-default-credentials)
 for more information.

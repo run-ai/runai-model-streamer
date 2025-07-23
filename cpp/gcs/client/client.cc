@@ -32,7 +32,7 @@ GCSClient::GCSClient(const common::backend_api::ObjectClientConfig_t& config) :
     _responder(nullptr),
     _chunk_bytesize(config.default_storage_chunk_size)
 {
-    _client = google::cloud::storage_experimental::AsyncClient(_client_config.options);
+    _client = std::make_unique<google::cloud::storage_experimental::AsyncClient>(_client_config.options);
 }
 
 bool GCSClient::verify_credentials(const common::backend_api::ObjectClientConfig_t & config) const
@@ -86,7 +86,7 @@ common::ResponseCode GCSClient::async_read(const char* path, common::backend_api
     {
         size_t bytesize_ = (i == size - 1 ? total_ : _chunk_bytesize);
 
-        _client.ReadObjectRange(
+        _client->ReadObjectRange(
             bucket_name,
             path_name,
             offset_,
