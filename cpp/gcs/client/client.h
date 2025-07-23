@@ -42,7 +42,7 @@ struct GCSClient : common::IClient
     std::atomic<bool> _stop;
     ClientConfiguration _client_config;
     const size_t _chunk_bytesize;
-    google::cloud::storage_experimental::AsyncClient _client;
+    std::unique_ptr<google::cloud::storage_experimental::AsyncClient> _client;
 
     // queue of asynchronous responses
     using Responder = common::SharedQueue<common::backend_api::Response>;
