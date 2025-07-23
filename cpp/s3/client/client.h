@@ -8,9 +8,8 @@
 #include "s3/client_configuration/client_configuration.h"
 #include "common/backend_api/response/response.h"
 
-#include "common/path/path.h"
+#include "common/backend_api/object_storage/object_storage.h"
 #include "common/storage_uri/storage_uri.h"
-#include "common/s3_credentials/s3_credentials.h"
 #include "common/s3_wrapper/s3_wrapper.h"
 #include "common/shared_queue/shared_queue.h"
 #include "common/range/range.h"
@@ -20,32 +19,32 @@ namespace runai::llm::streamer::impl::s3
 
 struct S3ClientBase
 {
-    S3ClientBase(const common::s3::Path & path);
-
-    S3ClientBase(const common::s3::Path & path, const common::s3::Credentials_C & credentials);
+    S3ClientBase(const common::backend_api::ObjectClientConfig_t & config);
 
      // verify that clien's credentials have not change
-    bool verify_credentials(const common::s3::Credentials_C & credentials) const;
+    bool verify_credentials(const common::backend_api::ObjectClientConfig_t & config) const;
 
  protected:
-    const std::optional<Aws::String> _key;
-    const std::optional<Aws::String> _secret;
-    const std::optional<Aws::String> _token;
-    const std::optional<Aws::String> _region;
+    std::optional<Aws::String> _key;
+    std::optional<Aws::String> _secret;
+    std::optional<Aws::String> _token;
+    std::optional<Aws::String> _region;
     const std::optional<Aws::String> _endpoint;
     std::unique_ptr<Aws::Auth::AWSCredentials> _client_credentials;
+    const size_t _chunk_bytesize;
 
  private:
-    bool verify_credentials_member(const std::optional<Aws::String>& client_member, const char* input_member, const char * name) const;
+    bool verify_credentials_member(const std::optional<Aws::String>& client_member, const std::optional<Aws::String>& input_member, const char * name) const;
 };
 
 struct S3Client : S3ClientBase
 {
-    S3Client(const common::s3::Path & path);
+    S3Client(const common::backend_api::ObjectClientConfig_t & config);
 
-    S3Client(const common::s3::Path & path, const common::s3::Credentials_C & credentials);
-
-    common::ResponseCode async_read(const common::s3::Path & path, common::backend_api::ObjectRequestId_t request_id,  const common::Range & range, size_t chunk_bytesize, char * buffer);
+    common::backend_api::ResponseCode_t async_read(const char* path,
+                                                   common::backend_api::ObjectRange_t range,
+                                                   char* destination_buffer,
+                                                   common::backend_api::ObjectRequestId_t request_id);
 
     common::backend_api::Response async_read_response();
 

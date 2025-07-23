@@ -1,7 +1,9 @@
 #include "s3/s3.h"
 #include "s3/client_mgr/client_mgr.h"
+#include "s3/s3_init/s3_init.h"
 
 #include "common/exception/exception.h"
+#include "utils/env/env.h"
 
 // For connecting to s3 providers other then aws:
 // 1. uri should be in the format s3://bucket/path
@@ -22,44 +24,95 @@
 namespace runai::llm::streamer::impl::s3
 {
 
-common::ResponseCode runai_create_s3_client(const common::s3::Path * path, const common::s3::Credentials_C * credentials, void ** client)
+// --- Backend API ---
+
+const utils::Semver min_glibc_semver = utils::Semver(common::description(static_cast<int>(common::ResponseCode::GlibcPrerequisite)));
+const size_t min_chunk_bytesize = 5 * 1024 * 1024;
+
+common::backend_api::ResponseCode_t obj_open_backend(common::backend_api::ObjectBackendHandle_t* out_backend_handle)
 {
     common::ResponseCode ret = common::ResponseCode::Success;
+
     try
     {
-        *client = static_cast<void *>(S3ClientMgr::pop(*path, *credentials));
-    }
-    catch(const common::Exception & e)
-    {
-        ret = e.error();
-        *client = nullptr;
+        // verify prerequisites
+        auto glibc_version = utils::get_glibc_version();
+        if (min_glibc_semver > glibc_version)
+        {
+            LOG(ERROR) << "GLIBC version must be at least " << min_glibc_semver << ", instead of " << glibc_version;
+            return common::ResponseCode::GlibcPrerequisite;
+        }
+
+        size_t chunk_size;
+        if (utils::try_getenv("RUNAI_STREAMER_CHUNK_BYTESIZE", chunk_size))
+        {
+            LOG_IF(INFO, (chunk_size < min_chunk_bytesize)) << "Minimal chunk size to read from S3 is 5 MiB";
+        }
+
+        // shutdown of S3 will occur when the main process exits, and the s3 library is destructed
+        // attemting to shutdown outside the s3 library cause race and segmantation fault e.g. when the s3 trace logs are enabled
+        static S3Init s3_init;
     }
     catch(const std::exception & e)
     {
-        LOG(ERROR) << "Failed to create S3 client";
-        ret = common::ResponseCode::FileAccessError;
-        *client = nullptr;
+        LOG(ERROR) << "Failed to init S3 backend";
+        ret = common::ResponseCode::S3NotSupported;
     }
     return ret;
 }
 
-void runai_remove_s3_client(void * client)
+common::backend_api::ResponseCode_t obj_close_backend(common::backend_api::ObjectBackendHandle_t backend_handle)
 {
+    // shutdown of S3 will occur when the main process exits
+    common::ResponseCode ret = common::ResponseCode::Success;
+    return ret;
+}
+
+common::backend_api::ObjectShutdownPolicy_t obj_get_backend_shutdown_policy()
+{
+    return common::backend_api::OBJECT_SHUTDOWN_POLICY_ON_PROCESS_EXIT;
+}
+
+// --- Client API ---
+
+common::backend_api::ResponseCode_t obj_create_client(common::backend_api::ObjectBackendHandle_t backend_handle,
+                                                       const common::backend_api::ObjectClientConfig_t* client_initial_config,
+                                                       common::backend_api::ObjectClientHandle_t* out_client_handle)
+{
+    common::ResponseCode ret = common::ResponseCode::Success;
     try
     {
-        if (client)
+        *out_client_handle = S3ClientMgr::pop(*client_initial_config);
+    }
+    catch(const std::exception & e)
+    {
+        LOG(ERROR) << "Failed to create S3 client";
+        ret = common::ResponseCode::UnknownError;
+    }
+    return ret;
+}
+
+common::backend_api::ResponseCode_t obj_remove_client(common::backend_api::ObjectClientHandle_t client_handle)
+{
+    common::ResponseCode ret = common::ResponseCode::Success;
+    try
+    {
+        if (client_handle)
         {
-           S3ClientMgr::push(static_cast<S3Client *>(client));
+           S3ClientMgr::push(static_cast<S3Client *>(client_handle));
         }
     }
     catch(const std::exception & e)
     {
         LOG(ERROR) << "Failed to remove S3 client";
+        ret = common::ResponseCode::UnknownError;
     }
+    return ret;
 }
 
-void runai_release_s3_clients()
+common::backend_api::ResponseCode_t obj_remove_all_clients()
 {
+    common::ResponseCode ret = common::ResponseCode::Success;
     try
     {
         S3ClientMgr::clear();
@@ -67,11 +120,14 @@ void runai_release_s3_clients()
     catch(const std::exception & e)
     {
         LOG(ERROR) << "Failed to remove all S3 clients";
+        ret = common::ResponseCode::UnknownError;
     }
+    return ret;
 }
 
-void runai_stop_s3_clients()
+common::backend_api::ResponseCode_t obj_cancel_all_reads()
 {
+    common::ResponseCode ret = common::ResponseCode::Success;
     try
     {
         S3ClientMgr::stop();
@@ -79,20 +135,26 @@ void runai_stop_s3_clients()
     catch(const std::exception & e)
     {
         LOG(ERROR) << "Failed to stop all S3 clients";
+        ret = common::ResponseCode::UnknownError;
     }
+    return ret;
 }
 
-common::ResponseCode runai_async_read_s3_client(void * client, common::backend_api::ObjectRequestId_t request_id, const common::s3::Path * path, common::Range * range, size_t chunk_bytesize, char * buffer)
+common::backend_api::ResponseCode_t obj_request_read(common::backend_api::ObjectClientHandle_t client_handle,
+                                                     const char* path,
+                                                     common::backend_api::ObjectRange_t range,
+                                                     char* destination_buffer,
+                                                     common::backend_api::ObjectRequestId_t request_id)
 {
     try
     {
-        if (!client)
+        if (!client_handle)
         {
             LOG(ERROR) << "Attempt to read with null s3 client";
             return common::ResponseCode::UnknownError;
         }
-        auto ptr = static_cast<S3Client *>(client);
-        return ptr->async_read(*path, request_id, *range, chunk_bytesize, buffer);
+        auto ptr = static_cast<S3Client *>(client_handle);
+        return ptr->async_read(path, range, destination_buffer, request_id);
     }
     catch(const std::exception& e)
     {
@@ -101,14 +163,15 @@ common::ResponseCode runai_async_read_s3_client(void * client, common::backend_a
     return common::ResponseCode::UnknownError;
 }
 
-common::ResponseCode runai_async_response_s3_client(void * client,
-                                                    common::backend_api::ObjectCompletionEvent_t* event_buffer,
-                                                    unsigned int max_events_to_retrieve,
-                                                    unsigned int* out_num_events_retrieved)
+common::backend_api::ResponseCode_t obj_wait_for_completions(common::backend_api::ObjectClientHandle_t client_handle,
+                                                              common::backend_api::ObjectCompletionEvent_t* event_buffer,
+                                                              unsigned int max_events_to_retrieve,
+                                                              unsigned int* out_num_events_retrieved,
+                                                              common::backend_api::ObjectWaitMode_t wait_mode)
 {
     try
     {
-        if (!client)
+        if (!client_handle)
         {
             LOG(ERROR) << "Attempt to get read response with null s3 client";
             return common::ResponseCode::UnknownError;
@@ -126,7 +189,7 @@ common::ResponseCode runai_async_response_s3_client(void * client,
 
         // for now reads a single event
 
-        auto ptr = static_cast<S3Client *>(client);
+        auto ptr = static_cast<S3Client *>(client_handle);
         auto response = ptr->async_read_response();
         *out_num_events_retrieved = 1;
         event_buffer[0].request_id = response.handle;

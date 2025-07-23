@@ -33,6 +33,7 @@ runai_cc_test(
     name = "streamer_s3_test",
     srcs = ["streamer_s3_test.cc"],
     deps = [":streamer",
+            "//common/backend_api/object_storage",
            "//utils/random",
             "//utils/temp/env",
             "//utils/dylib",

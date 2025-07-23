@@ -297,7 +297,7 @@ TEST(Workload, Stopped_Async)
 
         std::shared_ptr<common::s3::StorageUri> uri;
         EXPECT_NO_THROW(uri = std::make_shared<common::s3::StorageUri>(paths[file_idx]));
-        common::s3::S3ClientWrapper::Params s3_params(uri, credentials);
+        common::s3::S3ClientWrapper::Params s3_params(uri, credentials, utils::random::number<size_t>());
 
         Batches batches(file_idx, assigner.file_assignments(file_idx), config, responder, paths[file_idx], s3_params, chunks);
 

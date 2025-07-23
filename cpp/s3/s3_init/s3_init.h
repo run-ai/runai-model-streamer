@@ -2,7 +2,7 @@
 
 #include <aws/core/Aws.h>
 #include <aws/s3-crt/S3CrtClient.h>
-#include <aws/s3-crt/model/BucketLocationConstraint.h>
+//#include <aws/s3-crt/model/BucketLocationConstraint.h>
 
 namespace runai::llm::streamer::impl::s3
 {

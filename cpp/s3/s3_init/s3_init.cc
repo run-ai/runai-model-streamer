@@ -8,7 +8,6 @@
 namespace runai::llm::streamer::impl::s3
 {
 
-
 S3Init::S3Init()
 {
     options.httpOptions.installSigPipeHandler = true;
