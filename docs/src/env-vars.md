@@ -102,15 +102,3 @@ String `s3` or `gcs`
 
 (Empty). Object Plugin is auto-determined based on the Object
 Storage URI (eg: `s3://`).
-
-### RUNAI_STREAMER_OVERRIDE_ENDPOINT_URL
-
-Overrides endpoint url used by the object storage plugin backend
-
-#### Values accepted
-
-String
-
-#### Default value
-
-(Empty). When unset, `AWS_ENDPOINT_URL` is used.
