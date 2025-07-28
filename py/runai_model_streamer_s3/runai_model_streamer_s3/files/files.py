@@ -6,7 +6,7 @@ import boto3
 from pathlib import Path
 
 def glob(path: str, allow_pattern: Optional[List[str]] = None, credentials: Optional[S3Credentials] = None) -> List[str]:
-    session = get_credentials(credentials)
+    session, _ = get_credentials(credentials)
     if session is None:
         s3 = boto3.client("s3")
     else:
@@ -24,7 +24,7 @@ def pull_files(model_path: str,
                 allow_pattern: Optional[List[str]] = None,
                 ignore_pattern: Optional[List[str]] = None,
                 credentials: Optional[S3Credentials] = None,) -> None:
-    session = get_credentials(credentials)
+    session, _ = get_credentials(credentials)
     if session is None:
         s3 = boto3.client("s3")
     else:
@@ -42,7 +42,7 @@ def pull_files(model_path: str,
     for file in files:
         destination_file = os.path.join(
             dst,
-            file.removeprefix(base_dir).lstrip("/"))
+            removeprefix(file, base_dir).lstrip("/"))
         local_dir = Path(destination_file).parent
         os.makedirs(local_dir, exist_ok=True)
         s3.download_file(bucket_name, file, destination_file)

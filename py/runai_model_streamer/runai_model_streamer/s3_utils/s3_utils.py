@@ -92,7 +92,7 @@ def convert_gs_path(path : str) -> str:
         return converted_path
     return path
 
-def s3_glob(path: str, allow_pattern: Optional[List[str]] = None) -> List[str]:
+def s3_glob(path: str, allow_pattern: Optional[List[str]] = None, s3_credentials : Optional[S3Credentials] = None) -> List[str]:
     """
     Glob for S3 paths.
 
@@ -103,13 +103,14 @@ def s3_glob(path: str, allow_pattern: Optional[List[str]] = None) -> List[str]:
     s3_files_module = get_s3_files_module()
     if s3_files_module is None:
         raise ImportError("S3 files module not found. Please install the required package.")
-    return s3_files_module.glob(path, allow_pattern)
+    return s3_files_module.glob(path, allow_pattern, s3_credentials)
 
 def s3_pull_files(model_path: str,
                 dst: str,
                 allow_pattern: Optional[List[str]] = None,
-                ignore_pattern: Optional[List[str]] = None,) -> None:
+                ignore_pattern: Optional[List[str]] = None,
+                s3_credentials : Optional[S3Credentials] = None,) -> None:
     s3_files_module = get_s3_files_module()
     if s3_files_module is None:
         raise ImportError("S3 files module not found. Please install the required package.")
-    return s3_files_module.pull_files(model_path, dst, allow_pattern, ignore_pattern)
+    return s3_files_module.pull_files(model_path, dst, allow_pattern, ignore_pattern, s3_credentials)
