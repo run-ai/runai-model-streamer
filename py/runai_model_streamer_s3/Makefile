@@ -7,6 +7,9 @@ PACKAGE_VERSION ?= 0.0.0
 build:
 	python3 setup.py bdist_wheel --plat-name ${PLATFORM}
 
+test:
+	python3 -m unittest discover -b runai_model_streamer_s3
+
 clean:
 	rm -rf build/ dist/ runai_model_streamer_s3.egg-info/
 

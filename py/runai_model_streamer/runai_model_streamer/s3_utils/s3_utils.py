@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List
 import re
 import os
 import importlib
@@ -13,17 +13,26 @@ DEFAULT_AWS_EC2_METADATA_DISABLED = "true"
 def get_s3_credentials_module():
     s3_module_name = "runai_model_streamer_s3"
     s3_credentials_module_name = "runai_model_streamer_s3.credentials.credentials"
+    
+    return get_module(s3_module_name, s3_credentials_module_name)
 
+def get_s3_files_module():
+    s3_module_name = "runai_model_streamer_s3"
+    s3_files_module_name = "runai_model_streamer_s3.files.files"
+    
+    return get_module(s3_module_name, s3_files_module_name)
+
+def get_module(main_module: str, module_name: str):
     # Check if the main module exists first
-    if importlib.util.find_spec(s3_module_name) is None:
+    if importlib.util.find_spec(main_module) is None:
         return None
 
     # Now check if the credentials module exists
-    if importlib.util.find_spec(s3_credentials_module_name) is None:
+    if importlib.util.find_spec(module_name) is None:
         return None
 
     # Import and return the credentials module
-    return importlib.import_module(s3_credentials_module_name)
+    return importlib.import_module(module_name)
 
 class S3Credentials:
     def __init__(
@@ -82,3 +91,26 @@ def convert_gs_path(path : str) -> str:
         converted_path = f"{S3_PROTOCOL_PREFIX}{stripped_path}"
         return converted_path
     return path
+
+def s3_glob(path: str, allow_pattern: Optional[List[str]] = None, s3_credentials : Optional[S3Credentials] = None) -> List[str]:
+    """
+    Glob for S3 paths.
+
+    :param path: The S3 path to glob.
+    :param allow_pattern: Optional list of patterns to allow.
+    :return: List of matching S3 paths.
+    """
+    s3_files_module = get_s3_files_module()
+    if s3_files_module is None:
+        raise ImportError("S3 files module not found. Please install the required package.")
+    return s3_files_module.glob(path, allow_pattern, s3_credentials)
+
+def s3_pull_files(model_path: str,
+                dst: str,
+                allow_pattern: Optional[List[str]] = None,
+                ignore_pattern: Optional[List[str]] = None,
+                s3_credentials : Optional[S3Credentials] = None,) -> None:
+    s3_files_module = get_s3_files_module()
+    if s3_files_module is None:
+        raise ImportError("S3 files module not found. Please install the required package.")
+    return s3_files_module.pull_files(model_path, dst, allow_pattern, ignore_pattern, s3_credentials)
