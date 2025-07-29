@@ -154,18 +154,18 @@ TEST_F(S3WrappertTest, Shutdown_Policy)
     EXPECT_EQ(is_shutdown(), true);
 }
 
-TEST(BackendHandle, GetLibraryName_S3)
+TEST(BackendHandle, GetPluginType_S3)
 {
     auto storage_uri = std::make_shared<StorageUri>("s3://bucket/path");
-    std::string library_name = S3ClientWrapper::BackendHandle::get_libstreamers_library_name(storage_uri);
-    EXPECT_EQ(library_name, "libstreamers3.so");
+    ObjectPluginType plugin_type = S3ClientWrapper::BackendHandle::get_libstreamers_plugin_type(storage_uri);
+    EXPECT_EQ(plugin_type, ObjectPluginType::ObjStorageS3);
 }
 
-TEST(BackendHandle, GetLibraryName_GCS)
+TEST(BackendHandle, GetPluginType_GCS)
 {
     auto storage_uri = std::make_shared<StorageUri>("gs://bucket/path");
-    std::string library_name = S3ClientWrapper::BackendHandle::get_libstreamers_library_name(storage_uri);
-    EXPECT_EQ(library_name, "libstreamergcs.so");
+    ObjectPluginType plugin_type = S3ClientWrapper::BackendHandle::get_libstreamers_plugin_type(storage_uri);
+    EXPECT_EQ(plugin_type, ObjectPluginType::ObjStorageGCS);
 }
 
 }; // namespace runai::llm::streamer::common::s3

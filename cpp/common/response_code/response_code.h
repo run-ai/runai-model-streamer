@@ -21,6 +21,8 @@ enum class ResponseCode : int
     BusyError,
     CaFileNotFound,
     UnknownError,
+    ObjPluginLoadError,
+    GCSNotSupported,
     __Max,
 };
 

@@ -25,12 +25,14 @@ TEST(Response, Description)
         "Empty request parameters",
         "Streamer is handling previous request",
         "CA bundle file not found",
-        "Unknown Error"
+        "Unknown Error",
+        "Error loading object storage plugin",
+        "GCS not supported"
     };
 
     // errors
 
-    for (auto response_code : {ResponseCode::FileAccessError, ResponseCode::EofError, ResponseCode::InvalidParameterError, ResponseCode::EmptyRequestError, ResponseCode::BusyError, ResponseCode::UnknownError, ResponseCode::FinishedError, ResponseCode::S3NotSupported, ResponseCode::GlibcPrerequisite, ResponseCode::InsufficientFdLimit, ResponseCode::CaFileNotFound} )
+    for (auto response_code : {ResponseCode::FileAccessError, ResponseCode::EofError, ResponseCode::InvalidParameterError, ResponseCode::EmptyRequestError, ResponseCode::BusyError, ResponseCode::UnknownError, ResponseCode::FinishedError, ResponseCode::S3NotSupported, ResponseCode::GlibcPrerequisite, ResponseCode::InsufficientFdLimit, ResponseCode::CaFileNotFound, ResponseCode::ObjPluginLoadError, ResponseCode::GCSNotSupported} )
     {
         std::string str = description(static_cast<int>(response_code));
 
