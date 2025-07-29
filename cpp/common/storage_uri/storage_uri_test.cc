@@ -22,6 +22,19 @@ TEST(Uri, Valid_S3_Path)
     auto s3_path = "s3://" + bucket + "/" + path;
     std::unique_ptr<StorageUri> uri;
     EXPECT_NO_THROW(uri = std::make_unique<StorageUri>(s3_path));
+    EXPECT_EQ(uri->scheme, "s3");
+    EXPECT_EQ(uri->bucket, bucket);
+    EXPECT_EQ(uri->path, path);
+}
+
+TEST(Uri, Valid_GCS_Path)
+{
+    auto bucket = utils::random::string();
+    auto path = utils::random::string();
+    auto s3_path = "gs://" + bucket + "/" + path;
+    std::unique_ptr<StorageUri> uri;
+    EXPECT_NO_THROW(uri = std::make_unique<StorageUri>(s3_path));
+    EXPECT_EQ(uri->scheme, "gs");
     EXPECT_EQ(uri->bucket, bucket);
     EXPECT_EQ(uri->path, path);
 }
@@ -46,6 +59,14 @@ TEST(Valid, Empty_Bucket)
     auto s3_path = "s3:///" + path;
     std::unique_ptr<StorageUri> uri;
     EXPECT_THROW(uri = std::make_unique<StorageUri>(s3_path), std::exception);
+}
+
+TEST(Invalid, InvalidScheme)
+{
+    auto path = utils::random::string();
+    auto endpoint = "nfs://" + path;
+    std::unique_ptr<StorageUri> uri;
+    EXPECT_THROW(uri = std::make_unique<StorageUri>(endpoint), std::exception);
 }
 
 }; // namespace runai::llm::streamer::common::s3

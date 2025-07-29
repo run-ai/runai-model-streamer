@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <mutex>
 #include "common/range/range.h"
@@ -16,6 +17,11 @@
 
 namespace runai::llm::streamer::common::s3
 {
+
+static const std::string lib_streamer_s3_so_name = "libstreamers3.so";
+static const std::string lib_streamer_gcs_so_name = "libstreamergcs.so";
+static const std::string obj_plugin_s3_name = "s3";
+static const std::string obj_plugin_gcs_name = "gcs";
 
 struct S3ClientWrapper
 {
@@ -47,6 +53,8 @@ struct S3ClientWrapper
          ~BackendHandle();
 
          common::backend_api::ObjectBackendHandle_t backend_handle() const;
+
+         static const std::string get_libstreamers_library_name(const std::shared_ptr<common::s3::StorageUri> & uri);
 
          std::shared_ptr<utils::Dylib> open_object_storage_impl(const Params & params);
 
