@@ -34,7 +34,9 @@ constexpr std::array<const char *, static_cast<size_t>(ResponseCode::__Max)> __m
     "Empty request parameters",
     "Streamer is handling previous request",
     "CA bundle file not found",
-    "Unknown Error"
+    "Unknown Error",
+    "Error loading object storage plugin",
+    "GCS not supported",
 };
 
 const char * description(int response_code)
