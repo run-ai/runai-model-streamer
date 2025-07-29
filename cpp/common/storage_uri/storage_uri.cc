@@ -8,9 +8,11 @@
 namespace runai::llm::streamer::common::s3
 {
 
+static const std::string gcsProtocol("gs");
+
 StorageUri::StorageUri(const std::string & uri) : uri(uri)
 {
-    static const std::regex awsRegex("^s3://([^/]+)/(.+)$");
+    static const std::regex awsRegex("^(s3|gs)://([^/]+)/(.+)$");
 
     std::smatch match;
 
@@ -22,15 +24,21 @@ StorageUri::StorageUri(const std::string & uri) : uri(uri)
         throw std::exception();
     }
 
-    bucket = match[1];
-    path = match[2];
+    scheme = match[1];
+    bucket = match[2];
+    path = match[3];
 
-    LOG(SPAM) << "bucket: " << bucket << " path: " << path;
+    LOG(SPAM) << "scheme: " << scheme << " bucket: " << bucket << " path: " << path;
 }
 
 std::ostream & operator<<(std::ostream & os, const StorageUri & uri)
 {
-    return os << "bucket: " << uri.bucket << " path: " << uri.path;
+    return os << "scheme: " << uri.scheme << " bucket: " << uri.bucket << " path: " << uri.path;
+}
+
+bool StorageUri::is_gcs() const
+{
+    return scheme == gcsProtocol;
 }
 
 StorageUri_C::StorageUri_C(const StorageUri & uri) :

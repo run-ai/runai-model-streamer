@@ -58,7 +58,7 @@ const utils::Semver min_glibc_semver = utils::Semver(description(static_cast<int
 S3ClientWrapper::BackendHandle::BackendHandle(const Params & params) :
     dylib_ptr(open_object_storage_impl(params))
 {
-    ASSERT(dylib_ptr != nullptr) << "Failed to open libstreamers3.so"; // should never happen
+    ASSERT(dylib_ptr != nullptr) << "Failed to open libstreamer shared library"; // should never happen
 
     auto open_object_storage_ = dylib_ptr->dlsym<ResponseCode(*)(common::backend_api::ObjectBackendHandle_t*)>("obj_open_backend");
     auto ret = open_object_storage_(&_backend_handle);
@@ -88,16 +88,25 @@ S3ClientWrapper::BackendHandle::~BackendHandle()
     }
 }
 
+const std::string S3ClientWrapper::BackendHandle::get_libstreamers_library_name(const std::shared_ptr<common::s3::StorageUri> & uri) {
+    if (uri != nullptr && uri->is_gcs()) {
+        return lib_streamer_gcs_so_name;
+    } else {
+        return lib_streamer_s3_so_name;
+    }
+}
+
 std::shared_ptr<utils::Dylib> S3ClientWrapper::BackendHandle::open_object_storage_impl(const Params & params)
 {
     // lazy load the s3 library once
+    const std::string library_name = get_libstreamers_library_name(params.uri);
     try
     {
-        return std::make_shared<utils::Dylib>("libstreamers3.so");
+        return std::make_shared<utils::Dylib>(library_name.c_str());
     }
     catch (...)
     {
-        LOG(ERROR) << "Failed to open libstreamers3.so";
+        LOG(ERROR) << "Failed to open " << library_name;
     }
     throw Exception(ResponseCode::S3NotSupported);
     return nullptr;

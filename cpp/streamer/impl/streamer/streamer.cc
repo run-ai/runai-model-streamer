@@ -13,6 +13,7 @@
 #include "streamer/impl/workload/workload.h"
 #include "streamer/impl/assigner/assigner.h"
 #include "common/exception/exception.h"
+#include "common/storage_uri/storage_uri.h"
 
 namespace runai::llm::streamer::impl
 {

@@ -9,9 +9,12 @@ struct StorageUri
 {
     StorageUri(const std::string & uri);
 
+    std::string scheme;
     std::string uri;
     std::string bucket;
     std::string path;
+
+    bool is_gcs() const;
 };
 
 struct StorageUri_C

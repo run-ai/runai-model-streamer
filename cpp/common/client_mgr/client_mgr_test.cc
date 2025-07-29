@@ -59,6 +59,10 @@ struct Helper : IClient
     const size_t id;
 };
 
+inline constexpr char HelperName[] = "Helper";
+
+using ClientMgrHelper = ClientMgr<Helper, HelperName>;
+
 size_t Helper::global_counter = 0;
 
 struct ClientMgrTest : ::testing::Test
@@ -76,10 +80,10 @@ struct ClientMgrTest : ::testing::Test
 
     void TearDown() override
     {
-        ClientMgr<Helper>::clear();
+        ClientMgrHelper::clear();
 
-        EXPECT_EQ(ClientMgr<Helper>::size(), 0);
-        EXPECT_EQ(ClientMgr<Helper>::unused(), 0);
+        EXPECT_EQ(ClientMgrHelper::size(), 0);
+        EXPECT_EQ(ClientMgrHelper::unused(), 0);
     }
 
     static std::shared_ptr<common::s3::StorageUri> create_uri()
@@ -94,40 +98,40 @@ struct ClientMgrTest : ::testing::Test
 
 TEST_F(ClientMgrTest, Creation_Sanity)
 {
-    EXPECT_EQ(ClientMgr<Helper>::size(), 0);
-    EXPECT_EQ(ClientMgr<Helper>::unused(), 0);
+    EXPECT_EQ(ClientMgrHelper::size(), 0);
+    EXPECT_EQ(ClientMgrHelper::unused(), 0);
 }
 
 TEST_F(ClientMgrTest, Create_Client)
 {
     std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
     const auto config = params.to_config(initial_params);
-    Helper * helper = ClientMgr<Helper>::pop(config);
+    Helper * helper = ClientMgrHelper::pop(config);
 
-    EXPECT_EQ(ClientMgr<Helper>::size(), 1);
-    EXPECT_EQ(ClientMgr<Helper>::unused(), 0);
+    EXPECT_EQ(ClientMgrHelper::size(), 1);
+    EXPECT_EQ(ClientMgrHelper::unused(), 0);
 
     // used clients are not cleared
-    ClientMgr<Helper>::clear();
-    EXPECT_EQ(ClientMgr<Helper>::size(), 1);
+    ClientMgrHelper::clear();
+    EXPECT_EQ(ClientMgrHelper::size(), 1);
 
-    ClientMgr<Helper>::push(helper);
-    ClientMgr<Helper>::clear();
-    EXPECT_EQ(ClientMgr<Helper>::size(), 0);
+    ClientMgrHelper::push(helper);
+    ClientMgrHelper::clear();
+    EXPECT_EQ(ClientMgrHelper::size(), 0);
 }
 
 TEST_F(ClientMgrTest, Reuse_Client)
 {
     std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
     const auto config = params.to_config(initial_params);
-    Helper * helper = ClientMgr<Helper>::pop(config);
+    Helper * helper = ClientMgrHelper::pop(config);
 
-    EXPECT_EQ(ClientMgr<Helper>::size(), 1);
-    EXPECT_EQ(ClientMgr<Helper>::unused(), 0);
+    EXPECT_EQ(ClientMgrHelper::size(), 1);
+    EXPECT_EQ(ClientMgrHelper::unused(), 0);
 
-    ClientMgr<Helper>::push(helper);
-    EXPECT_EQ(ClientMgr<Helper>::size(), 1);
-    EXPECT_EQ(ClientMgr<Helper>::unused(), 1);
+    ClientMgrHelper::push(helper);
+    EXPECT_EQ(ClientMgrHelper::size(), 1);
+    EXPECT_EQ(ClientMgrHelper::unused(), 1);
 
     const auto expected = helper->counter;
 
@@ -138,17 +142,17 @@ TEST_F(ClientMgrTest, Reuse_Client)
         params.uri->path = path;
         std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
         const auto config = params.to_config(initial_params);
-        Helper * helper = ClientMgr<Helper>::pop(config);
+        Helper * helper = ClientMgrHelper::pop(config);
 
         EXPECT_TRUE(helper->verify_credentials(config));
         EXPECT_EQ(helper->counter, expected);
 
-        EXPECT_EQ(ClientMgr<Helper>::size(), 1);
-        EXPECT_EQ(ClientMgr<Helper>::unused(), 0);
+        EXPECT_EQ(ClientMgrHelper::size(), 1);
+        EXPECT_EQ(ClientMgrHelper::unused(), 0);
 
-        ClientMgr<Helper>::push(helper);
-        EXPECT_EQ(ClientMgr<Helper>::size(), 1);
-        EXPECT_EQ(ClientMgr<Helper>::unused(), 1);
+        ClientMgrHelper::push(helper);
+        EXPECT_EQ(ClientMgrHelper::size(), 1);
+        EXPECT_EQ(ClientMgrHelper::unused(), 1);
     }
 }
 
@@ -156,14 +160,14 @@ TEST_F(ClientMgrTest, Credentials_Changed)
 {
     std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
     const auto config = params.to_config(initial_params);
-    Helper * helper = ClientMgr<Helper>::pop(config);
+    Helper * helper = ClientMgrHelper::pop(config);
 
-    EXPECT_EQ(ClientMgr<Helper>::size(), 1);
-    EXPECT_EQ(ClientMgr<Helper>::unused(), 0);
+    EXPECT_EQ(ClientMgrHelper::size(), 1);
+    EXPECT_EQ(ClientMgrHelper::unused(), 0);
 
-    ClientMgr<Helper>::push(helper);
-    EXPECT_EQ(ClientMgr<Helper>::size(), 1);
-    EXPECT_EQ(ClientMgr<Helper>::unused(), 1);
+    ClientMgrHelper::push(helper);
+    EXPECT_EQ(ClientMgrHelper::size(), 1);
+    EXPECT_EQ(ClientMgrHelper::unused(), 1);
 
     auto expected = helper->counter;
 
@@ -183,7 +187,7 @@ TEST_F(ClientMgrTest, Credentials_Changed)
         std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
         const auto new_config = new_params.to_config(initial_params);
         bool changed = !helper->verify_credentials(new_config);
-        Helper * helper = ClientMgr<Helper>::pop(new_config);
+        Helper * helper = ClientMgrHelper::pop(new_config);
 
         EXPECT_TRUE(helper->verify_credentials(new_config));
 
@@ -191,12 +195,12 @@ TEST_F(ClientMgrTest, Credentials_Changed)
 
         expected = helper->counter;
 
-        EXPECT_EQ(ClientMgr<Helper>::size(), 1);
-        EXPECT_EQ(ClientMgr<Helper>::unused(), 0);
+        EXPECT_EQ(ClientMgrHelper::size(), 1);
+        EXPECT_EQ(ClientMgrHelper::unused(), 0);
 
-        ClientMgr<Helper>::push(helper);
-        EXPECT_EQ(ClientMgr<Helper>::size(), 1);
-        EXPECT_EQ(ClientMgr<Helper>::unused(), 1);
+        ClientMgrHelper::push(helper);
+        EXPECT_EQ(ClientMgrHelper::size(), 1);
+        EXPECT_EQ(ClientMgrHelper::unused(), 1);
     }
 }
 
@@ -208,19 +212,19 @@ TEST_F(ClientMgrTest, Change_Bucket)
     {
         std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
         const auto config = params.to_config(initial_params);
-        Helper * helper = ClientMgr<Helper>::pop(config);
+        Helper * helper = ClientMgrHelper::pop(config);
 
-        EXPECT_EQ(ClientMgr<Helper>::size(), i + 1);
-        EXPECT_EQ(ClientMgr<Helper>::unused(), 0);
+        EXPECT_EQ(ClientMgrHelper::size(), i + 1);
+        EXPECT_EQ(ClientMgrHelper::unused(), 0);
 
         used.insert(helper);
     }
 
     for (auto helper : used)
     {
-        ClientMgr<Helper>::push(helper);
+        ClientMgrHelper::push(helper);
     }
-    EXPECT_EQ(ClientMgr<Helper>::unused(), m);
+    EXPECT_EQ(ClientMgrHelper::unused(), m);
 
     unsigned n = utils::random::number(2, 20);
     auto uri_ = create_uri();
@@ -237,16 +241,16 @@ TEST_F(ClientMgrTest, Change_Bucket)
         common::s3::S3ClientWrapper::Params new_params(uri_, credentials, utils::random::number<size_t>());
         std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
         const auto new_config = new_params.to_config(initial_params);
-        Helper * helper = ClientMgr<Helper>::pop(new_config);
-        EXPECT_EQ(ClientMgr<Helper>::unused(), (m > i + 1 ? m - i - 1 : 0));
+        Helper * helper = ClientMgrHelper::pop(new_config);
+        EXPECT_EQ(ClientMgrHelper::unused(), (m > i + 1 ? m - i - 1 : 0));
 
-        EXPECT_EQ(ClientMgr<Helper>::size(), (m > i + 1 ? m : i + 1));
+        EXPECT_EQ(ClientMgrHelper::size(), (m > i + 1 ? m : i + 1));
         used.insert(helper);
     }
 
     for (auto helper : used)
     {
-        ClientMgr<Helper>::push(helper);
+        ClientMgrHelper::push(helper);
     }
 }
 
@@ -254,32 +258,32 @@ TEST_F(ClientMgrTest, Remove_Client)
 {
     std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
     const auto config = params.to_config(initial_params);
-    Helper * helper = ClientMgr<Helper>::pop(config);
+    Helper * helper = ClientMgrHelper::pop(config);
 
-    EXPECT_EQ(ClientMgr<Helper>::size(), 1);
-    EXPECT_EQ(ClientMgr<Helper>::unused(), 0);
+    EXPECT_EQ(ClientMgrHelper::size(), 1);
+    EXPECT_EQ(ClientMgrHelper::unused(), 0);
 
-    ClientMgr<Helper>::push(helper);
+    ClientMgrHelper::push(helper);
 }
 
 TEST_F(ClientMgrTest, Remove_Client_Is_Reentrant)
 {
     std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
     const auto config = params.to_config(initial_params);
-    Helper * helper = ClientMgr<Helper>::pop(config);
+    Helper * helper = ClientMgrHelper::pop(config);
 
-    EXPECT_EQ(ClientMgr<Helper>::size(), 1);
-    EXPECT_EQ(ClientMgr<Helper>::unused(), 0);
+    EXPECT_EQ(ClientMgrHelper::size(), 1);
+    EXPECT_EQ(ClientMgrHelper::unused(), 0);
 
-    ClientMgr<Helper>::push(helper);
+    ClientMgrHelper::push(helper);
 
-    EXPECT_EQ(ClientMgr<Helper>::size(), 1);
-    EXPECT_EQ(ClientMgr<Helper>::unused(), 1);
+    EXPECT_EQ(ClientMgrHelper::size(), 1);
+    EXPECT_EQ(ClientMgrHelper::unused(), 1);
 
     // push is reentrant
-    EXPECT_NO_THROW(ClientMgr<Helper>::push(helper));
-    EXPECT_EQ(ClientMgr<Helper>::size(), 1);
-    EXPECT_EQ(ClientMgr<Helper>::unused(), 1);
+    EXPECT_NO_THROW(ClientMgrHelper::push(helper));
+    EXPECT_EQ(ClientMgrHelper::size(), 1);
+    EXPECT_EQ(ClientMgrHelper::unused(), 1);
 }
 
 }; //namespace runai::llm::streamer::common

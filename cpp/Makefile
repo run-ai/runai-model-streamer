@@ -7,6 +7,9 @@ build:
 		"--config=${ARCH}" && \
 	bazel build s3:libstreamers3.so \
 		--define USE_SYSTEM_LIBS=${USE_SYSTEM_LIBS} \
+		"--config=${ARCH}" && \
+	bazel build gcs:libstreamergcs.so \
+		--define USE_SYSTEM_LIBS=${USE_SYSTEM_LIBS} \
 		"--config=${ARCH}"
 
 build_mock:
