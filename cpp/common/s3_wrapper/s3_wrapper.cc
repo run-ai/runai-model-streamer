@@ -88,40 +88,48 @@ S3ClientWrapper::BackendHandle::~BackendHandle()
     }
 }
 
-const std::string S3ClientWrapper::BackendHandle::get_libstreamers_library_name(const std::shared_ptr<common::s3::StorageUri> & uri) {
+const ObjectPluginType ObjectPluginType::ObjStorageGCS(PluginID::GCS, obj_plugin_gcs_name, lib_streamer_gcs_so_name);
+const ObjectPluginType ObjectPluginType::ObjStorageS3(PluginID::S3, obj_plugin_s3_name, lib_streamer_s3_so_name);
+
+const ObjectPluginType S3ClientWrapper::BackendHandle::get_libstreamers_plugin_type(const std::shared_ptr<common::s3::StorageUri> & uri) {
     std::string plugin_type;
     bool plugin_type_override = utils::try_getenv("RUNAI_STREAMER_OVERRIDE_OBJ_PLUGIN", plugin_type);
     if (plugin_type_override && !plugin_type.empty()) {
-        if (plugin_type == obj_plugin_s3_name) {
-            return lib_streamer_s3_so_name;
-        } else if (plugin_type == obj_plugin_gcs_name) {
-            return lib_streamer_gcs_so_name;
+        if (plugin_type == ObjectPluginType::ObjStorageS3.name()) {
+            return ObjectPluginType::ObjStorageS3;
+        } else if (plugin_type == ObjectPluginType::ObjStorageGCS.name()) {
+            return ObjectPluginType::ObjStorageGCS;
         } else {
             LOG(ERROR) << "Unsupported RUNAI_STREAMER_OVERRIDE_OBJ_PLUGIN: " << plugin_type;
-            throw Exception(ResponseCode::S3NotSupported);
+            throw Exception(ResponseCode::ObjPluginLoadError);
         }
     }
 
     if (uri != nullptr && uri->is_gcs()) {
-        return lib_streamer_gcs_so_name;
+        return ObjectPluginType::ObjStorageGCS;
     } else {
-        return lib_streamer_s3_so_name;
+        return ObjectPluginType::ObjStorageS3;
     }
 }
 
 std::shared_ptr<utils::Dylib> S3ClientWrapper::BackendHandle::open_object_storage_impl(const Params & params)
 {
     // lazy load the s3 library once
-    const std::string library_name = get_libstreamers_library_name(params.uri);
+    const ObjectPluginType plugin_type = get_libstreamers_plugin_type(params.uri);
     try
     {
-        return std::make_shared<utils::Dylib>(library_name.c_str());
+        return std::make_shared<utils::Dylib>(plugin_type.so_name().c_str());
     }
     catch (...)
     {
-        LOG(ERROR) << "Failed to open " << library_name;
+        LOG(ERROR) << "Failed to open storage backend for " << plugin_type.name() << ": " << plugin_type.so_name();
     }
-    throw Exception(ResponseCode::S3NotSupported);
+    switch(plugin_type.id()) {
+        case PluginID::GCS:
+            throw Exception(ResponseCode::GCSNotSupported);
+        case PluginID::S3:
+            throw Exception(ResponseCode::S3NotSupported);
+    }
     return nullptr;
 }
 

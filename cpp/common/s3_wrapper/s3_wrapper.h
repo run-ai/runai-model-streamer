@@ -2,7 +2,6 @@
 
 #include <memory>
 #include <string>
-#include <string_view>
 #include <vector>
 #include <mutex>
 #include "common/range/range.h"
@@ -22,6 +21,36 @@ static const std::string lib_streamer_s3_so_name = "libstreamers3.so";
 static const std::string lib_streamer_gcs_so_name = "libstreamergcs.so";
 static const std::string obj_plugin_s3_name = "s3";
 static const std::string obj_plugin_gcs_name = "gcs";
+
+enum struct PluginID {
+    GCS,
+    S3
+};
+
+/**
+ * Type-safe enum for encapsulating plugin information (name, shared library)
+ */
+class ObjectPluginType {
+private:
+    PluginID _id;
+    std::string _name;
+    std::string _so_name;
+
+    ObjectPluginType(PluginID id, std::string name, std::string so_name)
+        : _id(id), _name(name), _so_name(so_name) {}
+
+public:
+    static const ObjectPluginType ObjStorageGCS;
+    static const ObjectPluginType ObjStorageS3;
+
+    std::string name() const { return _name; }
+    std::string so_name() const { return _so_name; }
+    constexpr PluginID id() const { return _id; }
+
+    bool operator==(const ObjectPluginType& other) const {
+        return _id == other._id;
+    }
+};
 
 struct S3ClientWrapper
 {
@@ -54,7 +83,7 @@ struct S3ClientWrapper
 
          common::backend_api::ObjectBackendHandle_t backend_handle() const;
 
-         static const std::string get_libstreamers_library_name(const std::shared_ptr<common::s3::StorageUri> & uri);
+         static const ObjectPluginType get_libstreamers_plugin_type(const std::shared_ptr<common::s3::StorageUri> & uri);
 
          std::shared_ptr<utils::Dylib> open_object_storage_impl(const Params & params);
 
