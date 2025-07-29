@@ -8,7 +8,7 @@ import humanize
 
 
 RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME = "RUNAI_STREAMER_MEMORY_LIMIT"
-
+DEFAULT_MEMORY_LIMIT_STRING = "20000000000" # 20 GB
 
 class RunaiStreamerMemoryLimitException(Exception):
     pass
@@ -98,6 +98,8 @@ class FilesRequestsIteratorWithBuffer:
         files_chunks: List[FileChunks],
     ) -> FilesRequestsIteratorWithBuffer:
         memory_limit = os.getenv(RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME)
+        if memory_limit is None:
+            memory_limit = DEFAULT_MEMORY_LIMIT_STRING
         memory_mode = _get_memory_mode(memory_limit)
         if memory_limit is not None:
             memory_limit = int(memory_limit)
@@ -193,7 +195,7 @@ class ChunksIterator:
 
 
 def _get_memory_mode(memory_limit: str | None) -> MemoryCapMode:
-    if memory_limit is None or memory_limit == "-1":
+    if memory_limit == "-1":
         return MemoryCapMode.unlimited
     elif memory_limit == "0":
         return MemoryCapMode.largest_chunk
