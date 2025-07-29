@@ -13,8 +13,11 @@ import runai_model_streamer.safetensors_streamer.safetensors_pytorch as safetens
 from runai_model_streamer.s3_utils.s3_utils import (
     S3Credentials,
     is_s3_path,
+    is_gs_path,
     s3_glob,
     s3_pull_files,
+    gcs_glob,
+    gcs_pull_files,
 )
 
 SAFETENSORS_PATTERN = "*.safetensors"
@@ -22,6 +25,8 @@ SAFETENSORS_PATTERN = "*.safetensors"
 def list_safetensors(path: str, s3_credentials : Optional[S3Credentials] = None) -> List[str]:
     if is_s3_path(path):
         return s3_glob(path, [SAFETENSORS_PATTERN], s3_credentials)
+    if is_gs_path(path):
+        return gcs_glob(path, [SAFETENSORS_PATTERN])
     return glob.glob(os.path.join(path, SAFETENSORS_PATTERN))
 
 def pull_files(model_path: str,
@@ -31,6 +36,8 @@ def pull_files(model_path: str,
                 s3_credentials : Optional[S3Credentials] = None) -> None:
     if is_s3_path(model_path):
         return s3_pull_files(model_path, dst, allow_pattern, ignore_pattern, s3_credentials)
+    if is_gs_path(model_path):
+        return gcs_pull_files(model_path, dst, allow_pattern, ignore_pattern)
     raise NotImplementedError("pull files is not implemented for file system paths")
 
 class SafetensorsStreamer:

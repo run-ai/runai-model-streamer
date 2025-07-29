@@ -15,8 +15,6 @@ from runai_model_streamer.s3_utils.s3_utils import (
     S3Credentials,
     is_s3_path,
     is_gs_path,
-    set_gs_environment_variables,
-    convert_gs_path,
     get_s3_credentials_module,
 )
 
@@ -72,13 +70,7 @@ class FileStreamer:
     ) -> str:
         if s3_credentials_module:
             # initialize session only one
-
-            if is_gs_path(path):
-                # set gs endpoint
-                set_gs_environment_variables()
-                # replace path prefix
-                path = convert_gs_path(path)
-            elif is_s3_path(path) and self.s3_session is None:
+            if is_s3_path(path) and self.s3_session is None:
                 # check for s3 path and init sessions and credentials           
                 self.s3_session, self.s3_credentials = s3_credentials_module.get_credentials(credentials)
         return path
