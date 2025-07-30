@@ -43,7 +43,7 @@ Controls how the CPU Memory buffer to which tensors are read from the file is be
 
 #### Default value
 
-`-1 - UNLIMITED`
+`20000000000 - 20 GB`
 
 ### AWS_ENDPOINT_URL
 
