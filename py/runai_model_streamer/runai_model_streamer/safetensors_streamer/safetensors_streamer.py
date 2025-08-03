@@ -49,15 +49,21 @@ class SafetensorsStreamer:
             self,
             path: str,
             s3_credentials : Optional[S3Credentials] = None,
+            device: Optional[str] = None,
         ) -> None:
-        return self.stream_files([path], s3_credentials)
+        return self.stream_files([path], s3_credentials, device)
     
     def stream_files(
             self,
             paths: List[str],
             s3_credentials : Optional[S3Credentials] = None,
+            device: Optional[str] = None,
         ) -> None:
         self.files_to_tensors_metadata = {}
+        if device is None:
+            self.device_str = "cpu"
+        else:
+            self.device_str = device
 
         file_stream_requests: List[FileChunks] = []
 
@@ -71,6 +77,7 @@ class SafetensorsStreamer:
         self.file_streamer.stream_files(
             file_stream_requests,
             s3_credentials,
+            self.device_str,
         )
 
     def get_tensors(self) -> Iterator[torch.tensor]:
