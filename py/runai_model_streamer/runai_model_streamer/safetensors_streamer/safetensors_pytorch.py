@@ -57,13 +57,13 @@ class SafetensorsMetadata:
         header_sizes = {}
         for file_path, ready_chunk_index, buffer in fs.get_chunks():
             header_sizes[file_path] = struct.unpack(
-                LITTLE_ENDIAN_LONG_LONG_STRUCT_FORMAT, buffer
+                LITTLE_ENDIAN_LONG_LONG_STRUCT_FORMAT, buffer.numpy()
             )[0]
             
         metadatas = {}
         fs.stream_files([FileChunks(filename, SAFETENSORS_HEADER_BUFFER_SIZE, [header_size]) for filename, header_size in header_sizes.items()])
         for file_path, ready_chunk_index, buffer in fs.get_chunks():
-            metadatas[file_path] = json.loads(bytearray(buffer))
+            metadatas[file_path] = json.loads(bytearray(buffer.numpy()))
 
         return [SafetensorsMetadata(
             metadatas[filename], header_sizes[filename] + SAFETENSORS_HEADER_BUFFER_SIZE
@@ -115,11 +115,9 @@ def create_torch_tensor(
 ) -> torch.tensor:
     if tensor_metadata.get_item_count() == 0:
         return torch.empty(tensor_metadata.shape, dtype=tensor_metadata.get_torch_dtype())
+
+    tensor = buffer.view(tensor_metadata.get_torch_dtype())
     
-    tensor = torch.frombuffer(
-        buffer,
-        dtype=tensor_metadata.get_torch_dtype(),
-        count=tensor_metadata.get_item_count(),
-        offset=0,
-    )
+    # Reshape the tensor to its final, correct shape.
     return tensor.view(tensor_metadata.shape)
+    

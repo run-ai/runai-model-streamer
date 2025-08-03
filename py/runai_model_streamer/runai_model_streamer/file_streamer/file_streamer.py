@@ -22,6 +22,8 @@ from runai_model_streamer.s3_utils.s3_utils import (
 
 import humanize
 
+import torch
+
 s3_credentials_module = get_s3_credentials_module()
 
 class RunaiStreamerInvalidInputException(Exception):
@@ -147,5 +149,9 @@ class FileStreamer:
                 return
             
             file_path, chunk_index, chunk_buffer = self.requests_iterator.get_global_file_and_chunk(file_relative_index, chunk_relative_index)
-            yield file_path, chunk_index, chunk_buffer
+            # create one dimensional tensor from the chunk buffer
+            # we return a tensor of shape (1, chunk_buffer.size)
+            # the data type of the original chunk_buffer, as created by the requests_iterator, is preserved (uint8)
+            tensor = torch.from_numpy(chunk_buffer).view(1, -1)
+            yield file_path, chunk_index, tensor
 

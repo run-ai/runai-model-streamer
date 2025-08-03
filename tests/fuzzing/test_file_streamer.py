@@ -86,7 +86,7 @@ class TestFuzzing(unittest.TestCase):
                 file_chunks = file_to_file_chunks[file]
                 expected_id_to_results = expected_file_to_id_to_results[file]
                 self.assertEqual(
-                    dst.tobytes(),
+                    dst.numpy().tobytes(),
                     expected_id_to_results[id]["expected_content"],
                 )
 
