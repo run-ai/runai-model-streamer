@@ -4,10 +4,11 @@ import torch
 import glob
 import os
 from typing import List
-from runai_model_streamer.file_streamer import (
-    FileStreamer,
-    FileChunks
-)
+
+from runai_model_streamer.file_streamer import FileChunks
+
+from runai_model_streamer.distributed_streamer import DistributedStreamer
+
 import runai_model_streamer.safetensors_streamer.safetensors_pytorch as safetensors_pytorch
 
 from runai_model_streamer.s3_utils.s3_utils import (
@@ -35,7 +36,7 @@ def pull_files(model_path: str,
 
 class SafetensorsStreamer:
     def __init__(self) -> None:
-        self.file_streamer = FileStreamer()
+        self.file_streamer = DistributedStreamer()
         self.files_to_tensors_metadata = {}
 
     def __enter__(self) -> SafetensorsStreamer:
