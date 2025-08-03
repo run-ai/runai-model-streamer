@@ -30,7 +30,7 @@ class TestBindings(unittest.TestCase):
             for file, id, dst in fs.get_chunks():
                 self.assertEqual(file, file_path)
                 self.assertEqual(
-                    dst.tobytes().decode("utf-8"),
+                    dst.numpy().tobytes().decode("utf-8"),
                     id_to_results[id]["expected_text"],
                 )
 
@@ -53,7 +53,7 @@ class TestBindings(unittest.TestCase):
             for file, id, dst in fs.get_chunks():
                 self.assertEqual(file, file_path)
                 self.assertEqual(
-                    dst.tobytes().decode("utf-8"),
+                    dst.numpy().tobytes().decode("utf-8"),
                     id_to_results[id]["expected_text"],
                 )
 
@@ -85,7 +85,7 @@ class TestBindings(unittest.TestCase):
             for file, id, dst, in fs.get_chunks():
                 self.assertEqual(file, file_path)
                 self.assertEqual(
-                    dst.tobytes().decode("utf-8"),
+                    dst.numpy().tobytes().decode("utf-8"),
                     id_to_results[id]["expected_text"],
                 )
 
