@@ -15,8 +15,8 @@ class _WorkUnit:
     path: str
     offset: int
     size: int
-    original_request_index: int
-    original_chunk_index: int
+    original_request_index: int # the FileChunks original id
+    original_chunk_index: int   # the chunk index in the FileChunks
 
 def partition_by_chunks(
     file_stream_requests: List[FileChunks], n: int
@@ -58,7 +58,7 @@ def partition_by_chunks(
                     path=request.path,
                     offset=current_offset,
                     size=chunk_size,
-                    original_request_index=req_idx,
+                    original_request_index=request.id,
                     original_chunk_index=chunk_idx
                 ))
             current_offset += chunk_size
@@ -77,6 +77,7 @@ def partition_by_chunks(
 
     # 4. Reconstruct the final `FileChunks` objects and their source maps.
     result_partitions: List[List[Tuple[FileChunks, Dict[int, Tuple[int, int, int]]]]] = []
+    id_generator = 0
     for partition_of_units in partitions_of_units:
         new_partition: List[Tuple[FileChunks, Dict[int, Tuple[int, int, int]]]] = []
         units_by_path: Dict[str, List[_WorkUnit]] = defaultdict(list)
@@ -88,8 +89,9 @@ def partition_by_chunks(
             if not units:
                 continue
 
-            current_fc = FileChunks(path=path, offset=units[0].offset, chunks=[units[0].size])
+            current_fc = FileChunks(id=id_generator, path=path, offset=units[0].offset, chunks=[units[0].size])
             current_map = {0: (units[0].original_request_index, units[0].original_chunk_index, units[0].size)}
+            id_generator += 1
             
             for i in range(1, len(units)):
                 next_unit = units[i]
@@ -99,8 +101,9 @@ def partition_by_chunks(
                     current_map[new_chunk_index] = (next_unit.original_request_index, next_unit.original_chunk_index, next_unit.size)
                 else:
                     new_partition.append((current_fc, current_map))
-                    current_fc = FileChunks(path=path, offset=next_unit.offset, chunks=[next_unit.size])
+                    current_fc = FileChunks(id=id_generator, path=path, offset=next_unit.offset, chunks=[next_unit.size])
                     current_map = {0: (next_unit.original_request_index, next_unit.original_chunk_index, next_unit.size)}
+                    id_generator += 1
             
             new_partition.append((current_fc, current_map))
         

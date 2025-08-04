@@ -29,9 +29,9 @@ class DistributedStreamer:
         self.total_size = 0
         self.device_str = None
         self.is_distributed = False
-        self.partitions = {}
-        self.rank_file_chunks_list = {}
-        self.rank_dicts_list = {}
+        self.partitions = {} # partitions of all the input file_stream_requests
+        self.rank_file_chunks_list = {} # post Partitioning FileChunks to be streamed by this rank
+        self.rank_dicts_map = {} # maps post partitioning FileChunks.id and chunk index to the original FileChunks.id and chunk index and chunk size
         self.broadcast_plan = {}
         self.is_distributed = False
         self.rank = 0
@@ -88,10 +88,10 @@ class DistributedStreamer:
 
         # read partition
         self.rank_file_chunks_list = []
-        self.rank_dicts_list = []
+        self.rank_dicts_map = {}
         for fc, d in self.partitions[self.rank]:
             self.rank_file_chunks_list.append(fc)
-            self.rank_dicts_list.append(d)
+            self.rank_dicts_map[fc.id] = d
         self.file_streamer.stream_files(self.rank_file_chunks_list, credentials, device)
  
     def get_chunks(self) -> Iterator:
@@ -107,15 +107,18 @@ class DistributedStreamer:
         for i in range(len(self.broadcast_plan)):
             if self.broadcast_plan[i] == self.rank:
                 # wait for the next chunk
-                file_path, ready_chunk_index, buffer = self.file_streamer.get_chunks()
+                ready_request_index, ready_chunk_index, buffer = self.file_streamer.get_chunks()
 
                 # translate chunk index to original request index, chunk index and size
-                original_request_index, original_chunk_index, original_chunk_size = self.rank_dicts_list[file_path][ready_chunk_index]
+                original_request_index, original_chunk_index, original_chunk_size = self.rank_dicts_map[ready_request_index][ready_chunk_index]
 
-                # broadcast
+                # broadcast chunk identifiers
+
+                # broadcast data
                 dist.broadcast(buffer, self.rank)
-                yield file_path, original_request_index, original_chunk_index, buffer
+                yield original_request_index, original_chunk_index, buffer
             else:
-                # wait for broadcast
-                dist.broadcast(buffer, self.rank)
-                yield file_path, ready_chunk_index, buffer
+                # wait for broadcast chunk identifiers
+                # wait for broadcast data
+                dist.broadcast(buffer, self.broadcast_plan[i])
+                yield original_request_index, original_chunk_index, buffer
