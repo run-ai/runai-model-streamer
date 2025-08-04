@@ -52,22 +52,22 @@ class SafetensorsMetadata:
                 self.read_sizes.append(self.tensors_metadata[i].get_bytesize())
 
     @staticmethod
-    def from_files(fs: FileStreamer, filenames: str) -> List[SafetensorsMetadata]:
-        fs.stream_files([FileChunks(filename, 0, [SAFETENSORS_HEADER_BUFFER_SIZE]) for filename in filenames])
+    def from_files(fs: FileStreamer, filenames: List[str]) -> List[SafetensorsMetadata]:
+        fs.stream_files([FileChunks(i, filenames[i], 0, [SAFETENSORS_HEADER_BUFFER_SIZE]) for i in range(len(filenames))])
         header_sizes = {}
-        for file_path, ready_chunk_index, buffer in fs.get_chunks():
-            header_sizes[file_path] = struct.unpack(
+        for file_index, ready_chunk_index, buffer in fs.get_chunks():
+            header_sizes[file_index] = struct.unpack(
                 LITTLE_ENDIAN_LONG_LONG_STRUCT_FORMAT, buffer.numpy()
             )[0]
             
         metadatas = {}
-        fs.stream_files([FileChunks(filename, SAFETENSORS_HEADER_BUFFER_SIZE, [header_size]) for filename, header_size in header_sizes.items()])
-        for file_path, ready_chunk_index, buffer in fs.get_chunks():
-            metadatas[file_path] = json.loads(bytearray(buffer.numpy()))
+        fs.stream_files([FileChunks(i, filenames[i], SAFETENSORS_HEADER_BUFFER_SIZE, [header_size]) for i, header_size in header_sizes.items()])
+        for file_index, ready_chunk_index, buffer in fs.get_chunks():
+            metadatas[file_index] = json.loads(bytearray(buffer.numpy()))
 
         return [SafetensorsMetadata(
-            metadatas[filename], header_sizes[filename] + SAFETENSORS_HEADER_BUFFER_SIZE
-        ) for filename in filenames]
+            metadatas[i], header_sizes[i] + SAFETENSORS_HEADER_BUFFER_SIZE
+        ) for i in range(len(filenames))]
 
 
 class SafetensorMetadata:
@@ -100,7 +100,7 @@ class Offsets:
 
 
 def prepare_request(
-    fs: FileStreamer, paths: str
+    fs: FileStreamer, paths: List[str]
 ) -> List[Tuple[str, int, List[SafetensorMetadata], List[int]]]:
     safetensors_metadatas = SafetensorsMetadata.from_files(fs, paths)
     return [(

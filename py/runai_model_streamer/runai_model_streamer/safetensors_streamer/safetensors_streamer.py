@@ -72,8 +72,8 @@ class SafetensorsStreamer:
         for i in range(len(paths)):
             (file_offset, tensors_metadata, tensor_sizes) = safetensors_metadatas[i]
             path = paths[i]
-            self.files_to_tensors_metadata[path] = tensors_metadata
-            file_stream_requests.append(FileChunks(path, file_offset, tensor_sizes))
+            self.files_to_tensors_metadata[i] = tensors_metadata
+            file_stream_requests.append(FileChunks(i, path, file_offset, tensor_sizes))
 
         self.file_streamer.stream_files(
             file_stream_requests,
@@ -82,8 +82,8 @@ class SafetensorsStreamer:
         )
 
     def get_tensors(self) -> Iterator[torch.tensor]:
-        for file_path, ready_chunk_index, buffer in self.file_streamer.get_chunks():
-            tensor_metadata = self.files_to_tensors_metadata[file_path][ready_chunk_index]
+        for file_index, ready_chunk_index, buffer in self.file_streamer.get_chunks():
+            tensor_metadata = self.files_to_tensors_metadata[file_index][ready_chunk_index]
             yield tensor_metadata.name, safetensors_pytorch.create_torch_tensor(
                 buffer, tensor_metadata
             )

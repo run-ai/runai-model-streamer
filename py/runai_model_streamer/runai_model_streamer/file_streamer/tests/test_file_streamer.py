@@ -14,6 +14,7 @@ class TestBindings(unittest.TestCase):
     def test_runai_library(self):
         # Prepare file with content
         file_content = "XTest Text1TestText2Test-Text3\n"
+        file_id = 17
         file_path = os.path.join(self.temp_dir, "test_file.txt")
         with open(file_path, "w") as file:
             file.write(file_content)
@@ -26,9 +27,9 @@ class TestBindings(unittest.TestCase):
             3: {"expected_text": "Test-Text3"},
         }
         with FileStreamer() as fs:
-            fs.stream_files([FileChunks(file_path, 1, request_sizes)])
-            for file, id, dst in fs.get_chunks():
-                self.assertEqual(file, file_path)
+            fs.stream_files([FileChunks(file_id, file_path, 1, request_sizes)])
+            for res_file_id, id, dst in fs.get_chunks():
+                self.assertEqual(res_file_id, file_id)
                 self.assertEqual(
                     dst.numpy().tobytes().decode("utf-8"),
                     id_to_results[id]["expected_text"],
@@ -38,6 +39,7 @@ class TestBindings(unittest.TestCase):
     def test_min_memory_cap(self, mock_get_memory_mode):
         mock_get_memory_mode.return_value = MemoryCapMode.largest_chunk
         file_content = "XTest Text1TestText2Test-Text3\n"
+        file_id = 17
         file_path = os.path.join(self.temp_dir, "min_test_file.txt")
         with open(file_path, "w") as file:
             file.write(file_content)
@@ -49,9 +51,9 @@ class TestBindings(unittest.TestCase):
             2: {"expected_text": "Test-Text3"},
         }
         with FileStreamer() as fs:
-            fs.stream_files([FileChunks(file_path, 1, request_sizes)])
-            for file, id, dst in fs.get_chunks():
-                self.assertEqual(file, file_path)
+            fs.stream_files([FileChunks(file_id, file_path, 1, request_sizes)])
+            for res_file_id, id, dst in fs.get_chunks():
+                self.assertEqual(res_file_id, file_id)
                 self.assertEqual(
                     dst.numpy().tobytes().decode("utf-8"),
                     id_to_results[id]["expected_text"],
@@ -64,6 +66,7 @@ class TestBindings(unittest.TestCase):
         mock_getenv.return_value = 6
 
         file_content = "XABBCCCDDDDEEEEEFFFFGGGHHI"
+        file_id = 17
         file_path = os.path.join(self.temp_dir, "limited_test_file.txt")
         with open(file_path, "w") as file:
             file.write(file_content)
@@ -81,9 +84,9 @@ class TestBindings(unittest.TestCase):
             8: {"expected_text": "I"},
         }
         with FileStreamer() as fs:
-            fs.stream_files([FileChunks(file_path, 1, request_sizes)])
-            for file, id, dst, in fs.get_chunks():
-                self.assertEqual(file, file_path)
+            fs.stream_files([FileChunks(file_id, file_path, 1, request_sizes)])
+            for res_file_id, id, dst, in fs.get_chunks():
+                self.assertEqual(res_file_id, file_id)
                 self.assertEqual(
                     dst.numpy().tobytes().decode("utf-8"),
                     id_to_results[id]["expected_text"],
