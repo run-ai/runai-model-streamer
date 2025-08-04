@@ -14,6 +14,10 @@ from runai_model_streamer.file_streamer import (
     FileChunks,
 )
 
+from runai_model_streamer.distributed_streamer.partition import (
+    partition
+)
+
 import humanize
 from timeit import default_timer as timer
 
@@ -24,6 +28,7 @@ class DistributedStreamer:
         self.total_size = 0
         self.device_str = None
         self.is_distributed = False
+        self.partitions = {}
 
     def __enter__(self) -> DistributedStreamer:
         self.file_streamer.__enter__()
@@ -67,7 +72,8 @@ class DistributedStreamer:
             return
         
         # partition tensors between processes
-
+        self.partitions = partition(file_stream_requests, self.get_group_size())
+        
         # read partition 
 
  
