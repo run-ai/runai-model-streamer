@@ -45,21 +45,21 @@ def random_file_chunks(i, dir):
     request_sizes = chunk_sizes[1:]
 
     expected_id_to_results = {}
-    for i in range(len(request_sizes)):
-        if i == len(request_sizes):
+    for j in range(len(request_sizes)):
+        if j == len(request_sizes):
             expected_content = (
-                file_content[sum(request_sizes[0:i]) :] + initial_offset
+                file_content[sum(request_sizes[0:j]) :] + initial_offset
             )
         else:
             expected_content = file_content[
-                sum(request_sizes[0:i])
-                + initial_offset : sum(request_sizes[0 : i + 1])
+                sum(request_sizes[0:j])
+                + initial_offset : sum(request_sizes[0 : j + 1])
                 + initial_offset
             ]
         expected_id_to_results[i] = {
             "expected_content": expected_content,
         }
-    return expected_id_to_results, FileChunks(file_path, initial_offset, request_sizes)
+    return expected_id_to_results, FileChunks(i, file_path, initial_offset, request_sizes)
 
 class TestFuzzing(unittest.TestCase):
     def setUp(self):
