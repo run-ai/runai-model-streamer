@@ -5,7 +5,8 @@ from typing import List
 # You may need to adjust the import paths based on your project structure.
 from runai_model_streamer.distributed_streamer.partition import (
     partition_by_chunks,
-    partition_by_files
+    partition_by_files,
+    create_broadcast_plan
 )
 from runai_model_streamer.file_streamer import FileChunks
 
@@ -159,6 +160,40 @@ class TestPartitioning(unittest.TestCase):
 
         # Verify that only the non-zero chunks are present in the output
         self._verify_all_chunks_present(requests_with_zero, partitions)
+
+    def test_create_broadcast_plan(self):
+        """Tests the round-robin broadcast plan creation."""
+        # Create a sample partition structure.
+        # Partition 0: 3 chunks
+        # Partition 1: 1 chunk
+        # Partition 2: 4 chunks
+        partitions = [
+            [FileChunks("A", 0, [10, 20, 30])],
+            [FileChunks("B", 0, [40])],
+            [FileChunks("C", 0, [50, 60]), FileChunks("D", 0, [70, 80])]
+        ]
+        
+        plan = create_broadcast_plan(partitions)
+        
+        # Total chunks = 3 + 1 + 4 = 8. Plan length should be 8.
+        self.assertEqual(len(plan), 8)
+        
+        # Check the number of broadcasts for each process.
+        self.assertEqual(plan.count(0), 3)
+        self.assertEqual(plan.count(1), 1)
+        self.assertEqual(plan.count(2), 4)
+        
+        # Check the round-robin order.
+        # P0, P1, P2
+        # P0, P2 (P1 is done)
+        # P0, P2
+        # P2
+        expected_plan = [0, 1, 2, 0, 2, 0, 2, 2]
+        self.assertListEqual(plan, expected_plan)
+
+        # Test with empty partitions
+        plan_empty = create_broadcast_plan([])
+        self.assertListEqual(plan_empty, [])
 
     def tearDown(self):
         """No cleanup needed for these tests."""
