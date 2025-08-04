@@ -15,7 +15,8 @@ from runai_model_streamer.file_streamer import (
 )
 
 from runai_model_streamer.distributed_streamer.partition import (
-    partition
+    partition,
+    create_broadcast_plan
 )
 
 import humanize
@@ -29,6 +30,11 @@ class DistributedStreamer:
         self.device_str = None
         self.is_distributed = False
         self.partitions = {}
+        self.rank_file_chunks_list = {}
+        self.rank_dicts_list = {}
+        self.broadcast_plan = {}
+        self.is_distributed = False
+        self.rank = 0
 
     def __enter__(self) -> DistributedStreamer:
         self.file_streamer.__enter__()
@@ -66,6 +72,10 @@ class DistributedStreamer:
 
         # check if distributed
         self.is_distributed = torch.distributed.is_initialized() and get_group_size() > 1
+        if self.is_distributed:
+            self.rank = dist.get_rank()
+        else:
+            self.rank = 0
 
         if not self.is_distributed:
             self.file_streamer.stream_files(file_stream_requests, credentials, device)
@@ -74,8 +84,15 @@ class DistributedStreamer:
         # partition tensors between processes
         self.partitions = partition(file_stream_requests, self.get_group_size())
         
-        # read partition 
+        self.broadcast_plan = create_broadcast_plan(self.partitions)
 
+        # read partition
+        self.rank_file_chunks_list = []
+        self.rank_dicts_list = []
+        for fc, d in self.partitions[self.rank]:
+            self.rank_file_chunks_list.append(fc)
+            self.rank_dicts_list.append(d)
+        self.file_streamer.stream_files(self.rank_file_chunks_list, credentials, device)
  
     def get_chunks(self) -> Iterator:
         if not self.file_streamer:
@@ -87,4 +104,18 @@ class DistributedStreamer:
             return
         
         # broadcast and wait for ready tensors
-        
+        for i in range(len(self.broadcast_plan)):
+            if self.broadcast_plan[i] == self.rank:
+                # wait for the next chunk
+                file_path, ready_chunk_index, buffer = self.file_streamer.get_chunks()
+
+                # translate chunk index to original request index, chunk index and size
+                original_request_index, original_chunk_index, original_chunk_size = self.rank_dicts_list[file_path][ready_chunk_index]
+
+                # broadcast
+                dist.broadcast(buffer, self.rank)
+                yield file_path, original_request_index, original_chunk_index, buffer
+            else:
+                # wait for broadcast
+                dist.broadcast(buffer, self.rank)
+                yield file_path, ready_chunk_index, buffer

@@ -10,20 +10,23 @@ class _WorkUnit:
     """
     An internal, flattened representation of a single, indivisible chunk of work.
     This simplifies the partitioning logic by breaking down the input into its
-    smallest components.
+    smallest components and tracking their original positions.
     """
     path: str
     offset: int
     size: int
+    original_request_index: int
+    original_chunk_index: int
 
-def partition_by_chunks(file_stream_requests: List[FileChunks], n: int) -> List[List[FileChunks]]:
+def partition_by_chunks(
+    file_stream_requests: List[FileChunks], n: int
+) -> List[List[Tuple[FileChunks, Dict[int, Tuple[int, int, int]]]]]:
     """
     Partitions a list of file read requests into n balanced parts.
 
-    The function prioritizes creating partitions of nearly equal total byte size.
-    A secondary goal is to maintain continuous read operations where possible.
-    The partitioning is deterministic: the same input will always produce the
-    same output.
+    For each returned FileChunks object, it also provides a map from the index
+    of a chunk in its new list to a tuple representing its original position
+    (original_request_index, original_chunk_index, chunk_size).
 
     Args:
         file_stream_requests: A list of FileChunks objects representing the
@@ -31,8 +34,10 @@ def partition_by_chunks(file_stream_requests: List[FileChunks], n: int) -> List[
         n: The number of partitions to divide the work into.
 
     Returns:
-        A list containing n lists of FileChunks. Each inner list is a partition
-        of the total workload.
+        A list of n partitions. Each partition is a list of tuples, where each
+        tuple contains a new FileChunks object and its corresponding source map.
+        The map's key is the new chunk index, and the value is a tuple
+        (original request index, original chunk index, chunk size).
 
     Raises:
         ValueError: If n is not a positive integer.
@@ -44,82 +49,68 @@ def partition_by_chunks(file_stream_requests: List[FileChunks], n: int) -> List[
         return [[] for _ in range(n)]
 
     # 1. Flatten the input `FileChunks` into a single list of `_WorkUnit`s.
-    # Each WorkUnit is a single, atomic chunk with its absolute file offset.
     all_units: List[_WorkUnit] = []
-    for request in file_stream_requests:
+    for req_idx, request in enumerate(file_stream_requests):
         current_offset = request.offset
-        for chunk_size in request.chunks:
+        for chunk_idx, chunk_size in enumerate(request.chunks):
             if chunk_size > 0:
                 all_units.append(_WorkUnit(
                     path=request.path,
                     offset=current_offset,
-                    size=chunk_size
+                    size=chunk_size,
+                    original_request_index=req_idx,
+                    original_chunk_index=chunk_idx
                 ))
             current_offset += chunk_size
 
-    # 2. Sort the atomic work units. This is the key to the partitioning
-    # strategy. By sorting from the largest to the smallest chunk, we can use a
-    # greedy algorithm that closely approximates the optimal solution for the
-    # bin packing problem, ensuring the most balanced partitions possible.
+    # 2. Sort the atomic work units from largest to smallest.
     all_units.sort(key=lambda u: u.size, reverse=True)
 
     # 3. Distribute the sorted work units into n partitions.
-    # We always add the next work unit to the partition that currently has the
-    # smallest total size.
-    partitions: List[List[_WorkUnit]] = [[] for _ in range(n)]
+    partitions_of_units: List[List[_WorkUnit]] = [[] for _ in range(n)]
     partition_sizes: List[int] = [0] * n
 
     for unit in all_units:
-        # Find the partition with the minimum current workload.
         min_size_idx = partition_sizes.index(min(partition_sizes))
-        
-        # Assign the work unit and update the partition's size.
-        partitions[min_size_idx].append(unit)
+        partitions_of_units[min_size_idx].append(unit)
         partition_sizes[min_size_idx] += unit.size
 
-    # 4. Reconstruct the final `FileChunks` objects from the partitioned work units.
-    # Within each partition, we group units by file path and merge consecutive
-    # chunks back together to respect the `FileChunks` format.
-    result_partitions: List[List[FileChunks]] = []
-    for partition in partitions:
-        new_file_chunks_list: List[FileChunks] = []
-        
-        # Group work units by their file path within the partition.
+    # 4. Reconstruct the final `FileChunks` objects and their source maps.
+    result_partitions: List[List[Tuple[FileChunks, Dict[int, Tuple[int, int, int]]]]] = []
+    for partition_of_units in partitions_of_units:
+        new_partition: List[Tuple[FileChunks, Dict[int, Tuple[int, int, int]]]] = []
         units_by_path: Dict[str, List[_WorkUnit]] = defaultdict(list)
-        for unit in partition:
+        for unit in partition_of_units:
             units_by_path[unit.path].append(unit)
         
-        # For each file, reconstruct the continuous FileChunks.
         for path, units in units_by_path.items():
-            # Sort by offset to find continuous blocks.
             units.sort(key=lambda u: u.offset)
-
             if not units:
                 continue
 
-            # Iterate through the sorted units, merging where possible.
             current_fc = FileChunks(path=path, offset=units[0].offset, chunks=[units[0].size])
+            current_map = {0: (units[0].original_request_index, units[0].original_chunk_index, units[0].size)}
             
             for i in range(1, len(units)):
                 next_unit = units[i]
-                # Check if the next unit is contiguous with the current FileChunks block.
                 if current_fc.offset + sum(current_fc.chunks) == next_unit.offset:
-                    # If so, append its size to the current block.
+                    new_chunk_index = len(current_fc.chunks)
                     current_fc.chunks.append(next_unit.size)
+                    current_map[new_chunk_index] = (next_unit.original_request_index, next_unit.original_chunk_index, next_unit.size)
                 else:
-                    # If not, the current block is finished. Add it to our list.
-                    new_file_chunks_list.append(current_fc)
-                    # Start a new block with the non-contiguous unit.
+                    new_partition.append((current_fc, current_map))
                     current_fc = FileChunks(path=path, offset=next_unit.offset, chunks=[next_unit.size])
+                    current_map = {0: (next_unit.original_request_index, next_unit.original_chunk_index, next_unit.size)}
             
-            # Add the last processed FileChunks block to the list.
-            new_file_chunks_list.append(current_fc)
-            
-        result_partitions.append(new_file_chunks_list)
+            new_partition.append((current_fc, current_map))
+        
+        result_partitions.append(new_partition)
 
     return result_partitions
 
-def partition_by_files(file_stream_requests: List[FileChunks], n: int) -> List[List[FileChunks]]:
+def partition_by_files(
+    file_stream_requests: List[FileChunks], n: int
+) -> List[List[Tuple[FileChunks, Dict[int, Tuple[int, int, int]]]]]:
     """
     Partitions a list of file read requests into n parts by distributing
     whole FileChunks objects.
@@ -134,11 +125,8 @@ def partition_by_files(file_stream_requests: List[FileChunks], n: int) -> List[L
         n: The number of partitions to divide the work into.
 
     Returns:
-        A list containing n lists of FileChunks. Each inner list is a partition
-        of the total workload.
-
-    Raises:
-        ValueError: If n is not a positive integer.
+        A list of n partitions. Each partition is a list of tuples, where each
+        tuple contains a FileChunks object and its corresponding source map.
     """
     if n <= 0:
         raise ValueError("Number of partitions (n) must be a positive integer.")
@@ -146,31 +134,43 @@ def partition_by_files(file_stream_requests: List[FileChunks], n: int) -> List[L
     if not file_stream_requests:
         return [[] for _ in range(n)]
 
-    # 1. Sort the FileChunks objects from largest to smallest total size.
-    # We create a copy to avoid modifying the original list.
-    sorted_requests = sorted(file_stream_requests, key=lambda fc: fc.total_size(), reverse=True)
+    # 1. Sort the FileChunks objects from largest to smallest total size, keeping track of original index.
+    requests_with_indices = list(enumerate(file_stream_requests))
+    sorted_requests = sorted(
+        requests_with_indices,
+        key=lambda item: sum(item[1].chunks),
+        reverse=True
+    )
 
     # 2. Distribute the sorted FileChunks objects into n partitions.
-    partitions: List[List[FileChunks]] = [[] for _ in range(n)]
+    partitions: List[List[Tuple[FileChunks, Dict[int, Tuple[int, int, int]]]]] = [[] for _ in range(n)]
     partition_sizes: List[int] = [0] * n
 
-    for request in sorted_requests:
-        # Find the partition with the minimum current workload.
+    for original_request_index, request in sorted_requests:
         min_size_idx = partition_sizes.index(min(partition_sizes))
         
-        # Assign the FileChunks object and update the partition's size.
-        partitions[min_size_idx].append(request)
-        partition_sizes[min_size_idx] += request.total_size()
+        # Create the source map. Since we aren't changing the chunk order within
+        # the FileChunks object, the mapping is direct.
+        source_map = {
+            chunk_idx: (original_request_index, chunk_idx, request.chunks[chunk_idx])
+            for chunk_idx in range(len(request.chunks))
+        }
+        
+        partitions[min_size_idx].append((request, source_map))
+        partition_sizes[min_size_idx] += sum(request.chunks)
 
     return partitions
 
-def partition(file_stream_requests: List[FileChunks], n: int) -> List[List[FileChunks]]:
+# Dict[int, Tuple[int, int, int] maps the chunk index in the corresponding
+# FileChunks object to the original request index, chunk index, and chunk size.
+
+def partition(file_stream_requests: List[FileChunks], n: int) -> List[List[Tuple[FileChunks, Dict[int, Tuple[int, int, int]]]]]:
     if len(file_stream_requests) >= n:
         return partition_by_files(file_stream_requests, n)
     else:
         return partition_by_chunks(file_stream_requests, n)
 
-def create_broadcast_plan(partitions: List[List[FileChunks]]) -> List[int]:
+def create_broadcast_plan(partitions: List[List[Tuple[FileChunks, dict]]]) -> List[int]:
     """
     Creates a round-robin broadcast plan from a list of partitions.
 
@@ -179,7 +179,7 @@ def create_broadcast_plan(partitions: List[List[FileChunks]]) -> List[int]:
 
     Args:
         partitions: A list of n partitions, where each partition is a list
-                    of FileChunks assigned to a single process.
+                    of tuples containing a FileChunks object and its source map.
 
     Returns:
         A list of process indices (0 to n-1) representing the broadcast
@@ -190,8 +190,8 @@ def create_broadcast_plan(partitions: List[List[FileChunks]]) -> List[int]:
     if n == 0:
         return []
 
-    # Count the number of chunks each process has.
-    chunks_per_process = [sum(len(fc.chunks) for fc in p) for p in partitions]
+    # Count the number of chunks each process has by unpacking the tuples.
+    chunks_per_process = [sum(len(fc.chunks) for fc, _ in p) for p in partitions]
     
     plan = []
     process_idx = 0
@@ -207,3 +207,4 @@ def create_broadcast_plan(partitions: List[List[FileChunks]]) -> List[int]:
         process_idx = (process_idx + 1) % n
         
     return plan
+
