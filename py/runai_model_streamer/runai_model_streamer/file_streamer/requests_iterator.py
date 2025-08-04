@@ -25,6 +25,14 @@ class FileChunks:
         self.offset = offset
         self.chunks = chunks
 
+    def total_size(self) -> int:
+        return sum(self.chunks)
+
+    def __repr__(self) -> str:
+        """Provides a clear string representation for the object."""
+        return (f"FileChunks(path='{self.path}', offset={self.offset}, "
+                f"num_chunks={len(self.chunks)}, total_size={self.total_size()})")
+
 class FilesRequest:
     def __init__(self) -> None:
         self.files: List[FileChunks] = []
