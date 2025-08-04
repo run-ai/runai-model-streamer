@@ -218,10 +218,10 @@ class TestPartitioning(unittest.TestCase):
     def setUp(self):
         """Set up a standard set of requests for use in multiple tests."""
         self.requests: List[FileChunks] = [
-            FileChunks(path="file_A.dat", offset=1000, chunks=[100, 50, 200]), # Total: 350
-            FileChunks(path="file_B.dat", offset=0, chunks=[400]),             # Total: 400
-            FileChunks(path="file_A.dat", offset=5000, chunks=[80, 20]),       # Total: 100
-            FileChunks(path="file_C.dat", offset=800, chunks=[300, 150]),      # Total: 450
+            FileChunks(0, path="file_A.dat", offset=1000, chunks=[100, 50, 200]), # Total: 350
+            FileChunks(1, path="file_B.dat", offset=0, chunks=[400]),             # Total: 400
+            FileChunks(2, path="file_A.dat", offset=5000, chunks=[80, 20]),       # Total: 100
+            FileChunks(3, path="file_C.dat", offset=800, chunks=[300, 150]),      # Total: 450
         ]
         self.total_size = sum(sum(r.chunks) for r in self.requests) # 1300
 
@@ -352,8 +352,8 @@ class TestPartitioning(unittest.TestCase):
 
         # Test case 3: Test re-merging of contiguous chunks
         contiguous_requests = [
-            FileChunks(path="A", offset=0, chunks=[10, 20]),
-            FileChunks(path="A", offset=30, chunks=[5])
+            FileChunks(0, path="A", offset=0, chunks=[10, 20]),
+            FileChunks(1, path="A", offset=30, chunks=[5])
         ]
         partitions = partition_by_chunks(contiguous_requests, 1)
         self.assertEqual(len(partitions[0]), 1, "All contiguous chunks should be merged")
@@ -368,8 +368,8 @@ class TestPartitioning(unittest.TestCase):
     def test_partition_by_chunks_with_zero_size_chunks(self):
         """Tests that zero-sized chunks are correctly handled (ignored)."""
         requests_with_zero = [
-            FileChunks(path="Z.dat", offset=0, chunks=[10, 50, 0, 100]),
-            FileChunks(path="Y.dat", offset=10, chunks=[0, 0, 25])
+            FileChunks(0, path="Z.dat", offset=0, chunks=[10, 50, 0, 100]),
+            FileChunks(1, path="Y.dat", offset=10, chunks=[0, 0, 25])
         ]
         n = 2
         partitions = partition_by_chunks(requests_with_zero, n)
@@ -386,9 +386,9 @@ class TestPartitioning(unittest.TestCase):
         """Tests the round-robin broadcast plan creation."""
         # Create a sample partition structure.
         partitions = [
-            [(FileChunks("A", 0, [10, 20, 30]), {})],
-            [(FileChunks("B", 0, [40]), {})],
-            [(FileChunks("C", 0, [50, 60]), {}), (FileChunks("D", 0, [70, 80]), {})]
+            [(FileChunks(0, "A", 0, [10, 20, 30]), {})],
+            [(FileChunks(1, "B", 0, [40]), {})],
+            [(FileChunks(2, "C", 0, [50, 60]), {}), (FileChunks(3, "D", 0, [70, 80]), {})]
         ]
         
         plan = create_broadcast_plan(partitions)
