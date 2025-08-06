@@ -52,18 +52,20 @@ class SafetensorsMetadata:
                 self.read_sizes.append(self.tensors_metadata[i].get_bytesize())
 
     @staticmethod
-    def from_files(fs: FileStreamer, filenames: List[str]) -> List[SafetensorsMetadata]:
-        fs.stream_files([FileChunks(i, filenames[i], 0, [SAFETENSORS_HEADER_BUFFER_SIZE]) for i in range(len(filenames))])
+    def from_files(fs: FileStreamer, filenames: List[str], s3_credentials: Optional[S3Credentials], device_str: str) -> List[SafetensorsMetadata]:
+        fs.stream_files([FileChunks(i, filenames[i], 0, [SAFETENSORS_HEADER_BUFFER_SIZE]) for i in range(len(filenames))], s3_credentials, device_str)
         header_sizes = {}
         for file_index, ready_chunk_index, buffer in fs.get_chunks():
+            cpu_buffer = buffer.to("cpu")
             header_sizes[file_index] = struct.unpack(
-                LITTLE_ENDIAN_LONG_LONG_STRUCT_FORMAT, buffer.numpy()
+                LITTLE_ENDIAN_LONG_LONG_STRUCT_FORMAT, cpu_buffer.numpy()
             )[0]
-            
+
         metadatas = {}
-        fs.stream_files([FileChunks(i, filenames[i], SAFETENSORS_HEADER_BUFFER_SIZE, [header_size]) for i, header_size in header_sizes.items()])
+        fs.stream_files([FileChunks(i, filenames[i], SAFETENSORS_HEADER_BUFFER_SIZE, [header_size]) for i, header_size in header_sizes.items()], s3_credentials, device_str)
         for file_index, ready_chunk_index, buffer in fs.get_chunks():
-            metadatas[file_index] = json.loads(bytearray(buffer.numpy()))
+            cpu_buffer = buffer.to("cpu")
+            metadatas[file_index] = json.loads(bytearray(cpu_buffer.numpy()))
 
         return [SafetensorsMetadata(
             metadatas[i], header_sizes[i] + SAFETENSORS_HEADER_BUFFER_SIZE
@@ -100,9 +102,9 @@ class Offsets:
 
 
 def prepare_request(
-    fs: FileStreamer, paths: List[str]
+    fs: FileStreamer, paths: List[str], s3_credentials: Optional[S3Credentials], device_str: str
 ) -> List[Tuple[str, int, List[SafetensorMetadata], List[int]]]:
-    safetensors_metadatas = SafetensorsMetadata.from_files(fs, paths)
+    safetensors_metadatas = SafetensorsMetadata.from_files(fs, paths, s3_credentials, device_str)
     return [(
         safetensors_metadata.offset,
         safetensors_metadata.tensors_metadata,

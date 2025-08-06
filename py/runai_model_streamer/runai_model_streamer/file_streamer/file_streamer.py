@@ -50,6 +50,8 @@ class FileStreamer:
         self.streamer = runai_start()
         self.start_time = timer()
         self.total_size = 0
+        self.device_str = None
+        self.device_type = None
 
         self.s3_session = None
         self.s3_credentials = None
