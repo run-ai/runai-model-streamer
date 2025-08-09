@@ -622,8 +622,6 @@ class DistributedStreamer:
 
         dist.barrier()
 
-        time.sleep(10)
-
         start_time = timer()
         
         # --- PIPELINE & BATCHING SETUP ---
