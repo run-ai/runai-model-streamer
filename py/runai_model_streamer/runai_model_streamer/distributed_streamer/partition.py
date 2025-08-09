@@ -208,6 +208,8 @@ def single_reader_partition(
 # FileChunks object to the original request index, chunk index, and chunk size.
 
 def partition(file_stream_requests: List[FileChunks], n: int) -> List[List[Tuple[FileChunks, Dict[int, Tuple[int, int, int]]]]]:
+    return single_reader_partition(file_stream_requests, n)
+
     partition_policy = os.getenv("RUNAI_STREAMER_PARTITION_POLICY")
     if partition_policy == "single_reader":
         return single_reader_partition(file_stream_requests, n)
