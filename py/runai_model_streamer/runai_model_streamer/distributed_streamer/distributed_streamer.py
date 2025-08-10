@@ -32,7 +32,6 @@ class DistributedStreamer:
         self.rank_file_chunks_list = {} # post Partitioning FileChunks to be streamed by this rank
         self.rank_dicts_map = {} # maps post partitioning FileChunks.id and chunk index to the original FileChunks.id and chunk index and chunk size
         self.broadcast_plan = {}
-        self.is_distributed = False
         self.rank = 0
 
     def __enter__(self) -> DistributedStreamer:
@@ -61,6 +60,12 @@ class DistributedStreamer:
         # check if distributed
         self.is_distributed = torch.distributed.is_initialized()
         self.is_distributed = self.is_distributed and self.get_group_size() > 1
+
+        if os.environ.get("RUNAI_STREAMER_DIST") is not None:
+            self.is_distributed = int(os.environ.get("RUNAI_STREAMER_DIST")) == 1
+
+        print(f"rank {self.rank} is distributed: {self.is_distributed}")
+
         if self.is_distributed:
             self.rank = dist.get_rank()
         else:
@@ -71,6 +76,7 @@ class DistributedStreamer:
                 raise ValueError("Distributed backend nccl does not support cpu tensors")
 
         if not self.is_distributed:
+            print(f"rank {self.rank} streaming with no distribution")
             self.file_streamer.stream_files(file_stream_requests, credentials, device)
             return
         
@@ -616,6 +622,7 @@ class DistributedStreamer:
             raise ValueError("Streamer not initialized")
         
         if not self.is_distributed:
+            print(f"rank {self.rank} streaming with no distribution")
             for item in self.file_streamer.get_chunks():
                 yield item
             return
@@ -625,6 +632,7 @@ class DistributedStreamer:
         start_time = timer()
         
         # --- PIPELINE & BATCHING SETUP ---
+        # TODO (Noa) check that the available device memory is enough for the buffers
         PIPELINE_DEPTH = 4
         MAX_CHUNKS_PER_BATCH = 256
         
@@ -662,7 +670,6 @@ class DistributedStreamer:
                     # --- SENDER LOGIC ---
 
                     if total_chunks == 0:
-                        print(f"broadcasting rank {self.rank} finished sending - total_chunks == 0")
                         break   
 
                     if len(handles) >= PIPELINE_DEPTH:
@@ -675,6 +682,7 @@ class DistributedStreamer:
                     chunk_count_in_batch = 0
                     
                     if not is_iterator_exhausted:
+                        start_time = timer()
                         while chunk_count_in_batch < MAX_CHUNKS_PER_BATCH:
  
                             # Prioritize the leftover chunk from the previous batch.
@@ -707,14 +715,18 @@ class DistributedStreamer:
                             current_data_offset += chunk_size
                             chunk_count_in_batch += 1
 
+                        if chunk_count_in_batch > 0:
+                            end_time = timer()
+                            print(f"rank {self.rank} aggregated {chunk_count_in_batch} chunks in {end_time - start_time} seconds")
+
                     batch_metadata_tensor[0, 0] = chunk_count_in_batch
                     total_chunks -= chunk_count_in_batch
                
                     # The sender launches two async broadcasts.
-                    print(f"rank {self.rank} broadcasting metadata from rank {broadcasting_rank} chunk_count_in_batch: {chunk_count_in_batch} total_chunks: {total_chunks}")
-                    dist.broadcast(batch_metadata_tensor, self.rank, async_op=True)
+                    #print(f"rank {self.rank} broadcasting metadata from rank {broadcasting_rank} chunk_count_in_batch: {chunk_count_in_batch} total_chunks: {total_chunks}")
 
                     if chunk_count_in_batch > 0:
+                        dist.broadcast(batch_metadata_tensor, self.rank, async_op=True)
                         data_handle = dist.broadcast(data_buffer[:current_data_offset], self.rank, async_op=True)
                         handles.append(data_handle)
 
@@ -726,9 +738,9 @@ class DistributedStreamer:
 
                 else:
                     # --- RECEIVER LOGIC ---
-                    print(f"rank {self.rank} waiting for metadata from rank {broadcasting_rank} total_chunks: {total_chunks}")
+                    #print(f"rank {self.rank} waiting for metadata from rank {broadcasting_rank} total_chunks: {total_chunks}")
                     if total_chunks == 0:
-                        print(f"rank {self.rank} finished receiving all chunks - total_chunks == 0")
+                        #print(f"rank {self.rank} finished receiving all chunks - total_chunks == 0")
                         break
 
                     metadata_buf = metadata_buffers[buffer_idx]
@@ -736,13 +748,13 @@ class DistributedStreamer:
                     
                     chunk_count_in_batch = metadata_buf[0, 0].item()
 
-                    print(f"rank {self.rank} received metadata from rank {broadcasting_rank} chunk_count_in_batch: {chunk_count_in_batch} total_chunks: {total_chunks}")
+                    #print(f"rank {self.rank} received metadata from rank {broadcasting_rank} chunk_count_in_batch: {chunk_count_in_batch} total_chunks: {total_chunks}")
                     
                     if chunk_count_in_batch == 0:
-                        print(f"rank {self.rank} received metadata from rank {broadcasting_rank} chunk_count_in_batch == 0")
+                        #print(f"rank {self.rank} received metadata from rank {broadcasting_rank} chunk_count_in_batch == 0")
                         continue
 
-                    print(f"rank {self.rank} received metadata from rank {broadcasting_rank} chunk_count_in_batch: {chunk_count_in_batch} total_chunks: {total_chunks}")
+                    #print(f"rank {self.rank} received metadata from rank {broadcasting_rank} chunk_count_in_batch: {chunk_count_in_batch} total_chunks: {total_chunks}")
 
                     last_meta = metadata_buf[chunk_count_in_batch]
                     total_data_size = last_meta[3].item() + last_meta[2].item() # offset plus size of last chunk in batch
@@ -758,9 +770,9 @@ class DistributedStreamer:
                     total_chunks -= chunk_count_in_batch
         finally:
             # Wait for any final in-flight operations from the sender.
-            print(f"rank {self.rank} waiting for {len(handles)} in-flight operations to complete")
+            #print(f"rank {self.rank} waiting for {len(handles)} in-flight operations to complete")
             for handle in handles:
                 handle.wait()
             dist.barrier()
             end_time = timer()
-            print(f"rank {self.rank} done waiting for {len(handles)} in-flight operations to complete in {end_time - start_time} seconds")
+            #print(f"rank {self.rank} done waiting for {len(handles)} in-flight operations to complete in {end_time - start_time} seconds")
