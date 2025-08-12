@@ -207,10 +207,21 @@ def single_reader_partition(
 # Dict[int, Tuple[int, int, int] maps the chunk index in the corresponding
 # FileChunks object to the original request index, chunk index, and chunk size.
 
-def partition(file_stream_requests: List[FileChunks], n: int) -> List[List[Tuple[FileChunks, Dict[int, Tuple[int, int, int]]]]]:
-    return single_reader_partition(file_stream_requests, n)
+def get_partition_policy() -> str:
+
+    #return "single_reader"
 
     partition_policy = os.getenv("RUNAI_STREAMER_PARTITION_POLICY")
+    if partition_policy is not None:
+        return partition_policy
+    else:
+        if len(file_stream_requests) >= n:
+            return "files"
+        else:
+            return "chunks"
+
+def partition(file_stream_requests: List[FileChunks], n: int) -> List[List[Tuple[FileChunks, Dict[int, Tuple[int, int, int]]]]]:
+    partition_policy = get_partition_policy()
     if partition_policy == "single_reader":
         return single_reader_partition(file_stream_requests, n)
     elif partition_policy == "files":
@@ -220,12 +231,7 @@ def partition(file_stream_requests: List[FileChunks], n: int) -> List[List[Tuple
         print(f"partitioning by chunks for n: {n}")
         return partition_by_chunks(file_stream_requests, n)
     else:
-        if len(file_stream_requests) >= n:
-            print(f"partitioning by files for n: {n}")
-            return partition_by_files(file_stream_requests, n)
-        else:
-            print(f"partitioning by chunks for n: {n}")
-            return partition_by_chunks(file_stream_requests, n)
+        raise ValueError(f"Invalid partition policy: {partition_policy}")
 
 def create_broadcast_plan(partitions: List[List[Tuple[FileChunks, dict]]]) -> List[int]:
     """
