@@ -48,7 +48,7 @@ class TestSafetensorStreamerFuzzing(unittest.TestCase):
 
         our = {}
         with SafetensorsStreamer() as run_sf:
-            run_sf.stream_files(file_paths)
+            run_sf.stream_files(file_paths, None, "cpu")
             for name, tensor in run_sf.get_tensors():
                 our[name] = tensor
 
