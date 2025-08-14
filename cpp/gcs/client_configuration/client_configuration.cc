@@ -8,6 +8,8 @@
 #include "utils/env/env.h"
 
 #include <fstream>
+#include <thread>
+#include <algorithm>
 
 namespace runai::llm::streamer::impl::gcs
 {
@@ -15,10 +17,18 @@ namespace runai::llm::streamer::impl::gcs
 ClientConfiguration::ClientConfiguration()
 {
     const auto max_connections = utils::getenv<unsigned long>("RUNAI_STREAMER_S3_MAX_CONNECTIONS", 0);
-    if (max_connections)
-    {
-        options.set<google::cloud::storage::ConnectionPoolSizeOption>(max_connections);
+    if (max_connections) {
+        max_concurrency = max_connections;
+    } else {
+        unsigned nprocs = std::thread::hardware_concurrency();
+        // Use at least 8 threads if hardware_concurrency cannot be computed.
+        LOG(SPAM) << "Hardware concurrency detected: " << nprocs;
+        unsigned default_max_concurrency = nprocs == 0 ? 8U : 1U;
+        unsigned worker_concurrency = utils::getenv<unsigned long>("RUNAI_STREAMER_CONCURRENCY", 8UL);
+        LOG(SPAM) << "Streamer worker concurrency: " << worker_concurrency;
+        max_concurrency = std::max(default_max_concurrency, nprocs * 2 / worker_concurrency);
     }
+    LOG(DEBUG) << "GCS per-client concurrency is set to: " << max_concurrency;
 
     // if the transfer speed is less than the low speed limit for request_timeout_ms milliseconds the transfer is aborted and retried
     const auto request_timeout_ms = utils::getenv<unsigned long>("RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS", 600000);

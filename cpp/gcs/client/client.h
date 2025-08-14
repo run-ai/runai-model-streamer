@@ -8,6 +8,7 @@
 #include <future>
 
 #include "gcs/client_configuration/client_configuration.h"
+#include "gcs/client/async_gcs_client/async_gcs_client.h"
 
 #include "google/cloud/storage/client.h"
 #include "google/cloud/options.h"
@@ -41,7 +42,7 @@ struct GCSClient : common::IClient
     std::atomic<bool> _stop;
     ClientConfiguration _client_config;
     const size_t _chunk_bytesize;
-    std::unique_ptr<google::cloud::storage::Client> _client;
+    std::unique_ptr<AsyncGcsClient> _client;
 
     // queue of asynchronous responses
     using Responder = common::SharedQueue<common::backend_api::Response>;

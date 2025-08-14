@@ -7,6 +7,7 @@
 #include <memory>
 #include <functional>
 
+#include "google/cloud/future.h"
 #include "google/cloud/storage/client.h"
 #include "google/cloud/storage/oauth2/credentials.h"
 #include "google/cloud/common_options.h"
@@ -28,12 +29,12 @@ GCSClient::GCSClient(const common::backend_api::ObjectClientConfig_t& config) :
     _responder(nullptr),
     _chunk_bytesize(config.default_storage_chunk_size)
 {
-    _client = std::make_unique<google::cloud::storage::Client>(google::cloud::storage::Client(_client_config.options));
+    _client = std::make_unique<AsyncGcsClient>(_client_config.options, _client_config.max_concurrency);
 }
 
 bool GCSClient::verify_credentials(const common::backend_api::ObjectClientConfig_t & config) const
 {
-    // TODO: Verify credentials.
+    // TODO: Verify credentials once they are passed in via config.
     return true;
 }
 
@@ -46,6 +47,32 @@ common::backend_api::Response GCSClient::async_read_response()
     }
 
     return _responder->pop();
+}
+
+common::ResponseCode write_stream_to_buffer(
+        google::cloud::storage::ObjectReadStream && stream,
+        char * dest_buffer,
+        size_t bytesize,
+        common::backend_api::ObjectRequestId_t request_id) {
+    size_t bytes_received = 0;
+    while (stream.read(dest_buffer, bytesize)) {
+        bytes_received += stream.gcount();
+    }
+    stream.Close();
+    if (bytes_received != bytesize) {
+        LOG(ERROR) << "GCS ReadObject received " << bytes_received << " bytes, but "
+                << bytesize << " were requested. This is unexpected." << std::endl;
+        return common::ResponseCode::FileAccessError;
+    }
+    if (stream.bad()) {
+        // Note: currently a failure to read any sub range fails the entire read request
+        //       a retry mechanism should be added for failed reads
+        const auto & err = stream.status();
+        LOG(ERROR) << "Failed to download GCS object of request " << request_id << " " << err.code() << ": " << err.message();
+        return common::ResponseCode::FileAccessError;
+    }
+
+    return common::ResponseCode::Success;
 }
 
 common::ResponseCode GCSClient::async_read(const char* path, common::backend_api::ObjectRange_t range, char* destination_buffer, common::backend_api::ObjectRequestId_t request_id)
@@ -67,6 +94,10 @@ common::ResponseCode GCSClient::async_read(const char* path, common::backend_api
     // each range is divided into chunks (size is the number of chunks)
     // when all the chunks have been read successfuly the response for that range is pushed to the responder
 
+    auto counter = std::make_shared< std::atomic<unsigned> >(size);
+    // success flag for the current range is passed to the client
+    auto is_success = std::make_shared< std::atomic<bool> >(true);
+
     const auto uri = common::s3::StorageUri(path);
 
     std::string bucket_name(uri.bucket);
@@ -75,43 +106,46 @@ common::ResponseCode GCSClient::async_read(const char* path, common::backend_api
     size_t total_ = range.length;
     size_t offset_ = range.offset;
 
-    auto response_code = common::ResponseCode::Success;
     for (unsigned i = 0; i < size && !_stop; ++i)
     {
         size_t bytesize_ = (i == size - 1 ? total_ : _chunk_bytesize);
 
-        auto stream = _client->ReadObject(bucket_name, path_name, google::cloud::storage::ReadRange(offset_, offset_ + bytesize_));
-        size_t bytes_received = 0;
-        while (stream.read(buffer_, bytesize_)) {
-            bytes_received += stream.gcount();
-        }
-        stream.Close();
-        if (bytes_received != bytesize_) {
-            LOG(ERROR) << "GCS ReadObject received " << bytes_received << " bytes, but "
-                    << bytesize_ << " were requested. This is unexpected." << std::endl;
-            response_code = common::ResponseCode::FileAccessError;
-            break;
-        }
-        if (stream.bad()) {
-            // Note: currently a failure to read any sub range fails the entire read request
-            //       a retry mechanism should be added for failed reads
-            const auto & err = stream.status();
-            LOG(ERROR) << "Failed to download GCS object of request " << request_id << " " << err.code() << ": " << err.message();
-            response_code = common::ResponseCode::FileAccessError;
-            break;
-        } else {
-            LOG(SPAM) << "Read request [" << request_id << ":" << i << "] succeeded - (" << (size - 1 - i) << "/" << size << ") remaining";
-        }
+        _client->ReadObjectAsync(bucket_name, path_name, google::cloud::storage::ReadRange(offset_, offset_ + bytesize_)).then(
+            [dest_buffer = buffer_, responder = _responder, request_id, bytesize_, counter, is_success](auto f) {
+            auto stream = f.get();
+            auto response_code = write_stream_to_buffer(std::move(stream), dest_buffer, bytesize_, request_id);
+            if (response_code == common::ResponseCode::Success)
+            {
+                const auto running = counter->fetch_sub(1);
+                LOG(SPAM) << "Async read request " << request_id << " succeeded - " << running << " running";
+                // send success response only if all the requests have succeeded
+                // note that unsuccessful attempts do not update the counter
+                if (running == 1)
+                {
+                    common::backend_api::Response r(request_id, response_code);
+                    responder->push(std::move(r));
+                }
+            }
+            else
+            {
+                // Note: currently a failure to read any sub range fails the entire read request
+                //       a retry mechanism should be added for failed reads
+                bool previous = is_success->exchange(false);
+                // send error response only once
+                if (previous)
+                {
+                    common::backend_api::Response r(request_id, response_code);
+                    responder->push(std::move(r));
+                }
+            }
+        });
 
         total_ -= bytesize_;
         offset_ += bytesize_;
         buffer_ += bytesize_;
     }
 
-    common::backend_api::Response r(request_id, response_code);
-    _responder->push(std::move(r));
-
-    return _stop ? common::ResponseCode::FinishedError : response_code;
+    return _stop ? common::ResponseCode::FinishedError : common::ResponseCode::Success;
 }
 
 void GCSClient::stop()
