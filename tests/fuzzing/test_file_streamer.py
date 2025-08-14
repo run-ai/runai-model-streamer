@@ -56,7 +56,7 @@ def random_file_chunks(i, dir):
                 + initial_offset : sum(request_sizes[0 : j + 1])
                 + initial_offset
             ]
-        expected_id_to_results[i] = {
+        expected_id_to_results[j] = {
             "expected_content": expected_content,
         }
     return expected_id_to_results, FileChunks(i, file_path, initial_offset, request_sizes)
@@ -72,8 +72,8 @@ class TestFuzzing(unittest.TestCase):
         
         for i in range(random.randint(MIN_NUM_FILES, MAX_NUM_FILES)):
             expected_id_to_results, file_chunks = random_file_chunks(i, self.temp_dir)
-            expected_file_to_id_to_results[file_chunks.path] = expected_id_to_results
-            file_to_file_chunks[file_chunks.path] = file_chunks
+            expected_file_to_id_to_results[file_chunks.id] = expected_id_to_results
+            file_to_file_chunks[file_chunks.id] = file_chunks
             files_chunks.append(file_chunks)
 
         random_memory_mode([chunk for chunk in file_chunks.chunks for file_chunks in files_chunks])
@@ -81,7 +81,9 @@ class TestFuzzing(unittest.TestCase):
         with FileStreamer() as fs:
             fs.stream_files(files_chunks, None, "cpu")
             for file, id, dst in fs.get_chunks():
-                self.assertIn(file, [file_chunks.path for file_chunks in files_chunks])
+                # file is the unique integer identifier for the file chunks request
+                self.assertLess(file, len(files_chunks))
+                self.assertGreaterEqual(file, 0)
 
                 file_chunks = file_to_file_chunks[file]
                 expected_id_to_results = expected_file_to_id_to_results[file]
