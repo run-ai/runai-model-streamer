@@ -108,31 +108,11 @@ class DistributedStreamer:
             self.reading_from_storage = True
         else:
             self.reading_from_storage = False
-            print(f"rank {self.rank} has no files to stream")
-    
+            print(f"rank {self.rank} has no files to stream")    
+
     def get_chunks(self) -> Iterator:
         if not self.file_streamer:
             raise ValueError("Streamer not initialized")
- 
-        if not self.is_distributed:
-            print(f"rank {self.rank} streaming with no distribution")
-            for item in self.file_streamer.get_chunks():
-                yield item
-            return
-
-        if get_partition_policy() == "single_reader":
-            for item in self.get_chunks_single_reader():
-                yield item
-        elif get_partition_policy() == "chunks" or get_partition_policy() == "files":
-            for item in self.get_chunks_multi_readers():
-                yield item
-        else:
-            raise ValueError(f"Invalid partition policy: {get_partition_policy()}")
-
-
-    def get_chunks_single_reader(self) -> Iterator:
-        if not self.file_streamer:
-            raise ValueError("Streamer not initialized")
         
         if not self.is_distributed:
             print(f"rank {self.rank} streaming with no distribution")
@@ -146,178 +126,15 @@ class DistributedStreamer:
         
         # --- PIPELINE & BATCHING SETUP ---
         # TODO (Noa) check that the available device memory is enough for the buffers
-        PIPELINE_DEPTH = 8
         MAX_CHUNKS_PER_BATCH = 256
-        BROADCAST_THRESHOLD = 1000 * 1000 * 1000  # 1GB
+        BUFFER_MIN_BYTESIZE = 1024 * 1024 * 1024;
+        BUFFER_BYTESIZE = max(BUFFER_MIN_BYTESIZE, self.max_chunk)
+        print(f"rank {self.rank} broadcasting buffer size: {BUFFER_BYTESIZE}", flush=True)
 
-        data_buffers = [
-            torch.empty(self.max_chunk, dtype=torch.uint8, device=self.device_type)
-            for _ in range(PIPELINE_DEPTH)
-        ]
-        metadata_buffers = [
-            torch.zeros(MAX_CHUNKS_PER_BATCH + 1, 4, dtype=torch.int64, device=self.device_type)
-            for _ in range(PIPELINE_DEPTH)
-        ]
-        
-        handles = []
-        # --- END OF SETUP ---
+        data_buffer = torch.empty(BUFFER_BYTESIZE, dtype=torch.uint8, device=self.device_type)
+        received_buffer = torch.empty(BUFFER_BYTESIZE, dtype=torch.uint8, device=self.device_type)
 
-        ready_chunks_iterator = self.file_streamer.get_chunks()
-        
-        def chunk_generator():
-            yield from ready_chunks_iterator
-            while True:
-                yield None
-
-        total_chunks = len(self.broadcast_plan)
-        chunk_gen = chunk_generator()
-        is_iterator_exhausted = False
-        leftover_chunk = None
-        print(f"rank {self.rank} should read {total_chunks} chunks")
-        print(f"rank {self.rank} reading from storage: {self.reading_from_storage}", flush=True)
-
-        try:
-            for i in range(len(self.broadcast_plan)):
-                broadcasting_rank = self.broadcast_plan[i]
-                buffer_idx = i % PIPELINE_DEPTH
-
-                if broadcasting_rank == self.rank:
-                    # --- SENDER LOGIC ---
-
-                    if total_chunks == 0:
-                        break   
-
-                    if len(handles) >= PIPELINE_DEPTH:
-                        handles.pop(0).wait()
-
-                    batch_metadata_tensor = metadata_buffers[buffer_idx]
-                    data_buffer = data_buffers[buffer_idx]
-                    
-                    current_data_offset = 0
-                    chunk_count_in_batch = 0
-                    
-                    if self.reading_from_storage and not is_iterator_exhausted:
-                        start_time = timer()
-                        while chunk_count_in_batch < MAX_CHUNKS_PER_BATCH:
- 
-                            # Prioritize the leftover chunk from the previous batch.
-                            if leftover_chunk:
-                                chunk_item = leftover_chunk
-                                leftover_chunk = None
-                            else:
-                                chunk_item = next(chunk_gen)
-
-                            if chunk_item is None:
-                                is_iterator_exhausted = True
-                                break
-
-                            ready_request_id, ready_chunk_index, cpu_buffer = chunk_item
-                            chunk_size = cpu_buffer.numel()
-
-                            if current_data_offset + chunk_size > self.max_chunk:
-                                # This chunk doesn't fit, so we save it for the next batch.
-                                leftover_chunk = chunk_item
-                                break 
-
-                            data_buffer[current_data_offset : current_data_offset + chunk_size].copy_(cpu_buffer.squeeze(), non_blocking=True)
-                            
-                            orig_req_idx, orig_chunk_idx, _ = self.rank_dicts_map[ready_request_id][ready_chunk_index]
-                            
-                            batch_metadata_tensor[chunk_count_in_batch + 1].copy_(
-                                torch.tensor([orig_req_idx, orig_chunk_idx, chunk_size, current_data_offset])
-                            )
-                            
-                            current_data_offset += chunk_size
-                            chunk_count_in_batch += 1
-
-                            if current_data_offset > BROADCAST_THRESHOLD:
-                                break
-
-                        if chunk_count_in_batch > 0:
-                            end_time = timer()
-                            print(f"rank {self.rank} aggregated {chunk_count_in_batch} chunks in {end_time - start_time} seconds")
-
-                    batch_metadata_tensor[0, 0] = chunk_count_in_batch
-                    total_chunks -= chunk_count_in_batch
-               
-                    # The sender launches two async broadcasts.
-                    #print(f"rank {self.rank} broadcasting metadata from rank {broadcasting_rank} chunk_count_in_batch: {chunk_count_in_batch} total_chunks: {total_chunks}")
-
-                    if chunk_count_in_batch > 0:
-                        dist.broadcast(batch_metadata_tensor, self.rank, async_op=True)
-                        data_handle = dist.broadcast(data_buffer[:current_data_offset], self.rank, async_op=True)
-                        handles.append(data_handle)
-
-                        # The sender can yield its local data immediately.
-                        for j in range(chunk_count_in_batch):
-                            meta = batch_metadata_tensor[j + 1]
-                            offset, size = meta[3].item(), meta[2].item()
-                            yield meta[0].item(), meta[1].item(), data_buffer[offset : offset + size]
-
-                else:
-                    # --- RECEIVER LOGIC ---
-                    #print(f"rank {self.rank} waiting for metadata from rank {broadcasting_rank} total_chunks: {total_chunks}")
-                    if total_chunks == 0:
-                        #print(f"rank {self.rank} finished receiving all chunks - total_chunks == 0")
-                        break
-
-                    metadata_buf = metadata_buffers[buffer_idx]
-                    dist.broadcast(metadata_buf, broadcasting_rank)
-                    
-                    chunk_count_in_batch = metadata_buf[0, 0].item()
-
-                    #print(f"rank {self.rank} received metadata from rank {broadcasting_rank} chunk_count_in_batch: {chunk_count_in_batch} total_chunks: {total_chunks}")
-                    
-                    if chunk_count_in_batch == 0:
-                        #print(f"rank {self.rank} received metadata from rank {broadcasting_rank} chunk_count_in_batch == 0")
-                        continue
-
-                    #print(f"rank {self.rank} received metadata from rank {broadcasting_rank} chunk_count_in_batch: {chunk_count_in_batch} total_chunks: {total_chunks}")
-
-                    last_meta = metadata_buf[chunk_count_in_batch]
-                    total_data_size = last_meta[3].item() + last_meta[2].item() # offset plus size of last chunk in batch
-
-                    data_buf_view = data_buffers[buffer_idx][:total_data_size]
-                    dist.broadcast(data_buf_view, broadcasting_rank)
-                    
-                    for j in range(chunk_count_in_batch):
-                        meta = metadata_buf[j + 1]
-                        offset, size = meta[3].item(), meta[2].item()
-                        yield meta[0].item(), meta[1].item(), data_buf_view[offset : offset + size]
-
-                    total_chunks -= chunk_count_in_batch
-        finally:
-            # Wait for any final in-flight operations from the sender.
-            #print(f"rank {self.rank} waiting for {len(handles)} in-flight operations to complete")
-            for handle in handles:
-                handle.wait()
-            dist.barrier()
-            end_time = timer()
-            print(f"rank {self.rank} done waiting for {len(handles)} in-flight operations to complete in {end_time - start_time} seconds")
-
-
-
-    def get_chunks_multi_readers(self) -> Iterator:
-        if not self.file_streamer:
-            raise ValueError("Streamer not initialized")
-        
-        if not self.is_distributed:
-            print(f"rank {self.rank} streaming with no distribution")
-            for item in self.file_streamer.get_chunks():
-                yield item
-            return
-
-        dist.barrier()
-
-        start_time = timer()
-        
-        # --- PIPELINE & BATCHING SETUP ---
-        # TODO (Noa) check that the available device memory is enough for the buffers
-        PIPELINE_DEPTH = 1
-        MAX_CHUNKS_PER_BATCH = 256
-
-        data_buffer = torch.empty(self.max_chunk, dtype=torch.uint8, device=self.device_type)
-        received_buffer = torch.empty(self.max_chunk, dtype=torch.uint8, device=self.device_type)
+        print(f"rank {self.rank} allocating reusable buffers  humanized: {humanize.naturalsize(2 * BUFFER_BYTESIZE)}", flush=True)
   
         batch_metadata_tensor = torch.zeros(MAX_CHUNKS_PER_BATCH + 1, 4, dtype=torch.int64, device=self.device_type)
         received_metadata_tensor = torch.zeros(MAX_CHUNKS_PER_BATCH + 1, 4, dtype=torch.int64, device=self.device_type)
@@ -350,6 +167,7 @@ class DistributedStreamer:
                     
                     if self.reading_from_storage and not is_iterator_exhausted:
                         start_time = timer()
+                        copy_batch_time = 0
                         while chunk_count_in_batch < MAX_CHUNKS_PER_BATCH:
  
                             # Prioritize the leftover chunk from the previous batch.
@@ -366,19 +184,23 @@ class DistributedStreamer:
                             ready_request_id, ready_chunk_index, cpu_buffer = chunk_item
                             chunk_size = cpu_buffer.numel()
 
-                            if current_data_offset + chunk_size > self.max_chunk:
+                            if current_data_offset + chunk_size > BUFFER_BYTESIZE:
                                 # This chunk doesn't fit, so we save it for the next batch.
                                 leftover_chunk = chunk_item
                                 break 
 
-                            data_buffer[current_data_offset : current_data_offset + chunk_size].copy_(cpu_buffer.squeeze(), non_blocking=True)
+                            # TODO (Noa) for limited memory mode perform synchronous copy
+                            
+                            start_copy_time = timer()
+                            data_buffer[current_data_offset : current_data_offset + chunk_size].copy_(cpu_buffer.squeeze())
                             
                             orig_req_idx, orig_chunk_idx, _ = self.rank_dicts_map[ready_request_id][ready_chunk_index]
-                            
+                            # TODO (Noa) for only limited memory mode perform synchronous copy                            
                             batch_metadata_tensor[chunk_count_in_batch + 1].copy_(
-                                torch.tensor([orig_req_idx, orig_chunk_idx, chunk_size, current_data_offset]), 
-                                non_blocking=True
+                                torch.tensor([orig_req_idx, orig_chunk_idx, chunk_size, current_data_offset])
                             )
+                            copy_batch_time += end_copy_time - start_copy_time
+                            end_copy_time = timer()
                             
                             current_data_offset += chunk_size
                             chunk_count_in_batch += 1
@@ -386,7 +208,7 @@ class DistributedStreamer:
                         if chunk_count_in_batch > 0:
                             end_time = timer()
                             print(f"rank {self.rank} aggregated {chunk_count_in_batch} chunks in {end_time - start_time} seconds")
-
+                            print(f"rank {self.rank} copy time: {copy_batch_time} seconds")
                     batch_metadata_tensor[0, 0] = chunk_count_in_batch
 
                     total_chunks -= chunk_count_in_batch                    

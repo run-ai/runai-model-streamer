@@ -6,7 +6,6 @@ from typing import List, Dict, Tuple
 from runai_model_streamer.distributed_streamer.partition import (
     partition_by_chunks,
     partition_by_files,
-    single_reader_partition,
     create_broadcast_plan
 )
 from runai_model_streamer.file_streamer import FileChunks
@@ -122,50 +121,6 @@ class TestPartitioning(unittest.TestCase):
         
         self._verify_all_chunks_present(self.requests, partitions)
         self._verify_chunk_maps(self.requests, partitions)
-
-    def test_single_reader_partition(self):
-        """Tests for the single_reader_partition function."""
-        # Test case 1: Basic partitioning into 3 parts
-        n = 3
-        partitions = single_reader_partition(self.requests, n)
-        
-        self.assertEqual(len(partitions), n, "Should return the correct number of partitions")
-        
-        partition_sizes = [self._get_partition_total_size(p) for p in partitions]
-        self.assertEqual(sum(partition_sizes), self.total_size, "Total size should be conserved")
-        self.assertCountEqual(partition_sizes, [1300, 0, 0])
-
-        self._verify_all_chunks_present(self.requests, partitions)
-        self._verify_chunk_maps(self.requests, partitions)
-
-        # Test case 2: Partitioning into 1 part
-        n = 1
-        partitions = single_reader_partition(self.requests, n)
-        self.assertEqual(len(partitions), n)
-        self.assertEqual(self._get_partition_total_size(partitions[0]), self.total_size)
-        
-        self._verify_all_chunks_present(self.requests, partitions)
-        self._verify_chunk_maps(self.requests, partitions)
-
-        # Test case 3: Empty input list
-        partitions = single_reader_partition([], n)
-        self.assertEqual(len(partitions), n)
-        self.assertTrue(all(len(p) == 0 for p in partitions))
-
-        # Test case 4: More partitions than requests
-        n = 5
-        partitions = single_reader_partition(self.requests, n)
-        self.assertEqual(len(partitions), n)
-        self.assertEqual(sum(self._get_partition_total_size(p) for p in partitions), self.total_size)
-        self.assertTrue(any(len(p) == 0 for p in partitions))
-        partition_sizes = [self._get_partition_total_size(p) for p in partitions]
-        self.assertEqual(sum(partition_sizes), self.total_size, "Total size should be conserved")
-        self.assertCountEqual(partition_sizes, [1300, 0, 0, 0, 0])
-        
-        
-        self._verify_all_chunks_present(self.requests, partitions)
-        self._verify_chunk_maps(self.requests, partitions)
-
 
     def test_partition_by_chunks(self):
         """Tests for the partition_by_chunks function."""

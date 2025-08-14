@@ -165,66 +165,19 @@ def partition_by_files(
 
     return partitions
 
-def single_reader_partition(
-    file_stream_requests: List[FileChunks], n: int
-) -> List[List[Tuple[FileChunks, Dict[int, Tuple[int, int, int]]]]]:
-    """
-    Partitions a list of file read requests by assigning all FileChunks
-    objects to the first process (rank 0).
-
-    Args:
-        file_stream_requests: A list of FileChunks objects representing the
-                              total work to be done.
-        n: The number of partitions to divide the work into.
-
-    Returns:
-        A list of n partitions. The first partition contains all the work,
-        and the rest (from 1 to n-1) are guaranteed to be empty lists.
-    """
-    if n <= 0:
-        raise ValueError("Number of partitions (n) must be a positive integer.")
-    
-    # 1. Create a list of n empty partitions. This ensures the output list
-    #    always has length n.
-    partitions: List[List[Tuple[FileChunks, Dict[int, Tuple[int, int, int]]]]] = [[] for _ in range(n)]
-    
-    if not file_stream_requests:
-        return partitions
-
-    # 2. Iterate through all requests and add them only to the first partition (rank 0).
-    for original_request_index, request in enumerate(file_stream_requests):
-        # Create the source map for the current request.
-        source_map = {
-            chunk_idx: (original_request_index, chunk_idx, request.chunks[chunk_idx])
-            for chunk_idx in range(len(request.chunks))
-        }
-        
-        # Append the FileChunks object and its map to the first partition.
-        partitions[0].append((request, source_map))
-
-    return partitions
-
 # Dict[int, Tuple[int, int, int] maps the chunk index in the corresponding
 # FileChunks object to the original request index, chunk index, and chunk size.
 
 def get_partition_policy() -> str:
-
-    #return "single_reader"
-
     partition_policy = os.getenv("RUNAI_STREAMER_PARTITION_POLICY")
     if partition_policy is not None:
         return partition_policy
     else:
-        if len(file_stream_requests) >= n:
-            return "files"
-        else:
-            return "chunks"
+        return "chunks"
 
 def partition(file_stream_requests: List[FileChunks], n: int) -> List[List[Tuple[FileChunks, Dict[int, Tuple[int, int, int]]]]]:
     partition_policy = get_partition_policy()
-    if partition_policy == "single_reader":
-        return single_reader_partition(file_stream_requests, n)
-    elif partition_policy == "files":
+    if partition_policy == "files":
         print(f"partitioning by files for n: {n}")
         return partition_by_files(file_stream_requests, n)
     elif partition_policy == "chunks":
