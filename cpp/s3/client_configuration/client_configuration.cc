@@ -8,10 +8,17 @@ namespace runai::llm::streamer::impl::s3
 
 ClientConfiguration::ClientConfiguration()
 {
-    unsigned max_connections = utils::getenv<bool>("RUNAI_STREAMER_S3_MAX_CONNECTIONS", 0);
+    unsigned long max_connections = utils::getenv<unsigned long>("RUNAI_STREAMER_S3_MAX_CONNECTIONS", 0);
     if (max_connections)
     {
         config.maxConnections = max_connections;
+    }
+
+    unsigned long target_gbps = utils::getenv<unsigned long>("RUNAI_STREAMER_S3_TARGET_GBPS", 0);
+    if (target_gbps)
+    {
+        LOG(DEBUG) << "S3 target throughput is set to " << target_gbps << " Gbps";
+        config.throughputTargetGbps = target_gbps;
     }
 
     // if the transfer speed is less than the low speed limit for request_timeout_ms milliseconds the transfer is aborted and retried

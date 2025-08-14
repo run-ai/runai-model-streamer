@@ -129,6 +129,7 @@ class DistributedStreamer:
         MAX_CHUNKS_PER_BATCH = 256
         BUFFER_MIN_BYTESIZE = 1024 * 1024 * 1024;
         BUFFER_BYTESIZE = max(BUFFER_MIN_BYTESIZE, self.max_chunk)
+        ERROR_VALUE = -1
         print(f"rank {self.rank} broadcasting buffer size: {BUFFER_BYTESIZE}", flush=True)
 
         data_buffer = torch.empty(BUFFER_BYTESIZE, dtype=torch.uint8, device=self.device_type)
@@ -165,6 +166,7 @@ class DistributedStreamer:
                     current_data_offset = 0
                     chunk_count_in_batch = 0
                     
+                    is_success = True
                     if self.reading_from_storage and not is_iterator_exhausted:
                         start_time = timer()
                         copy_batch_time = 0
@@ -175,7 +177,12 @@ class DistributedStreamer:
                                 chunk_item = leftover_chunk
                                 leftover_chunk = None
                             else:
-                                chunk_item = next(chunk_gen)
+                                try:
+                                    chunk_item = next(chunk_gen)
+                                except Exception as e:
+                                    print(f"rank {self.rank} error: {e}")
+                                    is_success = False
+                                    break
 
                             if chunk_item is None:
                                 is_iterator_exhausted = True
@@ -199,19 +206,21 @@ class DistributedStreamer:
                             batch_metadata_tensor[chunk_count_in_batch + 1].copy_(
                                 torch.tensor([orig_req_idx, orig_chunk_idx, chunk_size, current_data_offset])
                             )
-                            copy_batch_time += end_copy_time - start_copy_time
-                            end_copy_time = timer()
                             
                             current_data_offset += chunk_size
-                            chunk_count_in_batch += 1
+                            chunk_count_in_batch += 1 
+
+                        # end of prefill loop
 
                         if chunk_count_in_batch > 0:
                             end_time = timer()
                             print(f"rank {self.rank} aggregated {chunk_count_in_batch} chunks in {end_time - start_time} seconds")
-                            print(f"rank {self.rank} copy time: {copy_batch_time} seconds")
-                    batch_metadata_tensor[0, 0] = chunk_count_in_batch
 
-                    total_chunks -= chunk_count_in_batch                    
+                    if is_success:     
+                        batch_metadata_tensor[0, 0] = chunk_count_in_batch
+                        total_chunks -= chunk_count_in_batch
+                    else:
+                        batch_metadata_tensor[0, 0] = ERROR_VALUE
 
                     # --- Broadcast ---
 
@@ -256,7 +265,9 @@ class DistributedStreamer:
                                 offset, size = meta[3].item(), meta[2].item()
                                 yield meta[0].item(), meta[1].item(), received_data_buf_view[offset : offset + size]
 
+        except Exception as e:
+            print(f"rank {self.rank} error: {e}")
+            raise e
         finally:
-            dist.barrier()
             end_time = timer()
             print(f"rank {self.rank} done in {end_time - start_time} seconds")

@@ -8,7 +8,7 @@ import humanize
 
 
 RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME = "RUNAI_STREAMER_MEMORY_LIMIT"
-DEFAULT_MEMORY_LIMIT_STRING = "20000000000" # 20 GB
+DEFAULT_MEMORY_LIMIT_STRING = "-1" # unlimited
 
 class RunaiStreamerMemoryLimitException(Exception):
     pass
