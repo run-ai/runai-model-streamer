@@ -43,3 +43,10 @@ jobs:
         password: ${{ secrets.PYPI_API_TOKEN }}
         packages-dir: py/runai_model_streamer_s3/dist/
         print-hash: true
+
+    - name: Publish GCS streamer package distributions to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        password: ${{ secrets.PYPI_API_TOKEN }}
+        packages-dir: py/runai_model_streamer_gcs/dist/
+        print-hash: true
