@@ -5,6 +5,8 @@
 #include <vector>
 #include <set>
 
+#include "common/exception/exception.h"
+
 #include "utils/logging/logging.h"
 #include "utils/random/random.h"
 #include "utils/fd/fd.h"
@@ -424,6 +426,35 @@ TEST(Async, Busy_Error)
             break;
         }
     }
+}
+
+TEST(AsyncRequest, InvalidScheme)
+{
+    auto size = utils::random::number(100, 1000);
+    const auto data = utils::random::buffer(size);
+    std::string s3_path = "s3://s3-bucket/file-01.txt";
+    std::string gcs_path = "gs://gcs-bucket/file-02.txt";
+
+    const auto chunk_size = utils::random::number<size_t>(1, 1024);
+    const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
+    Config config(utils::random::number(1, 20), utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
+
+    common::s3::Credentials credentials;
+
+    Streamer streamer(config);
+
+    std::vector<unsigned char> dst(size);
+    std::vector<size_t> sizes;
+    sizes.push_back(size);
+
+    std::vector<std::string> paths = {s3_path, gcs_path};
+    std::vector<size_t> file_offsets = {0};
+    std::vector<size_t> bytesizes = {size};
+    std::vector<void *> dsts = {dst.data()};
+    std::vector<unsigned> num_sizes = {1};
+    std::vector<std::vector<size_t>> internal_sizes =  { sizes };
+
+    EXPECT_THROW(streamer.async_request(paths, file_offsets, bytesizes, dsts, num_sizes, internal_sizes, credentials), runai::llm::streamer::common::Exception);
 }
 
 }; // namespace runai::llm::streamer::impl

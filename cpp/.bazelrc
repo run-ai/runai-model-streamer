@@ -12,6 +12,9 @@ build --noenable_bzlmod
 # when toggling between platforms (as is done in the Makefile)
 build:aarch64 --platform_suffix=aarch64
 build:aarch64 --platforms=@toolchain//:aarch64
+# Target architecture needs CRC and crypto extensions
+# This is a dependency of the ARM64 build targets in the google-cloud-cpp library.
+build:aarch64 --copt="-march=armv8-a+crc+crypto"
 
 build:x86_64 --platform_suffix=x86_64
 build:x86_64 --platforms=@toolchain//:x86_64

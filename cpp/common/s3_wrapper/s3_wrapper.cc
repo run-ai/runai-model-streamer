@@ -58,7 +58,7 @@ const utils::Semver min_glibc_semver = utils::Semver(description(static_cast<int
 S3ClientWrapper::BackendHandle::BackendHandle(const Params & params) :
     dylib_ptr(open_object_storage_impl(params))
 {
-    ASSERT(dylib_ptr != nullptr) << "Failed to open libstreamers3.so"; // should never happen
+    ASSERT(dylib_ptr != nullptr) << "Failed to open libstreamer shared library"; // should never happen
 
     auto open_object_storage_ = dylib_ptr->dlsym<ResponseCode(*)(common::backend_api::ObjectBackendHandle_t*)>("obj_open_backend");
     auto ret = open_object_storage_(&_backend_handle);
@@ -88,18 +88,35 @@ S3ClientWrapper::BackendHandle::~BackendHandle()
     }
 }
 
+const ObjectPluginType ObjectPluginType::ObjStorageGCS(PluginID::GCS, obj_plugin_gcs_name, lib_streamer_gcs_so_name);
+const ObjectPluginType ObjectPluginType::ObjStorageS3(PluginID::S3, obj_plugin_s3_name, lib_streamer_s3_so_name);
+
+const ObjectPluginType S3ClientWrapper::BackendHandle::get_libstreamers_plugin_type(const std::shared_ptr<common::s3::StorageUri> & uri) {
+    if (uri != nullptr && uri->is_gcs()) {
+        return ObjectPluginType::ObjStorageGCS;
+    } else {
+        return ObjectPluginType::ObjStorageS3;
+    }
+}
+
 std::shared_ptr<utils::Dylib> S3ClientWrapper::BackendHandle::open_object_storage_impl(const Params & params)
 {
     // lazy load the s3 library once
+    const ObjectPluginType plugin_type = get_libstreamers_plugin_type(params.uri);
     try
     {
-        return std::make_shared<utils::Dylib>("libstreamers3.so");
+        return std::make_shared<utils::Dylib>(plugin_type.so_name().c_str());
     }
     catch (...)
     {
-        LOG(ERROR) << "Failed to open libstreamers3.so";
+        LOG(ERROR) << "Failed to open storage backend for " << plugin_type.name() << ": " << plugin_type.so_name();
     }
-    throw Exception(ResponseCode::S3NotSupported);
+    switch(plugin_type.id()) {
+        case PluginID::GCS:
+            throw Exception(ResponseCode::GCSNotSupported);
+        case PluginID::S3:
+            throw Exception(ResponseCode::S3NotSupported);
+    }
     return nullptr;
 }
 

@@ -33,3 +33,10 @@ jobs:
         name: runai_model_streamer_s3
         path: py/runai_model_streamer_s3/dist/*
         if-no-files-found: error
+
+    - name: Upload GCS streamer package to github action
+      uses: actions/upload-artifact@v4
+      with:
+        name: runai_model_streamer_gcs
+        path: py/runai_model_streamer_gcs/dist/*
+        if-no-files-found: error

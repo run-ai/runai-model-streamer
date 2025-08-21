@@ -89,3 +89,13 @@ Boolean `0` or `1`
 #### Default value
 
 `1`
+
+### RUNAI_STREAMER_GCS_CREDENTIAL_FILE
+
+Specifies the path to a credential file to use for GCS authentication.
+
+If not defined (default) Application Default Credentials are used.
+
+#### Values accepted
+
+String

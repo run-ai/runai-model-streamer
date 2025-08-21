@@ -7,6 +7,7 @@
 #include <utility>
 #include <optional>
 
+#include "common/backend_api/object_storage/object_storage.h"
 #include "s3/client/client.h"
 
 #include "common/exception/exception.h"

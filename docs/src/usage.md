@@ -82,11 +82,37 @@ To check if IAM role assumption is needed run `aws s3 ls s3://your-bucket-name -
 
 ##### Streaming from Google cloud storage
 
-To load tensors from GCS pass credentials as environment variables `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
+###### SDK Authentication
 
-The streamer supports GCS url `gs://my-bucket/my/file/path.safetensors`
+GCS SDK backend is provided through the Python package `runai-model-streamer-gcs`.
 
-> **Note:** If using GCS url with prefix `gs://` there is no need to pass additional environment variables for S3 compatible storage 
+To authentication to GCS, there are multiple configuration options:
+
+1. External Credentials: If you set the `RUNAI_STREAMER_GCS_CREDENTIAL_FILE` environment variable, the
+   SDK will load credentials from a JSON file at the path specified (eg: service account credentials)
+2. Default Credentials: If you set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable, the google-cloud-cpp
+   SDK will read application default credentials from a JSON file at the path specified.
+3. Metadata Server: If neither above environment variables are set, the SDK attempts to fetch an auth token from
+   the GCP metadata server. This is applicable when running on a GCE, GKE or GAE environment.
+
+See [How Application Default Credentials works](https://cloud.google.com/docs/authentication/application-default-credentials)
+for more information.
+
+###### HMAC Authentication
+
+S3 compatible HMAC authentication to GCS is provided through the Python package `runai-model-streamer-s3`.
+
+To use HMAC credentials, you can use the S3 backend library, and AWS environment variables.
+You should set the following variables:
+ * `AWS_ACCESS_KEY_ID`: Set this to the Interoperability Access ID for your GCS bucket
+ * `AWS_SECRET_ACCESS_KEY`: Set this to the Interoperability Secret for your GCS bucket
+ * `AWS_ENDPOINT_URL`: Set this to `https://storage.googleapis.com`
+ * `AWS_EC2_METADATA_DISABLED`: Set this to `true`
+
+See [HMAC keys](https://cloud.google.com/storage/docs/authentication/hmackeys) for more information.
+
+The streamer supports GCS URLs when using HMAC authentication
+(eg: `gs://my-bucket/my/file/path.safetensors`).
 
 ##### Streaming from S3 compatible storage
 

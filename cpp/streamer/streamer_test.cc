@@ -251,6 +251,26 @@ TEST_F(StreamerTest, S3_Library_Not_Found)
     runai_end(streamer);
 }
 
+TEST_F(StreamerTest, GCS_Library_Not_Found)
+{
+    auto size = utils::random::number(100, 1000);
+
+    void * streamer;
+    auto res = runai_start(&streamer);
+    EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
+
+    const auto s3_path = "gs://" + utils::random::string() + "/" + utils::random::string();
+
+    std::vector<char> dst(size);
+    std::vector<size_t> sizes;
+    sizes.push_back(size);
+    EXPECT_EQ(runai_request_file(streamer, s3_path.c_str(), 0, size, dst.data()), static_cast<int>(common::ResponseCode::Success));
+    unsigned r = utils::random::number();
+    EXPECT_EQ(runai_response(streamer, &r, &r), static_cast<int>(common::ResponseCode::GCSNotSupported));
+
+    runai_end(streamer);
+}
+
 TEST_F(StreamerTest, End_Before_Read)
 {
     auto size = utils::random::number(10000000, 100000000);
