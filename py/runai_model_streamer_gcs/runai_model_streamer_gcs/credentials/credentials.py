@@ -11,6 +11,9 @@ GCS_CREDENTIAL_TYPE = "GCS_CREDENTIAL_TYPE"
 GCS_SA_KEY_PATH = "GCS_SA_KEY_PATH"
 # TODO: Pass credentials through to the C++ API library.
 RUNAI_STREAMER_GCS_CREDENTIAL_FILE = "RUNAI_STREAMER_GCS_CREDENTIAL_FILE"
+# Testing Only: This variable is used by google-cloud-cpp for emulator testing
+#   We use it here to allow Anonymous credential override.
+CLOUD_STORAGE_EMULATOR_ENDPOINT = "CLOUD_STORAGE_EMULATOR_ENDPOINT"
 
 class CredentialType(Enum):
     # Credentials provided explicitly via a JSON file.
@@ -37,7 +40,10 @@ class GCSCredentials:
 
     def gcp_credentials(self) -> google.auth.credentials.Credentials:
         credentials = None
-        if self.credential_type == CredentialType.SERVICE_ACCOUNT_JSON:
+        endpoint_override = os.getenv(CLOUD_STORAGE_EMULATOR_ENDPOINT, default=False)
+        if endpoint_override:
+            credentials = google.auth.credentials.AnonymousCredentials()
+        elif self.credential_type == CredentialType.SERVICE_ACCOUNT_JSON:
             credentials, _ = google.auth.load_credentials_from_file(self.sa_key_path)
         else:
             credentials, _ = google.auth.default()

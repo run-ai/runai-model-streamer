@@ -5,7 +5,12 @@ MINIO_BUCKET := test-bucket
 MINIO_ROOT_USER := minioadmin
 MINIO_ROOT_PASSWORD := minioadmin
 
-.PHONY: s3 fuzzing all
+FAKE_GCS_SERVER_API_PORT := 8000
+FAKE_GCS_SERVER_ROOT := /tmp/fake-gcs-server
+FAKE_GCS_SERVER_DATA_DIR := ${FAKE_GCS_SERVER_ROOT}/data
+FAKE_GCS_SERVER_BUCKET := test-bucket
+
+.PHONY: gcs s3 fuzzing all
 
 s3:
 	@echo "Starting MinIO server on port ${MINIO_API_PORT} with data directory ${MINIO_DATA_DIR}"; \
@@ -19,6 +24,19 @@ s3:
 	wait $$MINIO_PID 2>/dev/null || true; \
 	rm -rf ${MINIO_DATA_DIR}
 
+gcs:
+	@echo "Starting Fake GCS Server on port ${FAKE_GCS_SERVER_API_PORT} with root directory ${FAKE_GCS_SERVER_ROOT}"; \
+	mkdir -p ${FAKE_GCS_SERVER_ROOT}; \
+	mkdir -p ${FAKE_GCS_SERVER_DATA_DIR}/${FAKE_GCS_SERVER_BUCKET}; \
+	fake-gcs-server -scheme http -port ${FAKE_GCS_SERVER_API_PORT} -data ${FAKE_GCS_SERVER_DATA_DIR} -filesystem-root ${FAKE_GCS_SERVER_ROOT} & \
+	FAKE_GCS_SERVER_PID=$$!; \
+	echo "Fake GCS Server PID is $$FAKE_GCS_SERVER_PID"; \
+	GCS_BUCKET=${FAKE_GCS_SERVER_BUCKET} CLOUD_STORAGE_EMULATOR_ENDPOINT=http://localhost:${FAKE_GCS_SERVER_API_PORT} pytest gcs/; \
+	echo "Stopping Fake GCS Server..."; \
+	kill $$FAKE_GCS_SERVER_PID; \
+	wait $$FAKE_GCS_SERVER_PID 2>/dev/null || true; \
+	rm -rf ${FAKE_GCS_SERVER_ROOT}
+
 fuzzing:
 	for i in $(shell seq 1 ${RUN_TIMES}); \
 	do \
@@ -26,4 +44,4 @@ fuzzing:
 		pytest fuzzing/; \
 	done
 
-all: fuzzing s3
+all: fuzzing s3 gcs
