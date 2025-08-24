@@ -186,6 +186,9 @@ def partition(file_stream_requests: List[FileChunks], n: int) -> List[List[Tuple
     else:
         raise ValueError(f"Invalid partition policy: {partition_policy}")
 
+def get_total_number_of_chunks(partitions: List[List[Tuple[FileChunks, dict]]]) -> int:
+    return sum(sum(len(fc.chunks) for fc, _ in p) for p in partitions)
+
 def create_broadcast_plan(partitions: List[List[Tuple[FileChunks, dict]]]) -> List[int]:
     """
     Creates a round-robin broadcast plan from a list of partitions.

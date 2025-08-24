@@ -14,7 +14,7 @@ mock:
 	make -C ../../cpp build_mock
 
 test: mock install_dev_dep
-	STREAMER_LIBRARY="../../cpp/bazel-bin/mock/libstreamer-mock.so" python3 -m unittest discover -b runai_model_streamer
+	STREAMER_LIBRARY="../../cpp/bazel-bin/mock/libstreamer-mock.so" python3 run_tests.py
 
 clean:
 	rm -rf build/ dist/ runai_model_streamer.egg-info/

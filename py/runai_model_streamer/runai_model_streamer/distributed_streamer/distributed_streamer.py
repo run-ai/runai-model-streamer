@@ -5,6 +5,7 @@ import torch
 import torch.distributed as dist
 import glob
 import os
+from datetime import timedelta
 
 from runai_model_streamer.s3_utils.s3_utils import S3Credentials
 
@@ -15,12 +16,14 @@ from runai_model_streamer.file_streamer import (
 
 from runai_model_streamer.distributed_streamer.partition import (
     partition,
-    create_broadcast_plan,
+    get_total_number_of_chunks,
     get_partition_policy
 )
 
 import humanize
 from timeit import default_timer as timer
+
+DEFAULT_BROADCAST_TIMEOUT = timedelta(seconds=20)
 
 class DistributedStreamer:
     def __init__(self) -> None:
@@ -30,8 +33,10 @@ class DistributedStreamer:
         self.partitions = {} # partitions of all the input file_stream_requests
         self.rank_file_chunks_list = {} # post Partitioning FileChunks to be streamed by this rank
         self.rank_dicts_map = {} # maps post partitioning FileChunks.id and chunk index to the original FileChunks.id and chunk index and chunk size
-        self.broadcast_plan = {}
+        self.total_chunks_to_read = 0
         self.rank = 0
+        self.original_group_rank = 0
+        self.distribution_group = None
         self.reading_from_storage = False
 
     def __enter__(self) -> DistributedStreamer:
@@ -42,9 +47,40 @@ class DistributedStreamer:
         return self.file_streamer.__exit__(exc_type, exc_value, traceback)
 
     def get_group_size(self) -> int:
-        if not torch.distributed.is_initialized():
+        if not dist.is_initialized():
             return 1
         return dist.get_world_size()
+
+    def set_is_distributed(self) -> None:
+
+        self.is_distributed = int(os.environ.get("RUNAI_STREAMER_DIST", "1")) == 1
+
+        if self.is_distributed:
+            self.is_distributed = dist.is_initialized()
+            self.is_distributed = self.is_distributed and self.get_group_size() > 1
+
+    def set_rank(self) -> None:
+        if self.is_distributed:
+            self.rank = dist.get_rank(group=self.distribution_group)
+            self.original_group_rank = dist.get_rank()
+ 
+    def create_distribution_group(self) -> dist.GroupSpec:
+        # TODO (Noa) get local rank or global rank according to configuration
+        # TODO (Noa) get local/global rank for various distribution platforms (torchrun, ray, etc.)
+        if not self.is_distributed:
+            return None
+
+        # create global group
+        world_size = self.get_group_size()
+
+        all_ranks = list(range(world_size))
+        timeout_val = os.environ.get("RUNAI_STREAMER_DIST_TIMEOUT")
+        if timeout_val:
+            group_timeout = timedelta(seconds=int(timeout_val))
+        else:
+            group_timeout = DEFAULT_BROADCAST_TIMEOUT
+        group = dist.new_group(ranks = all_ranks, timeout = group_timeout)
+        return group 
 
     def stream_files(
             self,
@@ -57,34 +93,36 @@ class DistributedStreamer:
         else:
             self.device_str = device
         self.device_type = torch.device(self.device_str)
+
         # check if distributed
-        self.is_distributed = torch.distributed.is_initialized()
-        self.is_distributed = self.is_distributed and self.get_group_size() > 1
+        self.set_is_distributed()
 
-        if os.environ.get("RUNAI_STREAMER_DIST") is not None:
-            self.is_distributed = int(os.environ.get("RUNAI_STREAMER_DIST")) == 1
-
-        print(f"rank {self.rank} is distributed: {self.is_distributed}")
-
-        if self.is_distributed:
-            self.rank = dist.get_rank()
-        else:
-            self.rank = 0
-
-        if self.is_distributed:
-            if self.device_str == "cpu" and dist.get_backend() == "nccl":
-                raise ValueError("Distributed backend nccl does not support cpu tensors")
+        print(f"is distributed: {self.is_distributed}")
 
         if not self.is_distributed:
-            print(f"rank {self.rank} streaming with no distribution")
+            print(f"streaming with no distribution")
             self.file_streamer.stream_files(file_stream_requests, credentials, device)
             return
-        
-        # partition tensors between processes
-        self.partitions = partition(file_stream_requests, self.get_group_size())
-        
-        self.broadcast_plan = create_broadcast_plan(self.partitions)
 
+
+        # check if distributed backend supports cpu tensors
+        if self.device_str == "cpu" and dist.get_backend() == "nccl":
+            raise ValueError("Distributed backend nccl does not support cpu tensors")
+
+        dist.barrier()
+
+        # create distribution group for configuring timeout and possibly broadcast locally in each node 
+        # The group must be created before partitioning the tensors, in case the group will be local
+        self.distribution_group = self.create_distribution_group()
+
+        # set rank in the new distribution group  
+        self.set_rank()
+
+        # partition tensors between processes in the distribution group
+        self.partitions = partition(file_stream_requests, dist.get_world_size(group=self.distribution_group))
+
+        self.total_chunks_to_read = get_total_number_of_chunks(self.partitions)
+        
         # find the size of the maximal chunk for the reusable buffer
 
         global_max_chunk = 0
@@ -120,8 +158,9 @@ class DistributedStreamer:
                 yield item
             return
 
-        dist.barrier()
-
+        # wait for all ranks to be ready - TODO (Noa) check if this is needed
+        # dist.barrier()
+        
         start_time = timer()
         
         # --- PIPELINE & BATCHING SETUP ---
@@ -149,19 +188,16 @@ class DistributedStreamer:
             while True:
                 yield None
 
-        group_size = self.get_group_size()
-        total_chunks = len(self.broadcast_plan)
+        chunks_to_read = self.total_chunks_to_read
         chunk_gen = chunk_generator()
         is_iterator_exhausted = False
         leftover_chunk = None
-        print(f"rank {self.rank} should read {total_chunks} chunks ")
+        print(f"rank {self.rank} should read {chunks_to_read} chunks ")
 
         try:
-            for i in range(len(self.broadcast_plan)):
-               
+            while chunks_to_read > 0:
+
                     # --- Fill staging buffer ---
-                    if total_chunks == 0:
-                        break   
 
                     current_data_offset = 0
                     chunk_count_in_batch = 0
@@ -218,22 +254,24 @@ class DistributedStreamer:
 
                     if is_success:     
                         batch_metadata_tensor[0, 0] = chunk_count_in_batch
-                        total_chunks -= chunk_count_in_batch
+                        chunks_to_read -= chunk_count_in_batch
                     else:
                         batch_metadata_tensor[0, 0] = ERROR_VALUE
 
                     # --- Broadcast ---
 
-                    print(f"rank {self.rank} broadcasting to {group_size} ranks", flush=True)
+                    group_size = dist.get_world_size(group=self.distribution_group)
+
+                    print(f"original rank {self.original_group_rank} new rank {self.rank} broadcasting to {group_size} ranks", flush=True)
                     for broadcasting_rank in range(group_size):
                         if broadcasting_rank == self.rank:
 
                             # broadcast metadata
-                            dist.broadcast(batch_metadata_tensor, self.rank)
+                            dist.broadcast(batch_metadata_tensor, self.rank, group=self.distribution_group)
 
                             # broadcast data
                             if chunk_count_in_batch > 0:
-                                dist.broadcast(data_buffer[:current_data_offset], self.rank)
+                                dist.broadcast(data_buffer[:current_data_offset], self.rank, group=self.distribution_group)
 
                             # yield
                                 # after the synvhronous broadcast the asynchronous copy has finished and it is safe to yield
@@ -243,7 +281,7 @@ class DistributedStreamer:
                                     yield meta[0].item(), meta[1].item(), data_buffer[offset : offset + size]
                         else:
                             # receive metadata
-                            dist.broadcast(received_metadata_tensor, broadcasting_rank)
+                            dist.broadcast(received_metadata_tensor, broadcasting_rank, group=self.distribution_group)
 
                             received_chunk_count_in_batch = received_metadata_tensor[0, 0].item()
 
@@ -254,17 +292,24 @@ class DistributedStreamer:
                             last_meta = received_metadata_tensor[received_chunk_count_in_batch]
                             total_data_size = last_meta[3].item() + last_meta[2].item() # offset plus size of last chunk in batch
 
-                            total_chunks -= received_chunk_count_in_batch
+                            chunks_to_read -= received_chunk_count_in_batch
 
                             received_data_buf_view = received_buffer[:total_data_size]
 
-                            dist.broadcast(received_data_buf_view, broadcasting_rank)
+                            dist.broadcast(received_data_buf_view, broadcasting_rank, group=self.distribution_group)
 
                             for j in range(received_chunk_count_in_batch):
                                 meta = received_metadata_tensor[j + 1]
                                 offset, size = meta[3].item(), meta[2].item()
                                 yield meta[0].item(), meta[1].item(), received_data_buf_view[offset : offset + size]
 
+        except RuntimeError as e:
+        # Check if the error is a timeout
+            if "timed out" in str(e).lower() or "timeout" in str(e).lower():
+                print(f"Rank {self.rank}: broadcast timed out - Could not complete broadcast.")
+            else:
+                print(f"rank {self.rank} error: {e}")
+            raise e
         except Exception as e:
             print(f"rank {self.rank} error: {e}")
             raise e
