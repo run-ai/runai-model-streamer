@@ -46,7 +46,6 @@ class SafetensorsStreamer:
     def __init__(self) -> None:
         self.file_streamer = DistributedStreamer()
         self.files_to_tensors_metadata = {}
-        self.device_str = None
 
     def __enter__(self) -> SafetensorsStreamer:
         self.file_streamer.__enter__()
@@ -63,27 +62,7 @@ class SafetensorsStreamer:
         ) -> None:
         return self.stream_files([path], s3_credentials, device)
 
-    # TODO (Noa) to be removed after testing
-    # device type should be handled by the caller
-    def get_device_str(self, device_type: Optional[str] = None) -> str:
-        if dist.is_initialized():
-            backend_name = dist.get_backend()
-            if backend_name == "nccl":
-                # TODO (Noa) vllm does not set LOCAL_RANK - should be checked if this is the local or global rank
-                rank = dist.get_rank()
-                return f"cuda:{rank}"
-            else:
-                return "cpu"
-        else:
-            if device_type is None:
-                return "cpu"
-            return device_type
-        # if device_type == torch.device("cpu"):
-        #     return "cpu"
-        # else:
-        #     local_rank = int(os.getenv("LOCAL_RANK"))
-        #     return f"cuda:{local_rank}"
-    
+ 
     def stream_files(
             self,
             paths: List[str],
@@ -95,11 +74,9 @@ class SafetensorsStreamer:
         # TODO (Noa) to be removed after testing and vllm integration
         # TODO (Noa)sending device type cpu while torch distributed backend is nccl will crash and should be checked
 
-        self.device_str = self.get_device_str(device)
-
         file_stream_requests: List[FileChunks] = []
 
-        safetensors_metadatas = safetensors_pytorch.prepare_request(self.file_streamer, paths, s3_credentials, self.device_str)
+        safetensors_metadatas = safetensors_pytorch.prepare_request(self.file_streamer, paths, s3_credentials, "cpu")
 
         for i in range(len(paths)):
             (file_offset, tensors_metadata, tensor_sizes) = safetensors_metadatas[i]
@@ -110,7 +87,7 @@ class SafetensorsStreamer:
         self.file_streamer.stream_files(
             file_stream_requests,
             credentials=s3_credentials,
-            device=self.device_str
+            device=device,
         )
 
     def get_tensors(self) -> Iterator[torch.tensor]:
