@@ -113,6 +113,9 @@ class DistributedStreamer:
             self.device_str = "cpu"
 
     def create_distribution_group(self) -> dist.GroupSpec:
+        if self.distribution_group:
+            return self.distribution_group
+
         if not self.is_distributed:
             return None
 
@@ -244,10 +247,7 @@ class DistributedStreamer:
             for item in self.file_streamer.get_chunks():
                 yield item
             return
-
-        # wait for all ranks to be ready - TODO (Noa) check if this is needed
-        # dist.barrier()
-        
+     
         start_time = timer()
         
         # --- PIPELINE & BATCHING SETUP ---
@@ -391,3 +391,4 @@ class DistributedStreamer:
         finally:
             end_time = timer()
             print(f"rank {self.rank} done in {end_time - start_time} seconds")
+            dist.barrier(group=self.distribution_group)
