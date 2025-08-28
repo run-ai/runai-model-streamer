@@ -25,7 +25,7 @@ from runai_model_streamer.distributed_streamer.partition import (
 import humanize
 from timeit import default_timer as timer
 
-DEFAULT_BROADCAST_TIMEOUT = timedelta(seconds=20)
+DEFAULT_BROADCAST_TIMEOUT = timedelta(seconds=30)
 
 class DistributedStreamer:
     def __init__(self) -> None:
@@ -40,6 +40,7 @@ class DistributedStreamer:
         self.original_group_rank = 0
         self.distribution_group = None
         self.reading_from_storage = False
+        self.local_group_global_ranks = []
 
     def __enter__(self) -> DistributedStreamer:
         self.file_streamer.__enter__()
@@ -106,7 +107,7 @@ class DistributedStreamer:
             if backend_name == "nccl":
                 device = torch.cuda.current_device()
                 self.device_str = f"cuda:{device}"
-                #print(f"DistributedStreamer: process {os.getpid()} global rank {dist.get_rank()} using device {self.device_str} for distributed mode")
+                print(f"DistributedStreamer: process {os.getpid()} global rank {dist.get_rank()} using device {self.device_str} for distributed mode")
             else:
                 self.device_str = "cpu"
         else:
@@ -127,7 +128,9 @@ class DistributedStreamer:
 
             all_ranks = list(range(world_size))
             group_timeout = self.get_broadcast_timeout()
+            self.local_group_global_ranks = all_ranks
             group = dist.new_group(ranks = all_ranks, timeout = group_timeout)
+
         else:
             group = self.create_local_distribution_group()
         return group
@@ -135,52 +138,55 @@ class DistributedStreamer:
     def create_local_distribution_group(self) -> dist.GroupSpec:
         """
         Creates a torch.distributed.ProcessGroup containing all ranks on the current node.
-        
-        This function requires the distributed environment to be initialized.
-        
-        Returns:
-            A new ProcessGroup object or None if not in a distributed environment.
+        This version uses a coordinated creation pattern to avoid deadlocks.
         """
         if not dist.is_initialized():
             return None
 
         group_timeout = self.get_broadcast_timeout()
-
-        # don't use self.rank here because it is set after the distribution group is created
         my_global_rank = dist.get_rank()
         world_size = dist.get_world_size()
 
-        # discover the global ranks of all processes on the same host as the current process
-        
-        # 1. Each process gets its hostname.
-        my_hostname = socket.gethostname()
-
-        # 2. Gather the hostnames from all processes in the world.
-        # We need a list to store the gathered objects.
+        # 1. Discover all peers on all nodes (this is a global collective)
         all_hostnames = [None] * world_size
-        dist.all_gather_object(all_hostnames, my_hostname)
+        dist.all_gather_object(all_hostnames, socket.gethostname())
 
-        # 3. Find the global ranks of all processes on the same host as the current process.
-        my_local_peers_global_ranks = []
-        for global_rank, hostname in enumerate(all_hostnames):
-            if hostname == my_hostname:
-                my_local_peers_global_ranks.append(global_rank)
-                
-        # 4. Create the new group. All processes on the same node will have the
-        # same list of global ranks and will correctly form the group together.
-        local_group = dist.new_group(ranks = my_local_peers_global_ranks, timeout = group_timeout)
+        # 2. Create a list of rank lists, one for each unique host.
+        # e.g., [[0,1,2,3,4,5,6,7], [8,9,10,11,12,13,14,15]]
+        unique_hostnames = sorted(list(set(all_hostnames)))
+        groups_by_ranks = []
+        for hostname in unique_hostnames:
+            ranks_on_host = [r for r, h in enumerate(all_hostnames) if h == hostname]
+            groups_by_ranks.append(ranks_on_host)
+
+        # --- THIS IS THE FIX ---
+        # 3. All 16 processes must create ALL subgroups in the same order.
+        # This is a global collective operation, done once for each subgroup.
+        if my_global_rank == 0:
+            print(f"Coordinated creation of {len(groups_by_ranks)} subgroups...", flush=True)
         
-        # print(
-        #     f"pid {os.getpid()} rank {my_global_rank} on host '{my_hostname}' is part of a new local group "
-        #     f"with global ranks: {my_local_peers_global_ranks}"
-        # )
+        created_groups = [dist.new_group(ranks=ranks, timeout=group_timeout) for ranks in groups_by_ranks]
         
-        return local_group
+        # 4. Now, each process finds which of the newly created groups it belongs to.
+        my_local_group = None
+        for i, ranks_list in enumerate(groups_by_ranks):
+            if my_global_rank in ranks_list:
+                my_local_group = created_groups[i]
+                self.local_group_global_ranks = ranks_list # Save the mapping
+                break
+        
+        print(
+            f"pid {os.getpid()} rank {my_global_rank} on host '{socket.gethostname()}' successfully joined local group "
+            f"with global ranks: {self.local_group_global_ranks}"
+        )
+        
+        return my_local_group
 
     def set_rank(self) -> None:
         if self.is_distributed:
             self.rank = dist.get_rank(group=self.distribution_group)
             self.original_group_rank = dist.get_rank()
+            print(f"pid {os.getpid()} originally rank {self.original_group_rank} is now rank {self.rank} in the distribution group")
 
     def stream_files(
             self,
@@ -231,12 +237,12 @@ class DistributedStreamer:
             self.rank_file_chunks_list.append(fc)
             self.rank_dicts_map[fc.id] = d
         if len(self.rank_file_chunks_list) > 0:
-            print(f"rank {self.rank} has {len(self.rank_file_chunks_list)} files to stream to device {self.device_str}")
+            print(f"global rank {self.original_group_rank} local rank {self.rank} has {len(self.rank_file_chunks_list)} files to stream to device {self.device_str}")
             self.file_streamer.stream_files(self.rank_file_chunks_list, credentials, "cpu")
             self.reading_from_storage = True
         else:
             self.reading_from_storage = False
-            print(f"rank {self.rank} has no files to stream")    
+            print(f"global rank {self.original_group_rank} local rank {self.rank} has no files to stream")    
 
     def get_chunks(self) -> Iterator:
         if not self.file_streamer:
@@ -252,6 +258,7 @@ class DistributedStreamer:
         
         # --- PIPELINE & BATCHING SETUP ---
         # TODO (Noa) check that the available device memory is enough for the buffers
+
         MAX_CHUNKS_PER_BATCH = 256
         BUFFER_MIN_BYTESIZE = 1024 * 1024 * 1024;
         BUFFER_BYTESIZE = max(BUFFER_MIN_BYTESIZE, self.max_chunk)
@@ -259,7 +266,7 @@ class DistributedStreamer:
         data_buffer = torch.empty(BUFFER_BYTESIZE, dtype=torch.uint8, device=self.device_type)
         received_buffer = torch.empty(BUFFER_BYTESIZE, dtype=torch.uint8, device=self.device_type)
 
-        print(f"rank {self.rank} allocating reusable buffers  humanized: {humanize.naturalsize(2 * BUFFER_BYTESIZE)}", flush=True)
+        print(f"local rank {self.rank} global rank {self.original_group_rank} allocating reusable buffers  humanized: {humanize.naturalsize(2 * BUFFER_BYTESIZE)}", flush=True)
   
         batch_metadata_tensor = torch.zeros(MAX_CHUNKS_PER_BATCH + 1, 4, dtype=torch.int64, device=self.device_type)
         received_metadata_tensor = torch.zeros(MAX_CHUNKS_PER_BATCH + 1, 4, dtype=torch.int64, device=self.device_type)
@@ -328,7 +335,7 @@ class DistributedStreamer:
 
                         if chunk_count_in_batch > 0:
                             end_time = timer()
-                            print(f"rank {self.rank} aggregated {chunk_count_in_batch} chunks in {end_time - start_time} seconds")
+                            print(f"local rank {self.rank} global rank {self.original_group_rank} aggregated {chunk_count_in_batch} chunks in {end_time - start_time} seconds")
 
                     batch_metadata_tensor[0, 0] = chunk_count_in_batch
                     chunks_to_read -= chunk_count_in_batch
@@ -337,16 +344,19 @@ class DistributedStreamer:
 
                     group_size = dist.get_world_size(group=self.distribution_group)
 
-                    #print(f"original rank {self.original_group_rank} new rank {self.rank} broadcasting group size is {group_size} ranks", flush=True)
+                    print(f"local rank {self.rank} global rank {self.original_group_rank} broadcasting group size is {group_size} ranks", flush=True)
                     for broadcasting_rank in range(group_size):
-                        if broadcasting_rank == self.rank:
+                        # Map the local rank to its corresponding GLOBAL rank
+                        global_broadcasting_rank = self.local_group_global_ranks[broadcasting_rank]
 
+                        # self.original_group_rank is the GLOBAL rank of the current process
+                        if global_broadcasting_rank == self.original_group_rank:
                             # broadcast metadata
-                            dist.broadcast(batch_metadata_tensor, self.rank, group=self.distribution_group)
+                            dist.broadcast(batch_metadata_tensor, global_broadcasting_rank, group=self.distribution_group)
 
                             # broadcast data
                             if chunk_count_in_batch > 0:
-                                dist.broadcast(data_buffer[:current_data_offset], self.rank, group=self.distribution_group)
+                                dist.broadcast(data_buffer[:current_data_offset], global_broadcasting_rank, group=self.distribution_group)
 
                             # yield
                                 # after the synvhronous broadcast the asynchronous copy has finished and it is safe to yield
@@ -356,7 +366,9 @@ class DistributedStreamer:
                                     yield meta[0].item(), meta[1].item(), data_buffer[offset : offset + size]
                         else:
                             # receive metadata
-                            dist.broadcast(received_metadata_tensor, broadcasting_rank, group=self.distribution_group)
+                            dist.broadcast(received_metadata_tensor, global_broadcasting_rank, group=self.distribution_group)
+
+                            print(f"local rank {self.rank} global rank {self.original_group_rank} received metadata from global rank {global_broadcasting_rank}")
 
                             received_chunk_count_in_batch = received_metadata_tensor[0, 0].item()
 
@@ -371,7 +383,9 @@ class DistributedStreamer:
 
                             received_data_buf_view = received_buffer[:total_data_size]
 
-                            dist.broadcast(received_data_buf_view, broadcasting_rank, group=self.distribution_group)
+                            dist.broadcast(received_data_buf_view, global_broadcasting_rank, group=self.distribution_group)
+
+                            print(f"local rank {self.rank} global rank {self.original_group_rank} received data from global rank {global_broadcasting_rank}")
 
                             for j in range(received_chunk_count_in_batch):
                                 meta = received_metadata_tensor[j + 1]
@@ -381,14 +395,14 @@ class DistributedStreamer:
         except RuntimeError as e:
         # Check if the error is a timeout
             if "timed out" in str(e).lower() or "timeout" in str(e).lower():
-                print(f"Rank {self.rank}: broadcast timed out - Could not complete broadcast.")
+                print(f"Rank {self.original_group_rank}: broadcast timed out - Could not complete broadcast.")
             else:
-                print(f"rank {self.rank} error: {e}")
+                print(f"rank {self.original_group_rank} error: {e}")
             raise e
         except Exception as e:
-            print(f"rank {self.rank} error: {e}")
+            print(f"rank {self.original_group_rank} error: {e}")
             raise e
         finally:
             end_time = timer()
-            print(f"rank {self.rank} done in {end_time - start_time} seconds")
+            print(f"local rank {self.rank} global rank {self.original_group_rank} done in {end_time - start_time} seconds")
             dist.barrier(group=self.distribution_group)
