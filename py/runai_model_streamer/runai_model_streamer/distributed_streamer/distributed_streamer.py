@@ -55,9 +55,10 @@ class DistributedStreamer:
         return dist.get_world_size()
 
     def set_is_distributed(self, device: Optional[str] = None) -> None:
-
+        # check if distributed streaming should be used
         self.is_distributed = int(os.environ.get("RUNAI_STREAMER_DIST", "1")) == 1
 
+        # check if torch distributed is initialized and there are more than one process
         if self.is_distributed:
             self.is_distributed = dist.is_initialized()
             self.is_distributed = self.is_distributed and self.get_group_size() > 1
@@ -66,7 +67,6 @@ class DistributedStreamer:
         self.device_type = torch.device(self.device_str)
 
         # do not distribute if backend type does not match device type
-
         if self.is_distributed:
             backend_name = dist.get_backend()
             if backend_name == "nccl" and self.device_str == "cpu":
@@ -77,8 +77,14 @@ class DistributedStreamer:
                 self.is_distributed = False
 
             if backend_name != "nccl" and backend_name != "gloo":
-                # TODO (Noa) support mpi
                 print(f"DistributedStreamer: backend {backend_name} is not supported - using non-distributed mode")
+                self.is_distributed = False
+
+        # check if there is enough free memory on the device
+        if self.is_distributed and torch.cuda.is_available() and self.device_str != "cpu":
+            free_memory = self.get_cuda_free_memory()
+            if free_memory < 2 * self.max_chunk:
+                print(f"Warning: Not enough memory on the device for distributed streaming, free memory: {free_memory} bytes, required minimun: {2 * self.max_chunk} bytes")
                 self.is_distributed = False
 
     def get_broadcast_timeout(self) -> timedelta:
@@ -159,12 +165,9 @@ class DistributedStreamer:
             ranks_on_host = [r for r, h in enumerate(all_hostnames) if h == hostname]
             groups_by_ranks.append(ranks_on_host)
 
-        # --- THIS IS THE FIX ---
-        # 3. All 16 processes must create ALL subgroups in the same order.
+        # 3. All processes must create ALL subgroups in the same order.
         # This is a global collective operation, done once for each subgroup.
-        if my_global_rank == 0:
-            print(f"Coordinated creation of {len(groups_by_ranks)} subgroups...", flush=True)
-        
+         
         created_groups = [dist.new_group(ranks=ranks, timeout=group_timeout) for ranks in groups_by_ranks]
         
         # 4. Now, each process finds which of the newly created groups it belongs to.
@@ -175,10 +178,10 @@ class DistributedStreamer:
                 self.local_group_global_ranks = ranks_list # Save the mapping
                 break
         
-        print(
-            f"pid {os.getpid()} rank {my_global_rank} on host '{socket.gethostname()}' successfully joined local group "
-            f"with global ranks: {self.local_group_global_ranks}"
-        )
+        # print(
+        #     f"pid {os.getpid()} rank {my_global_rank} on host '{socket.gethostname()}' successfully joined local group "
+        #     f"with global ranks: {self.local_group_global_ranks}"
+        # )
         
         return my_local_group
 
@@ -186,7 +189,12 @@ class DistributedStreamer:
         if self.is_distributed:
             self.rank = dist.get_rank(group=self.distribution_group)
             self.original_group_rank = dist.get_rank()
-            print(f"pid {os.getpid()} originally rank {self.original_group_rank} is now rank {self.rank} in the distribution group")
+
+    def get_cuda_free_memory(self) -> int:
+        if not torch.cuda.is_available():
+            return 0
+        free_memory, total_memory = torch.cuda.mem_get_info()
+        return free_memory
 
     def stream_files(
             self,
@@ -194,10 +202,15 @@ class DistributedStreamer:
             credentials: Optional[S3Credentials] = None,
             device: Optional[str] = None,
     ) -> None:
-        # check if distributed
+
+        # find the size of the maximal chunk for the reusable buffer
+        max_chunks_per_file = (fc.max_chunk_size() for fc in file_stream_requests if fc.chunks)
+        self.max_chunk = max(max_chunks_per_file, default=0)
+
+        # check if distributed streaming can be used
         self.set_is_distributed(device)
 
-        print(f"is distributed: {self.is_distributed} device: {self.device_str}")
+        #print(f"is distributed: {self.is_distributed} device: {self.device_str}")
 
         if not self.is_distributed:
             #print(f"streaming with no distribution")
@@ -212,7 +225,8 @@ class DistributedStreamer:
         # The group must be created before partitioning the tensors, in case the group will be local
         self.distribution_group = self.create_distribution_group()
 
-        # set rank in the new distribution group  
+
+        # set rank in the new distribution group
         self.set_rank()
 
         # partition tensors between processes in the distribution group
@@ -220,16 +234,6 @@ class DistributedStreamer:
 
         self.total_chunks_to_read = get_total_number_of_chunks(self.partitions)
         
-        # find the size of the maximal chunk for the reusable buffer
-
-        global_max_chunk = 0
-        for p in self.partitions:
-            for fc, _ in p:
-                if fc.chunks:
-                    global_max_chunk = max(global_max_chunk, max(fc.chunks))
-
-        self.max_chunk = global_max_chunk
-
         # read partition
         self.rank_file_chunks_list = []
         self.rank_dicts_map = {}
@@ -255,9 +259,6 @@ class DistributedStreamer:
             return
      
         start_time = timer()
-        
-        # --- PIPELINE & BATCHING SETUP ---
-        # TODO (Noa) check that the available device memory is enough for the buffers
 
         MAX_CHUNKS_PER_BATCH = 256
         BUFFER_MIN_BYTESIZE = 1024 * 1024 * 1024;
@@ -271,8 +272,6 @@ class DistributedStreamer:
         batch_metadata_tensor = torch.zeros(MAX_CHUNKS_PER_BATCH + 1, 4, dtype=torch.int64, device=self.device_type)
         received_metadata_tensor = torch.zeros(MAX_CHUNKS_PER_BATCH + 1, 4, dtype=torch.int64, device=self.device_type)
         
-        # --- END OF SETUP ---
-
         ready_chunks_iterator = self.file_streamer.get_chunks()
         
         def chunk_generator():
@@ -317,13 +316,10 @@ class DistributedStreamer:
                                 leftover_chunk = chunk_item
                                 break 
 
-                            # TODO (Noa) for limited memory mode perform synchronous copy
-                            
                             start_copy_time = timer()
                             data_buffer[current_data_offset : current_data_offset + chunk_size].copy_(cpu_buffer.squeeze())
                             
                             orig_req_idx, orig_chunk_idx, _ = self.rank_dicts_map[ready_request_id][ready_chunk_index]
-                            # TODO (Noa) for only limited memory mode perform synchronous copy                            
                             batch_metadata_tensor[chunk_count_in_batch + 1].copy_(
                                 torch.tensor([orig_req_idx, orig_chunk_idx, chunk_size, current_data_offset])
                             )
@@ -344,7 +340,6 @@ class DistributedStreamer:
 
                     group_size = dist.get_world_size(group=self.distribution_group)
 
-                    print(f"local rank {self.rank} global rank {self.original_group_rank} broadcasting group size is {group_size} ranks", flush=True)
                     for broadcasting_rank in range(group_size):
                         # Map the local rank to its corresponding GLOBAL rank
                         global_broadcasting_rank = self.local_group_global_ranks[broadcasting_rank]
@@ -368,8 +363,6 @@ class DistributedStreamer:
                             # receive metadata
                             dist.broadcast(received_metadata_tensor, global_broadcasting_rank, group=self.distribution_group)
 
-                            print(f"local rank {self.rank} global rank {self.original_group_rank} received metadata from global rank {global_broadcasting_rank}")
-
                             received_chunk_count_in_batch = received_metadata_tensor[0, 0].item()
 
                             if received_chunk_count_in_batch == 0:
@@ -384,8 +377,6 @@ class DistributedStreamer:
                             received_data_buf_view = received_buffer[:total_data_size]
 
                             dist.broadcast(received_data_buf_view, global_broadcasting_rank, group=self.distribution_group)
-
-                            print(f"local rank {self.rank} global rank {self.original_group_rank} received data from global rank {global_broadcasting_rank}")
 
                             for j in range(received_chunk_count_in_batch):
                                 meta = received_metadata_tensor[j + 1]
@@ -406,3 +397,4 @@ class DistributedStreamer:
             end_time = timer()
             print(f"local rank {self.rank} global rank {self.original_group_rank} done in {end_time - start_time} seconds")
             dist.barrier(group=self.distribution_group)
+

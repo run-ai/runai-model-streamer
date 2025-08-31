@@ -29,6 +29,9 @@ class FileChunks:
     def total_size(self) -> int:
         return sum(self.chunks)
 
+    def max_chunk_size(self) -> int:
+        return max(self.chunks)
+
     def __repr__(self) -> str:
         """Provides a clear string representation for the object."""
         return (f"FileChunks(id='{self.id}', path='{self.path}', offset={self.offset}, "

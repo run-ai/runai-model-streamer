@@ -71,11 +71,9 @@ class SafetensorsStreamer:
         ) -> None:
         self.files_to_tensors_metadata = {}
 
-        # TODO (Noa) to be removed after testing and vllm integration
-        # TODO (Noa)sending device type cpu while torch distributed backend is nccl will crash and should be checked
-
         file_stream_requests: List[FileChunks] = []
 
+        # metadata is created on cpu and each process reads it individually
         safetensors_metadatas = safetensors_pytorch.prepare_request(self.file_streamer, paths, s3_credentials, "cpu")
 
         for i in range(len(paths)):
