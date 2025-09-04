@@ -25,7 +25,7 @@ from runai_model_streamer.distributed_streamer.partition import (
 import humanize
 from timeit import default_timer as timer
 
-DEFAULT_BROADCAST_TIMEOUT = timedelta(seconds=30)
+DEFAULT_BROADCAST_TIMEOUT = timedelta(seconds=600)
 
 class DistributedStreamer:
     def __init__(self) -> None:
@@ -41,12 +41,20 @@ class DistributedStreamer:
         self.distribution_group = None
         self.reading_from_storage = False
         self.local_group_global_ranks = []
+        self.is_error = False
 
     def __enter__(self) -> DistributedStreamer:
         self.file_streamer.__enter__()
         return self
 
     def __exit__(self, exc_type: any, exc_value: any, traceback: any) -> None:
+        if self.distribution_group and not self.is_error:
+            print(f"local rank {self.rank} global rank {self.original_group_rank} destroying distribution group")
+            torch.distributed.barrier(group=self.distribution_group)
+            torch.distributed.destroy_process_group(group=self.distribution_group)
+            del self.distribution_group
+            self.distribution_group = None
+            print(f"local rank {self.rank} global rank {self.original_group_rank} destroyed distribution group")
         return self.file_streamer.__exit__(exc_type, exc_value, traceback)
 
     def get_group_size(self) -> int:
@@ -113,7 +121,7 @@ class DistributedStreamer:
             if backend_name == "nccl":
                 device = torch.cuda.current_device()
                 self.device_str = f"cuda:{device}"
-                print(f"DistributedStreamer: process {os.getpid()} global rank {dist.get_rank()} using device {self.device_str} for distributed mode")
+                #print(f"DistributedStreamer: process {os.getpid()} global rank {dist.get_rank()} using device {self.device_str} for distributed mode")
             else:
                 self.device_str = "cpu"
         else:
@@ -126,7 +134,7 @@ class DistributedStreamer:
         if not self.is_distributed:
             return None
 
-        is_global_group = int(os.environ.get("RUNAI_STREAMER_DIST_GLOBAL", "0")) == 1
+        is_global_group = int(os.environ.get("RUNAI_STREAMER_DIST_GLOBAL", "1")) == 1
 
         if is_global_group:
             # create global group
@@ -145,6 +153,9 @@ class DistributedStreamer:
         """
         Creates a torch.distributed.ProcessGroup containing all ranks on the current node.
         This version uses a coordinated creation pattern to avoid deadlocks.
+
+        Warning: This functin performs all_gather_object on the global group which cause nccl to allocate  device memory which otherwise may never be allocated by the user application
+        Consider creating a another global subgroup just for discovering the local ranks and then destroy that subgroup after the ranks are discovered.
         """
         if not dist.is_initialized():
             return None
@@ -331,7 +342,7 @@ class DistributedStreamer:
 
                         if chunk_count_in_batch > 0:
                             end_time = timer()
-                            print(f"local rank {self.rank} global rank {self.original_group_rank} aggregated {chunk_count_in_batch} chunks in {end_time - start_time} seconds")
+                            #print(f"local rank {self.rank} global rank {self.original_group_rank} aggregated {chunk_count_in_batch} chunks in {end_time - start_time} seconds")
 
                     batch_metadata_tensor[0, 0] = chunk_count_in_batch
                     chunks_to_read -= chunk_count_in_batch
@@ -384,17 +395,18 @@ class DistributedStreamer:
                                 yield meta[0].item(), meta[1].item(), received_data_buf_view[offset : offset + size]
 
         except RuntimeError as e:
-        # Check if the error is a timeout
+            # Check if the error is a timeout
+            self.is_error = True
             if "timed out" in str(e).lower() or "timeout" in str(e).lower():
                 print(f"Rank {self.original_group_rank}: broadcast timed out - Could not complete broadcast.")
             else:
                 print(f"rank {self.original_group_rank} error: {e}")
             raise e
         except Exception as e:
+            self.is_error = True
             print(f"rank {self.original_group_rank} error: {e}")
             raise e
         finally:
             end_time = timer()
             print(f"local rank {self.rank} global rank {self.original_group_rank} done in {end_time - start_time} seconds")
-            dist.barrier(group=self.distribution_group)
 
