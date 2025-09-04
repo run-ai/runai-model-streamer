@@ -33,7 +33,8 @@ RUN curl -fsSL -o fake-gcs-server_1.52.2.tar.gz https://github.com/fsouza/fake-g
     && mkdir -p fake-gcs-server \
     && tar zxf fake-gcs-server_1.52.2.tar.gz -C fake-gcs-server \
     && chmod +x fake-gcs-server/fake-gcs-server \
-    && mv fake-gcs-server/fake-gcs-server /usr/local/bin/fake-gcs-server
+    && mv fake-gcs-server/fake-gcs-server /usr/local/bin/fake-gcs-server \
+    && rm -rf fake-gcs-server
 
 RUN curl -fsSL -o openssl-3.5.0.tar.gz https://www.openssl.org/source/openssl-3.5.0.tar.gz && \
     tar zxf openssl-3.5.0.tar.gz && \

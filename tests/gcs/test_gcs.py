@@ -13,10 +13,11 @@ class FakeGCSServer(ObjectStoreBackend):
     """A helper class to interact with a GCS-compatible test server."""
     def __init__(self):
         self.url = os.getenv("CLOUD_STORAGE_EMULATOR_ENDPOINT")
+        project = os.getenv("GOOGLE_CLOUD_PROJECT")
         # Use anonymous client as authentication is implicit
         self.client = storage.Client(
             client_options={'api_endpoint': self.url},
-            project='fake-project',
+            project=project,
             credentials=AnonymousCredentials(),
         )
 

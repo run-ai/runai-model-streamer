@@ -11,26 +11,26 @@ GCS_CREDENTIAL_TYPE = "GCS_CREDENTIAL_TYPE"
 GCS_SA_KEY_PATH = "GCS_SA_KEY_PATH"
 # TODO: Pass credentials through to the C++ API library.
 RUNAI_STREAMER_GCS_CREDENTIAL_FILE = "RUNAI_STREAMER_GCS_CREDENTIAL_FILE"
-# Testing Only: This variable is used by google-cloud-cpp for emulator testing
-#   We use it here to allow Anonymous credential override.
-CLOUD_STORAGE_EMULATOR_ENDPOINT = "CLOUD_STORAGE_EMULATOR_ENDPOINT"
+RUNAI_STREAMER_GCS_USE_ANONYMOUS_CREDENTIALS = "RUNAI_STREAMER_GCS_USE_ANONYMOUS_CREDENTIALS"
 
 class CredentialType(Enum):
     # Credentials provided explicitly via a JSON file.
     SERVICE_ACCOUNT_JSON = auto()
     # Workload Identity or Application Default Credentials.
     DEFAULT_CREDENTIALS = auto()
+    # Workload Identity or Application Default Credentials.
+    ANONYMOUS_CREDENTIALS = auto()
 
 class GCSCredentials:
     def __init__(
         self,
+        credential_type: CredentialType,
         sa_key_file: Optional[str] = None,
     ):
+        self.credential_type = credential_type
         if sa_key_file:
+            assert credential_type == CredentialType.SERVICE_ACCOUNT_JSON
             self.sa_key_path = sa_key_file
-            self.credential_type = CredentialType.SERVICE_ACCOUNT_JSON
-        else:
-            self.credential_type = CredentialType.DEFAULT_CREDENTIALS
 
     def serialized_credentials(self) -> Dict[str, str]:
         return {
@@ -40,8 +40,7 @@ class GCSCredentials:
 
     def gcp_credentials(self) -> google.auth.credentials.Credentials:
         credentials = None
-        endpoint_override = os.getenv(CLOUD_STORAGE_EMULATOR_ENDPOINT, default=False)
-        if endpoint_override:
+        if self.credential_type == CredentialType.ANONYMOUS_CREDENTIALS:
             credentials = google.auth.credentials.AnonymousCredentials()
         elif self.credential_type == CredentialType.SERVICE_ACCOUNT_JSON:
             credentials, _ = google.auth.load_credentials_from_file(self.sa_key_path)
@@ -49,6 +48,9 @@ class GCSCredentials:
             credentials, _ = google.auth.default()
 
         return credentials
+
+def getenv_as_bool(key: str) -> bool:
+    return (os.getenv(key, "False").lower() in ("true", "1"))
 
 def get_credentials() -> GCSCredentials:
     """
@@ -59,5 +61,12 @@ def get_credentials() -> GCSCredentials:
         - GCSCredentials object with the resolved credentials (or original if session not created)
     """
 
+    use_anon_creds = getenv_as_bool(RUNAI_STREAMER_GCS_USE_ANONYMOUS_CREDENTIALS)
+    if use_anon_creds:
+        return GCSCredentials(CredentialType.ANONYMOUS_CREDENTIALS)
+
     sa_key_file = os.getenv(RUNAI_STREAMER_GCS_CREDENTIAL_FILE, default=None)
-    return GCSCredentials(sa_key_file)
+    if sa_key_file:
+        return GCSCredentials(CredentialType.SERVICE_ACCOUNT_JSON, sa_key_file)
+
+    return GCSCredentials(CredentialType.DEFAULT_CREDENTIALS)

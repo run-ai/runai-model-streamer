@@ -31,7 +31,7 @@ gcs:
 	fake-gcs-server -scheme http -port ${FAKE_GCS_SERVER_API_PORT} -data ${FAKE_GCS_SERVER_DATA_DIR} -filesystem-root ${FAKE_GCS_SERVER_ROOT} & \
 	FAKE_GCS_SERVER_PID=$$!; \
 	echo "Fake GCS Server PID is $$FAKE_GCS_SERVER_PID"; \
-	GCS_BUCKET=${FAKE_GCS_SERVER_BUCKET} CLOUD_STORAGE_EMULATOR_ENDPOINT=http://localhost:${FAKE_GCS_SERVER_API_PORT} pytest gcs/; \
+	GOOGLE_CLOUD_PROJECT=fake-project GCS_BUCKET=${FAKE_GCS_SERVER_BUCKET} API_ENDPOINT_OVERRIDE=http://localhost:${FAKE_GCS_SERVER_API_PORT} CLOUD_STORAGE_EMULATOR_ENDPOINT=http://localhost:${FAKE_GCS_SERVER_API_PORT} RUNAI_STREAMER_GCS_USE_ANONYMOUS_CREDENTIALS=True pytest gcs/; \
 	echo "Stopping Fake GCS Server..."; \
 	kill $$FAKE_GCS_SERVER_PID; \
 	wait $$FAKE_GCS_SERVER_PID 2>/dev/null || true; \
