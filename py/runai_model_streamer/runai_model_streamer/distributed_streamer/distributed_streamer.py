@@ -134,7 +134,7 @@ class DistributedStreamer:
         if not self.is_distributed:
             return None
 
-        is_global_group = int(os.environ.get("RUNAI_STREAMER_DIST_GLOBAL", "1")) == 1
+        is_global_group = int(os.environ.get("RUNAI_STREAMER_DIST_GLOBAL", "0")) == 1
 
         if is_global_group:
             # create global group
@@ -154,8 +154,8 @@ class DistributedStreamer:
         Creates a torch.distributed.ProcessGroup containing all ranks on the current node.
         This version uses a coordinated creation pattern to avoid deadlocks.
 
-        Warning: This functin performs all_gather_object on the global group which cause nccl to allocate  device memory which otherwise may never be allocated by the user application
-        Consider creating a another global subgroup just for discovering the local ranks and then destroy that subgroup after the ranks are discovered.
+        This function performs all_gather_object on the global group which cause nccl to allocate  device memory which otherwise may never be allocated by the user application
+        To avoid this issue, we create a another global subgroup just for discovering the local ranks and then destroy that subgroup after the ranks are discovered.
         """
         if not dist.is_initialized():
             return None
@@ -164,9 +164,14 @@ class DistributedStreamer:
         my_global_rank = dist.get_rank()
         world_size = dist.get_world_size()
 
+
         # 1. Discover all peers on all nodes (this is a global collective)
+        # create global group just for discovering the local ranks
+        tmp_global_group = dist.new_group(ranks=list(range(world_size)), timeout=group_timeout)
         all_hostnames = [None] * world_size
-        dist.all_gather_object(all_hostnames, socket.gethostname())
+        dist.all_gather_object(all_hostnames, socket.gethostname(), group=tmp_global_group)
+        dist.destroy_process_group(group=tmp_global_group)
+        del tmp_global_group
 
         # 2. Create a list of rank lists, one for each unique host.
         # e.g., [[0,1,2,3,4,5,6,7], [8,9,10,11,12,13,14,15]]
