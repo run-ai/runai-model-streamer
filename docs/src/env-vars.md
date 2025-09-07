@@ -43,7 +43,7 @@ Controls how the CPU Memory buffer to which tensors are read from the file is be
 
 #### Default value
 
-`-1`
+`-1` for distributed streaming and 40 GB otherwise
 
 ### AWS_ENDPOINT_URL
 

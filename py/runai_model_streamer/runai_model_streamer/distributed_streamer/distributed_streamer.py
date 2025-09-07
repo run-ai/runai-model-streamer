@@ -259,15 +259,32 @@ class DistributedStreamer:
         
         # read partition
         self.rank_file_chunks_list = []
+
+        # map partitions's file chunks index to the index in the original file list
         self.rank_dicts_map = {}
         for fc, d in self.partitions[self.rank]:
             self.rank_file_chunks_list.append(fc)
             self.rank_dicts_map[fc.id] = d
-        if len(self.rank_file_chunks_list) > 0:
-            self.file_streamer.stream_files(self.rank_file_chunks_list, credentials, "cpu")
-            self.reading_from_storage = True
-        else:
+
+        if len(self.rank_file_chunks_list) == 0:
             self.reading_from_storage = False
+            return
+
+        # read files
+        original_memory_limit = os.environ.get("RUNAI_STREAMER_MEMORY_LIMIT")
+        try:
+            # for distributed streaming only - change default memory limit to unlimited
+            if original_memory_limit == None:
+                os.environ["RUNAI_STREAMER_MEMORY_LIMIT"] = "-1"
+            self.file_streamer.stream_files(self.rank_file_chunks_list, credentials, "cpu")
+        except Exception as e:
+            raise e
+        finally:
+            if original_memory_limit is None:
+                os.environ.pop("RUNAI_STREAMER_MEMORY_LIMIT", None)
+            else:
+                os.environ["RUNAI_STREAMER_MEMORY_LIMIT"] = original_memory_limit
+        self.reading_from_storage = True
 
     def get_chunks(self) -> Iterator:
         if not self.file_streamer:
