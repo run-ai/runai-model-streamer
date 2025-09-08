@@ -40,7 +40,7 @@ def compatibility_test_cases(backend_class, scheme, bucket_name):
 
             our = {}
             with SafetensorsStreamer() as run_sf:
-                run_sf.stream_file(f"{self.scheme}://{self.bucket_name}/model.safetensors")
+                run_sf.stream_file(f"{self.scheme}://{self.bucket_name}/model.safetensors", None, "cpu")
                 for name, tensor in run_sf.get_tensors():
                     our[name] = tensor
 
