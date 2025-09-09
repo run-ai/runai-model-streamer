@@ -3,7 +3,7 @@ import os
 import dataclasses
 from collections import defaultdict
 from typing import List, Dict
-
+import humanize
 from runai_model_streamer.file_streamer import FileChunks
 
 @dataclasses.dataclass(frozen=True)
@@ -28,6 +28,11 @@ def partition_by_chunks(
     For each returned FileChunks object, it also provides a map from the index
     of a chunk in its new list to a tuple representing its original position
     (original_request_index, original_chunk_index, chunk_size).
+
+    A greedy algorithm is used to assign each chunk to a partition.
+    It iterates through the global sorted list of chunks (starting with the largest chunk)
+    and assigns each chunk to the partition that is currently the "emptiest"
+    (has the smallest total size of assigned work so far).
 
     Args:
         file_stream_requests: A list of FileChunks objects representing the
@@ -178,52 +183,26 @@ def get_partition_policy() -> str:
 def partition(file_stream_requests: List[FileChunks], n: int) -> List[List[Tuple[FileChunks, Dict[int, Tuple[int, int, int]]]]]:
     partition_policy = get_partition_policy()
     if partition_policy == "files":
-        print(f"partitioning by files for n: {n}")
         return partition_by_files(file_stream_requests, n)
     elif partition_policy == "chunks":
-        print(f"partitioning by chunks for n: {n}")
         return partition_by_chunks(file_stream_requests, n)
     else:
         raise ValueError(f"Invalid partition policy: {partition_policy}")
 
 def get_total_number_of_chunks(partitions: List[List[Tuple[FileChunks, dict]]]) -> int:
+    if partitions is None or len(partitions) == 0:
+        return 0
     return sum(sum(len(fc.chunks) for fc, _ in p) for p in partitions)
 
-def create_broadcast_plan(partitions: List[List[Tuple[FileChunks, dict]]]) -> List[int]:
-    """
-    Creates a round-robin broadcast plan from a list of partitions.
+def get_total_size_of_partition(partition: List[Tuple[FileChunks, dict]]) -> int:
+    if partition is None or len(partition) == 0:
+        return 0
+    return sum(sum(fc.chunks) for fc, _ in partition)
 
-    In each turn of the round robin, a process broadcasts a single chunk. The
-    plan continues until all chunks from all processes have been broadcast.
-
-    Args:
-        partitions: A list of n partitions, where each partition is a list
-                    of tuples containing a FileChunks object and its source map.
-
-    Returns:
-        A list of process indices (0 to n-1) representing the broadcast
-        order. The length of the list is the total number of chunks across
-        all partitions.
-    """
-    n = len(partitions)
-    if n == 0:
-        return []
-
-    # Count the number of chunks each process has by unpacking the tuples.
-    chunks_per_process = [sum(len(fc.chunks) for fc, _ in p) for p in partitions]
-    
-    plan = []
-    process_idx = 0
-    
-    # Continue until all processes have broadcast all their chunks.
-    while sum(chunks_per_process) > 0:
-        # If the current process still has chunks, add it to the plan.
-        if chunks_per_process[process_idx] > 0:
-            plan.append(process_idx)
-            chunks_per_process[process_idx] -= 1
-        
-        # Move to the next process in the round robin.
-        process_idx = (process_idx + 1) % n
-        
-    return plan
+def log_partition_info(partitions: List[List[Tuple[FileChunks, dict]]]):
+    log_string = "Partitions sizes:"
+    for i in range(len(partitions)):
+        size = get_total_size_of_partition(partitions[i])
+        log_string += f" {i}: {humanize.naturalsize(size, binary=True)} ; "
+    print(log_string)
 

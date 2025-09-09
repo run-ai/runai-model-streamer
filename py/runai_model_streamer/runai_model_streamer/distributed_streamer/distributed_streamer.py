@@ -17,7 +17,8 @@ from runai_model_streamer.file_streamer import (
 from runai_model_streamer.distributed_streamer.partition import (
     partition,
     get_total_number_of_chunks,
-    get_partition_policy
+    get_partition_policy,
+    log_partition_info,
 )
 
 from runai_model_streamer.s3_utils.s3_utils import (
@@ -73,10 +74,8 @@ class DistributedStreamer:
 
         # environment variable to override default distributed streaming
         if os.environ.get("RUNAI_STREAMER_DIST") == "0":
-            print(f"RUNAI_STREAMER_DIST is set to 0")
             self.is_distributed = False
         elif os.environ.get("RUNAI_STREAMER_DIST") == "1":
-            print(f"RUNAI_STREAMER_DIST is set to 1")
             self.is_distributed = True
 
         # check if torch distributed is initialized and there are more than one process
@@ -234,7 +233,6 @@ class DistributedStreamer:
         # check if distributed streaming can be used
         self.set_is_distributed(path, device)
 
-        print(f"is distributed: {self.is_distributed} device: {self.device_str}")
 
         if not self.is_distributed:
             self.file_streamer.stream_files(file_stream_requests, credentials, device)
@@ -248,12 +246,13 @@ class DistributedStreamer:
         # The group must be created before partitioning the tensors, in case the group will be local
         self.distribution_group = self.create_distribution_group()
 
-
         # set rank in the new distribution group
         self.set_rank()
 
         # partition tensors between processes in the distribution group
         self.partitions = partition(file_stream_requests, dist.get_world_size(group=self.distribution_group))
+        if self.rank == 0:
+            log_partition_info(self.partitions)
 
         self.total_chunks_to_read = get_total_number_of_chunks(self.partitions)
         

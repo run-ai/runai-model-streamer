@@ -6,7 +6,6 @@ from typing import List, Dict, Tuple
 from runai_model_streamer.distributed_streamer.partition import (
     partition_by_chunks,
     partition_by_files,
-    create_broadcast_plan
 )
 from runai_model_streamer.file_streamer import FileChunks
 
@@ -177,28 +176,6 @@ class TestPartitioning(unittest.TestCase):
 
         self._verify_all_chunks_present(requests_with_zero, partitions)
         self._verify_chunk_maps(requests_with_zero, partitions)
-
-    def test_create_broadcast_plan(self):
-        """Tests the round-robin broadcast plan creation."""
-        # Create a sample partition structure.
-        partitions = [
-            [(FileChunks(0, "A", 0, [10, 20, 30]), {})],
-            [(FileChunks(1, "B", 0, [40]), {})],
-            [(FileChunks(2, "C", 0, [50, 60]), {}), (FileChunks(3, "D", 0, [70, 80]), {})]
-        ]
-        
-        plan = create_broadcast_plan(partitions)
-        
-        self.assertEqual(len(plan), 8)
-        self.assertEqual(plan.count(0), 3)
-        self.assertEqual(plan.count(1), 1)
-        self.assertEqual(plan.count(2), 4)
-        expected_plan = [0, 1, 2, 0, 2, 0, 2, 2]
-        self.assertListEqual(plan, expected_plan)
-
-        # Test with empty partitions
-        plan_empty = create_broadcast_plan([])
-        self.assertListEqual(plan_empty, [])
 
     def tearDown(self):
         """No cleanup needed for these tests."""
