@@ -5,7 +5,6 @@ import google.auth
 import google.auth.credentials
 
 import os
-import boto3
 
 GCS_CREDENTIAL_TYPE = "GCS_CREDENTIAL_TYPE"
 GCS_SA_KEY_PATH = "GCS_SA_KEY_PATH"
