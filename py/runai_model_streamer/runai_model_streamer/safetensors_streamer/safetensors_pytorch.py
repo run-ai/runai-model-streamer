@@ -63,8 +63,7 @@ class SafetensorsMetadata:
         metadatas = {}
         fs.stream_files([FileChunks(i, filenames[i], SAFETENSORS_HEADER_BUFFER_SIZE, [header_size]) for i, header_size in header_sizes.items()], s3_credentials, "cpu")
         for file_index, ready_chunk_index, buffer in fs.get_chunks():
-            cpu_buffer = buffer.to("cpu")
-            metadatas[file_index] = json.loads(bytearray(cpu_buffer.numpy()))
+            metadatas[file_index] = json.loads(bytearray(buffer.numpy()))
 
         return [SafetensorsMetadata(
             metadatas[i], header_sizes[i] + SAFETENSORS_HEADER_BUFFER_SIZE

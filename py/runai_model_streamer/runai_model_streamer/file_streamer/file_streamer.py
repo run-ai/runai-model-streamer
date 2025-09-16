@@ -158,6 +158,6 @@ class FileStreamer:
             if self.device_str == "cpu":
                 yield file_path, chunk_index, tensor
             else:
-                gpu_tensor = tensor.to(self.device_str)
-                yield file_path, chunk_index, gpu_tensor
+                device_tensor = tensor.to(self.device_str)
+                yield file_path, chunk_index, device_tensor
 

@@ -96,12 +96,13 @@ class DistributedStreamer:
                 self.is_distributed = False
             if backend_name == "gloo" and self.device_str != "cpu":
                 self.is_distributed = False
-            if backend_name != "nccl" and backend_name != "gloo":
-                print(f"DistributedStreamer: backend {backend_name} is not supported - using non-distributed mode")
+            if os.environ.get("RUNAI_STREAMER_DIST") is None and backend_name != "nccl" and backend_name != "gloo":
+                print(f"Note: torch distributed backend {backend_name} is not supported by default for distributed streaming - To allow this backend, set RUNAI_STREAMER_DIST to `1`")
                 self.is_distributed = False
 
         # check if there is enough free memory on the device
-        if self.is_distributed and torch.cuda.is_available() and self.device_str != "cpu":
+        # TO_DO(Noa) - add support for other device types
+        if self.is_distributed and torch.cuda.is_available() and dist.get_backend() == "nccl":
             free_memory = self.get_cuda_free_memory()
             if free_memory < 2 * self.max_chunk:
                 print(f"Warning: Not enough memory on the device for distributed streaming, free memory: {free_memory} bytes, required minimun: {2 * self.max_chunk} bytes")
@@ -115,19 +116,12 @@ class DistributedStreamer:
             return DEFAULT_BROADCAST_TIMEOUT
 
     def set_device_str(self, device: Optional[str] = None) -> None:
-        # cpu specified
-        if device is "cpu":
+        if device is not None:
             self.device_str = device
             return
 
-        # specific cuda device
-        if device is not None:
-            cuda_pattern = re.compile(r"^cuda:\d+$", re.IGNORECASE)
-            if cuda_pattern.match(device) is not None:
-                self.device_str = device
-            return
-
-        # cuda or None
+        # Default behavior
+        # TO DO(Noa): Change default behavior to "cpu" after integration with vLLM
         if self.is_distributed:
             backend_name = dist.get_backend()
             if backend_name == "nccl":
