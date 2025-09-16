@@ -93,7 +93,6 @@ class DistributedStreamer:
                 self.is_distributed = False
             if backend_name == "gloo" and self.device_str != "cpu":
                 self.is_distributed = False
-
             if backend_name != "nccl" and backend_name != "gloo":
                 print(f"DistributedStreamer: backend {backend_name} is not supported - using non-distributed mode")
                 self.is_distributed = False
@@ -233,6 +232,9 @@ class DistributedStreamer:
         # check if distributed streaming can be used
         self.set_is_distributed(path, device)
 
+        print(f"is distributed: {self.is_distributed}")
+
+        # TODO (Noa) set the value of RUNAI_STREAMER_PROCESS_GROUP_SIZE to be the number of processes in the distribution group (or 1 if process group is not initialized)
 
         if not self.is_distributed:
             self.file_streamer.stream_files(file_stream_requests, credentials, device)

@@ -51,8 +51,6 @@ class FileStreamer:
         self.start_time = timer()
         self.total_size = 0
         self.device_str = None
-        self.device_type = None
-
         self.s3_session = None
         self.s3_credentials = None
         return self
@@ -93,7 +91,6 @@ class FileStreamer:
             self.device_str = "cpu"
         else:
             self.device_str = device
-        self.device_type = torch.device(self.device_str)
 
         for file_stream_request in file_stream_requests:
             self.total_size += sum(file_stream_request.chunks)
