@@ -3,7 +3,7 @@ import torch
 import struct
 import json
 from typing import List, Tuple
-from runai_model_streamer.file_streamer.file_streamer import (FileStreamer, FileChunks)
+from runai_model_streamer.distributed_streamer.distributed_streamer import (DistributedStreamer, FileChunks)
 
 
 SAFETENSORS_DATA_OFFSETS_KEY = "data_offsets"
@@ -52,7 +52,7 @@ class SafetensorsMetadata:
                 self.read_sizes.append(self.tensors_metadata[i].get_bytesize())
 
     @staticmethod
-    def from_files(fs: FileStreamer, filenames: List[str], s3_credentials: Optional[S3Credentials]) -> List[SafetensorsMetadata]:
+    def from_files(fs: DistributedStreamer, filenames: List[str], s3_credentials: Optional[S3Credentials]) -> List[SafetensorsMetadata]:
         fs.stream_files([FileChunks(i, filenames[i], 0, [SAFETENSORS_HEADER_BUFFER_SIZE]) for i in range(len(filenames))], s3_credentials, "cpu")
         header_sizes = {}
         for file_index, ready_chunk_index, buffer in fs.get_chunks():
@@ -63,7 +63,8 @@ class SafetensorsMetadata:
         metadatas = {}
         fs.stream_files([FileChunks(i, filenames[i], SAFETENSORS_HEADER_BUFFER_SIZE, [header_size]) for i, header_size in header_sizes.items()], s3_credentials, "cpu")
         for file_index, ready_chunk_index, buffer in fs.get_chunks():
-            metadatas[file_index] = json.loads(bytearray(buffer.numpy()))
+            cpu_buffer = buffer.to("cpu")
+            metadatas[file_index] = json.loads(bytearray(cpu_buffer.numpy()))
 
         return [SafetensorsMetadata(
             metadatas[i], header_sizes[i] + SAFETENSORS_HEADER_BUFFER_SIZE
@@ -100,7 +101,7 @@ class Offsets:
 
 
 def prepare_request(
-    fs: FileStreamer, paths: List[str], s3_credentials: Optional[S3Credentials]
+    fs: DistributedStreamer, paths: List[str], s3_credentials: Optional[S3Credentials]
 ) -> List[Tuple[str, int, List[SafetensorMetadata], List[int]]]:
     safetensors_metadatas = SafetensorsMetadata.from_files(fs, paths, s3_credentials)
     return [(

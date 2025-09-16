@@ -74,7 +74,7 @@ class SafetensorsStreamer:
         file_stream_requests: List[FileChunks] = []
 
         # metadata is created on cpu and each process reads it individually
-        safetensors_metadatas = safetensors_pytorch.prepare_request(self.file_streamer.file_streamer, paths, s3_credentials)
+        safetensors_metadatas = safetensors_pytorch.prepare_request(self.file_streamer, paths, s3_credentials)
 
         for i in range(len(paths)):
             (file_offset, tensors_metadata, tensor_sizes) = safetensors_metadatas[i]

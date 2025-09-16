@@ -47,6 +47,9 @@ class DistributedStreamer:
         self.reading_from_storage = False
         self.local_group_global_ranks = []
         self.is_error = False
+        self.my_global_rank = 0
+        self.groups_by_ranks = []
+        self.num_processes_on_node = None
 
     def __enter__(self) -> DistributedStreamer:
         self.file_streamer.__enter__()
@@ -164,13 +167,48 @@ class DistributedStreamer:
 
         This function performs all_gather_object on the global group which cause nccl to allocate  device memory which otherwise may never be allocated by the user application
         To avoid this issue, we create a another global subgroup just for discovering the local ranks and then destroy that subgroup after the ranks are discovered.
+
+        Note: find_local_ranks() must be called before this function
         """
+
         if not dist.is_initialized():
             return None
 
         group_timeout = self.get_broadcast_timeout()
-        my_global_rank = dist.get_rank()
         world_size = dist.get_world_size()
+
+        # All processes must create ALL subgroups in the same order.
+        # This is a global collective operation, done once for each subgroup.
+         
+        created_groups = [dist.new_group(ranks=ranks, timeout=group_timeout) for ranks in self.groups_by_ranks]
+        
+        # Each process finds which of the newly created groups it belongs to.
+        my_local_group = None
+        for i, ranks_list in enumerate(self.groups_by_ranks):
+            if self.my_global_rank in ranks_list:
+                my_local_group = created_groups[i]
+                self.local_group_global_ranks = ranks_list # Save the mapping
+                break
+
+        return my_local_group
+
+    def find_local_ranks(self) -> Tuple[int, int, List[List[int]]]:
+        """
+        Returns the number of processes on the node, global rank and the list of ranks on each node
+
+        This function performs all_gather_object on the global group which cause nccl to allocate  device memory which otherwise may never be allocated by the user application
+        To avoid this issue, we create a another global subgroup just for discovering the local ranks and then destroy that subgroup after the ranks are discovered.
+        """
+        if not dist.is_initialized():
+            return 1, 0, [[0]]
+
+        group_timeout = self.get_broadcast_timeout()
+        world_size = dist.get_world_size()
+
+        if world_size == 1:
+            return 1, 0, [[0]]
+
+        my_global_rank = dist.get_rank()
 
         # 1. Discover all peers on all nodes (this is a global collective)
         # create global group just for discovering the local ranks
@@ -179,7 +217,7 @@ class DistributedStreamer:
         dist.all_gather_object(all_hostnames, socket.gethostname(), group=sandbox_global_group)
         dist.destroy_process_group(group=sandbox_global_group)
         del sandbox_global_group
-
+ 
         # 2. Create a list of rank lists, one for each unique host.
         # e.g., [[0,1,2,3,4,5,6,7], [8,9,10,11,12,13,14,15]]
         unique_hostnames = sorted(list(set(all_hostnames)))
@@ -188,20 +226,13 @@ class DistributedStreamer:
             ranks_on_host = [r for r, h in enumerate(all_hostnames) if h == hostname]
             groups_by_ranks.append(ranks_on_host)
 
-        # 3. All processes must create ALL subgroups in the same order.
-        # This is a global collective operation, done once for each subgroup.
-         
-        created_groups = [dist.new_group(ranks=ranks, timeout=group_timeout) for ranks in groups_by_ranks]
-        
-        # 4. Now, each process finds which of the newly created groups it belongs to.
-        my_local_group = None
+        my_group_size = 1
         for i, ranks_list in enumerate(groups_by_ranks):
             if my_global_rank in ranks_list:
-                my_local_group = created_groups[i]
-                self.local_group_global_ranks = ranks_list # Save the mapping
+                my_group_size = len(ranks_list)
                 break
 
-        return my_local_group
+        return my_group_size, my_global_rank, groups_by_ranks
 
     def set_rank(self) -> None:
         if self.is_distributed:
@@ -232,9 +263,15 @@ class DistributedStreamer:
         # check if distributed streaming can be used
         self.set_is_distributed(path, device)
 
-        print(f"is distributed: {self.is_distributed}")
+        # set the value of RUNAI_STREAMER_PROCESS_GROUP_SIZE to be the number of processes in the distribution group (or 1 if process group is not initialized)
+        # This is useful for auto adjustments in the CPP layer, which depends on the number of processes of this workload
+        if self.num_processes_on_node is None:
+            self.num_processes_on_node, self.my_global_rank, self.groups_by_ranks = self.find_local_ranks()
+        if os.environ.get("RUNAI_STREAMER_PROCESS_GROUP_SIZE") is None:
+            os.environ["RUNAI_STREAMER_PROCESS_GROUP_SIZE"] = str(self.num_processes_on_node)
 
-        # TODO (Noa) set the value of RUNAI_STREAMER_PROCESS_GROUP_SIZE to be the number of processes in the distribution group (or 1 if process group is not initialized)
+        if self.rank == 0:
+            print(f"is distributed: {self.is_distributed} num_processes_on_node: {self.num_processes_on_node}")
 
         if not self.is_distributed:
             self.file_streamer.stream_files(file_stream_requests, credentials, device)
