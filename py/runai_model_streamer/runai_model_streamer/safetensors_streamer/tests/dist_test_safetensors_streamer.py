@@ -12,16 +12,8 @@ class TestDistributedSafetensorsStreamer(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        if not dist.is_initialized():
-            dist.init_process_group("gloo")
         cls.rank = dist.get_rank()
         cls.world_size = dist.get_world_size()
-
-    @classmethod
-    def tearDownClass(cls):
-        if dist.is_initialized():
-            dist.barrier()
-            dist.destroy_process_group()
 
     def setUp(self):
         dist.barrier()
