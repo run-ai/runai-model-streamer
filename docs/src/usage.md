@@ -48,6 +48,39 @@ with SafetensorsStreamer() as streamer:
 
 > **Note:** You can not mix S3 path and file system paths on same `streamer.stream_files()` call.
 
+#### Distributed streaming
+
+##### Use case and motivation
+
+Multiple processes are reading the same file list, e.g., the default loader of vLLM loading model weights on multiple devices.
+When reading from a file system, the operating system page cache optimizes the reading by storing pages in the cache, so files are read from storage only once. However, reading from object storage cannot utilize the page cache, leading to multiple reads from storage and long loading times.
+Distributed streaming is designed to solve this problem by dividing the reading workload between the multiple processes, where each process reads a unique portion of the files and then distributes its share to the other processes.
+
+##### Requirements
+
+Distributed streaming is based on a torch distributed group and the broadcast operation.
+The backend of the torch group must support the broadcast operation.
+
+The performance gain depends on the type of backend and the communication between devices.
+The nccl backend with nvlink between devices is most suitable for distributed streaming.
+
+##### Control
+
+Distributed streaming is enabled by default when streaming from object storage to CUDA devices.
+It is possible to disable distributed streaming by setting `RUNAI_STREAMER_DIST=0`
+
+It is possible to force distributed streaming for other cases by setting `RUNAI_STREAMER_DIST=1`
+
+##### Global and local modes
+
+In local mode, the processes on each node divide the entire workload among themselves.
+In global mode, the workload is divided between all processes on all nodes.
+For example, with 2 nodes and 16 processes (8 processes on each node), each process reads 1/8 of the workload in local mode and 1/16 in global mode.
+
+The mode should be selected according to the communication speed between nodes.
+By default, distributed streaming is done in local mode.
+To enable global mode, set RUNAI_STREAMER_DIST_GLOBAL=1.
+
 ##### S3 authentication
 
 By default, the streamer performs authentication via boto3 to obtain credentials, which are then passed to the S3 client in `libstreamers3.so`.

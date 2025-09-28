@@ -99,3 +99,31 @@ If not defined (default) Application Default Credentials are used.
 #### Values accepted
 
 String
+
+### RUNAI_STREAMER_DIST
+
+Enables distributed streaming for multiple devices
+
+If not defined (default) distributed streaming is enabled only for streaming from object storage to CUDA devices
+
+### Values accepted
+
+Boolean `0` or `1`
+
+#### Default value
+
+None
+
+### RUNAI_STREAMER_DIST_GLOBAL
+
+Enables global distributed streaming for multiple devices, dividing the workload between multiple nodes
+
+If not defined (default) distributed streaming is loacl - dividing the workload between processes of the same node 
+
+### Values accepted
+
+Boolean `0` or `1`
+
+#### Default value
+
+`0`
