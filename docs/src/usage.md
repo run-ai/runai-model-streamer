@@ -58,6 +58,11 @@ Distributed streaming is designed to solve this problem by dividing the reading 
 
 ##### Requirements
 
+Distributed streaming uses reusable staging buffers on each device, which hold the data of the yielded tensors
+Therefore, the yielded tensor might be overwritten at the next iteration. If needed, clone and detach the yielded tensor to save a copy.
+ 
+The memory requirements for the staging buffers is twice the size of the larget tensor in the files
+
 Distributed streaming is based on a torch distributed group and the broadcast operation.
 The backend of the torch group must support the broadcast operation.
 
