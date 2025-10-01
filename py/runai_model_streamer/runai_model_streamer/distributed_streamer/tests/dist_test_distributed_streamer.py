@@ -71,7 +71,7 @@ class TestDistributedStreamer(unittest.TestCase):
         env_vars = {"RUNAI_STREAMER_DIST": "1", "RUNAI_STREAMER_DIST_BUFFER_MIN_BYTESIZE": "0"}
         with patch.dict(os.environ, env_vars):
             with DistributedStreamer() as streamer:
-                streamer.stream_files(requests)
+                streamer.stream_files(requests, None, "cpu", True)
                 for req_id, chunk_idx, data_tensor in streamer.get_chunks():
                     reconstructed_data_map[req_id][chunk_idx] = data_tensor.cpu().numpy().tobytes()
             for req_id, chunks in reconstructed_data_map.items():
@@ -86,7 +86,7 @@ class TestDistributedStreamer(unittest.TestCase):
         env_vars = {"RUNAI_STREAMER_DIST": "1"}
         with patch.dict(os.environ, env_vars):
             with DistributedStreamer() as streamer:
-                streamer.stream_files(requests)
+                streamer.stream_files(requests, None, "cpu", True)
                 count = 0
                 for req_id, chunk_idx, data_tensor in streamer.get_chunks():
                     count += 1
@@ -132,7 +132,7 @@ class TestDistributedStreamer(unittest.TestCase):
         env_vars = {"RUNAI_STREAMER_DIST": "1", "RUNAI_STREAMER_DIST_BUFFER_MIN_BYTESIZE": "0"}
         with patch.dict(os.environ, env_vars):
             with DistributedStreamer() as streamer:
-                streamer.stream_files(requests)
+                streamer.stream_files(requests, None, "cpu", True)
                 for req_id, chunk_idx, data_tensor in streamer.get_chunks():
                     reconstructed_data_map[req_id][chunk_idx] = data_tensor.cpu().numpy().tobytes()
 
@@ -161,7 +161,7 @@ class TestDistributedStreamer(unittest.TestCase):
             
             with self.assertRaises(Exception):
                 with DistributedStreamer() as streamer:
-                    streamer.stream_files(requests)
+                    streamer.stream_files(requests, None, "cpu", True)
                     for _ in streamer.get_chunks():
                         pass
         
@@ -180,7 +180,7 @@ class TestDistributedStreamer(unittest.TestCase):
             with self.assertRaises(Exception) as context:
                 with DistributedStreamer() as streamer:
                     # All ranks must pass the setup phase
-                    streamer.stream_files(requests)
+                    streamer.stream_files(requests, None, "cpu", True)
                     
                     if self.rank == 1:
                         time.sleep(timeout_seconds + 2) # Sleep longer than timeout

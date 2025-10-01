@@ -53,7 +53,7 @@ class SafetensorsMetadata:
 
     @staticmethod
     def from_files(fs: DistributedStreamer, filenames: List[str], s3_credentials: Optional[S3Credentials]) -> List[SafetensorsMetadata]:
-        fs.stream_files([FileChunks(i, filenames[i], 0, [SAFETENSORS_HEADER_BUFFER_SIZE]) for i in range(len(filenames))], s3_credentials, "cpu")
+        fs.stream_files([FileChunks(i, filenames[i], 0, [SAFETENSORS_HEADER_BUFFER_SIZE]) for i in range(len(filenames))], s3_credentials, "cpu", False)
         header_sizes = {}
         for file_index, ready_chunk_index, buffer in fs.get_chunks():
             header_sizes[file_index] = struct.unpack(
@@ -61,7 +61,7 @@ class SafetensorsMetadata:
             )[0]
 
         metadatas = {}
-        fs.stream_files([FileChunks(i, filenames[i], SAFETENSORS_HEADER_BUFFER_SIZE, [header_size]) for i, header_size in header_sizes.items()], s3_credentials, "cpu")
+        fs.stream_files([FileChunks(i, filenames[i], SAFETENSORS_HEADER_BUFFER_SIZE, [header_size]) for i, header_size in header_sizes.items()], s3_credentials, "cpu", False)
         for file_index, ready_chunk_index, buffer in fs.get_chunks():
             metadatas[file_index] = json.loads(bytearray(buffer.numpy()))
 

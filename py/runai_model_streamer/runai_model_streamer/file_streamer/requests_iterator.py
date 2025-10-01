@@ -96,7 +96,7 @@ class FilesRequestsIteratorWithBuffer:
                 raise RunaiStreamerMemoryLimitException(
                     f"MemoryCapMode is Limited, but no limit supplied"
                 )
-            largest_chunk = max(max(file_chunks.chunks) for file_chunks in files_chunks)
+            largest_chunk = max((max(file_chunks.chunks, default=0) for file_chunks in files_chunks), default=0)
             if user_memory_limit < largest_chunk:
                 raise RunaiStreamerMemoryLimitException(
                     f"Memory limit supplied: {user_memory_limit} cannot be smaller than: {largest_chunk}"
@@ -205,7 +205,6 @@ class ChunksIterator:
             current_request_size += candidate_chunk
 
         return chunks
-
 
 def _get_memory_mode(memory_limit: str | None) -> MemoryCapMode:
     if memory_limit == "-1":

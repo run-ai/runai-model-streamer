@@ -68,8 +68,12 @@ class DistributedStreamer:
             return 1
         return dist.get_world_size()
 
-    def set_is_distributed(self, path: str, device: Optional[str] = None) -> None:
+    def set_is_distributed(self, is_distributed: bool, path: str, device: str) -> None:
         # check if distributed streaming should be used
+
+        if not is_distributed:
+            self.is_distributed = False
+            return
 
         # environment variable to override default distributed streaming
         # by default, use distributed streaming only for object storage paths
@@ -93,10 +97,7 @@ class DistributedStreamer:
                 print(f"Note: torch distributed is not initialized")
             self.is_distributed = self.is_distributed and self.get_group_size() > 1
 
-        self.set_device_str(device)
-        self.device_type = torch.device(self.device_str)
-
-        # do not distribute if backend type does not match device type
+       # do not distribute if backend type does not match device type
         if self.is_distributed:
             backend_name = dist.get_backend()
             if backend_name == "nccl" and self.device_str == "cpu":
@@ -122,23 +123,6 @@ class DistributedStreamer:
             return timedelta(seconds=int(timeout_val))
         else:
             return DEFAULT_BROADCAST_TIMEOUT
-
-    def set_device_str(self, device: Optional[str] = None) -> None:
-        if device is not None:
-            self.device_str = device
-            return
-
-        # Default behavior
-        # TO DO(Noa): Change default behavior to "cpu" after integration with vLLM
-        if self.is_distributed:
-            backend_name = dist.get_backend()
-            if backend_name == "nccl":
-                device = torch.cuda.current_device()
-                self.device_str = f"cuda:{device}"
-            else:
-                self.device_str = "cpu"
-        else:
-            self.device_str = "cpu"
 
     def create_distribution_group(self) -> dist.GroupSpec:
         if self.distribution_group:
@@ -249,9 +233,13 @@ class DistributedStreamer:
     def stream_files(
             self,
             file_stream_requests: List[FileChunks],
-            credentials: Optional[S3Credentials] = None,
-            device: Optional[str] = None,
+            credentials: Optional[S3Credentials],
+            device: str,
+            is_distributed: bool,
     ) -> None:
+
+        self.device_str = device
+        self.device_type = torch.device(self.device_str)
 
         # find the size of the maximal chunk for the reusable buffer
         max_chunks_per_file = (fc.max_chunk_size() for fc in file_stream_requests if fc.chunks)
@@ -262,7 +250,7 @@ class DistributedStreamer:
             path = file_stream_requests[0].path
 
         # check if distributed streaming can be used
-        self.set_is_distributed(path, device)
+        self.set_is_distributed(is_distributed, path, device)
 
         # set the value of RUNAI_STREAMER_PROCESS_GROUP_SIZE to be the number of processes in the distribution group (or 1 if process group is not initialized)
         # This is useful for auto adjustments in the CPP layer, which depends on the number of processes of this workload
