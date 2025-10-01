@@ -104,15 +104,15 @@ String
 
 Enables distributed streaming for multiple devices
 
-If not defined (default) distributed streaming is enabled only for streaming from object storage to CUDA devices
+`auto` enables distributed streaming only for streaming from object storage to CUDA devices
 
 ### Values accepted
 
-Boolean `0` or `1`
+String `0` or `1` or `auto`
 
 #### Default value
 
-None
+`auto`
 
 ### RUNAI_STREAMER_DIST_GLOBAL
 
@@ -122,7 +122,7 @@ If not defined (default) distributed streaming is loacl - dividing the workload 
 
 ### Values accepted
 
-Boolean `0` or `1`
+String `0` or `1`
 
 #### Default value
 

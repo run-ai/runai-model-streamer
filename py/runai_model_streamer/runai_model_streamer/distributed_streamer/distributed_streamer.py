@@ -70,16 +70,21 @@ class DistributedStreamer:
 
     def set_is_distributed(self, path: str, device: Optional[str] = None) -> None:
         # check if distributed streaming should be used
-
-        # by default, use distributed streaming only for object storage paths
-        if path is not None:
-            self.is_distributed = is_s3_path(path) or is_gs_path(path)
-
+        
         # environment variable to override default distributed streaming
-        if os.environ.get("RUNAI_STREAMER_DIST") == "0":
+        # by default, use distributed streaming only for object storage paths
+        enable_dist = os.environ.get("RUNAI_STREAMER_DIST")
+        if enable_dist == "0":
             self.is_distributed = False
-        elif os.environ.get("RUNAI_STREAMER_DIST") == "1":
+        elif enable_dist == "1":
             self.is_distributed = True
+        elif enable_dist == "auto" or enable_dist is None:
+            if path is not None:
+                self.is_distributed = is_s3_path(path) or is_gs_path(path)
+            else:
+                self.is_distributed = False
+        else:
+            raise ValueError(f"Invalid value for RUNAI_STREAMER_DIST: {enable_dist}")
 
         # check if torch distributed is initialized and there are more than one process
         if self.is_distributed:
