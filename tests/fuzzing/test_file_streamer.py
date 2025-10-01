@@ -79,7 +79,7 @@ class TestFuzzing(unittest.TestCase):
         random_memory_mode([chunk for chunk in file_chunks.chunks for file_chunks in files_chunks])
 
         with FileStreamer() as fs:
-            fs.stream_files(files_chunks, None, "cpu", False)
+            fs.stream_files(files_chunks)
             for file, id, dst in fs.get_chunks():
                 # file is the unique integer identifier for the file chunks request
                 self.assertLess(file, len(files_chunks))
