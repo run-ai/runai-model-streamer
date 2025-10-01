@@ -82,15 +82,12 @@ class FileStreamer:
             self,
             file_stream_requests: List[FileChunks],
             credentials: Optional[S3Credentials] = None,
-            device: Optional[str] = None,
+            device: Optional[str] = "cpu",
 ) -> None:
         if not homogeneous_paths([file_stream_request.path for file_stream_request in file_stream_requests]):
             raise RunaiStreamerInvalidInputException("Cannot stream files from multiple source types in parallel") 
 
-        if device is None:
-            self.device_str = "cpu"
-        else:
-            self.device_str = device
+        self.device_str = device
 
         for file_stream_request in file_stream_requests:
             self.total_size += sum(file_stream_request.chunks)

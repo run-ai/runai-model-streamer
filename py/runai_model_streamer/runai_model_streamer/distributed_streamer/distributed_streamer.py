@@ -27,7 +27,6 @@ from runai_model_streamer.s3_utils.s3_utils import (
     is_gs_path,
 )
 
-import humanize
 from timeit import default_timer as timer
 
 DEFAULT_BROADCAST_TIMEOUT = timedelta(seconds=600)
@@ -50,6 +49,7 @@ class DistributedStreamer:
         self.my_global_rank = 0
         self.groups_by_ranks = []
         self.num_processes_on_node = None
+        self.group_size = 1
 
     def __enter__(self) -> DistributedStreamer:
         self.file_streamer.__enter__()
@@ -70,7 +70,7 @@ class DistributedStreamer:
 
     def set_is_distributed(self, path: str, device: Optional[str] = None) -> None:
         # check if distributed streaming should be used
-        
+
         # environment variable to override default distributed streaming
         # by default, use distributed streaming only for object storage paths
         enable_dist = os.environ.get("RUNAI_STREAMER_DIST")
@@ -89,6 +89,8 @@ class DistributedStreamer:
         # check if torch distributed is initialized and there are more than one process
         if self.is_distributed:
             self.is_distributed = dist.is_initialized()
+            if not self.is_distributed:
+                print(f"Note: torch distributed is not initialized")
             self.is_distributed = self.is_distributed and self.get_group_size() > 1
 
         self.set_device_str(device)
@@ -98,19 +100,20 @@ class DistributedStreamer:
         if self.is_distributed:
             backend_name = dist.get_backend()
             if backend_name == "nccl" and self.device_str == "cpu":
+                print(f"Note: torch distributed backend {backend_name} is not supported for CPU device", flush=True)
                 self.is_distributed = False
             if backend_name == "gloo" and self.device_str != "cpu":
+                print(f"Note: torch distributed backend {backend_name} is not supported for {self.device_str} device", flush=True)
                 self.is_distributed = False
             if os.environ.get("RUNAI_STREAMER_DIST") is None and backend_name != "nccl" and backend_name != "gloo":
-                print(f"Note: torch distributed backend {backend_name} is not supported by default for distributed streaming - To allow this backend, set RUNAI_STREAMER_DIST to `1`")
+                print(f"Note: torch distributed backend {backend_name} is not supported by default for distributed streaming - To allow this backend, set RUNAI_STREAMER_DIST to `1`", flush=True)
                 self.is_distributed = False
 
         # check if there is enough free memory on the device
-        # TO_DO(Noa) - add support for other device types
         if self.is_distributed and torch.cuda.is_available() and dist.get_backend() == "nccl":
             free_memory = self.get_cuda_free_memory()
             if free_memory < 2 * self.max_chunk:
-                print(f"Warning: Not enough memory on the device for distributed streaming, free memory: {free_memory} bytes, required minimun: {2 * self.max_chunk} bytes")
+                print(f"Warning: Not enough memory on the device for distributed streaming, free memory: {free_memory} bytes, required minimun: {2 * self.max_chunk} bytes", flush=True)
                 self.is_distributed = False
 
     def get_broadcast_timeout(self) -> timedelta:
@@ -174,7 +177,6 @@ class DistributedStreamer:
             return None
 
         group_timeout = self.get_broadcast_timeout()
-        world_size = dist.get_world_size()
 
         # All processes must create ALL subgroups in the same order.
         # This is a global collective operation, done once for each subgroup.
@@ -269,20 +271,16 @@ class DistributedStreamer:
         if os.environ.get("RUNAI_STREAMER_PROCESS_GROUP_SIZE") is None:
             os.environ["RUNAI_STREAMER_PROCESS_GROUP_SIZE"] = str(self.num_processes_on_node)
 
-        if self.rank == 0:
-            print(f"is distributed: {self.is_distributed} num_processes_on_node: {self.num_processes_on_node}")
-
         if not self.is_distributed:
             self.file_streamer.stream_files(file_stream_requests, credentials, device)
             return
 
-        # check if distributed backend supports cpu tensors
-        if self.device_str == "cpu" and dist.get_backend() == "nccl":
-            raise ValueError("Distributed backend nccl does not support cpu tensors")
-
         # create distribution group for configuring timeout and possibly broadcast locally in each node 
         # The group must be created before partitioning the tensors, in case the group will be local
         self.distribution_group = self.create_distribution_group()
+        self.group_size = dist.get_world_size(group=self.distribution_group)
+
+        print(f"Using distributing streaming between {self.group_size} processes")
 
         # set rank in the new distribution group
         self.set_rank()
@@ -452,11 +450,9 @@ class DistributedStreamer:
                   chunk_count_in_batch: int,
                   current_data_size: int) -> Iterator:        
 
-        group_size = dist.get_world_size(group=self.distribution_group)
-
         total_broadcast_chunks = 0
 
-        for broadcasting_rank in range(group_size):
+        for broadcasting_rank in range(self.group_size):
             # Map the local rank to its corresponding GLOBAL rank
             global_broadcasting_rank = self.local_group_global_ranks[broadcasting_rank]
 

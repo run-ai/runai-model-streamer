@@ -1,7 +1,6 @@
 from __future__ import annotations
 from typing import Iterator, Optional
 import torch
-import torch.distributed as dist
 import glob
 import os
 from typing import List
