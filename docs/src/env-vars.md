@@ -118,7 +118,7 @@ String `0` or `1` or `auto`
 
 Enables global distributed streaming for multiple devices, dividing the workload between multiple nodes
 
-If not defined (default) distributed streaming is loacl - dividing the workload between processes of the same node 
+If not defined (default) distributed streaming is local - dividing the workload between processes of the same node 
 
 ### Values accepted
 
