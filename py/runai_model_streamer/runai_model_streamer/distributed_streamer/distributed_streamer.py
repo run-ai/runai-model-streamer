@@ -34,39 +34,38 @@ DEFAULT_BROADCAST_TIMEOUT = timedelta(seconds=600)
 class DistributedStreamer:
     def __init__(self) -> None:
         self.file_streamer = FileStreamer()
-        self.device_str = None
+        self.distributed_streamer = _distributedStreamer(self.file_streamer)
         self.is_distributed = False
-        self.partitions = {} # partitions of all the input file_stream_requests
-        self.rank_file_chunks_list = {} # post Partitioning FileChunks to be streamed by this rank
-        self.rank_dicts_map = {} # maps post partitioning FileChunks.id and chunk index to the original FileChunks.id and chunk index and chunk size
-        self.total_chunks_to_read = 0
-        self.rank = 0
-        self.original_group_rank = 0
-        self.distribution_group = None
-        self.reading_from_storage = False
-        self.local_group_global_ranks = []
-        self.is_error = False
-        self.my_global_rank = 0
-        self.groups_by_ranks = []
         self.num_processes_on_node = None
         self.group_size = 1
+        self.my_global_rank = 0
+        self.groups_by_ranks = []
+        self.broadcast_timeout = DEFAULT_BROADCAST_TIMEOUT
+        self.max_chunk = 0
 
     def __enter__(self) -> DistributedStreamer:
         self.file_streamer.__enter__()
+        self.distributed_streamer.__enter__()
         return self
 
     def __exit__(self, exc_type: any, exc_value: any, traceback: any) -> None:
-        if self.distribution_group and not self.is_error:
-            torch.distributed.barrier(group=self.distribution_group)
-            torch.distributed.destroy_process_group(group=self.distribution_group)
-            del self.distribution_group
-            self.distribution_group = None
-        return self.file_streamer.__exit__(exc_type, exc_value, traceback)
-
+        try:
+            self.distributed_streamer.__exit__(exc_type, exc_value, traceback)
+        finally:
+            # Ensure the second __exit__ is always called
+            self.file_streamer.__exit__(exc_type, exc_value, traceback)
+        return
+    
     def get_group_size(self) -> int:
         if not dist.is_initialized():
             return 1
         return dist.get_world_size()
+
+    def get_cuda_free_memory(self) -> int:
+        if not torch.cuda.is_available():
+            return 0
+        free_memory, total_memory = torch.cuda.mem_get_info()
+        return free_memory
 
     def set_is_distributed(self, is_distributed: bool, path: str, device: str) -> None:
         # check if distributed streaming should be used
@@ -100,11 +99,11 @@ class DistributedStreamer:
        # do not distribute if backend type does not match device type
         if self.is_distributed:
             backend_name = dist.get_backend()
-            if backend_name == "nccl" and self.device_str == "cpu":
+            if backend_name == "nccl" and device == "cpu":
                 print(f"Note: torch distributed backend {backend_name} is not supported for CPU device", flush=True)
                 self.is_distributed = False
-            if backend_name == "gloo" and self.device_str != "cpu":
-                print(f"Note: torch distributed backend {backend_name} is not supported for {self.device_str} device", flush=True)
+            if backend_name == "gloo" and device != "cpu":
+                print(f"Note: torch distributed backend {backend_name} is not supported for {device} device", flush=True)
                 self.is_distributed = False
             if os.environ.get("RUNAI_STREAMER_DIST") is None and backend_name != "nccl" and backend_name != "gloo":
                 print(f"Note: torch distributed backend {backend_name} is not supported by default for distributed streaming - To allow this backend, set RUNAI_STREAMER_DIST to `1`", flush=True)
@@ -124,59 +123,6 @@ class DistributedStreamer:
         else:
             return DEFAULT_BROADCAST_TIMEOUT
 
-    def create_distribution_group(self) -> dist.GroupSpec:
-        if self.distribution_group:
-            return self.distribution_group
-
-        if not self.is_distributed:
-            return None
-
-        is_global_group = int(os.environ.get("RUNAI_STREAMER_DIST_GLOBAL", "0")) == 1
-
-        if is_global_group:
-            # create global group
-            world_size = self.get_group_size()
-
-            all_ranks = list(range(world_size))
-            group_timeout = self.get_broadcast_timeout()
-            self.local_group_global_ranks = all_ranks
-            group = dist.new_group(ranks = all_ranks, timeout = group_timeout)
-
-        else:
-            group = self.create_local_distribution_group()
-        return group
-
-    def create_local_distribution_group(self) -> dist.GroupSpec:
-        """
-        Creates a torch.distributed.ProcessGroup containing all ranks on the current node.
-        This version uses a coordinated creation pattern to avoid deadlocks.
-
-        This function performs all_gather_object on the global group which cause nccl to allocate  device memory which otherwise may never be allocated by the user application
-        To avoid this issue, we create a another global subgroup just for discovering the local ranks and then destroy that subgroup after the ranks are discovered.
-
-        Note: find_local_ranks() must be called before this function
-        """
-
-        if not dist.is_initialized():
-            return None
-
-        group_timeout = self.get_broadcast_timeout()
-
-        # All processes must create ALL subgroups in the same order.
-        # This is a global collective operation, done once for each subgroup.
-         
-        created_groups = [dist.new_group(ranks=ranks, timeout=group_timeout) for ranks in self.groups_by_ranks]
-        
-        # Each process finds which of the newly created groups it belongs to.
-        my_local_group = None
-        for i, ranks_list in enumerate(self.groups_by_ranks):
-            if self.my_global_rank in ranks_list:
-                my_local_group = created_groups[i]
-                self.local_group_global_ranks = ranks_list # Save the mapping
-                break
-
-        return my_local_group
-
     def find_local_ranks(self) -> Tuple[int, int, List[List[int]]]:
         """
         Returns the number of processes on the node, global rank and the list of ranks on each node
@@ -187,7 +133,7 @@ class DistributedStreamer:
         if not dist.is_initialized():
             return 1, 0, [[0]]
 
-        group_timeout = self.get_broadcast_timeout()
+        self.broadcast_timeout = self.get_broadcast_timeout()
         world_size = dist.get_world_size()
 
         if world_size == 1:
@@ -197,7 +143,7 @@ class DistributedStreamer:
 
         # 1. Discover all peers on all nodes (this is a global collective)
         # create global group just for discovering the local ranks
-        sandbox_global_group = dist.new_group(ranks=list(range(world_size)), timeout=group_timeout)
+        sandbox_global_group = dist.new_group(ranks=list(range(world_size)), timeout=self.broadcast_timeout)
         all_hostnames = [None] * world_size
         dist.all_gather_object(all_hostnames, socket.gethostname(), group=sandbox_global_group)
         dist.destroy_process_group(group=sandbox_global_group)
@@ -219,17 +165,6 @@ class DistributedStreamer:
 
         return my_group_size, my_global_rank, groups_by_ranks
 
-    def set_rank(self) -> None:
-        if self.is_distributed:
-            self.rank = dist.get_rank(group=self.distribution_group)
-            self.original_group_rank = dist.get_rank()
-
-    def get_cuda_free_memory(self) -> int:
-        if not torch.cuda.is_available():
-            return 0
-        free_memory, total_memory = torch.cuda.mem_get_info()
-        return free_memory
-
     def stream_files(
             self,
             file_stream_requests: List[FileChunks],
@@ -238,16 +173,13 @@ class DistributedStreamer:
             is_distributed: bool,
     ) -> None:
 
-        self.device_str = device
-        self.device_type = torch.device(self.device_str)
+        path = None
+        if len(file_stream_requests) > 0:
+            path = file_stream_requests[0].path
 
         # find the size of the maximal chunk for the reusable buffer
         max_chunks_per_file = (fc.max_chunk_size() for fc in file_stream_requests if fc.chunks)
         self.max_chunk = max(max_chunks_per_file, default=0)
-
-        path = None
-        if len(file_stream_requests) > 0:
-            path = file_stream_requests[0].path
 
         # check if distributed streaming can be used
         self.set_is_distributed(is_distributed, path, device)
@@ -261,7 +193,123 @@ class DistributedStreamer:
 
         if not self.is_distributed:
             self.file_streamer.stream_files(file_stream_requests, credentials, device)
-            return
+        else:
+            self.distributed_streamer.stream_files(file_stream_requests, credentials, device, self.my_global_rank, self.groups_by_ranks, self.broadcast_timeout, self.max_chunk)
+
+    def get_chunks(self) -> Iterator:
+        if not self.file_streamer:
+            raise ValueError("Streamer not initialized")
+        
+        if not self.is_distributed:
+            for item in self.file_streamer.get_chunks():
+                yield item
+        else:
+           for item in self.distributed_streamer.get_chunks():
+                yield item
+        return         
+
+
+class _distributedStreamer:
+    def __init__(self, file_streamer : FileStreamer) -> None:
+        self.file_streamer = file_streamer
+        self.device = None
+        self.partitions = {} # partitions of all the input file_stream_requests
+        self.rank_file_chunks_list = {} # post Partitioning FileChunks to be streamed by this rank
+        self.rank_dicts_map = {} # maps post partitioning FileChunks.id and chunk index to the original FileChunks.id and chunk index and chunk size
+        self.total_chunks_to_read = 0
+        self.rank = 0
+        self.original_group_rank = 0
+        self.distribution_group = None
+        self.reading_from_storage = False
+        self.local_group_global_ranks = []
+        self.is_error = False
+        self.my_global_rank = 0
+        self.groups_by_ranks = []
+        self.broadcast_timeout = DEFAULT_BROADCAST_TIMEOUT
+
+    def __enter__(self) -> _distributedStreamer:
+        return self
+
+    def __exit__(self, exc_type: any, exc_value: any, traceback: any) -> None:
+        if self.distribution_group:
+            try:
+                # Only attempt a barrier if there was no exception.
+                if exc_type is None:
+                    torch.distributed.barrier(group=self.distribution_group)
+            finally:
+                # ALWAYS destroy the group.
+                torch.distributed.destroy_process_group(group=self.distribution_group)
+                del self.distribution_group
+                self.distribution_group = None
+        return
+
+    def create_distribution_group(self) -> dist.GroupSpec:
+        if self.distribution_group:
+            return self.distribution_group
+
+        is_global_group = int(os.environ.get("RUNAI_STREAMER_DIST_GLOBAL", "0")) == 1
+
+        if is_global_group:
+            # create global group
+            world_size = dist.get_world_size()
+
+            all_ranks = list(range(world_size))
+            self.local_group_global_ranks = all_ranks
+            group = dist.new_group(ranks = all_ranks, timeout = broadcast_timeout)
+
+        else:
+            group = self.create_local_distribution_group()
+        return group
+
+    def create_local_distribution_group(self) -> dist.GroupSpec:
+        """
+        Creates a torch.distributed.ProcessGroup containing all ranks on the current node.
+        This version uses a coordinated creation pattern to avoid deadlocks.
+
+        This function performs all_gather_object on the global group which cause nccl to allocate  device memory which otherwise may never be allocated by the user application
+        To avoid this issue, we create a another global subgroup just for discovering the local ranks and then destroy that subgroup after the ranks are discovered.
+
+        Note: find_local_ranks() must be called before this function
+        """
+
+        if not dist.is_initialized():
+            return None
+
+        # All processes must create ALL subgroups in the same order.
+        # This is a global collective operation, done once for each subgroup.
+         
+        created_groups = [dist.new_group(ranks=ranks, timeout=self.broadcast_timeout) for ranks in self.groups_by_ranks]
+        
+        # Each process finds which of the newly created groups it belongs to.
+        my_local_group = None
+        for i, ranks_list in enumerate(self.groups_by_ranks):
+            if self.my_global_rank in ranks_list:
+                my_local_group = created_groups[i]
+                self.local_group_global_ranks = ranks_list # Save the mapping
+                break
+
+        return my_local_group
+
+    def set_rank(self) -> None:
+        self.rank = dist.get_rank(group=self.distribution_group)
+        self.original_group_rank = dist.get_rank()
+
+    def stream_files(
+            self,
+            file_stream_requests: List[FileChunks],
+            credentials: Optional[S3Credentials],
+            device: str,
+            my_global_rank : int,
+            groups_by_ranks : List[List[int]],
+            broadcast_timeout : int,
+            max_chunk : int,
+    ) -> None:
+
+        self.device = torch.device(device)
+        self.my_global_rank = my_global_rank
+        self.groups_by_ranks = groups_by_ranks
+        self.broadcast_timeout = broadcast_timeout
+        self.max_chunk = max_chunk
 
         # create distribution group for configuring timeout and possibly broadcast locally in each node 
         # The group must be created before partitioning the tensors, in case the group will be local
@@ -313,12 +361,6 @@ class DistributedStreamer:
         if not self.file_streamer:
             raise ValueError("Streamer not initialized")
         
-        if not self.is_distributed:
-            #f"rank {self.rank} streaming with no distribution")
-            for item in self.file_streamer.get_chunks():
-                yield item
-            return
-     
         start_time = timer()
 
         MAX_CHUNKS_PER_BATCH = 256
@@ -326,11 +368,11 @@ class DistributedStreamer:
         BUFFER_MIN_BYTESIZE = int(os.environ.get("RUNAI_STREAMER_DIST_BUFFER_MIN_BYTESIZE", str(DEFAULT_BUFFER_MIN_BYTESIZE))) # environment variable used for testing
         BUFFER_BYTESIZE = max(BUFFER_MIN_BYTESIZE, self.max_chunk)
 
-        data_buffer = torch.empty(BUFFER_BYTESIZE, dtype=torch.uint8, device=self.device_type)
-        received_buffer = torch.empty(BUFFER_BYTESIZE, dtype=torch.uint8, device=self.device_type)
+        data_buffer = torch.empty(BUFFER_BYTESIZE, dtype=torch.uint8, device=self.device)
+        received_buffer = torch.empty(BUFFER_BYTESIZE, dtype=torch.uint8, device=self.device)
 
-        batch_metadata_tensor = torch.zeros(MAX_CHUNKS_PER_BATCH + 1, 4, dtype=torch.int64, device=self.device_type)
-        received_metadata_tensor = torch.zeros(MAX_CHUNKS_PER_BATCH + 1, 4, dtype=torch.int64, device=self.device_type)
+        batch_metadata_tensor = torch.zeros(MAX_CHUNKS_PER_BATCH + 1, 4, dtype=torch.int64, device=self.device)
+        received_metadata_tensor = torch.zeros(MAX_CHUNKS_PER_BATCH + 1, 4, dtype=torch.int64, device=self.device)
         
         ready_chunks_iterator = self.file_streamer.get_chunks()
         
