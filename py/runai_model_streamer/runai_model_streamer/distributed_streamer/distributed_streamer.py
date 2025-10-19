@@ -255,7 +255,7 @@ class _distributedStreamer:
 
             all_ranks = list(range(world_size))
             self.local_group_global_ranks = all_ranks
-            group = dist.new_group(ranks = all_ranks, timeout = broadcast_timeout)
+            group = dist.new_group(ranks = all_ranks, timeout = self.broadcast_timeout)
 
         else:
             group = self.create_local_distribution_group()
