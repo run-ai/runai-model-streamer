@@ -21,16 +21,6 @@ with SafetensorsStreamer() as streamer:
 
 > **Note:** To make the tensors available on the CPU memory, clone the yielded tensors before calling `streamer.get_tensors()`. Note that otherwise, tensors may be overwritten when using `RUNAI_STREAMER_MEMORY_LIMIT` or completely destroyed when closing the `SafetensorsStreamer` object.
 
-#### Streaming from S3
-
-> **Note:** Streaming models from S3 requires the installation of the streamer S3 package, as can be found [here](#s3CapabilityInstallation).
-
-To load tensors from object storage, replace the file path in the code above with your S3 path, e.g.:
-
-```python
-file_path = "s3://my-bucket/my/file/path.safetensors"
-```
-
 #### Streaming from multiple files
 
 To stream tensors from multiple files in parallel use the `streamer.stream_files()` API:
@@ -48,7 +38,74 @@ with SafetensorsStreamer() as streamer:
 
 > **Note:** You can not mix S3 path and file system paths on same `streamer.stream_files()` call.
 
-##### S3 authentication
+#### Distributed streaming
+
+##### Use case and motivation
+
+Distributed streaming is for multiple processes which are reading the same file list, e.g., the default loader of vLLM loading model weights on multiple devices.
+
+When reading from a file system, the operating system page cache optimizes the reading by storing pages in the cache, so files are read from storage only once. However, reading from object storage cannot utilize the page cache, leading to multiple reads from storage and long loading times.
+
+Distributed streaming is designed to solve this problem by dividing the reading workload between the multiple processes, where each process reads a unique portion of the files and then distributes its share to the other processes.
+
+##### Usage
+
+```python
+from runai_model_streamer import SafetensorsStreamer
+
+file_paths = ["/path/to/file-1.safetensors", "/path/to/file-2.safetensors"]
+
+tensors = {}
+device = 'CUDA:0'
+with SafetensorsStreamer() as streamer:
+    streamer.stream_files(file_paths, s3_credentials=None, device=device, is_distributed=True)
+    for name, tensor in streamer.get_tensors():       
+       tensors[name] = tensor.clone().detach() # returning tensors on the specified device, which is CUDA:0
+```
+
+##### Requirements
+
+Distributed streaming allocates reusable staging buffers on each device, which hold the data of the yielded tensors
+Therefore, the yielded tensor might be overwritten at the next iteration. If tensors are used outside the iterator loop, clone and detach the yielded tensor to save a copy.
+ 
+The memory requirements for the staging buffers is twice the size of the largest tensor in the files
+
+Distributed streaming is based on a torch distributed group and the broadcast operation.
+The backend of the torch group must support the broadcast operation.
+
+The performance gain depends on the type of backend and the communication between devices.
+The nccl backend with nvlink between devices is most suitable for distributed streaming.
+
+##### Control
+
+Distributed streaming is enabled by default when streaming from object storage to CUDA devices.
+It is possible to disable distributed streaming by setting `RUNAI_STREAMER_DIST=0`
+
+It is possible to force distributed streaming for other cases by setting `RUNAI_STREAMER_DIST=1`
+
+##### Global and local modes
+
+In local mode, the processes on each node divide the entire workload among themselves.
+
+In global mode, the workload is divided between all the processes on all the nodes.
+
+For example, with 2 nodes and 16 processes (8 processes on each node), each process reads 1/8 of the workload in local mode and 1/16 in global mode.
+
+The mode should be selected according to the communication speed between the nodes.
+By default, distributed streaming is done in local mode.
+To enable global mode, set `RUNAI_STREAMER_DIST_GLOBAL=1`.
+
+#### Streaming from S3
+
+> **Note:** Streaming models from S3 requires the installation of the streamer S3 package, as can be found [here](#s3CapabilityInstallation).
+
+To load tensors from object storage, replace the file path in the code above with your S3 path, e.g.:
+
+```python
+file_path = "s3://my-bucket/my/file/path.safetensors"
+```
+
+#### S3 authentication
 
 By default, the streamer performs authentication via boto3 to obtain credentials, which are then passed to the S3 client in `libstreamers3.so`.
 
@@ -80,9 +137,9 @@ The session token shoud be passed as an environment variable `AWS_SESSION_TOKEN`
 
 To check if IAM role assumption is needed run `aws s3 ls s3://your-bucket-name --region your-region`. If you get a `403 Forbidden` error, you might need an assumed role
 
-##### Streaming from Google cloud storage
+#### Streaming from Google cloud storage
 
-###### SDK Authentication
+##### SDK Authentication
 
 GCS SDK backend is provided through the Python package `runai-model-streamer-gcs`.
 
@@ -98,7 +155,7 @@ To authentication to GCS, there are multiple configuration options:
 See [How Application Default Credentials works](https://cloud.google.com/docs/authentication/application-default-credentials)
 for more information.
 
-###### HMAC Authentication
+##### HMAC Authentication
 
 S3 compatible HMAC authentication to GCS is provided through the Python package `runai-model-streamer-s3`.
 
@@ -114,7 +171,7 @@ See [HMAC keys](https://cloud.google.com/storage/docs/authentication/hmackeys) f
 The streamer supports GCS URLs when using HMAC authentication
 (eg: `gs://my-bucket/my/file/path.safetensors`).
 
-##### Streaming from S3 compatible storage
+#### Streaming from S3 compatible storage
 
 To load tensors from S3 compatible object store, define the following environment variables
 
@@ -124,9 +181,9 @@ Setting the environment variable `AWS_ENDPOINT_URL` is mandatory
 
 Setting the environment variable `AWS_EC2_METADATA_DISABLED` is needed in order to avoid a delay of few seconds, which happens only when the aws s3 sdk is used for compatible storage as explained [here](https://github.com/aws/aws-sdk-cpp/issues/1410)   
 
-#####  Troubleshooting
+####  Troubleshooting
 
-For AWS S3 trace logs pass the environment variable `RUNAI_STREAMER_S3_TRACE=1` - this will create a log file in the location of the application
+For the object storage SDK trace logs pass the environment variable `RUNAI_STREAMER_S3_TRACE=1` - this will create a log file in the location of the application
 
 For the streamer internal logs pass the environment variables `RUNAI_STREAMER_LOG_TO_STDERR=1 RUNAI_STREAMER_LOG_LEVEL=DEBUG`
 

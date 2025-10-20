@@ -20,6 +20,8 @@ from runai_model_streamer.s3_utils.s3_utils import (
 
 import humanize
 
+import torch
+
 s3_credentials_module = get_s3_credentials_module()
 
 class RunaiStreamerInvalidInputException(Exception):
@@ -48,7 +50,7 @@ class FileStreamer:
         self.streamer = runai_start()
         self.start_time = timer()
         self.total_size = 0
-
+        self.device_str = None
         self.s3_session = None
         self.s3_credentials = None
         return self
@@ -58,7 +60,7 @@ class FileStreamer:
         elapsed_time = timer() - self.start_time
         throughput = size / elapsed_time
         print(
-            f"[RunAI Streamer] Overall time to stream {humanize.naturalsize(size, binary=True)} of all files: {round(elapsed_time, 2)}s, {humanize.naturalsize(throughput, binary=True)}/s",
+            f"[RunAI Streamer] Overall time to stream {humanize.naturalsize(size, binary=True)} of all files to {self.device_str}: {round(elapsed_time, 2)}s, {humanize.naturalsize(throughput, binary=True)}/s",
             flush=True,
         )
         if self.streamer:
@@ -80,9 +82,12 @@ class FileStreamer:
             self,
             file_stream_requests: List[FileChunks],
             credentials: Optional[S3Credentials] = None,
+            device: Optional[str] = "cpu",
 ) -> None:
         if not homogeneous_paths([file_stream_request.path for file_stream_request in file_stream_requests]):
             raise RunaiStreamerInvalidInputException("Cannot stream files from multiple source types in parallel") 
+
+        self.device_str = device
 
         for file_stream_request in file_stream_requests:
             self.total_size += sum(file_stream_request.chunks)
@@ -139,5 +144,17 @@ class FileStreamer:
                 return
             
             file_path, chunk_index, chunk_buffer = self.requests_iterator.get_global_file_and_chunk(file_relative_index, chunk_relative_index)
-            yield file_path, chunk_index, chunk_buffer
+            # create one dimensional tensor from the chunk buffer
+            # we return a tensor of shape (1, chunk_buffer.size)
+            # the data type of the original chunk_buffer, as created by the requests_iterator, is preserved (uint8)
+            tensor = torch.from_numpy(chunk_buffer).view(1, -1)
+
+            # currently file streamer is always reading a cpu buffer
+            # so we don't need to move the tensor to the device
+            # for future GDS/CUDA support we will need to move the tensor to the device (cpu or different device)
+            if self.device_str == "cpu":
+                yield file_path, chunk_index, tensor
+            else:
+                device_tensor = tensor.to(self.device_str)
+                yield file_path, chunk_index, device_tensor
 

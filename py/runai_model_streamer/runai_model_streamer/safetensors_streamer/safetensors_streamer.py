@@ -4,10 +4,11 @@ import torch
 import glob
 import os
 from typing import List
-from runai_model_streamer.file_streamer import (
-    FileStreamer,
-    FileChunks
-)
+
+from runai_model_streamer.file_streamer import FileChunks
+
+from runai_model_streamer.distributed_streamer import DistributedStreamer
+
 import runai_model_streamer.safetensors_streamer.safetensors_pytorch as safetensors_pytorch
 
 from runai_model_streamer.s3_utils.s3_utils import (
@@ -42,7 +43,7 @@ def pull_files(model_path: str,
 
 class SafetensorsStreamer:
     def __init__(self) -> None:
-        self.file_streamer = FileStreamer()
+        self.file_streamer = DistributedStreamer()
         self.files_to_tensors_metadata = {}
 
     def __enter__(self) -> SafetensorsStreamer:
@@ -56,33 +57,42 @@ class SafetensorsStreamer:
             self,
             path: str,
             s3_credentials : Optional[S3Credentials] = None,
+            device: Optional[str] = "cpu",
+            is_distributed: bool = False,
         ) -> None:
-        return self.stream_files([path], s3_credentials)
-    
+        return self.stream_files([path], s3_credentials, device, is_distributed)
+
+ 
     def stream_files(
             self,
             paths: List[str],
             s3_credentials : Optional[S3Credentials] = None,
+            device: Optional[str] = "cpu",
+            is_distributed: bool = False, 
         ) -> None:
         self.files_to_tensors_metadata = {}
 
         file_stream_requests: List[FileChunks] = []
 
-        safetensors_metadatas = safetensors_pytorch.prepare_request(self.file_streamer, paths)
+        # metadata is created on cpu and each process reads it individually
+        safetensors_metadatas = safetensors_pytorch.prepare_request(self.file_streamer, paths, s3_credentials)
+
         for i in range(len(paths)):
             (file_offset, tensors_metadata, tensor_sizes) = safetensors_metadatas[i]
             path = paths[i]
-            self.files_to_tensors_metadata[path] = tensors_metadata
-            file_stream_requests.append(FileChunks(path, file_offset, tensor_sizes))
+            self.files_to_tensors_metadata[i] = tensors_metadata
+            file_stream_requests.append(FileChunks(i, path, file_offset, tensor_sizes))
 
         self.file_streamer.stream_files(
             file_stream_requests,
-            s3_credentials,
+            credentials=s3_credentials,
+            device=device,
+            is_distributed=is_distributed,
         )
 
     def get_tensors(self) -> Iterator[torch.tensor]:
-        for file_path, ready_chunk_index, buffer in self.file_streamer.get_chunks():
-            tensor_metadata = self.files_to_tensors_metadata[file_path][ready_chunk_index]
+        for file_index, ready_chunk_index, buffer in self.file_streamer.get_chunks():
+            tensor_metadata = self.files_to_tensors_metadata[file_index][ready_chunk_index]
             yield tensor_metadata.name, safetensors_pytorch.create_torch_tensor(
                 buffer, tensor_metadata
             )

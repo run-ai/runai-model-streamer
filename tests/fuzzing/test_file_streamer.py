@@ -45,21 +45,21 @@ def random_file_chunks(i, dir):
     request_sizes = chunk_sizes[1:]
 
     expected_id_to_results = {}
-    for i in range(len(request_sizes)):
-        if i == len(request_sizes):
+    for j in range(len(request_sizes)):
+        if j == len(request_sizes):
             expected_content = (
-                file_content[sum(request_sizes[0:i]) :] + initial_offset
+                file_content[sum(request_sizes[0:j]) :] + initial_offset
             )
         else:
             expected_content = file_content[
-                sum(request_sizes[0:i])
-                + initial_offset : sum(request_sizes[0 : i + 1])
+                sum(request_sizes[0:j])
+                + initial_offset : sum(request_sizes[0 : j + 1])
                 + initial_offset
             ]
-        expected_id_to_results[i] = {
+        expected_id_to_results[j] = {
             "expected_content": expected_content,
         }
-    return expected_id_to_results, FileChunks(file_path, initial_offset, request_sizes)
+    return expected_id_to_results, FileChunks(i, file_path, initial_offset, request_sizes)
 
 class TestFuzzing(unittest.TestCase):
     def setUp(self):
@@ -72,8 +72,8 @@ class TestFuzzing(unittest.TestCase):
         
         for i in range(random.randint(MIN_NUM_FILES, MAX_NUM_FILES)):
             expected_id_to_results, file_chunks = random_file_chunks(i, self.temp_dir)
-            expected_file_to_id_to_results[file_chunks.path] = expected_id_to_results
-            file_to_file_chunks[file_chunks.path] = file_chunks
+            expected_file_to_id_to_results[file_chunks.id] = expected_id_to_results
+            file_to_file_chunks[file_chunks.id] = file_chunks
             files_chunks.append(file_chunks)
 
         random_memory_mode([chunk for chunk in file_chunks.chunks for file_chunks in files_chunks])
@@ -81,12 +81,14 @@ class TestFuzzing(unittest.TestCase):
         with FileStreamer() as fs:
             fs.stream_files(files_chunks)
             for file, id, dst in fs.get_chunks():
-                self.assertIn(file, [file_chunks.path for file_chunks in files_chunks])
+                # file is the unique integer identifier for the file chunks request
+                self.assertLess(file, len(files_chunks))
+                self.assertGreaterEqual(file, 0)
 
                 file_chunks = file_to_file_chunks[file]
                 expected_id_to_results = expected_file_to_id_to_results[file]
                 self.assertEqual(
-                    dst.tobytes(),
+                    dst.numpy().tobytes(),
                     expected_id_to_results[id]["expected_content"],
                 )
 

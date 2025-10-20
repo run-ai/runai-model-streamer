@@ -8,7 +8,7 @@ import humanize
 
 
 RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME = "RUNAI_STREAMER_MEMORY_LIMIT"
-DEFAULT_MEMORY_LIMIT_STRING = "20000000000" # 20 GB
+DEFAULT_MEMORY_LIMIT_STRING = "40000000000" # 40 GB (to be set to unlimited for distributed streaming)
 
 class RunaiStreamerMemoryLimitException(Exception):
     pass
@@ -20,10 +20,22 @@ class MemoryCapMode(enum.Enum):
     largest_chunk = 3
 
 class FileChunks:
-    def __init__(self, path: str, offset: int, chunks: List[int]) -> None:
+    def __init__(self, id: int, path: str, offset: int, chunks: List[int]) -> None:
+        self.id = id # the id of the file chunk must be unique in the context of a single stream_files request
         self.path = path
         self.offset = offset
         self.chunks = chunks
+
+    def total_size(self) -> int:
+        return sum(self.chunks)
+
+    def max_chunk_size(self) -> int:
+        return max(self.chunks)
+
+    def __repr__(self) -> str:
+        """Provides a clear string representation for the object."""
+        return (f"FileChunks(id='{self.id}', path='{self.path}', offset={self.offset}, "
+                f"num_chunks={len(self.chunks)}, total_size={self.total_size()})")
 
 class FilesRequest:
     def __init__(self) -> None:
@@ -44,7 +56,7 @@ class FilesRequestsIteratorWithBuffer:
         self.file_buffers = []
 
     def get_global_file_and_chunk(self, local_file_index: int, local_chunk_index: int) -> Tuple[str, int, memoryview]:
-        file_path, global_chunk_index = self.files_requests_iterator.get_global_file_and_chunk(
+        file_id, global_chunk_index = self.files_requests_iterator.get_global_file_and_chunk(
             local_file_index, local_chunk_index
         )
         file_buffer = self.file_buffers[local_file_index]
@@ -52,7 +64,7 @@ class FilesRequestsIteratorWithBuffer:
         file_active_chunks = self.files_requests_iterator.active_request.files[local_file_index].chunks
         chunk_offset_start = sum(file_active_chunks[:local_chunk_index])
         chunk_offset_end = chunk_offset_start + file_active_chunks[local_chunk_index]
-        return file_path, global_chunk_index, file_buffer[chunk_offset_start: chunk_offset_end]
+        return file_id, global_chunk_index, file_buffer[chunk_offset_start: chunk_offset_end]
 
     def next_request(self) -> Optional[FilesRequest]:
         next_requests = self.files_requests_iterator.next_request()
@@ -84,7 +96,7 @@ class FilesRequestsIteratorWithBuffer:
                 raise RunaiStreamerMemoryLimitException(
                     f"MemoryCapMode is Limited, but no limit supplied"
                 )
-            largest_chunk = max(max(file_chunks.chunks) for file_chunks in files_chunks)
+            largest_chunk = max((max(file_chunks.chunks, default=0) for file_chunks in files_chunks), default=0)
             if user_memory_limit < largest_chunk:
                 raise RunaiStreamerMemoryLimitException(
                     f"Memory limit supplied: {user_memory_limit} cannot be smaller than: {largest_chunk}"
@@ -115,13 +127,13 @@ class FilesRequestsIterator:
         
         self.file_to_current_chunk_index = {}
         for file_chunks in files_chunks:
-            self.file_to_current_chunk_index[file_chunks.path] = 0
+            self.file_to_current_chunk_index[file_chunks.id] = 0
 
         self.active_request: FilesRequest = None
 
     def get_global_file_and_chunk(self, local_file_index: int, local_chunk_index: int) -> Tuple[str, int]:
-        file_path = self.active_request.files[local_file_index].path
-        return file_path, self.file_to_current_chunk_index[file_path] + local_chunk_index
+        file_id = self.active_request.files[local_file_index].id
+        return file_id, self.file_to_current_chunk_index[file_id] + local_chunk_index
 
     def next_request(self) -> Optional[FilesRequest]:
         if not self.q:
@@ -129,7 +141,7 @@ class FilesRequestsIterator:
         
         if self.active_request is not None:
             for file_chunks in self.active_request.files:
-                self.file_to_current_chunk_index[file_chunks.path] += len(file_chunks.chunks)
+                self.file_to_current_chunk_index[file_chunks.id] += len(file_chunks.chunks)
             
         files_request = FilesRequest()
         current_request_memory_size = 0
@@ -157,6 +169,7 @@ class FileChunksIterator:
     def __init__(
         self, file_chunks: FileChunks
     ) -> None:
+        self.id = file_chunks.id
         self.path = file_chunks.path
         self.next_request_offset = file_chunks.offset
         self.chunks_iterator = ChunksIterator(file_chunks.chunks)
@@ -168,7 +181,7 @@ class FileChunksIterator:
         chunks = self.chunks_iterator.next_chunks(size)
         starting_offset = self.next_request_offset
         self.next_request_offset += sum(chunks)
-        return FileChunks(self.path, starting_offset, chunks)
+        return FileChunks(self.id, self.path, starting_offset, chunks)
 
 class ChunksIterator:
     def __init__(
@@ -192,7 +205,6 @@ class ChunksIterator:
             current_request_size += candidate_chunk
 
         return chunks
-
 
 def _get_memory_mode(memory_limit: str | None) -> MemoryCapMode:
     if memory_limit == "-1":

@@ -43,7 +43,7 @@ Controls how the CPU Memory buffer to which tensors are read from the file is be
 
 #### Default value
 
-`20000000000 - 20 GB`
+`-1` for distributed streaming and 40 GB otherwise
 
 ### AWS_ENDPOINT_URL
 
@@ -99,3 +99,31 @@ If not defined (default) Application Default Credentials are used.
 #### Values accepted
 
 String
+
+### RUNAI_STREAMER_DIST
+
+Enables distributed streaming for multiple devices
+
+`auto` enables distributed streaming only for streaming from object storage to CUDA devices
+
+### Values accepted
+
+String `0` or `1` or `auto`
+
+#### Default value
+
+`auto`
+
+### RUNAI_STREAMER_DIST_GLOBAL
+
+Enables global distributed streaming for multiple devices, dividing the workload between multiple nodes
+
+If not defined (default) distributed streaming is local - dividing the workload between processes of the same node 
+
+### Values accepted
+
+String `0` or `1`
+
+#### Default value
+
+`0`
