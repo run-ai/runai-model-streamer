@@ -5,10 +5,10 @@ import random
 from safetensors.torch import save_file
 
 MIN_NUM_FILES = 1
-MAX_NUM_FILES = 20
+MAX_NUM_FILES = 10
 MIN_NUM_TENSORS = 1
 MAX_NUM_TENSORS_SMALL = 20
-MAX_NUM_TENSORS = 1024
+MAX_NUM_TENSORS = 128
 
 MIN_TENSOR_SIZE = 16
 MAX_TENSOR_SIZE = 16777216
@@ -61,6 +61,7 @@ def random_tensors(min_num_tensors, max_num_tensors, min_tensor_shape_dim, max_t
 def create_random_safetensors(dir):
     path = os.path.join(dir, "model.safetensors")
     save_file(random_tensors(MIN_NUM_TENSORS, MAX_NUM_TENSORS, MIN_TENSOR_SHAPE_DIM, MAX_TENSOR_SHAPE_DIM), path)
+    print(f"Created {path} with size {os.path.getsize(path)} bytes", flush=True)
     return path
 
 def create_random_multi_safetensors(dir):
