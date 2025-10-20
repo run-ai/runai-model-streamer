@@ -88,27 +88,27 @@ class DistributedStreamer:
         if self.is_distributed:
             self.is_distributed = dist.is_initialized()
             if not self.is_distributed:
-                print(f"Note: torch distributed is not initialized - fallback to non distributed streaming")
+                print(f"Distributed streaming note: torch distributed is not initialized - fallback to non distributed streaming")
             self.is_distributed = self.is_distributed and self.get_group_size() > 1
 
        # do not distribute if backend type does not match device type
         if self.is_distributed:
             backend_name = dist.get_backend()
             if backend_name == "nccl" and device == "cpu":
-                print(f"Note: torch distributed backend {backend_name} is not supported for CPU device", flush=True)
+                print(f"Distributed streaming note: torch distributed backend {backend_name} is not supported for CPU device", flush=True)
                 self.is_distributed = False
             if backend_name == "gloo" and device != "cpu":
-                print(f"Note: torch distributed backend {backend_name} is not supported for {device} device", flush=True)
+                print(f"Distributed streaming note: torch distributed backend {backend_name} is not supported for {device} device", flush=True)
                 self.is_distributed = False
             if enable_dist is None and backend_name != "nccl" and backend_name != "gloo":
-                print(f"Note: torch distributed backend {backend_name} is not supported by default for distributed streaming - To allow this backend, set RUNAI_STREAMER_DIST to `1`", flush=True)
+                print(f"Distributed streaming note: torch distributed backend {backend_name} is not supported by default for distributed streaming - To allow this backend, set RUNAI_STREAMER_DIST to `1`", flush=True)
                 self.is_distributed = False
 
         # check if there is enough free memory on the device
         if self.is_distributed and torch.cuda.is_available() and dist.get_backend() == "nccl":
             free_memory = self.get_cuda_free_memory()
             if free_memory < 2 * self.params.max_chunk:
-                print(f"Warning: Not enough memory on the device for distributed streaming, free memory: {free_memory} bytes, required minimun: {2 * self.params.max_chunk} bytes", flush=True)
+                print(f"Distributed streaming warning: Not enough memory on the device for distributed streaming - fallback to non distributed streaming, free memory: {free_memory} bytes, required minimun: {2 * self.params.max_chunk} bytes", flush=True)
                 self.is_distributed = False
 
     def stream_files(
@@ -329,7 +329,7 @@ class _distributedStreamer:
         self.distribution_group = self.create_distribution_group()
         self.group_size = dist.get_world_size(group=self.distribution_group)
 
-        print(f"Using distributing streaming between {self.group_size} processes")
+        print(f"Distributed streaming - Using distributing streaming between {self.group_size} processes")
 
         # set rank in the new distribution group
         self.set_rank()
@@ -425,17 +425,17 @@ class _distributedStreamer:
             # Check if the error is a timeout
             self.is_error = True
             if "timed out" in str(e).lower() or "timeout" in str(e).lower():
-                print(f"Rank {self.original_group_rank}: broadcast timed out - Could not complete broadcast.")
+                print(f"Distributed streaming - Rank {self.original_group_rank}: broadcast timed out - Could not complete broadcast.")
             else:
-                print(f"rank {self.original_group_rank} error: {e}")
+                print(f"Distributed streaming - rank {self.original_group_rank} error: {e}")
             raise e
         except Exception as e:
             self.is_error = True
-            print(f"rank {self.original_group_rank} error: {e}")
+            print(f"Distributed streaming - rank {self.original_group_rank} error: {e}")
             raise e
         finally:
             end_time = timer()
-            print(f"local rank {self.rank} global rank {self.original_group_rank} {'failed' if self.is_error else 'done'} in {end_time - start_time} seconds")           
+            print(f"Distributed streaming - local rank {self.rank} global rank {self.original_group_rank} {'failed' if self.is_error else 'done'} in {end_time - start_time} seconds")           
 
     def prefill(self,
                 chunk_gen: Iterator,
@@ -542,5 +542,5 @@ class _distributedStreamer:
                     yield meta[0].item(), meta[1].item(), received_data_buf_view[offset : offset + size]
 
         if total_broadcast_chunks == 0 and chunks_to_read[0] > 0:
-            print(f"Error: rank {self.rank} is missing {chunks_to_read[0]} chunks", flush=True)
+            print(f"Distributed streaming - Error: rank {self.rank} is missing {chunks_to_read[0]} chunks", flush=True)
             raise RuntimeError("No chunks to read")
