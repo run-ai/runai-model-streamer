@@ -68,7 +68,7 @@ with SafetensorsStreamer() as streamer:
 Distributed streaming allocates reusable staging buffers on each device, which hold the data of the yielded tensors
 Therefore, the yielded tensor might be overwritten at the next iteration. If tensors are used outside the iterator loop, clone and detach the yielded tensor to save a copy.
  
-The memory requirements for the staging buffers is twice the size of the larget tensor in the files
+The memory requirements for the staging buffers is twice the size of the largest tensor in the files
 
 Distributed streaming is based on a torch distributed group and the broadcast operation.
 The backend of the torch group must support the broadcast operation.
@@ -87,11 +87,11 @@ It is possible to force distributed streaming for other cases by setting `RUNAI_
 
 In local mode, the processes on each node divide the entire workload among themselves.
 
-In global mode, the workload is divided between all processes on all nodes.
+In global mode, the workload is divided between all the processes on all the nodes.
 
 For example, with 2 nodes and 16 processes (8 processes on each node), each process reads 1/8 of the workload in local mode and 1/16 in global mode.
 
-The mode should be selected according to the communication speed between nodes.
+The mode should be selected according to the communication speed between the nodes.
 By default, distributed streaming is done in local mode.
 To enable global mode, set `RUNAI_STREAMER_DIST_GLOBAL=1`.
 

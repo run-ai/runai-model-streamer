@@ -200,7 +200,7 @@ def get_total_size_of_partition(partition: List[Tuple[FileChunks, dict]]) -> int
     return sum(sum(fc.chunks) for fc, _ in partition)
 
 def log_partition_info(partitions: List[List[Tuple[FileChunks, dict]]]):
-    log_string = "Partitions sizes:"
+    log_string = "[RunAI Streamer][Distributed] Partitions sizes:"
     for i in range(len(partitions)):
         size = get_total_size_of_partition(partitions[i])
         log_string += f" {i}: {humanize.naturalsize(size, binary=True)} ; "
