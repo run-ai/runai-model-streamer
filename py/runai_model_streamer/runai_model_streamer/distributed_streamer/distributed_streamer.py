@@ -34,14 +34,9 @@ DEFAULT_BROADCAST_TIMEOUT = timedelta(seconds=600)
 class DistributedStreamer:
     def __init__(self) -> None:
         self.file_streamer = FileStreamer()
+        self.params = _distributedStreamerParams()
         self.distributed_streamer = _distributedStreamer(self.file_streamer)
         self.is_distributed = False
-        self.num_processes_on_node = None
-        self.group_size = 1
-        self.my_global_rank = 0
-        self.groups_by_ranks = []
-        self.broadcast_timeout = DEFAULT_BROADCAST_TIMEOUT
-        self.max_chunk = 0
 
     def __enter__(self) -> DistributedStreamer:
         self.file_streamer.__enter__()
@@ -93,7 +88,7 @@ class DistributedStreamer:
         if self.is_distributed:
             self.is_distributed = dist.is_initialized()
             if not self.is_distributed:
-                print(f"Note: torch distributed is not initialized")
+                print(f"Note: torch distributed is not initialized - fallback to non distributed streaming")
             self.is_distributed = self.is_distributed and self.get_group_size() > 1
 
        # do not distribute if backend type does not match device type
@@ -105,16 +100,63 @@ class DistributedStreamer:
             if backend_name == "gloo" and device != "cpu":
                 print(f"Note: torch distributed backend {backend_name} is not supported for {device} device", flush=True)
                 self.is_distributed = False
-            if os.environ.get("RUNAI_STREAMER_DIST") is None and backend_name != "nccl" and backend_name != "gloo":
+            if enable_dist is None and backend_name != "nccl" and backend_name != "gloo":
                 print(f"Note: torch distributed backend {backend_name} is not supported by default for distributed streaming - To allow this backend, set RUNAI_STREAMER_DIST to `1`", flush=True)
                 self.is_distributed = False
 
         # check if there is enough free memory on the device
         if self.is_distributed and torch.cuda.is_available() and dist.get_backend() == "nccl":
             free_memory = self.get_cuda_free_memory()
-            if free_memory < 2 * self.max_chunk:
-                print(f"Warning: Not enough memory on the device for distributed streaming, free memory: {free_memory} bytes, required minimun: {2 * self.max_chunk} bytes", flush=True)
+            if free_memory < 2 * self.params.max_chunk:
+                print(f"Warning: Not enough memory on the device for distributed streaming, free memory: {free_memory} bytes, required minimun: {2 * self.params.max_chunk} bytes", flush=True)
                 self.is_distributed = False
+
+    def stream_files(
+            self,
+            file_stream_requests: List[FileChunks],
+            credentials: Optional[S3Credentials],
+            device: str,
+            is_distributed: bool,
+    ) -> None:
+
+        self.params.set_params(file_stream_requests)
+
+        path = None
+        if len(file_stream_requests) > 0:
+            path = file_stream_requests[0].path
+
+         # check if distributed streaming can be used
+        self.set_is_distributed(is_distributed, path, device)
+
+        if not self.is_distributed:
+            self.file_streamer.stream_files(file_stream_requests, credentials, device)
+        else:
+            self.distributed_streamer.stream_files(file_stream_requests, credentials, device, self.params)
+
+    def get_chunks(self) -> Iterator:
+        if not self.file_streamer:
+            raise ValueError("Streamer not initialized")
+        
+        if not self.is_distributed:
+            for item in self.file_streamer.get_chunks():
+                yield item
+        else:
+           for item in self.distributed_streamer.get_chunks():
+                yield item
+        return
+
+class _distributedStreamerParams:
+    def __init__(self) -> None:
+        self.num_processes_on_node = None
+        self.my_global_rank = 0
+        self.groups_by_ranks = []
+        self.broadcast_timeout = DEFAULT_BROADCAST_TIMEOUT
+        self.max_chunk = 0
+ 
+    def get_group_size(self) -> int:
+        if not dist.is_initialized():
+            return 1
+        return dist.get_world_size()
 
     def get_broadcast_timeout(self) -> timedelta:
         timeout_val = os.environ.get("RUNAI_STREAMER_DIST_TIMEOUT")
@@ -133,7 +175,6 @@ class DistributedStreamer:
         if not dist.is_initialized():
             return 1, 0, [[0]]
 
-        self.broadcast_timeout = self.get_broadcast_timeout()
         world_size = dist.get_world_size()
 
         if world_size == 1:
@@ -165,24 +206,16 @@ class DistributedStreamer:
 
         return my_group_size, my_global_rank, groups_by_ranks
 
-    def stream_files(
+    def set_params(
             self,
-            file_stream_requests: List[FileChunks],
-            credentials: Optional[S3Credentials],
-            device: str,
-            is_distributed: bool,
+            file_stream_requests: List[FileChunks], 
     ) -> None:
 
-        path = None
-        if len(file_stream_requests) > 0:
-            path = file_stream_requests[0].path
+        self.broadcast_timeout = self.get_broadcast_timeout()
 
         # find the size of the maximal chunk for the reusable buffer
         max_chunks_per_file = (fc.max_chunk_size() for fc in file_stream_requests if fc.chunks)
         self.max_chunk = max(max_chunks_per_file, default=0)
-
-        # check if distributed streaming can be used
-        self.set_is_distributed(is_distributed, path, device)
 
         # set the value of RUNAI_STREAMER_PROCESS_GROUP_SIZE to be the number of processes in the distribution group (or 1 if process group is not initialized)
         # This is useful for auto adjustments in the CPP layer, which depends on the number of processes of this workload
@@ -190,24 +223,6 @@ class DistributedStreamer:
             self.num_processes_on_node, self.my_global_rank, self.groups_by_ranks = self.find_local_ranks()
         if os.environ.get("RUNAI_STREAMER_PROCESS_GROUP_SIZE") is None:
             os.environ["RUNAI_STREAMER_PROCESS_GROUP_SIZE"] = str(self.num_processes_on_node)
-
-        if not self.is_distributed:
-            self.file_streamer.stream_files(file_stream_requests, credentials, device)
-        else:
-            self.distributed_streamer.stream_files(file_stream_requests, credentials, device, self.my_global_rank, self.groups_by_ranks, self.broadcast_timeout, self.max_chunk)
-
-    def get_chunks(self) -> Iterator:
-        if not self.file_streamer:
-            raise ValueError("Streamer not initialized")
-        
-        if not self.is_distributed:
-            for item in self.file_streamer.get_chunks():
-                yield item
-        else:
-           for item in self.distributed_streamer.get_chunks():
-                yield item
-        return         
-
 
 class _distributedStreamer:
     def __init__(self, file_streamer : FileStreamer) -> None:
@@ -217,6 +232,7 @@ class _distributedStreamer:
         self.rank_file_chunks_list = {} # post Partitioning FileChunks to be streamed by this rank
         self.rank_dicts_map = {} # maps post partitioning FileChunks.id and chunk index to the original FileChunks.id and chunk index and chunk size
         self.total_chunks_to_read = 0
+        self.group_size = 1
         self.rank = 0
         self.original_group_rank = 0
         self.distribution_group = None
@@ -299,17 +315,14 @@ class _distributedStreamer:
             file_stream_requests: List[FileChunks],
             credentials: Optional[S3Credentials],
             device: str,
-            my_global_rank : int,
-            groups_by_ranks : List[List[int]],
-            broadcast_timeout : int,
-            max_chunk : int,
+            params : _distributedStreamerParams
     ) -> None:
 
         self.device = torch.device(device)
-        self.my_global_rank = my_global_rank
-        self.groups_by_ranks = groups_by_ranks
-        self.broadcast_timeout = broadcast_timeout
-        self.max_chunk = max_chunk
+        self.my_global_rank = params.my_global_rank
+        self.groups_by_ranks = params.groups_by_ranks
+        self.broadcast_timeout = params.broadcast_timeout
+        self.max_chunk = params.max_chunk
 
         # create distribution group for configuring timeout and possibly broadcast locally in each node 
         # The group must be created before partitioning the tensors, in case the group will be local
