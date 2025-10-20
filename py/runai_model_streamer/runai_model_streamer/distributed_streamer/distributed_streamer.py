@@ -374,8 +374,6 @@ class _distributedStreamer:
         if not self.file_streamer:
             raise ValueError("Streamer not initialized")
         
-        start_time = timer()
-
         MAX_CHUNKS_PER_BATCH = 256
         DEFAULT_BUFFER_MIN_BYTESIZE = 1024 * 1024 * 1024
         BUFFER_MIN_BYTESIZE = int(os.environ.get("RUNAI_STREAMER_DIST_BUFFER_MIN_BYTESIZE", str(DEFAULT_BUFFER_MIN_BYTESIZE))) # environment variable used for testing
@@ -433,9 +431,6 @@ class _distributedStreamer:
             self.is_error = True
             print(f"Distributed streaming - rank {self.original_group_rank} error: {e}")
             raise e
-        finally:
-            end_time = timer()
-            print(f"Distributed streaming - local rank {self.rank} global rank {self.original_group_rank} {'failed' if self.is_error else 'done'} in {end_time - start_time} seconds")           
 
     def prefill(self,
                 chunk_gen: Iterator,
