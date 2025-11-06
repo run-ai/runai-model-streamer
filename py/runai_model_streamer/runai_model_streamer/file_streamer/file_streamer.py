@@ -22,6 +22,10 @@ import humanize
 
 import torch
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 s3_credentials_module = get_s3_credentials_module()
 
 class RunaiStreamerInvalidInputException(Exception):
@@ -59,9 +63,8 @@ class FileStreamer:
         size = self.total_size
         elapsed_time = timer() - self.start_time
         throughput = size / elapsed_time
-        print(
-            f"[RunAI Streamer] Overall time to stream {humanize.naturalsize(size, binary=True)} of all files to {self.device_str}: {round(elapsed_time, 2)}s, {humanize.naturalsize(throughput, binary=True)}/s",
-            flush=True,
+        logger.info(
+            f"[RunAI Streamer] Overall time to stream {humanize.naturalsize(size, binary=True)} of all files to {self.device_str}: {round(elapsed_time, 2)}s, {humanize.naturalsize(throughput, binary=True)}/s"
         )
         if self.streamer:
             runai_end(self.streamer)

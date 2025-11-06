@@ -6,6 +6,10 @@ from typing import List, Dict
 import humanize
 from runai_model_streamer.file_streamer import FileChunks
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 @dataclasses.dataclass(frozen=True)
 class _WorkUnit:
     """
@@ -204,5 +208,5 @@ def log_partition_info(partitions: List[List[Tuple[FileChunks, dict]]]):
     for i in range(len(partitions)):
         size = get_total_size_of_partition(partitions[i])
         log_string += f" {i}: {humanize.naturalsize(size, binary=True)} ; "
-    print(log_string)
+    logger.debug(log_string)
 

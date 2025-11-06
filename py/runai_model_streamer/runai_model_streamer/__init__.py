@@ -15,3 +15,10 @@ __all__ = [
     "list_safetensors",
     "pull_files",
 ]
+
+import os
+import logging
+
+logger_level = os.environ.get("RUNAI_STREAMER_LOG_LEVEL", "INFO").upper()
+
+logging.getLogger(__name__).setLevel(logger_level)

@@ -169,7 +169,7 @@ void SharedQueue<ResponseType>::push(ResponseType && response)
                 const auto throughput = bytes_per_second(); // bytes_per_second uses _mutex internally if needed
                 // Consider if std::cout is appropriate here or if it should be logged.
                 // This might also be better placed outside the lock if bytes_per_second is slow.
-                std::cout << "Read throughput is " << utils::logging::human_readable_size(throughput) << " per second " << std::endl;
+                LOG(INFO) << "Read throughput is " << utils::logging::human_readable_size(throughput) << " per second " << std::endl;
             }
         }
         else
