@@ -7,6 +7,9 @@ from runai_model_streamer.file_streamer.file_streamer import FileStreamer
 from runai_model_streamer.file_streamer.requests_iterator import FileChunks
 from runai_model_streamer.distributed_streamer.distributed_streamer import DistributedStreamer
 
+import os
+import logging
+
 __all__ = [
     "SafetensorsStreamer",
     "DistributedStreamer",
@@ -15,9 +18,6 @@ __all__ = [
     "list_safetensors",
     "pull_files",
 ]
-
-import os
-import logging
 
 logger_level = os.environ.get("RUNAI_STREAMER_LOG_LEVEL", "INFO").upper()
 

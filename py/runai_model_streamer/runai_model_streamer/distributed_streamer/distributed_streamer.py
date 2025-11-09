@@ -436,13 +436,13 @@ class _distributedStreamer:
             # Check if the error is a timeout
             self.is_error = True
             if "timed out" in str(e).lower() or "timeout" in str(e).lower():
-                logger.ValueError(f"[RunAI Streamer][Distributed] Rank {self.original_group_rank}: broadcast timed out - Could not complete broadcast.")
+                logger.exception(f"[RunAI Streamer][Distributed] Rank {self.original_group_rank}: broadcast timed out - Could not complete broadcast.")
             else:
-                logger.error(f"[RunAI Streamer][Distributed] rank {self.original_group_rank} error: {e}")
+                logger.exception(f"[RunAI Streamer][Distributed] rank {self.original_group_rank} error: {e}")
             raise e
         except Exception as e:
             self.is_error = True
-            logger.error(f"[RunAI Streamer][Distributed] rank {self.original_group_rank} error: {e}")
+            logger.exception(f"[RunAI Streamer][Distributed] rank {self.original_group_rank} error: {e}")
             raise e
 
     def prefill(self,
