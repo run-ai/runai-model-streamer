@@ -1,29 +1,19 @@
 import unittest
 import torch
 import os
+import tempfile
+import shutil
 from safetensors import safe_open
 from unittest.mock import patch
 
 # Import the class to be tested
 from runai_model_streamer.safetensors_streamer.safetensors_streamer import (
     SafetensorsStreamer,
+    pull_files,
+    list_safetensors,
 )
 
-# --- Import the Patcher ---
-# Import StreamerPatcher from the specified module path
-try:
-    from runai_model_streamer.safetensors_streamer.streamer_mock import StreamerPatcher
-except ImportError:
-    raise ImportError(
-        "Could not import StreamerPatcher from "
-        "runai_model_streamer.safetensors_streamer.streamer_mock. "
-        "Please ensure the file and class exist."
-    )
-
-
-# ======================================================================
-# YOUR TEST CLASS
-# ======================================================================
+from runai_model_streamer.safetensors_streamer.streamer_mock import StreamerPatcher
 
 class TestSafetensorsStreamerMock(unittest.TestCase):
 
@@ -73,7 +63,7 @@ class TestSafetensorsStreamerMock(unittest.TestCase):
             for name in f.keys():
                 their[name] = f.get_tensor(name)
 
-        # 6. Assertions (identical to original test)
+        # 6. Assertions 
         self.assertEqual(len(our.items()), len(their.items()))
         self.assertGreater(len(our.items()), 0, "No tensors loaded via mock")
         for name, our_tensor in our.items():
@@ -83,8 +73,6 @@ class TestSafetensorsStreamerMock(unittest.TestCase):
             res = torch.all(our_tensor.eq(their[name]))
             self.assertTrue(res)
 
-    # --- NEW TEST USING THE PATCHER (GS) ---
-    
     @patch(__name__ + '.SafetensorsStreamer')
     def test_safetensors_streamer_GS_MOCK(self, mock_streamer_class):
         """
@@ -120,6 +108,116 @@ class TestSafetensorsStreamerMock(unittest.TestCase):
         for name, their_tensor in their.items():
             self.assertTrue(name in our, f"Tensor {name} missing from mocked run")
             self.assertTrue(torch.all(our[name].eq(their_tensor)))
+
+    @patch(__name__ + '.list_safetensors')
+    def test_list_safetensors_S3_MOCK(self, mock_list_safetensors):
+        """
+        Mocked test: Verifies list_safetensors shim logic.
+        """
+
+        fake_s3_path = "s3://my-fake-bucket/models/"
+        patcher = StreamerPatcher(local_model_path=self.file_dir)
+        
+        # Connect the patch to the patcher's shim method
+        mock_list_safetensors.side_effect = patcher.shim_list_safetensors
+        
+        # Call the (now-mocked) function
+        listed_files = list_safetensors(fake_s3_path)
+        
+        # Assertions
+        self.assertIsInstance(listed_files, list)
+        self.assertEqual(len(listed_files), 2, "No files listed by shim")
+        self.assertTrue(
+            any(f.endswith(self.file_name) for f in listed_files),
+            f"{self.file_name} not found in listed files: {listed_files}"
+        )
+
+    @patch(__name__ + '.list_safetensors')
+    def test_list_safetensors_GS_MOCK(self, mock_list_safetensors):
+        """
+        Mocked test: Verifies list_safetensors shim logic.
+        """
+        
+        fake_gs_path = "gs://my-fake-bucket/models/"
+        patcher = StreamerPatcher(local_model_path=self.file_dir)
+        
+        # Connect the patch to the patcher's shim method
+        mock_list_safetensors.side_effect = patcher.shim_list_safetensors
+        
+        # Call the (now-mocked) function
+        listed_files = list_safetensors(fake_gs_path)
+        
+        # Assertions
+        self.assertIsInstance(listed_files, list)
+        self.assertGreater(len(listed_files), 0, "No files listed by shim")
+        self.assertTrue(
+            any(f.endswith(self.file_name) for f in listed_files),
+            f"{self.file_name} not found in listed files: {listed_files}"
+        )
+
+    # Patch the function *where it is imported*, which is this local module.
+    @patch(__name__ + '.pull_files')
+    def test_pull_files_S3_MOCK(self, mock_pull_files):
+        """
+        Mocked test: Verifies pull_files shim logic.
+        """
+        
+        fake_s3_path = "s3://my-fake-bucket/models/"
+        dest_dir = tempfile.mkdtemp()
+
+        try:
+            patcher = StreamerPatcher(local_model_path=self.file_dir)
+            
+            # Connect the patch to the patcher's shim method
+            mock_pull_files.side_effect = patcher.shim_pull_files
+            
+            # Call the (now-mocked) function
+            pull_files(
+                model_path=fake_s3_path,
+                dst=dest_dir,
+                allow_pattern=["*.safetensors"], # Test the filtering
+                ignore_pattern=None
+            )
+            
+            # Assertions
+            expected_file_path = os.path.join(dest_dir, self.file_name)
+            self.assertTrue(
+                os.path.exists(expected_file_path),
+                f"File was not 'pulled' to {expected_file_path}"
+            )
+            
+        finally:
+            shutil.rmtree(dest_dir)
+
+    @patch(__name__ + '.pull_files')
+    def test_pull_files_GS_MOCK(self, mock_pull_files):
+        """
+        Mocked test: Verifies pull_files shim logic with a GS path.
+        """
+        
+        fake_gs_path = "gs://my-fake-bucket/models/"
+        dest_dir = tempfile.mkdtemp()
+
+        try:
+            patcher = StreamerPatcher(local_model_path=self.file_dir)
+            mock_pull_files.side_effect = patcher.shim_pull_files
+            
+            pull_files(
+                model_path=fake_gs_path,
+                dst=dest_dir,
+                allow_pattern=["*.safetensors"],
+                ignore_pattern=None
+            )
+            
+            expected_file_path = os.path.join(dest_dir, self.file_name)
+            self.assertTrue(
+                os.path.exists(expected_file_path),
+                f"File was not 'pulled' to {expected_file_path}"
+            )
+            
+        finally:
+            shutil.rmtree(dest_dir)
+
 
 
 if __name__ == "__main__":

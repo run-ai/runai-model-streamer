@@ -2,6 +2,7 @@ from typing import Optional, List
 import re
 import os
 import importlib
+import fnmatch
 
 GCS_PROTOCOL_PREFIX = "gs://"
 S3_PROTOCOL_PREFIX = "s3://"
