@@ -29,6 +29,11 @@ from runai_model_streamer.s3_utils.s3_utils import (
 
 from timeit import default_timer as timer
 
+import logging
+import humanize
+
+logger = logging.getLogger(__name__)
+
 DEFAULT_BROADCAST_TIMEOUT = timedelta(seconds=600)
 
 class DistributedStreamer:
@@ -88,27 +93,27 @@ class DistributedStreamer:
         if self.is_distributed:
             self.is_distributed = dist.is_initialized()
             if not self.is_distributed:
-                print(f"[RunAI Streamer][Distributed] Torch distributed is not initialized - fallback to non distributed streaming")
+                logger.info("[RunAI Streamer][Distributed] Torch distributed is not initialized - fallback to non distributed streaming")
             self.is_distributed = self.is_distributed and self.get_group_size() > 1
 
        # do not distribute if backend type does not match device type
         if self.is_distributed:
             backend_name = dist.get_backend()
             if backend_name == "nccl" and device == "cpu":
-                print(f"[RunAI Streamer][Distributed] Note: Torch distributed backend {backend_name} is not supported for CPU device - fallback to non distributed streaming", flush=True)
+                logger.info("[RunAI Streamer][Distributed] Note: Torch distributed backend %s is not supported for CPU device - fallback to non distributed streaming", backend_name)
                 self.is_distributed = False
             if backend_name == "gloo" and device != "cpu":
-                print(f"[RunAI Streamer][Distributed] Note: Torch distributed backend {backend_name} is not supported for {device} device - fallback to non distributed streaming", flush=True)
+                logger.info("[RunAI Streamer][Distributed] Note: Torch distributed backend %s is not supported for %s device - fallback to non distributed streaming", backend_name, device)
                 self.is_distributed = False
             if enable_dist == "auto" and backend_name != "nccl" and backend_name != "gloo":
-                print(f"[RunAI Streamer][Distributed] Note: Torch distributed backend {backend_name} is not supported by default for distributed streaming - To allow this backend, set RUNAI_STREAMER_DIST to `1`", flush=True)
+                logger.info("[RunAI Streamer][Distributed] Note: Torch distributed backend %s is not supported by default for distributed streaming - To allow this backend, set RUNAI_STREAMER_DIST to `1`", backend_name)
                 self.is_distributed = False
 
         # check if there is enough free memory on the device
         if self.is_distributed and torch.cuda.is_available() and dist.get_backend() == "nccl":
             free_memory = self.get_cuda_free_memory()
             if free_memory < 2 * self.params.max_chunk:
-                print(f"[RunAI Streamer][Distributed] Warning: Not enough memory on the device for distributed streaming - fallback to non distributed streaming, free memory: {free_memory} bytes, required minimun: {2 * self.params.max_chunk} bytes", flush=True)
+                logger.warning(f"[RunAI Streamer][Distributed] Warning: Not enough memory on the device for distributed streaming - fallback to non distributed streaming, free memory: {free_memory} bytes, required minimun: {2 * self.params.max_chunk} bytes")
                 self.is_distributed = False
 
     def stream_files(
@@ -275,6 +280,8 @@ class _distributedStreamer:
 
         else:
             group = self.create_local_distribution_group()
+
+        logger.debug(f"[RunAI Streamer][Distributed] Created distribution group with size {dist.get_world_size(group=group)}")
         return group
 
     def create_local_distribution_group(self) -> dist.GroupSpec:
@@ -329,10 +336,11 @@ class _distributedStreamer:
         self.distribution_group = self.create_distribution_group()
         self.group_size = dist.get_world_size(group=self.distribution_group)
 
-        print(f"[RunAI Streamer][Distributed] Using distributed streaming between {self.group_size} processes")
-
         # set rank in the new distribution group
         self.set_rank()
+
+        if self.original_group_rank == 0:
+            logger.info(f"[RunAI Streamer][Distributed] Using distributed streaming between {self.group_size} processes")
 
         # partition tensors between processes in the distribution group
         self.partitions = partition(file_stream_requests, dist.get_world_size(group=self.distribution_group))
@@ -352,12 +360,15 @@ class _distributedStreamer:
 
         if len(self.rank_file_chunks_list) == 0:
             self.reading_from_storage = False
+            logger.debug(f"[RunAI Streamer][Distributed] Rank {self.original_group_rank}: No chunks to read from storage")
             return
 
         # read files
         original_memory_limit = os.environ.get("RUNAI_STREAMER_MEMORY_LIMIT")
         try:
             # for distributed streaming only - change default memory limit to unlimited
+            if self.original_group_rank == 0:
+                logger.debug(f"[RunAI Streamer][Distributed] Setting memory limit to unlimited")
             if original_memory_limit == None:
                 os.environ["RUNAI_STREAMER_MEMORY_LIMIT"] = "-1"
             self.file_streamer.stream_files(self.rank_file_chunks_list, credentials, "cpu")
@@ -409,6 +420,8 @@ class _distributedStreamer:
                     received_metadata_tensor,
                     leftover_chunk)
 
+                logger.debug(f"[RunAI Streamer][Distributed] Rank {self.original_group_rank}: Prefilled buffer with {chunk_count_in_batch} chunks and total size {humanize.naturalsize(current_data_size)}")
+
                 # --- Broadcast ---
                 yield from self.broadcast(
                     chunks_to_read,
@@ -418,18 +431,18 @@ class _distributedStreamer:
                     received_buffer,
                     chunk_count_in_batch,
                     current_data_size)
-                
+               
         except RuntimeError as e:
             # Check if the error is a timeout
             self.is_error = True
             if "timed out" in str(e).lower() or "timeout" in str(e).lower():
-                print(f"[RunAI Streamer][Distributed] Rank {self.original_group_rank}: broadcast timed out - Could not complete broadcast.")
+                logger.exception(f"[RunAI Streamer][Distributed] Rank {self.original_group_rank}: broadcast timed out - Could not complete broadcast.")
             else:
-                print(f"[RunAI Streamer][Distributed] rank {self.original_group_rank} error: {e}")
+                logger.exception(f"[RunAI Streamer][Distributed] rank {self.original_group_rank} error: {e}")
             raise e
         except Exception as e:
             self.is_error = True
-            print(f"[RunAI Streamer][Distributed] rank {self.original_group_rank} error: {e}")
+            logger.exception(f"[RunAI Streamer][Distributed] rank {self.original_group_rank} error: {e}")
             raise e
 
     def prefill(self,
@@ -440,7 +453,7 @@ class _distributedStreamer:
                 received_buffer: torch.Tensor,
                 batch_metadata_tensor: torch.Tensor,
                 received_metadata_tensor: torch.Tensor,
-                leftover_chunk: List[Tuple[int, int, torch.Tensor]]) -> Tuple[int, int, bool]:
+                leftover_chunk: List[Tuple[int, int, torch.Tensor]]) -> Tuple[int, int]:
 
         current_data_size = 0
         chunk_count_in_batch = 0
@@ -496,6 +509,7 @@ class _distributedStreamer:
 
             # self.original_group_rank is the GLOBAL rank of the current process
             if global_broadcasting_rank == self.original_group_rank:
+                logger.debug(f"[RunAI Streamer][Distributed] Rank {self.original_group_rank}: Broadcasting")
                 chunks_to_read[0] -= chunk_count_in_batch
                 total_broadcast_chunks += chunk_count_in_batch
                 # broadcast metadata
@@ -503,6 +517,7 @@ class _distributedStreamer:
 
                 # broadcast data
                 if chunk_count_in_batch > 0:
+                    logger.debug(f"[RunAI Streamer][Distributed] Rank {self.original_group_rank}: Broadcasting data of size {humanize.naturalsize(current_data_size)}")
                     dist.broadcast(data_buffer[:current_data_size], global_broadcasting_rank, group=self.distribution_group)
 
                 # yield
@@ -512,16 +527,19 @@ class _distributedStreamer:
                         yield meta[0].item(), meta[1].item(), data_buffer[offset : offset + size]
             else:
                 # receive metadata
+                logger.debug(f"[RunAI Streamer][Distributed] Rank {self.original_group_rank}: Receiving metadata from rank {global_broadcasting_rank}")
                 dist.broadcast(received_metadata_tensor, global_broadcasting_rank, group=self.distribution_group)
 
                 received_chunk_count_in_batch = received_metadata_tensor[0, 0].item()
 
                 if received_chunk_count_in_batch == 0:
+                    logger.debug(f"[RunAI Streamer][Distributed] Rank {self.original_group_rank}: No chunks to receive from rank {global_broadcasting_rank}")
                     continue
 
                 total_broadcast_chunks += received_chunk_count_in_batch
 
                 # receive data
+                logger.debug(f"[RunAI Streamer][Distributed] Rank {self.original_group_rank}: Receiving data from rank {global_broadcasting_rank}")
                 last_meta = received_metadata_tensor[received_chunk_count_in_batch]
                 total_data_size = last_meta[3].item() + last_meta[2].item() # offset plus size of last chunk in batch
 
@@ -530,6 +548,7 @@ class _distributedStreamer:
                 received_data_buf_view = received_buffer[:total_data_size]
 
                 dist.broadcast(received_data_buf_view, global_broadcasting_rank, group=self.distribution_group)
+                logger.debug(f"[RunAI Streamer][Distributed] Rank {self.original_group_rank}: Received data of size {humanize.naturalsize(total_data_size)}")
 
                 for j in range(received_chunk_count_in_batch):
                     meta = received_metadata_tensor[j + 1]
@@ -537,5 +556,5 @@ class _distributedStreamer:
                     yield meta[0].item(), meta[1].item(), received_data_buf_view[offset : offset + size]
 
         if total_broadcast_chunks == 0 and chunks_to_read[0] > 0:
-            print(f"[RunAI Streamer][Distributed] Error: rank {self.rank} is missing {chunks_to_read[0]} chunks", flush=True)
+            logger.error(f"[RunAI Streamer][Distributed] Error: rank {self.rank} is missing {chunks_to_read[0]} chunks")
             raise RuntimeError("No chunks to read")

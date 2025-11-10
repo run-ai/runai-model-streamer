@@ -22,8 +22,6 @@ class TestSafetensorStreamerFuzzing(unittest.TestCase):
 
         file_size = os.path.getsize(file_path)
 
-        print(f"File size: {file_size} bytes")
-
         our = {}
         with SafetensorsStreamer() as run_sf:
             run_sf.stream_file(file_path, None, "cpu", False)
@@ -43,8 +41,6 @@ class TestSafetensorStreamerFuzzing(unittest.TestCase):
         file_paths = create_random_multi_safetensors(self.temp_dir)
 
         files_size = sum([os.path.getsize(file_path) for file_path in file_paths])
-
-        print(f"Files total size: {files_size} bytes", flush=True)
 
         our = {}
         with SafetensorsStreamer() as run_sf:

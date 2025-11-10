@@ -6,6 +6,9 @@ import numpy as np
 import os
 import humanize
 
+import logging
+
+logger = logging.getLogger(__name__)
 
 RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME = "RUNAI_STREAMER_MEMORY_LIMIT"
 DEFAULT_MEMORY_LIMIT_STRING = "40000000000" # 40 GB (to be set to unlimited for distributed streaming)
@@ -48,9 +51,8 @@ class FilesRequest:
 class FilesRequestsIteratorWithBuffer:
     def __init__(self, buffer_size: int, files_chunks: List[FileChunks]) -> None:
         self.files_requests_iterator = FilesRequestsIterator(buffer_size, files_chunks)
-        print(
-            f"[RunAI Streamer] CPU Buffer size: {humanize.naturalsize(buffer_size, binary=True)} for files: {[file_chunks.path for file_chunks in files_chunks]}",
-            flush=True,
+        logger.debug(
+            f"[RunAI Streamer] CPU Buffer size: {humanize.naturalsize(buffer_size, binary=True)} for files: {[file_chunks.path for file_chunks in files_chunks]}"
         )
         self.buffer = np.empty(buffer_size, dtype=np.uint8)
         self.file_buffers = []
