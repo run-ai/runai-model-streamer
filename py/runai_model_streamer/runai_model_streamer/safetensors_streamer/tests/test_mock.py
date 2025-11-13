@@ -20,13 +20,14 @@ class TestSafetensorsStreamerMock(unittest.TestCase):
     def setUp(self):
         """Find the test file path once for all tests."""
         self.file_name = "test.safetensors"
-        self.file_dir = os.path.dirname(os.path.abspath(__file__))
-        self.local_file_path = os.path.join(self.file_dir, self.file_name)
+        self.file_dir = "test_files"
+        self.local_dir = os.path.dirname(os.path.abspath(__file__))
+        self.local_file_path = os.path.join(self.local_dir, self.file_dir, self.file_name)
         
         # Make sure the test file exists before running any test
         if not os.path.exists(self.local_file_path):
             raise FileNotFoundError(
-                f"Test file 'test.safetensors' not found in {self.file_dir}. "
+                f"Test file 'test.safetensors' not found in {self.local_dir}. "
                 "Please add it to run the tests."
             )
 
@@ -40,10 +41,10 @@ class TestSafetensorsStreamerMock(unittest.TestCase):
         """
         
         # 1. Create a fake S3 path
-        fake_s3_path = f"s3://my-fake-bucket/models/{self.file_name}"
+        fake_s3_path = f"s3://my-fake-bucket/{self.file_dir}/{self.file_name}"
 
         # 2. Initialize the Patcher, pointing to the *directory*
-        patcher = StreamerPatcher(local_model_path=self.file_dir)
+        patcher = StreamerPatcher(local_bucket_path=self.local_dir)
         
         # 3. Connect the patch to the patcher
         # When `SafetensorsStreamer()` is called, use the patcher's factory
@@ -81,10 +82,10 @@ class TestSafetensorsStreamerMock(unittest.TestCase):
         """
         
         # 1. Create a fake GS path
-        fake_gs_path = f"gs://my-fake-bucket/models/{self.file_name}"
+        fake_gs_path = f"gs://my-fake-bucket/{self.file_dir}/{self.file_name}"
 
         # 2. Initialize the Patcher
-        patcher = StreamerPatcher(local_model_path=self.file_dir)
+        patcher = StreamerPatcher(local_bucket_path=self.local_dir)
         
         # 3. Connect the patch to the patcher
         mock_streamer_class.side_effect = patcher.create_mock_streamer
@@ -115,8 +116,8 @@ class TestSafetensorsStreamerMock(unittest.TestCase):
         Mocked test: Verifies list_safetensors shim logic.
         """
 
-        fake_s3_path = "s3://my-fake-bucket/models/"
-        patcher = StreamerPatcher(local_model_path=self.file_dir)
+        fake_s3_path = f"s3://my-fake-bucket/{self.file_dir}"
+        patcher = StreamerPatcher(local_bucket_path=self.local_dir)
         
         # Connect the patch to the patcher's shim method
         mock_list_safetensors.side_effect = patcher.shim_list_safetensors
@@ -138,8 +139,8 @@ class TestSafetensorsStreamerMock(unittest.TestCase):
         Mocked test: Verifies list_safetensors shim logic.
         """
         
-        fake_gs_path = "gs://my-fake-bucket/models/"
-        patcher = StreamerPatcher(local_model_path=self.file_dir)
+        fake_gs_path = f"gs://my-fake-bucket/{self.file_dir}"
+        patcher = StreamerPatcher(local_bucket_path=self.local_dir)
         
         # Connect the patch to the patcher's shim method
         mock_list_safetensors.side_effect = patcher.shim_list_safetensors
@@ -162,11 +163,11 @@ class TestSafetensorsStreamerMock(unittest.TestCase):
         Mocked test: Verifies pull_files shim logic.
         """
         
-        fake_s3_path = "s3://my-fake-bucket/models/"
+        fake_s3_path = f"s3://my-fake-bucket/{self.file_dir}"
         dest_dir = tempfile.mkdtemp()
 
         try:
-            patcher = StreamerPatcher(local_model_path=self.file_dir)
+            patcher = StreamerPatcher(local_bucket_path=self.local_dir)
             
             # Connect the patch to the patcher's shim method
             mock_pull_files.side_effect = patcher.shim_pull_files
@@ -195,11 +196,11 @@ class TestSafetensorsStreamerMock(unittest.TestCase):
         Mocked test: Verifies pull_files shim logic with a GS path.
         """
         
-        fake_gs_path = "gs://my-fake-bucket/models/"
+        fake_gs_path = f"gs://my-fake-bucket/{self.file_dir}"
         dest_dir = tempfile.mkdtemp()
 
         try:
-            patcher = StreamerPatcher(local_model_path=self.file_dir)
+            patcher = StreamerPatcher(local_bucket_path=self.local_dir)
             mock_pull_files.side_effect = patcher.shim_pull_files
             
             pull_files(
@@ -218,6 +219,98 @@ class TestSafetensorsStreamerMock(unittest.TestCase):
         finally:
             shutil.rmtree(dest_dir)
 
+    @patch(__name__ + '.pull_files')
+    def test_pull_files_GS_MOCK_No_Slash(self, mock_pull_files):
+        """
+        Mocked test: Verifies pull_files shim logic with a GS path.
+        """
+        
+        fake_gs_path = f"gs://my-fake-bucket/{self.file_dir}"
+        dest_dir = tempfile.mkdtemp()
+
+        try:
+            patcher = StreamerPatcher(local_bucket_path=self.local_dir)
+            mock_pull_files.side_effect = patcher.shim_pull_files
+            
+            pull_files(
+                model_path=fake_gs_path,
+                dst=dest_dir,
+                allow_pattern=["*.safetensors"],
+                ignore_pattern=None
+            )
+            
+            expected_file_path = os.path.join(dest_dir, self.file_name)
+            self.assertTrue(
+                os.path.exists(expected_file_path),
+                f"File was not 'pulled' to {expected_file_path}"
+            )
+            
+        finally:
+            shutil.rmtree(dest_dir)
+
+    @patch(__name__ + '.pull_files')
+    def test_pull_files_GS_MOCK_With_Allow_Pattern(self, mock_pull_files):
+        """
+        Mocked test: Verifies pull_files shim logic with a GS path.
+        """
+        
+        fake_gs_path = f"gs://my-fake-bucket/{self.file_dir}"
+        dest_dir = tempfile.mkdtemp()
+
+        try:
+            patcher = StreamerPatcher(local_bucket_path=self.local_dir)
+            mock_pull_files.side_effect = patcher.shim_pull_files
+            
+            pull_files(
+                model_path=fake_gs_path,
+                dst=dest_dir,
+                allow_pattern=["*.bin"],
+                ignore_pattern=None
+            )
+            
+            expected_file_path = os.path.join(dest_dir, "test.bin")
+            self.assertFalse(
+                os.path.exists(expected_file_path),
+                f"File was 'pulled' to {expected_file_path}"
+            )
+            
+        finally:
+            shutil.rmtree(dest_dir)
+
+    @patch(__name__ + '.pull_files')
+    def test_pull_files_GS_MOCK_With_Ignore_Pattern(self, mock_pull_files):
+        """
+        Mocked test: Verifies pull_files shim logic with a GS path.
+        """
+        
+        fake_gs_path = f"gs://my-fake-bucket/{self.file_dir}"
+        dest_dir = tempfile.mkdtemp()
+
+        try:
+            patcher = StreamerPatcher(local_bucket_path=self.local_dir)
+            mock_pull_files.side_effect = patcher.shim_pull_files
+            
+            pull_files(
+                model_path=fake_gs_path,
+                dst=dest_dir,
+                allow_pattern=["*.safetensors"],
+                ignore_pattern=["test_empty.*"]
+            )
+            
+            expected_file_path = os.path.join(dest_dir, self.file_name)
+            self.assertTrue(
+                os.path.exists(expected_file_path),
+                f"File was not 'pulled' to {expected_file_path}"
+            )
+
+            expected_ignored_file_path = os.path.join(dest_dir, "test_empty.safetensors")
+            self.assertFalse(
+                os.path.exists(expected_ignored_file_path),
+                f"File was 'pulled' to {expected_ignored_file_path}"
+            )
+            
+        finally:
+            shutil.rmtree(dest_dir)
 
 
 if __name__ == "__main__":

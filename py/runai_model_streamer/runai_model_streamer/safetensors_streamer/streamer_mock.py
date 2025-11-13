@@ -1,10 +1,12 @@
+from __future__ import annotations
 import os
 import glob
 import shutil
-import fnmatch  # Still needed as a fallback/check
+import fnmatch
 from pathlib import Path
 from typing import List, Optional, Iterator, Any
-
+from urllib.parse import urlparse
+import logging
 import torch
 
 # --- Import REAL implementations ---
@@ -21,25 +23,51 @@ from runai_model_streamer.s3_utils.s3_utils import (
     removeprefix,
 )
 
+logger = logging.getLogger(__name__)
+
 class StreamerPatcher:
     """
     Generates mock objects for runai_model_streamer that redirect
     S3/GS paths to a local filesystem path.
     """
 
-    def __init__(self, local_model_path: str):
-        self.local_path = local_model_path
-        print(f"[Patcher] Initialized with local path: {self.local_path}")
+    def __init__(self, local_bucket_path: str):
+        # The bucket part in the uri would be replaced by the local path
+        # e.g. gs://mybucket/path/to/file  would be replaced by local_path/path/to/file
+        self.local_path = local_bucket_path 
+        logger.debug(f"[Patcher] Initialized with local path: {self.local_path} instead of object storage bucket")
 
-    def _is_remote_path(self, path: str) -> bool:
+    def convert_remote_path_to_local_path(self, path: str) -> str:
+        """Helper to convert a remote path to a local path."""        
+        # The bucket part in the uri would be replaced by the local path
+        # e.g. gs://mybucket/path/to/file  would be replaced by local_path/path/to/file
+        if not self.is_remote_path(path):
+            return path
+
+        # 1. Parse the full path as a URL
+        parsed_uri = urlparse(path)
+
+        # For "s3://mybucket/path/to/object":
+        # parsed_uri.path will be "/path/to/object"
+
+        # We just want the path. We strip the leading "/"
+        # so os.path.join doesn't treat it as an absolute path.
+        object_path = parsed_uri.path.lstrip('/')
+
+        converted_path = os.path.join(self.local_path, object_path)
+        logger.debug(f"[RunAI Streamer][SHIM] Converted '{path}' to '{converted_path}'")
+        return converted_path
+
+
+    def is_remote_path(self, path: str) -> bool:            
         """Helper to check if a path is S3 or GS."""
         return is_s3_path(path) or is_gs_path(path)
 
     # === Shim for list_safetensors ===
     def shim_list_safetensors(self, path: str, s3_credentials: Optional[S3Credentials] = None) -> List[str]:
-        rewritten_path = self.local_path if self._is_remote_path(path) else path
+        rewritten_path = self.convert_remote_path_to_local_path(path)
         if rewritten_path != path:
-            print(f"[SHIM] list_safetensors: Rewrote '{path}' to '{rewritten_path}'")
+            logger.debug(f"[RunAI Streamer][SHIM] list_safetensors: Rewrote '{path}' to '{rewritten_path}'")
         return original_list_safetensors(rewritten_path, s3_credentials)
 
     # === Shim for pull_files ===
@@ -54,8 +82,8 @@ class StreamerPatcher:
             # Match the original's behavior for non-remote paths
             raise NotImplementedError("pull files is not implemented for file system paths")
         
-        source_dir = os.path.normpath(self.local_path)
-        print(f"[SHIM] pull_files: Simulating download from '{model_path}' (using local: '{source_dir}') to '{dst}'")
+        source_dir = self.convert_remote_path_to_local_path(model_path)
+        logger.debug(f"[RunAI Streamer][SHIM] pull_files: Simulating download from '{model_path}' (using local: '{source_dir}') to '{dst}'")
 
         # 2. Simulate `list_objects_v2` / `list_blobs` by walking the local dir
         # We need to generate a list of relative paths, just like S3/GS keys
@@ -74,7 +102,7 @@ class StreamerPatcher:
         # 3. --- REUSE ORIGINAL FILTERING LOGIC ---
         # This is the exact filtering logic from both S3 and GCS `list_files`
         
-        print(f"[SHIM] pull_files: Filtering {len(all_local_files_relative)} local files...")
+        logger.debug(f"[RunAI Streamer][SHIM] pull_files: Filtering {len(all_local_files_relative)} local files...")
         
         # paths = _filter_ignore(paths, ["*/"])
         filtered_paths = filter_ignore(all_local_files_relative, ["*/"])
@@ -88,10 +116,10 @@ class StreamerPatcher:
             filtered_paths = filter_ignore(filtered_paths, ignore_pattern)
 
         if not filtered_paths:
-            print("[SHIM] pull_files: No files matched patterns.")
+            logger.debug("[RunAI Streamer][SHIM] pull_files: No files matched patterns.")
             return
 
-        print(f"[SHIM] pull_files: Matched {len(filtered_paths)} files.")
+        logger.debug(f"[RunAI Streamer][SHIM] pull_files: Matched {len(filtered_paths)} files.")
 
         # 4. Simulate the copy loop from `pull_files`
         # The `base_dir` in S3/GS-land is the prefix. In our case, the
@@ -115,24 +143,18 @@ class StreamerPatcher:
             os.makedirs(local_dir, exist_ok=True)
             
             # Copy the file
-            print(f"[SHIM] pull_files: Copying {source_file_path} to {destination_file}")
+            logger.debug(f"[RunAI Streamer][SHIM] pull_files: Copying {source_file_path} to {destination_file}")
             shutil.copy(source_file_path, destination_file)
 
     # === Shim for SafetensorsStreamer ===
        
     def create_mock_streamer(self, *args, **kwargs):
-        return self.MockSafetensorsStreamer(self.local_path)
+        return self.MockSafetensorsStreamer(self)
 
     class MockSafetensorsStreamer:
-        def __init__(self, local_path: str):
-            self.local_path = local_path
+        def __init__(self, patcher: StreamerPatcher):
+            self.patcher = patcher
             self.original_streamer = OriginalSafetensorsStreamer()
-
-        def _rewrite_file_path(self, path: str) -> str:
-            if is_s3_path(path) or is_gs_path(path):
-                # Assumes the path is a file, e.g., s3://.../model.safetensors
-                return os.path.join(self.local_path, os.path.basename(path))
-            return path
 
         def __enter__(self) -> "MockSafetensorsStreamer":
             self.original_streamer.__enter__()
@@ -143,18 +165,14 @@ class StreamerPatcher:
 
         def stream_file(self, path: str, s3_credentials: Optional[S3Credentials] = None,
                           device: Optional[str] = "cpu", is_distributed: bool = False) -> None:
-            rewritten_path = self._rewrite_file_path(path)
-            if rewritten_path != path:
-                print(f"[SHIM] stream_file: Rewriting '{path}' to '{rewritten_path}'")
+            rewritten_path = self.patcher.convert_remote_path_to_local_path(path)
             return self.original_streamer.stream_file(
                 rewritten_path, s3_credentials, device, is_distributed
             )
 
         def stream_files(self, paths: List[str], s3_credentials: Optional[S3Credentials] = None,
                            device: Optional[str] = "cpu", is_distributed: bool = False) -> None:
-            rewritten_paths = [self._rewrite_file_path(p) for p in paths]
-            if rewritten_paths != paths:
-                print(f"[SHIM] stream_files: Rewriting {paths} to {rewritten_paths}")
+            rewritten_paths = [self.patcher.convert_remote_path_to_local_path(p) for p in paths]
             return self.original_streamer.stream_files(
                 rewritten_paths, s3_credentials, device, is_distributed
             )
