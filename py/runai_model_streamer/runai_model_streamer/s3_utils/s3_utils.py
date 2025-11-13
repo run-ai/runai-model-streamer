@@ -2,6 +2,7 @@ from typing import Optional, List
 import re
 import os
 import importlib
+import fnmatch
 
 GCS_PROTOCOL_PREFIX = "gs://"
 S3_PROTOCOL_PREFIX = "s3://"
@@ -118,3 +119,20 @@ def gcs_pull_files(model_path: str,
     if gcs_files_module is None:
         raise ImportError("GCS files module not found. Please install the required package.")
     return gcs_files_module.pull_files(model_path, dst, allow_pattern, ignore_pattern)
+
+def filter_allow(paths: List[str], patterns: List[str]) -> List[str]:
+    return [
+        path for path in paths if any(
+            fnmatch.fnmatch(path, pattern) for pattern in patterns)
+    ]
+
+def filter_ignore(paths: List[str], patterns: List[str]) -> List[str]:
+    return [
+        path for path in paths
+        if not any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
+    ]
+
+def removeprefix(s: str, prefix: str) -> str:
+    if s.startswith(prefix):
+        return s[len(prefix):]
+    return s
