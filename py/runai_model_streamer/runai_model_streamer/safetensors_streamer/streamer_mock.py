@@ -66,8 +66,6 @@ class StreamerPatcher:
     # === Shim for list_safetensors ===
     def shim_list_safetensors(self, path: str, s3_credentials: Optional[S3Credentials] = None) -> List[str]:
         rewritten_path = self.convert_remote_path_to_local_path(path)
-        if rewritten_path != path:
-            logger.debug(f"[RunAI Streamer][SHIM] list_safetensors: Rewrote '{path}' to '{rewritten_path}'")
         return original_list_safetensors(rewritten_path, s3_credentials)
 
     # === Shim for pull_files ===
@@ -85,13 +83,9 @@ class StreamerPatcher:
         source_dir = self.convert_remote_path_to_local_path(model_path)
         logger.debug(f"[RunAI Streamer][SHIM] pull_files: Simulating download from '{model_path}' (using local: '{source_dir}') to '{dst}'")
 
-        # 2. Simulate `list_objects_v2` / `list_blobs` by walking the local dir
-        # We need to generate a list of relative paths, just like S3/GS keys
+        # 2. Simulate list_objects_v2 by walking the local dir
         all_local_files_relative = []
-        for root, dirs, files in os.walk(source_dir, topdown=True):
-            # Filter out directories
-            dirs[:] = [d for d in dirs if not (os.path.join(root, d) + "/").endswith("/")]
-            
+        for root, _, files in os.walk(source_dir, topdown=True):           
             for file in files:
                 full_path = os.path.join(root, file)
                 # Get the path relative to the model root

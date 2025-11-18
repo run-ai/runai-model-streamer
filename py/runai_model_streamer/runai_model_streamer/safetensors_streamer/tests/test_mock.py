@@ -3,6 +3,7 @@ import torch
 import os
 import tempfile
 import shutil
+from pathlib import Path
 from safetensors import safe_open
 from unittest.mock import patch
 
@@ -312,6 +313,118 @@ class TestSafetensorsStreamerMock(unittest.TestCase):
         finally:
             shutil.rmtree(dest_dir)
 
+# --- test shim_pull_files ---
+
+class TestShimPullFiles(unittest.TestCase):
+    def setUp(self):
+        """
+        Sets up a source directory acting as the 'cloud' bucket and a destination.
+        """
+        # Create a temporary directory for the test run
+        self.test_dir_obj = tempfile.TemporaryDirectory()
+        self.test_path = Path(self.test_dir_obj.name)
+        
+        self.mock_cloud_storage = self.test_path / "my-bucket"
+        self.destination = self.test_path / "download_dest"
+        
+        self.mock_cloud_storage.mkdir()
+        self.destination.mkdir()
+
+        # Initialize the patcher pointing to our mock cloud bucket
+        self.patcher = StreamerPatcher(local_bucket_path=str(self.mock_cloud_storage))
+
+
+    def tearDown(self):
+        # Clean up temporary directory
+        self.test_dir_obj.cleanup()
+
+    def test_recursive_copy_success(self):
+        """
+        CRITICAL TEST: This verifies that the Stage 2 bug is fixed.
+        If the 'dirs[:] = ...' bug existed, 'subdir/deep_file.txt' would fail to copy.
+        """
+        # Setup "Cloud" structure: s3://my-bucket/model/
+        bucket_path = self.mock_cloud_storage / "model"
+        bucket_path.mkdir(parents=True)
+        
+        # Create files
+        (bucket_path / "root_file.txt").write_text("content")
+        (bucket_path / "subdir").mkdir()
+        (bucket_path / "subdir" / "deep_file.txt").write_text("content")
+
+        # Action
+        self.patcher.shim_pull_files("s3://my-bucket/model", str(self.destination))
+
+        # Assert
+        self.assertTrue((self.destination / "root_file.txt").exists())
+        self.assertTrue((self.destination / "subdir").exists())
+        self.assertTrue((self.destination / "subdir" / "deep_file.txt").exists())
+
+    def test_allow_patterns(self):
+        """Verifies that allow_pattern restricts downloads."""
+        bucket_path = self.mock_cloud_storage / "model"
+        bucket_path.mkdir(parents=True)
+        
+        (bucket_path / "model.bin").write_text("binary")
+        (bucket_path / "config.json").write_text("json")
+        (bucket_path / "readme.txt").write_text("text")
+
+        # Action: Only allow .json and .bin
+        self.patcher.shim_pull_files(
+               "s3://my-bucket/model", 
+            str(self.destination), 
+            allow_pattern=["*.json", "*.bin"]
+        )
+
+        # Assert
+        self.assertTrue((self.destination / "model.bin").exists())
+        self.assertTrue((self.destination / "config.json").exists())
+        self.assertFalse((self.destination / "readme.txt").exists())
+
+    def test_ignore_patterns(self):
+        """Verifies that ignore_pattern excludes files."""
+        bucket_path = self.mock_cloud_storage / "model"
+        bucket_path.mkdir(parents=True)
+        
+        (bucket_path / "important.data").write_text("data")
+        (bucket_path / "junk.tmp").write_text("junk")
+        (bucket_path / ".hidden").write_text("hidden")
+
+        # Action: Ignore .tmp and hidden files
+        self.patcher.shim_pull_files(
+            "gs://my-bucket/model", 
+            str(self.destination), 
+            ignore_pattern=["*.tmp", ".*"]
+        )
+
+        # Assert
+        self.assertTrue((self.destination / "important.data").exists())
+        self.assertFalse((self.destination / "junk.tmp").exists())
+        self.assertFalse((self.destination / ".hidden").exists())
+
+    def test_local_path_raises_error(self):
+        """Verifies that providing a local path instead of s3/gs raises NotImplementedError."""
+        with self.assertRaises(NotImplementedError) as excinfo:
+            self.patcher.shim_pull_files("/local/path/on/disk", str(self.destination))
+        
+        self.assertIn("not implemented for file system paths", str(excinfo.exception))
+
+    def test_no_matching_files(self):
+        """Verifies behavior when source exists but filters exclude everything."""
+        bucket_path = self.mock_cloud_storage / "model"
+        bucket_path.mkdir(parents=True)
+        (bucket_path / "file.txt").write_text("text")
+
+        # Action: Allow only .csv (which doesn't exist)
+        self.patcher.shim_pull_files(
+            "s3://my-bucket/model", 
+            str(self.destination), 
+            allow_pattern=["*.csv"]
+        )
+
+        # Assert: Destination should be empty
+        # list(generator) evaluates it; boolean check works on the list
+        self.assertFalse(list(self.destination.glob("**/*")))
 
 if __name__ == "__main__":
     unittest.main()
