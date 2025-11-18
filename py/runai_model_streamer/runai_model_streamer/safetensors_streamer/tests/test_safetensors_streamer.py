@@ -9,9 +9,8 @@ from runai_model_streamer.safetensors_streamer.safetensors_streamer import (
 class TestSafetensorsStreamer(unittest.TestCase):
 
     def test_safetensors_streamer(self):
-        file_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "test.safetensors"
-        )
+        file_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_files")
+        file_path = os.path.join(file_dir, "test.safetensors")
         our = {}
         with SafetensorsStreamer() as run_sf:
             run_sf.stream_file(file_path, None, "cpu")

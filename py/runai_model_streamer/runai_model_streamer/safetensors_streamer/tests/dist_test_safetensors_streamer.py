@@ -22,9 +22,8 @@ class TestDistributedSafetensorsStreamer(unittest.TestCase):
         dist.barrier()
 
     def test_distributed_safetensors_streamer(self):
-        file_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "test.safetensors"
-        )
+        file_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_files")
+        file_path = os.path.join(file_dir, "test.safetensors")
         our = {}
         env_vars = {"RUNAI_STREAMER_DIST": "1", "RUNAI_STREAMER_DIST_BUFFER_MIN_BYTESIZE": "0"}
         with unittest.mock.patch.dict(os.environ, env_vars):
@@ -54,11 +53,11 @@ class TestDistributedSafetensorsStreamer(unittest.TestCase):
         rank = dist.get_rank()
         if rank == 0:
             file_path = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "test.safetensors"
+                os.path.dirname(os.path.abspath(__file__)), "test_files", "test.safetensors"
             )
         else:
             file_path = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "test_empty.safetensors"
+                os.path.dirname(os.path.abspath(__file__)), "test_files", "test_empty.safetensors"
             )
 
         our = {}
