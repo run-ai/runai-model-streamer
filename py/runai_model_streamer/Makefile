@@ -27,4 +27,5 @@ clean:
 	rm -rf build/ dist/ runai_model_streamer.egg-info/
 
 install:
-	pip3 install --force-reinstall dist/runai_model_streamer-${PACKAGE_VERSION}-py3-none-${PLATFORM}.whl
+	pip3 uninstall -y runai_model_streamer && \
+	pip3 install dist/runai_model_streamer-${PACKAGE_VERSION}-py3-none-${PLATFORM}.whl
