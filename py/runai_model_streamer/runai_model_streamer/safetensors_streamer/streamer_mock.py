@@ -76,7 +76,7 @@ class StreamerPatcher:
                           s3_credentials: Optional[S3Credentials] = None) -> None:
         
         # 1. Check if it's a path we're mocking (S3 or GS)
-        if not (is_s3_path(model_path) or is_gs_path(model_path)):
+        if not self.is_remote_path(model_path):
             # Match the original's behavior for non-remote paths
             raise NotImplementedError("pull files is not implemented for file system paths")
         
