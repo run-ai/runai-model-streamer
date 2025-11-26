@@ -149,6 +149,7 @@ class StreamerPatcher:
         def __init__(self, patcher: StreamerPatcher):
             self.patcher = patcher
             self.original_streamer = OriginalSafetensorsStreamer()
+            self.files_to_tensors_metadata = {}
 
         def __enter__(self) -> "MockSafetensorsStreamer":
             self.original_streamer.__enter__()
@@ -159,10 +160,13 @@ class StreamerPatcher:
 
         def stream_file(self, path: str, s3_credentials: Optional[S3Credentials] = None,
                           device: Optional[str] = "cpu", is_distributed: bool = False) -> None:
+            self.files_to_tensors_metadata = {}
             rewritten_path = self.patcher.convert_remote_path_to_local_path(path)
-            return self.original_streamer.stream_file(
+            res = self.original_streamer.stream_file(
                 rewritten_path, s3_credentials, device, is_distributed
             )
+            self.files_to_tensors_metadata = self.original_streamer.files_to_tensors_metadata
+            return res
 
         def stream_files(self, paths: List[str], s3_credentials: Optional[S3Credentials] = None,
                            device: Optional[str] = "cpu", is_distributed: bool = False) -> None:
