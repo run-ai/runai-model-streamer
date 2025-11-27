@@ -58,15 +58,49 @@ class StreamerPatcher:
         logger.debug(f"[RunAI Streamer][SHIM] Converted '{path}' to '{converted_path}'")
         return converted_path
 
+    def convert_local_path_to_mocked_remote_path(self, local_path_result: str, original_remote_path: str) -> str:
+        """
+        Converts a local path result (from list_safetensors) back to a mocked remote URI.
+
+        It takes the path segment relative to self.local_path and prepends the
+        original scheme (s3://bucket/) to it.
+        """
+        # 1. Determine the path segment relative to the patcher's local_path
+        if not local_path_result.startswith(self.local_path):
+            logger.warning(f"Local path result '{local_path_result}' does not start with '{self.local_path}'. Returning original.")
+            return local_path_result
+
+        # Get the path component that represents the object storage key
+        relative_path = os.path.relpath(local_path_result, self.local_path)
+
+        # 2. Extract the scheme and netloc (bucket name) from the original remote path
+        parsed_original = urlparse(original_remote_path)
+        scheme_and_netloc = f"{parsed_original.scheme}://{parsed_original.netloc}"
+
+        # 3. Construct the final mocked remote URI
+        # Ensure forward slashes for URI key and a single path separator
+        remote_uri = f"{scheme_and_netloc}/{relative_path.replace(os.path.sep, '/')}"
+
+        return remote_uri
+
 
     def is_remote_path(self, path: str) -> bool:            
         """Helper to check if a path is S3 or GS."""
         return is_s3_path(path) or is_gs_path(path)
+        
 
     # === Shim for list_safetensors ===
     def shim_list_safetensors(self, path: str, s3_credentials: Optional[S3Credentials] = None) -> List[str]:
+        logger.debug(f"[RunAI Streamer][SHIM] list_safetensors is called with path: {path}")
         rewritten_path = self.convert_remote_path_to_local_path(path)
-        return original_list_safetensors(rewritten_path, s3_credentials)
+        local_paths = original_list_safetensors(rewritten_path, s3_credentials)
+        remote_paths = [
+            self.convert_local_path_to_mocked_remote_path(p, path)
+            for p in local_paths
+        ]
+
+        return remote_paths
+
 
     # === Shim for pull_files ===
     def shim_pull_files(self, model_path: str,
@@ -74,6 +108,7 @@ class StreamerPatcher:
                           allow_pattern: Optional[List[str]] = None,
                           ignore_pattern: Optional[List[str]] = None,
                           s3_credentials: Optional[S3Credentials] = None) -> None:
+        logger.debug(f"[RunAI Streamer][SHIM] pull_files is called with path: {model_path}")
         
         # 1. Check if it's a path we're mocking (S3 or GS)
         if not self.is_remote_path(model_path):
@@ -160,6 +195,7 @@ class StreamerPatcher:
 
         def stream_file(self, path: str, s3_credentials: Optional[S3Credentials] = None,
                           device: Optional[str] = "cpu", is_distributed: bool = False) -> None:
+            logger.debug(f"[RunAI Streamer][SHIM] stream_file is called with path: {path}")
             self.files_to_tensors_metadata = {}
             rewritten_path = self.patcher.convert_remote_path_to_local_path(path)
             res = self.original_streamer.stream_file(
@@ -170,10 +206,12 @@ class StreamerPatcher:
 
         def stream_files(self, paths: List[str], s3_credentials: Optional[S3Credentials] = None,
                            device: Optional[str] = "cpu", is_distributed: bool = False) -> None:
+            logger.debug(f"[RunAI Streamer][SHIM] stream_files is called")
             rewritten_paths = [self.patcher.convert_remote_path_to_local_path(p) for p in paths]
             return self.original_streamer.stream_files(
                 rewritten_paths, s3_credentials, device, is_distributed
             )
 
         def get_tensors(self) -> Iterator[torch.tensor]:
+            logger.debug(f"[RunAI Streamer][SHIM] get_tensors is called")
             return self.original_streamer.get_tensors()
