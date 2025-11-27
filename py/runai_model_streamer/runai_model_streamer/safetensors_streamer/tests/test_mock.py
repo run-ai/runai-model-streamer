@@ -134,6 +134,13 @@ class TestSafetensorsStreamerMock(unittest.TestCase):
             f"{self.file_name} not found in listed files: {listed_files}"
         )
 
+        expected_mock_prefix = "s3://my-fake-bucket/"
+        for f in listed_files:
+            self.assertTrue(
+                f.startswith(expected_mock_prefix),
+                f"File path '{f}' does not start with the expected mock prefix '{expected_mock_prefix}'"
+            )
+
     @patch(__name__ + '.list_safetensors')
     def test_list_safetensors_GS_MOCK(self, mock_list_safetensors):
         """
@@ -157,7 +164,13 @@ class TestSafetensorsStreamerMock(unittest.TestCase):
             f"{self.file_name} not found in listed files: {listed_files}"
         )
 
-    # Patch the function *where it is imported*, which is this local module.
+        expected_mock_prefix = "gs://my-fake-bucket/"
+        for f in listed_files:
+            self.assertTrue(
+                f.startswith(expected_mock_prefix),
+                f"File path '{f}' does not start with the expected mock prefix '{expected_mock_prefix}'"
+            )
+
     @patch(__name__ + '.pull_files')
     def test_pull_files_S3_MOCK(self, mock_pull_files):
         """
