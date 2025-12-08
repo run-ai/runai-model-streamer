@@ -19,12 +19,15 @@ namespace runai::llm::streamer::common::s3
 
 static const std::string lib_streamer_s3_so_name = "libstreamers3.so";
 static const std::string lib_streamer_gcs_so_name = "libstreamergcs.so";
+static const std::string lib_streamer_azure_so_name = "libstreamerazure.so";
 static const std::string obj_plugin_s3_name = "s3";
 static const std::string obj_plugin_gcs_name = "gcs";
+static const std::string obj_plugin_azure_name = "azure";
 
 enum struct PluginID {
     GCS,
-    S3
+    S3,
+    AZURE
 };
 
 /**
@@ -42,6 +45,7 @@ private:
 public:
     static const ObjectPluginType ObjStorageGCS;
     static const ObjectPluginType ObjStorageS3;
+    static const ObjectPluginType ObjStorageAzure;
 
     std::string name() const { return _name; }
     std::string so_name() const { return _so_name; }

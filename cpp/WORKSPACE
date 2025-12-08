@@ -9,6 +9,11 @@ new_local_repository(
     build_file = "//third_party:aws.BUILD"
 )
 
+new_local_repository(
+    name = "azure",
+    path = "/opt",
+    build_file = "//third_party:azure.BUILD"
+)
 
 load("//third_party:gcp_repo.bzl", "load_gcp_repo")
 load_gcp_repo()

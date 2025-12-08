@@ -10,6 +10,9 @@ build:
 		"--config=${ARCH}" && \
 	bazel build gcs:libstreamergcs.so \
 		--define USE_SYSTEM_LIBS=${USE_SYSTEM_LIBS} \
+		"--config=${ARCH}" && \
+	bazel build azure:libstreamerazure.so \
+		--define USE_SYSTEM_LIBS=${USE_SYSTEM_LIBS} \
 		"--config=${ARCH}"
 
 build_mock:
