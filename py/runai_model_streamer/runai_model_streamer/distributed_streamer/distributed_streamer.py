@@ -21,10 +21,9 @@ from runai_model_streamer.distributed_streamer.partition import (
     log_partition_info,
 )
 
-from runai_model_streamer.s3_utils.s3_utils import (
+from runai_model_streamer.obj_store_utils.obj_store_utils import (
     S3Credentials,
-    is_s3_path,
-    is_gs_path,
+    is_obj_store_path,
 )
 
 from timeit import default_timer as timer
@@ -83,7 +82,7 @@ class DistributedStreamer:
             self.is_distributed = True
         elif enable_dist == "auto":
             if path is not None:
-                self.is_distributed = is_s3_path(path) or is_gs_path(path)
+                self.is_distributed = is_obj_store_path(path)
             else:
                 self.is_distributed = False
         else:

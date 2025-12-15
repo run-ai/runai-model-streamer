@@ -1,6 +1,4 @@
 from typing import Optional, List
-import re
-import os
 import importlib
 import fnmatch
 
@@ -10,6 +8,24 @@ DEFAULT_GCS_ENDPOINT_URL = "https://storage.googleapis.com"
 AWS_ENDPOINT_URL_ENV = "AWS_ENDPOINT_URL"
 AWS_EC2_METADATA_DISABLED_ENV = "AWS_EC2_METADATA_DISABLED"
 DEFAULT_AWS_EC2_METADATA_DISABLED = "true"
+
+def homogeneous_paths(paths: List[str]) -> bool:
+    if not paths:
+        return True  # Empty list is homogeneous by default
+
+    def path_type_fn(path: str):
+        if is_s3_path(path):
+            return is_s3_path
+        elif is_gs_path(path):
+            return is_gs_path
+        else:
+            return None
+
+    first_type = path_type_fn(paths[0])
+    for path in paths[1:]:
+        if path_type_fn(path) != first_type:
+            return False
+    return True
 
 def get_s3_credentials_module():
     s3_module_name = "runai_model_streamer_s3"
@@ -56,6 +72,15 @@ class S3Credentials:
         self.region_name = region_name
         self.endpoint = endpoint
 
+def is_obj_store_path(path: str) -> bool:
+    """
+    Checks if the given string is an object store path (S3 or GCS).
+
+    :param path: The string to check.
+    :return: True if it's an object store path, False otherwise.
+    """
+    return is_s3_path(path) or is_gs_path(path)
+
 def is_s3_path(path: str) -> bool:
     """
     Checks if the given string is an S3 path.
@@ -73,6 +98,31 @@ def is_gs_path(path: str) -> bool:
     :return: True if it's an GCS path, False otherwise.
     """
     return path.startswith(GCS_PROTOCOL_PREFIX)
+
+def obj_store_glob(path: str, allow_pattern: Optional[List[str]] = None, s3_credentials : Optional[S3Credentials] = None) -> List[str]:
+    """
+    Glob for object store paths (S3 or GCS).
+
+    :param path: The object store path to glob.
+    :param allow_pattern: Optional list of patterns to allow.
+    :return: List of matching object store paths.
+    """
+    if is_s3_path(path):
+        return s3_glob(path, allow_pattern, s3_credentials)
+    if is_gs_path(path):
+        return gcs_glob(path, allow_pattern)
+    raise ValueError("The provided path is neither an S3 nor a GCS path.")
+
+def obj_store_pull_files(model_path: str,
+                dst: str,
+                allow_pattern: Optional[List[str]] = None,
+                ignore_pattern: Optional[List[str]] = None,
+                s3_credentials : Optional[S3Credentials] = None,) -> None:
+    if is_s3_path(model_path):
+        return s3_pull_files(model_path, dst, allow_pattern, ignore_pattern, s3_credentials)
+    if is_gs_path(model_path):
+        return gcs_pull_files(model_path, dst, allow_pattern, ignore_pattern, s3_credentials)
+    raise ValueError("The provided path is neither an S3 nor a GCS path.")
 
 def s3_glob(path: str, allow_pattern: Optional[List[str]] = None, s3_credentials : Optional[S3Credentials] = None) -> List[str]:
     """

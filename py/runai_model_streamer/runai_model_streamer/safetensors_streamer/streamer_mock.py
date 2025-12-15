@@ -14,10 +14,9 @@ from runai_model_streamer import (
     SafetensorsStreamer as OriginalSafetensorsStreamer,
     list_safetensors as original_list_safetensors,
 )
-from runai_model_streamer.s3_utils.s3_utils import (
-    is_s3_path,
-    is_gs_path,
+from runai_model_streamer.obj_store_utils.obj_store_utils import (
     S3Credentials,
+    is_obj_store_path,
     filter_allow,
     filter_ignore,
     removeprefix,
@@ -41,7 +40,7 @@ class StreamerPatcher:
         """Helper to convert a remote path to a local path."""        
         # The bucket part in the uri would be replaced by the local path
         # e.g. gs://mybucket/path/to/file  would be replaced by local_path/path/to/file
-        if not self.is_remote_path(path):
+        if not is_obj_store_path(path):
             return path
 
         # 1. Parse the full path as a URL
@@ -82,11 +81,6 @@ class StreamerPatcher:
         remote_uri = f"{scheme_and_netloc}/{relative_path.replace(os.path.sep, '/')}"
 
         return remote_uri
-
-
-    def is_remote_path(self, path: str) -> bool:            
-        """Helper to check if a path is S3 or GS."""
-        return is_s3_path(path) or is_gs_path(path)
         
 
     # === Shim for list_safetensors ===
@@ -111,7 +105,7 @@ class StreamerPatcher:
         logger.debug(f"[RunAI Streamer][SHIM] pull_files is called with path: {model_path}")
         
         # 1. Check if it's a path we're mocking (S3 or GS)
-        if not self.is_remote_path(model_path):
+        if not is_obj_store_path(model_path):
             # Match the original's behavior for non-remote paths
             raise NotImplementedError("pull files is not implemented for file system paths")
         

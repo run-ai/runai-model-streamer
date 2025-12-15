@@ -11,11 +11,11 @@ from runai_model_streamer.file_streamer.requests_iterator import (
     FileChunks,
 )
 
-from runai_model_streamer.s3_utils.s3_utils import (
+from runai_model_streamer.obj_store_utils.obj_store_utils import (
     S3Credentials,
     is_s3_path,
-    is_gs_path,
     get_s3_credentials_module,
+    homogeneous_paths
 )
 
 import humanize
@@ -30,24 +30,6 @@ s3_credentials_module = get_s3_credentials_module()
 
 class RunaiStreamerInvalidInputException(Exception):
     pass
-
-def homogeneous_paths(paths: List[str]) -> bool:
-    if not paths:
-        return True  # Empty list is homogeneous by default
-
-    def path_type_fn(path: str):
-        if is_s3_path(path):
-            return is_s3_path
-        elif is_gs_path(path):
-            return is_gs_path
-        else:
-            return None
-
-    first_type = path_type_fn(paths[0])
-    for path in paths[1:]:
-        if path_type_fn(path) != first_type:
-            return False
-    return True
 
 class FileStreamer:
     def __enter__(self) -> "FileStreamer":
