@@ -1,5 +1,6 @@
 from typing import Optional, List, Tuple
 from runai_model_streamer_gcs.credentials.credentials import get_credentials, GCSCredentials
+import shutil
 
 import fnmatch
 import os
@@ -11,6 +12,12 @@ def _create_client() -> storage.client.Client:
     return storage.Client(credentials = credentials.gcp_credentials())
 
 def glob(path: str, allow_pattern: Optional[List[str]] = None) -> List[str]:
+    if path == "":
+        return []
+
+    if allow_pattern is None:
+        allow_pattern = ["*"]
+        
     gcs = _create_client()
 
     if not path.endswith("/"):
