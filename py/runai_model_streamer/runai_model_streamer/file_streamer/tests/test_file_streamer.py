@@ -27,7 +27,7 @@ class TestBindings(unittest.TestCase):
             3: {"expected_text": "Test-Text3"},
         }
         with FileStreamer() as fs:
-            fs.stream_files([FileChunks(file_id, file_path, 1, request_sizes)])
+            fs.stream_item([FileChunks(file_id, file_path, 1, request_sizes)])
             for res_file_id, id, dst in fs.get_chunks():
                 self.assertEqual(res_file_id, file_id)
                 self.assertEqual(
@@ -51,7 +51,7 @@ class TestBindings(unittest.TestCase):
             2: {"expected_text": "Test-Text3"},
         }
         with FileStreamer() as fs:
-            fs.stream_files([FileChunks(file_id, file_path, 1, request_sizes)])
+            fs.stream_item([FileChunks(file_id, file_path, 1, request_sizes)])
             for res_file_id, id, dst in fs.get_chunks():
                 self.assertEqual(res_file_id, file_id)
                 self.assertEqual(
@@ -84,7 +84,7 @@ class TestBindings(unittest.TestCase):
             8: {"expected_text": "I"},
         }
         with FileStreamer() as fs:
-            fs.stream_files([FileChunks(file_id, file_path, 1, request_sizes)])
+            fs.stream_item([FileChunks(file_id, file_path, 1, request_sizes)])
             for res_file_id, id, dst, in fs.get_chunks():
                 self.assertEqual(res_file_id, file_id)
                 self.assertEqual(

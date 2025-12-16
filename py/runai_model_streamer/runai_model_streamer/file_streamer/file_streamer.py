@@ -81,7 +81,7 @@ class FileStreamer:
         return path
 
 
-    def stream_files(
+    def stream_item(
             self,
             file_stream_requests: List[FileChunks],
             credentials: Optional[S3Credentials] = None,

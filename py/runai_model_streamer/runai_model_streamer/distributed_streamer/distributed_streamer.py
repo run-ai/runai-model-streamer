@@ -134,7 +134,7 @@ class DistributedStreamer:
         self.set_is_distributed(is_distributed, path, device)
 
         if not self.is_distributed:
-            self.file_streamer.stream_files(file_stream_requests, credentials, device)
+            self.file_streamer.stream_item(file_stream_requests, credentials, device)
         else:
             self.distributed_streamer.stream_files(file_stream_requests, credentials, device, self.params)
 
@@ -371,7 +371,7 @@ class _distributedStreamer:
                 logger.debug(f"[RunAI Streamer][Distributed] Setting memory limit to unlimited")
             if original_memory_limit == None:
                 os.environ["RUNAI_STREAMER_MEMORY_LIMIT"] = "-1"
-            self.file_streamer.stream_files(self.rank_file_chunks_list, credentials, "cpu")
+            self.file_streamer.stream_item(self.rank_file_chunks_list, credentials, "cpu")
         except Exception as e:
             raise e
         finally:

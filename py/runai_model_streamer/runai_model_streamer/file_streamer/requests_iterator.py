@@ -24,7 +24,7 @@ class MemoryCapMode(enum.Enum):
 
 class FileChunks:
     def __init__(self, id: int, path: str, offset: int, chunks: List[int]) -> None:
-        self.id = id # the id of the file chunk must be unique in the context of a single stream_files request
+        self.id = id # the id of the file chunk must be unique in the context of a single stream_item request
         self.path = path
         self.offset = offset
         self.chunks = chunks
