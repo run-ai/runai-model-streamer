@@ -15,4 +15,4 @@ struct S3Init
     Aws::SDKOptions options;
 };
 
-}; //namespace runai::llm::streamer::impl::s3
+}; //namespace runai::llm::streamer::impl::obj_store

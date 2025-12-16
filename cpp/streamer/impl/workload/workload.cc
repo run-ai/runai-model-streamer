@@ -4,7 +4,7 @@
 #include <memory>
 #include <utility>
 
-#include "streamer/impl/s3/s3.h"
+#include "streamer/impl/obj_store/obj_store.h"
 
 #include "common/response_code/response_code.h"
 #include "common/exception/exception.h"
@@ -107,7 +107,7 @@ void Workload::async_read(std::atomic<bool> & stopped)
 
         const auto & config = _batches_by_file_index.begin()->second.config;
 
-        auto s3_client = std::make_shared<common::s3::S3ClientWrapper>(_batches_by_file_index.begin()->second.object_storage_params);
+        auto s3_client = std::make_shared<common::obj_store::S3ClientWrapper>(_batches_by_file_index.begin()->second.object_storage_params);
         _reader = std::make_shared<S3>(s3_client, *config);
 
         unsigned requested_batches = 0;

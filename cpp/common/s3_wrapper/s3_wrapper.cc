@@ -2,14 +2,14 @@
 #include <vector>
 #include <chrono>
 
-#include "common/s3_wrapper/s3_wrapper.h"
-#include "common/s3_credentials/s3_credentials.h"
+#include "common/obj_store_wrapper/obj_store_wrapper.h"
+#include "common/obj_store_credentials/obj_store_credentials.h"
 #include "common/exception/exception.h"
 
 #include "utils/env/env.h"
 #include "utils/logging/logging.h"
 
-namespace runai::llm::streamer::common::s3
+namespace runai::llm::streamer::common::obj_store
 {
 
 std::mutex S3ClientWrapper::_backend_handle_mutex;
@@ -91,7 +91,7 @@ S3ClientWrapper::BackendHandle::~BackendHandle()
 const ObjectPluginType ObjectPluginType::ObjStorageGCS(PluginID::GCS, obj_plugin_gcs_name, lib_streamer_gcs_so_name);
 const ObjectPluginType ObjectPluginType::ObjStorageS3(PluginID::S3, obj_plugin_s3_name, lib_streamer_s3_so_name);
 
-const ObjectPluginType S3ClientWrapper::BackendHandle::get_libstreamers_plugin_type(const std::shared_ptr<common::s3::StorageUri> & uri) {
+const ObjectPluginType S3ClientWrapper::BackendHandle::get_libstreamers_plugin_type(const std::shared_ptr<common::obj_store::StorageUri> & uri) {
     if (uri != nullptr && uri->is_gcs()) {
         return ObjectPluginType::ObjStorageGCS;
     } else {
@@ -268,4 +268,4 @@ common::backend_api::ObjectShutdownPolicy_t S3ClientWrapper::get_backend_shutdow
     return get_backend_shutdown_policy_();
 }
 
-}; // namespace runai::llm::streamer::common::s3
+}; // namespace runai::llm::streamer::common::obj_store

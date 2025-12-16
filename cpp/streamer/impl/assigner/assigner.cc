@@ -194,10 +194,10 @@ bool Assigner::check_object_storage(const std::vector<std::string> & paths) cons
         return false;
     }
 
-    std::shared_ptr<common::s3::StorageUri> uri;
+    std::shared_ptr<common::obj_store::StorageUri> uri;
     try
     {
-        uri = std::make_shared<common::s3::StorageUri>(paths[0]);
+        uri = std::make_shared<common::obj_store::StorageUri>(paths[0]);
         return true;
     }
     catch(const std::exception& e)

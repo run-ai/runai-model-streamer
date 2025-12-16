@@ -7,7 +7,7 @@ runai_cc_auto_library(
         "//common/shared_queue",
         "//streamer/impl/config",
         "//streamer/impl/file",
-        "//streamer/impl/s3",
+        "//streamer/impl/obj_store",
         "//streamer/impl/task",
     ],
 )
@@ -23,11 +23,11 @@ runai_cc_test(
             "//utils/thread",
             "//utils/dylib",
             "//utils/scope_guard",
-            "//common/s3_wrapper",
-            "//s3/s3_mock:libstreamers3.so",
+            "//common/obj_store_wrapper",
+            "//obj_store/obj_store_mock:libstreamerobj_store.so",
     ],
-    data = ["//s3/s3_mock:libstreamers3.so"],
+    data = ["//obj_store/obj_store_mock:libstreamerobj_store.so"],
     linkopts = [
-        "-Wl,-rpath,$$ORIGIN/../../../s3/s3_mock",
+        "-Wl,-rpath,$$ORIGIN/../../../obj_store/obj_store_mock",
     ],
 )

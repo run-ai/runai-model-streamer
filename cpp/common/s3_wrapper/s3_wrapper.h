@@ -9,7 +9,7 @@
 #include "common/storage_uri/storage_uri.h"
 #include "common/backend_api/object_storage/object_storage.h"
 #include "common/backend_api/response/response.h"
-#include "common/s3_credentials/s3_credentials.h"
+#include "common/obj_store_credentials/obj_store_credentials.h"
 
 #include "utils/dylib/dylib.h"
 #include "utils/semver/semver.h"
@@ -83,7 +83,7 @@ struct S3ClientWrapper
 
          common::backend_api::ObjectBackendHandle_t backend_handle() const;
 
-         static const ObjectPluginType get_libstreamers_plugin_type(const std::shared_ptr<common::s3::StorageUri> & uri);
+         static const ObjectPluginType get_libstreamers_plugin_type(const std::shared_ptr<common::obj_store::StorageUri> & uri);
 
          std::shared_ptr<utils::Dylib> open_object_storage_impl(const Params & params);
 
@@ -132,4 +132,4 @@ struct S3ClientWrapper
       void * _s3_client;
 };
 
-}; //namespace runai::llm::streamer::common::s3
+}; //namespace runai::llm::streamer::common::obj_store

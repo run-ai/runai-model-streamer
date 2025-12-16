@@ -3,16 +3,16 @@
 #include <vector>
 
 #include "common/exception/exception.h"
-#include "common/s3_wrapper/s3_wrapper.h"
+#include "common/obj_store_wrapper/obj_store_wrapper.h"
 #include "common/backend_api/response/response.h"
-#include "streamer/impl/s3/s3.h"
+#include "streamer/impl/obj_store/obj_store.h"
 
 #include "utils/logging/logging.h"
 
 namespace runai::llm::streamer::impl
 {
 
-S3::S3(std::shared_ptr<common::s3::S3ClientWrapper> client, const Config & config) :
+S3::S3(std::shared_ptr<common::obj_store::S3ClientWrapper> client, const Config & config) :
     Reader(Reader::Mode::Async),
     _client(client),
     _config(config)
@@ -31,7 +31,7 @@ void S3::read(size_t bytesize, char * buffer)
     throw common::Exception(common::ResponseCode::UnknownError);
 }
 
-void S3::async_read(const common::s3::S3ClientWrapper::Params & params, common::backend_api::ObjectRequestId_t request_handle, const common::Range & range, char * buffer)
+void S3::async_read(const common::obj_store::S3ClientWrapper::Params & params, common::backend_api::ObjectRequestId_t request_handle, const common::Range & range, char * buffer)
 {
     auto response_code = _client->async_read(params, request_handle, range, buffer);
     if (response_code != common::ResponseCode::Success)
@@ -61,7 +61,7 @@ S3Cleanup::~S3Cleanup()
 {
     try
     {
-        common::s3::S3ClientWrapper::shutdown();
+        common::obj_store::S3ClientWrapper::shutdown();
     }
     catch(...)
     {
@@ -72,7 +72,7 @@ S3Stop::~S3Stop()
 {
     try
     {
-        common::s3::S3ClientWrapper::stop();
+        common::obj_store::S3ClientWrapper::stop();
     }
     catch(...)
     {

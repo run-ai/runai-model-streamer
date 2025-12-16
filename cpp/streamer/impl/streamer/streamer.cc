@@ -41,7 +41,7 @@ Streamer::~Streamer()
     {}
 }
 
-common::ResponseCode Streamer::sync_read(const std::string & path, size_t file_offset, size_t bytesize, void * dst, const common::s3::Credentials & credentials)
+common::ResponseCode Streamer::sync_read(const std::string & path, size_t file_offset, size_t bytesize, void * dst, const common::obj_store::Credentials & credentials)
 {
     LOG(SPAM) << "Requested to read " << bytesize << " bytes from " << path << " offset " << file_offset;
 
@@ -54,7 +54,7 @@ common::ResponseCode Streamer::sync_read(const std::string & path, size_t file_o
     return _responder->pop().ret;
 }
 
-common::ResponseCode Streamer::async_read(const std::string & path, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes, const common::s3::Credentials & credentials)
+common::ResponseCode Streamer::async_read(const std::string & path, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes, const common::obj_store::Credentials & credentials)
 {
     common::ResponseCode ret = common::ResponseCode::Success;
 
@@ -105,7 +105,7 @@ common::ResponseCode Streamer::async_request(
     std::vector<void *> & dsts,
     std::vector<unsigned> & num_sizes,
     std::vector<std::vector<size_t>> & internal_sizes,
-    const common::s3::Credentials & credentials)
+    const common::obj_store::Credentials & credentials)
 {
     // verify input
     verify_requests(paths, file_offsets, bytesizes, num_sizes, dsts);
@@ -204,12 +204,12 @@ void Streamer::verify_requests(std::vector<std::string> & paths, std::vector<siz
     }
 }
 
-common::s3::S3ClientWrapper::Params Streamer::handle_s3(unsigned file_index, const std::string & path, const common::s3::Credentials & credentials)
+common::obj_store::S3ClientWrapper::Params Streamer::handle_s3(unsigned file_index, const std::string & path, const common::obj_store::Credentials & credentials)
 {
-    std::shared_ptr<common::s3::StorageUri> uri;
+    std::shared_ptr<common::obj_store::StorageUri> uri;
     try
     {
-        uri = std::make_shared<common::s3::StorageUri>(path);
+        uri = std::make_shared<common::obj_store::StorageUri>(path);
     }
     catch(const std::exception& e)
     {
@@ -235,7 +235,7 @@ common::s3::S3ClientWrapper::Params Streamer::handle_s3(unsigned file_index, con
         _s3 = std::make_unique<S3Cleanup>();
     }
 
-    return common::s3::S3ClientWrapper::Params(uri, credentials, _config->s3_block_bytesize);
+    return common::obj_store::S3ClientWrapper::Params(uri, credentials, _config->s3_block_bytesize);
 }
 
 }; // namespace runai::llm::streamer::impl

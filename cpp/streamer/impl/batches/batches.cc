@@ -14,7 +14,7 @@
 
 #include "common/exception/exception.h"
 #include "streamer/impl/file/file.h"
-#include "streamer/impl/s3/s3.h"
+#include "streamer/impl/obj_store/obj_store.h"
 #include "common/s3_wrapper/s3_wrapper.h"
 
 
@@ -87,7 +87,7 @@ Batches::Batches(unsigned file_index,
                  std::shared_ptr<const Config> config,
                  std::shared_ptr<common::Responder> responder,
                  const std::string & path,
-                 const common::s3::S3ClientWrapper::Params & params,
+                 const common::obj_store::S3ClientWrapper::Params & params,
                  const std::vector<size_t> & internal_sizes) :
     _file_index(file_index),
     _itr(file_read_tasks),
@@ -113,7 +113,7 @@ size_t Batches::total() const
     return _total;
 }
 
-void Batches::build_tasks(std::shared_ptr<const Config> config, const std::string & path, const common::s3::S3ClientWrapper::Params & params, const std::vector<size_t> & internal_sizes)
+void Batches::build_tasks(std::shared_ptr<const Config> config, const std::string & path, const common::obj_store::S3ClientWrapper::Params & params, const std::vector<size_t> & internal_sizes)
 {
     const auto num_workers = _itr.workers();
     LOG(DEBUG) << "Building tasks for " <<num_workers << " workers";

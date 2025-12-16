@@ -8,7 +8,7 @@
 #include <optional>
 
 #include "common/backend_api/object_storage/object_storage.h"
-#include "s3/client/client.h"
+#include "obj_store/client/client.h"
 
 #include "common/exception/exception.h"
 
@@ -16,7 +16,7 @@
 #include "utils/env/env.h"
 #include "utils/fd/fd.h"
 
-namespace runai::llm::streamer::impl::s3
+namespace runai::llm::streamer::impl::obj_store
 {
 
 std::optional<Aws::String> convert(const char * input)
@@ -40,19 +40,19 @@ S3ClientBase::S3ClientBase(const common::backend_api::ObjectClientConfig_t & con
         {
             const char* key = ptr->key;
             const char* value = ptr->value;
-            if (strcmp(key, common::s3::Credentials::ACCESS_KEY_ID_KEY) == 0)
+            if (strcmp(key, common::obj_store::Credentials::ACCESS_KEY_ID_KEY) == 0)
             {
                 _key = convert(value);
             }
-            else if (strcmp(key, common::s3::Credentials::SECRET_ACCESS_KEY_KEY) == 0)
+            else if (strcmp(key, common::obj_store::Credentials::SECRET_ACCESS_KEY_KEY) == 0)
             {
                 _secret = convert(value);
             }
-            else if (strcmp(key, common::s3::Credentials::SESSION_TOKEN_KEY) == 0)
+            else if (strcmp(key, common::obj_store::Credentials::SESSION_TOKEN_KEY) == 0)
             {
                 _token = convert(value);
             }
-            else if (strcmp(key, common::s3::Credentials::REGION_KEY) == 0)
+            else if (strcmp(key, common::obj_store::Credentials::REGION_KEY) == 0)
             {
                 _region = convert(value);
             }
@@ -170,7 +170,7 @@ common::backend_api::ResponseCode_t S3Client::async_read(const char* path,
         _responder->increment(1);
     }
 
-    const auto uri = common::s3::StorageUri(path);
+    const auto uri = common::obj_store::StorageUri(path);
 
     Aws::String bucket_name(uri.bucket);
     Aws::String path_name(uri.path);
@@ -260,4 +260,4 @@ void S3Client::stop()
     }
 }
 
-}; // namespace runai::llm::streamer::impl::s3
+}; // namespace runai::llm::streamer::impl::obj_store

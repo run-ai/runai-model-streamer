@@ -1,12 +1,12 @@
 #pragma once
 
 #include "common/range/range.h"
-#include "common/s3_credentials/s3_credentials.h"
+#include "common/obj_store_credentials/obj_store_credentials.h"
 #include "common/response_code/response_code.h"
 #include "common/backend_api/response/response.h"
 #include "common/backend_api/object_storage/object_storage.h"
 
-namespace runai::llm::streamer::common::s3
+namespace runai::llm::streamer::common::obj_store
 {
 
 // --- Backend API ---
@@ -51,4 +51,4 @@ extern "C" int runai_mock_s3_clients();
 extern "C" void runai_mock_s3_cleanup();
 extern "C" bool runai_mock_s3_is_shutdown();
 
-}; //namespace runai::llm::streamer::common::s3
+}; //namespace runai::llm::streamer::common::obj_store

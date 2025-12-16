@@ -90,8 +90,8 @@ struct StreamerTest : ::testing::Test
     utils::temp::Env _chunk_bytesize;
     utils::temp::Env _block_bytesize;
     std::string s3_path;
-    common::s3::Credentials credentials;
-    common::s3::Credentials_C credentials_c;
+    common::obj_store::Credentials credentials;
+    common::obj_store::Credentials_C credentials_c;
 
     unsigned num_files;
     std::vector<std::string> s3_paths;

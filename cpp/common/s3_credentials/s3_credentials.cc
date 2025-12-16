@@ -1,4 +1,4 @@
-#include "common/s3_credentials/s3_credentials.h"
+#include "common/obj_store_credentials/obj_store_credentials.h"
 
 #include "utils/logging/logging.h"
 
@@ -52,4 +52,4 @@ void Credentials::to_object_client_config(std::vector<common::backend_api::Objec
     }
 }
 
-}; //namespace runai::llm::streamer::common::s3
+}; //namespace runai::llm::streamer::common::obj_store

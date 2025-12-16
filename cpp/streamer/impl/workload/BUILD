@@ -4,11 +4,11 @@ runai_cc_auto_library(
     name = "workload",
     deps = [
         "//utils/logging",
-        "//common/s3_wrapper",
+        "//common/obj_store_wrapper",
         "//common/exception",
         "//common/response_code",
         "//streamer/impl/batch",
-        "//streamer/impl/s3",
+        "//streamer/impl/obj_store",
         "//streamer/impl/reader",
     ],
 )
@@ -17,15 +17,15 @@ runai_cc_test(
     name = "workload_test",
     srcs = ["workload_test.cc"],
     deps = [":workload",
-            "//streamer/impl/s3",
+            "//streamer/impl/obj_store",
             "//streamer/impl/assigner",
             "//streamer/impl/batches",
             "//utils/random",
             "//utils/thread",
             "//utils/semaphore",
             "//utils/temp/file",],
-    data = ["//s3/s3_mock:libstreamers3.so"],
+    data = ["//obj_store/obj_store_mock:libstreamerobj_store.so"],
     linkopts = [
-        "-Wl,-rpath,$$ORIGIN/../../../s3/s3_mock",
+        "-Wl,-rpath,$$ORIGIN/../../../obj_store/obj_store_mock",
     ],
 )

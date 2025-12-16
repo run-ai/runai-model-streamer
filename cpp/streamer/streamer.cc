@@ -96,7 +96,7 @@ _RUNAI_EXTERN_C int runai_request(
             return static_cast<int>(common::ResponseCode::InvalidParameterError);
         }
 
-        common::s3::Credentials credentials(key, secret, token, region, endpoint);
+        common::obj_store::Credentials credentials(key, secret, token, region, endpoint);
 
         std::vector<std::string> paths_v(paths, paths + num_files);
         std::vector<size_t> file_offsets_v(file_offsets, file_offsets + num_files);

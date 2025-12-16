@@ -11,7 +11,7 @@ from runai_model_streamer.file_streamer.requests_iterator import (
     FileChunks,
 )
 
-from runai_model_streamer.s3_utils.s3_utils import (
+from runai_model_streamer.obj_store_utils.obj_store_utils import (
     S3Credentials,
     is_s3_path,
     is_gs_path,

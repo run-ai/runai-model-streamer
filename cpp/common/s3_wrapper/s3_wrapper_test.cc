@@ -1,4 +1,4 @@
-#include "common/s3_wrapper/s3_wrapper.h"
+#include "common/obj_store_wrapper/obj_store_wrapper.h"
 
 #include <gtest/gtest.h>
 #include <cstdint>
@@ -6,7 +6,7 @@
 #include "utils/dylib/dylib.h"
 #include "utils/random/random.h"
 #include "utils/temp/env/env.h"
-namespace runai::llm::streamer::common::s3
+namespace runai::llm::streamer::common::obj_store
 {
 
 struct S3WrappertTest : ::testing::Test
@@ -168,4 +168,4 @@ TEST(BackendHandle, GetPluginType_GCS)
     EXPECT_EQ(plugin_type, ObjectPluginType::ObjStorageGCS);
 }
 
-}; // namespace runai::llm::streamer::common::s3
+}; // namespace runai::llm::streamer::common::obj_store

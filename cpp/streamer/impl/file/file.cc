@@ -53,7 +53,7 @@ void File::read(size_t bytesize, char * buffer)
     }
 }
 
-void File::async_read(const common::s3::S3ClientWrapper::Params & params, common::backend_api::ObjectRequestId_t request_handle, const common::Range & range, char * buffer)
+void File::async_read(const common::obj_store::S3ClientWrapper::Params & params, common::backend_api::ObjectRequestId_t request_handle, const common::Range & range, char * buffer)
 {
     LOG(ERROR) << "Not implemented";
     throw common::Exception(common::ResponseCode::UnknownError);

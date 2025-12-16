@@ -5,6 +5,6 @@ runai_cc_auto_library(
     deps = [
          "//common/range",
          "//common/response",
-         "//common/s3_wrapper",
+         "//common/obj_store_wrapper",
     ],
 )

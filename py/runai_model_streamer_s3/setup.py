@@ -2,7 +2,7 @@ import os
 from setuptools import setup, find_packages
 
 VERSION = os.getenv("PACKAGE_VERSION", "0.0.0")
-LIB = "libstreamers3.so"
+LIB = "libstreamerobj_store.so"
 
 
 def assert_lib_exists():
@@ -20,7 +20,7 @@ def assert_lib_exists():
 
 assert_lib_exists()
 setup(
-    name="runai-model-streamer-s3",
+    name="runai-model-streamer-obj-store",
     version=VERSION,
     license_files=("LICENSE",),
     packages=find_packages(),

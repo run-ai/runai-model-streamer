@@ -1,17 +1,17 @@
 load("//:rules.bzl", "runai_portable_so")
 
 runai_portable_so(
-    name = "libstreamers3.so",
-    srcs = ["s3.h",
-            "s3.cc",
+    name = "libstreamerobj_store.so",
+    srcs = ["obj_store.h",
+            "obj_store.cc",
     ],
     deps = [
         "//common/exception",
         "//common/range",
         "//common/client_mgr",
         "//utils/semver",
-        "//s3/client",
-        "//s3/s3_init",
+        "//obj_store/client",
+        "//obj_store/obj_store_init",
     ],
-    ldscript = ":s3.ldscript",
+    ldscript = ":obj_store.ldscript",
 )

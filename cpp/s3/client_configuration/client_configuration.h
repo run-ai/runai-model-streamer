@@ -16,4 +16,4 @@ struct ClientConfiguration
     Aws::S3Crt::ClientConfiguration config;
 };
 
-}; //namespace runai::llm::streamer::impl::s3
+}; //namespace runai::llm::streamer::impl::obj_store

@@ -12,14 +12,14 @@ AWS_EC2_METADATA_DISABLED_ENV = "AWS_EC2_METADATA_DISABLED"
 DEFAULT_AWS_EC2_METADATA_DISABLED = "true"
 
 def get_s3_credentials_module():
-    s3_module_name = "runai_model_streamer_s3"
-    s3_credentials_module_name = "runai_model_streamer_s3.credentials.credentials"
+    s3_module_name = "runai_model_streamer_obj_store"
+    s3_credentials_module_name = "runai_model_streamer_obj_store.credentials.credentials"
     
     return get_module(s3_module_name, s3_credentials_module_name)
 
 def get_s3_files_module():
-    s3_module_name = "runai_model_streamer_s3"
-    s3_files_module_name = "runai_model_streamer_s3.files.files"
+    s3_module_name = "runai_model_streamer_obj_store"
+    s3_files_module_name = "runai_model_streamer_obj_store.files.files"
     
     return get_module(s3_module_name, s3_files_module_name)
 

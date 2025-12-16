@@ -1,7 +1,7 @@
 load("//:rules.bzl", "runai_cc_auto_library", "runai_cc_test")
 
 runai_cc_auto_library(
-    name = "s3_init",
+    name = "obj_store_init",
     deps = [
         "@aws",
         "//utils/env",
@@ -10,7 +10,7 @@ runai_cc_auto_library(
 )
 
 runai_cc_test(
-    name = "s3_init_test",
-    srcs = ["s3_init_test.cc"],
-    deps = [":s3_init"],
+    name = "obj_store_init_test",
+    srcs = ["obj_store_init_test.cc"],
+    deps = [":obj_store_init"],
 )

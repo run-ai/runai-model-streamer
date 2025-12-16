@@ -5,13 +5,13 @@
 #include <string>
 #include <optional>
 
-#include "s3/client_configuration/client_configuration.h"
+#include "obj_store/client_configuration/client_configuration.h"
 #include "common/backend_api/response/response.h"
 
 #include "common/backend_api/object_storage/object_storage.h"
 #include "common/client_mgr/client_mgr.h"
 #include "common/storage_uri/storage_uri.h"
-#include "common/s3_wrapper/s3_wrapper.h"
+#include "common/obj_store_wrapper/obj_store_wrapper.h"
 #include "common/shared_queue/shared_queue.h"
 #include "common/range/range.h"
 
@@ -66,4 +66,4 @@ struct S3Client : S3ClientBase
     std::shared_ptr<Responder> _responder;
 };
 
-}; //namespace runai::llm::streamer::impl::s3
+}; //namespace runai::llm::streamer::impl::obj_store

@@ -29,7 +29,7 @@
 // gcs:   AWS_ENDPOINT_URL="https://storage.googleapis.com" RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING=false AWS_EC2_METADATA_DISABLED=true <streamer app> s3://bucket/path
 // minio: AWS_ENDPOINT_URL="http://localhost:9000" RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING=0 AWS_EC2_METADATA_DISABLED=true AWS_ACCESS_KEY_ID="minio" AWS_SECRET_ACCESS_KEY="miniostorage" <streamer app> s3://bucket/path
 
-namespace runai::llm::streamer::impl::s3
+namespace runai::llm::streamer::impl::obj_store
 {
 
 // --- Backend API ---
@@ -71,4 +71,4 @@ extern "C" common::backend_api::ResponseCode_t obj_cancel_all_reads();
 // release clients
 extern "C" common::backend_api::ResponseCode_t obj_remove_all_clients();
 
-}; //namespace runai::llm::streamer::impl::s3
+}; //namespace runai::llm::streamer::impl::obj_store

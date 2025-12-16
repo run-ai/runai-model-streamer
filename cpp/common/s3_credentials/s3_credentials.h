@@ -41,4 +41,4 @@ struct Credentials_C
     const char * endpoint;
 };
 
-}; //namespace runai::llm::streamer::common::s3
+}; //namespace runai::llm::streamer::common::obj_store

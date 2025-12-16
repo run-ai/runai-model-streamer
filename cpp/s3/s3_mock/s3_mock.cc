@@ -1,4 +1,4 @@
-#include "s3/s3_mock/s3_mock.h"
+#include "obj_store/obj_store_mock/obj_store_mock.h"
 
 #include <unistd.h>
 
@@ -7,13 +7,13 @@
 #include <set>
 #include <atomic>
 
-#include "common/s3_credentials/s3_credentials.h"
+#include "common/obj_store_credentials/obj_store_credentials.h"
 
 #include "utils/logging/logging.h"
 #include "utils/random/random.h"
 #include "utils/env/env.h"
 
-namespace runai::llm::streamer::common::s3
+namespace runai::llm::streamer::common::obj_store
 {
 
 std::set<common::backend_api::ObjectClientHandle_t> __mock_clients;
@@ -278,4 +278,4 @@ bool runai_mock_s3_is_shutdown()
     return !__opened;
 }
 
-}; //namespace runai::llm::streamer::common::s3
+}; //namespace runai::llm::streamer::common::obj_store

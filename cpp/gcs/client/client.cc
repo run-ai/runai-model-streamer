@@ -98,7 +98,7 @@ common::ResponseCode GCSClient::async_read(const char* path, common::backend_api
     // success flag for the current range is passed to the client
     auto is_success = std::make_shared< std::atomic<bool> >(true);
 
-    const auto uri = common::s3::StorageUri(path);
+    const auto uri = common::obj_store::StorageUri(path);
 
     std::string bucket_name(uri.bucket);
     std::string path_name(uri.path);

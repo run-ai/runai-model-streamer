@@ -24,7 +24,7 @@ TEST(Batch, Finished_Until)
 {
     unsigned num_tasks = utils::random::number(1, 10);
     const auto path = utils::random::string();
-    common::s3::S3ClientWrapper::Params params;
+    common::obj_store::S3ClientWrapper::Params params;
 
     // File range to read
     auto start = utils::random::number<size_t>(0, 1024);
@@ -94,7 +94,7 @@ TEST(Read, Sanity)
     const auto data = utils::random::buffer(start + size);
     utils::temp::File file(data);
     const auto path = file.path;
-    common::s3::S3ClientWrapper::Params params;
+    common::obj_store::S3ClientWrapper::Params params;
 
     // divide range into chunks - a chunk per task
     auto chunks = utils::random::chunks(size, num_tasks);
@@ -153,7 +153,7 @@ TEST(Read, Error)
     const auto data = utils::random::buffer(start + size - utils::random::number<size_t>(1, size));
     utils::temp::File file(data);
     path = file.path;
-    common::s3::S3ClientWrapper::Params params;
+    common::obj_store::S3ClientWrapper::Params params;
 
     // divide range into chunks - a chunk per task
     auto chunks = utils::random::chunks(size, num_tasks);
@@ -203,7 +203,7 @@ TEST(Read, Already_Stopped)
     const auto data = utils::random::buffer(start + size);
     utils::temp::File file(data);
     const auto path = file.path;
-    common::s3::S3ClientWrapper::Params params;
+    common::obj_store::S3ClientWrapper::Params params;
 
     // divide range into chunks - a chunk per task
     auto chunks = utils::random::chunks(size, num_tasks);
@@ -261,7 +261,7 @@ TEST(Read, Stopped_During_Read)
     const auto data = utils::random::buffer(start + size);
     utils::temp::File file(data);
     const auto path = file.path;
-    common::s3::S3ClientWrapper::Params params;
+    common::obj_store::S3ClientWrapper::Params params;
 
     // divide range into chunks - a chunk per request
 
@@ -377,17 +377,17 @@ TEST(Read, Stopped_During_Async_Read)
     const auto data = utils::random::buffer(start + size);
     std::string path("s3://" + utils::random::string() + "/" + utils::random::string());
 
-    std::shared_ptr<common::s3::StorageUri> uri;
-    EXPECT_NO_THROW(uri = std::make_shared<common::s3::StorageUri>(path));
+    std::shared_ptr<common::obj_store::StorageUri> uri;
+    EXPECT_NO_THROW(uri = std::make_shared<common::obj_store::StorageUri>(path));
 
-    common::s3::Credentials credentials(
+    common::obj_store::Credentials credentials(
         (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
         (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
         (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
         (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
         (utils::random::boolean() ? utils::random::string().c_str() : nullptr));
 
-    common::s3::S3ClientWrapper::Params params(uri, credentials, utils::random::number<size_t>());
+    common::obj_store::S3ClientWrapper::Params params(uri, credentials, utils::random::number<size_t>());
 
     // divide range into chunks - a chunk per request
 
@@ -436,7 +436,7 @@ TEST(Read, Stopped_During_Async_Read)
 
     ::usleep(utils::random::number(300));
 
-    common::s3::S3ClientWrapper::stop();
+    common::obj_store::S3ClientWrapper::stop();
     stopped = true;
 
     // collect responses

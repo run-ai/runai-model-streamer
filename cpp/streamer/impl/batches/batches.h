@@ -25,7 +25,7 @@ struct Batches
            std::shared_ptr<const Config> config,
            std::shared_ptr<common::Responder> responder,
            const std::string & path,
-           const common::s3::S3ClientWrapper::Params & params,
+           const common::obj_store::S3ClientWrapper::Params & params,
            const std::vector<size_t> & internal_sizes);
 
     Batches(Batches &&) = default;
@@ -61,7 +61,7 @@ struct Batches
     };
 
     // create all the tasks
-    void build_tasks(std::shared_ptr<const Config> config, const std::string & path, const common::s3::S3ClientWrapper::Params & params, const std::vector<size_t> & internal_sizes);
+    void build_tasks(std::shared_ptr<const Config> config, const std::string & path, const common::obj_store::S3ClientWrapper::Params & params, const std::vector<size_t> & internal_sizes);
 
     // create tasks of a given request
     void handle_request(std::vector<Tasks> & v_tasks, unsigned request_index, size_t request_file_offset, size_t request_size, char * destination);

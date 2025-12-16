@@ -5,7 +5,7 @@ runai_cc_auto_library(
     deps = [
         "//utils/env",
         "//utils/logging",
-        "//common/s3_wrapper",
+        "//common/obj_store_wrapper",
     ]
 )
 

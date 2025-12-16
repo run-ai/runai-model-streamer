@@ -20,7 +20,7 @@ TEST(Batches, Sanity)
     auto num_files = utils::random::number(1, 10);
     LOG(DEBUG) << "number of files " << num_files;
 
-    common::s3::S3ClientWrapper::Params s3_params;
+    common::obj_store::S3ClientWrapper::Params s3_params;
 
     std::vector<std::string> paths;
     std::vector<size_t> file_offsets;
@@ -148,7 +148,7 @@ TEST(Batches, Failed_Reader)
 
     try
     {
-        common::s3::S3ClientWrapper::Params s3_params;
+        common::obj_store::S3ClientWrapper::Params s3_params;
 
         std::vector<std::string> paths;
         std::vector<size_t> file_offsets;
@@ -223,7 +223,7 @@ TEST(Batches, Zero_Size_Request)
     std::vector<unsigned> covered(size);
 
     {
-        common::s3::S3ClientWrapper::Params s3_params;
+        common::obj_store::S3ClientWrapper::Params s3_params;
 
         std::vector<std::string> paths;
         std::vector<size_t> file_offsets;

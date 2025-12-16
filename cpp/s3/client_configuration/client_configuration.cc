@@ -1,9 +1,9 @@
-#include "s3/client_configuration/client_configuration.h"
+#include "obj_store/client_configuration/client_configuration.h"
 
 #include "utils/logging/logging.h"
 #include "utils/env/env.h"
 
-namespace runai::llm::streamer::impl::s3
+namespace runai::llm::streamer::impl::obj_store
 {
 
 ClientConfiguration::ClientConfiguration()
@@ -38,4 +38,4 @@ ClientConfiguration::ClientConfiguration()
     }
 }
 
-}; // namespace runai::llm::streamer::impl::s3
+}; // namespace runai::llm::streamer::impl::obj_store

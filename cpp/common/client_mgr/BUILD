@@ -13,8 +13,8 @@ runai_cc_test(
         ":client_mgr",
         "//common/backend_api/object_storage",
         "//common/storage_uri",
-        "//common/s3_credentials",
-        "//common/s3_wrapper",
+        "//common/obj_store_credentials",
+        "//common/obj_store_wrapper",
         "//utils/random",
         ],
 )

@@ -27,4 +27,4 @@ struct StorageUri_C
 
 std::ostream & operator<<(std::ostream &, const StorageUri &);
 
-}; //namespace runai::llm::streamer::common::s3
+}; //namespace runai::llm::streamer::common::obj_store

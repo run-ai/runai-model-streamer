@@ -1,6 +1,6 @@
-#include "s3/s3.h"
-#include "s3/s3_init/s3_init.h"
-#include "s3/client/client.h"
+#include "obj_store/obj_store.h"
+#include "obj_store/obj_store_init/obj_store_init.h"
+#include "obj_store/client/client.h"
 
 #include "common/client_mgr/client_mgr.h"
 #include "common/exception/exception.h"
@@ -23,7 +23,7 @@
 // Then the ClientConfigurationProvider object should be destructed for restoring the environment variable
 // Note: this workaround should be removed if the Aws::S3Crt::ClientConfiguration will accept shouldDisableIMDS
 
-namespace runai::llm::streamer::impl::s3
+namespace runai::llm::streamer::impl::obj_store
 {
 
 inline constexpr char S3ClientName[] = "S3";
@@ -208,4 +208,4 @@ common::backend_api::ResponseCode_t obj_wait_for_completions(common::backend_api
     return common::ResponseCode::UnknownError;
 }
 
-}; // namespace runai::llm::streamer::impl::s3
+}; // namespace runai::llm::streamer::impl::obj_store

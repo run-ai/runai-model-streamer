@@ -11,7 +11,7 @@ runai_cc_auto_library(
         "//common/shared_queue",
         "//common/range",
         "//common/client_mgr",
-        "//common/s3_wrapper",
+        "//common/obj_store_wrapper",
         "//common/exception",
         "//common/storage_uri",
         "//common/backend_api/object_storage",

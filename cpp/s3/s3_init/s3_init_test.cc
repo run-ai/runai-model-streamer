@@ -1,10 +1,10 @@
-#include "s3/s3_init/s3_init.h"
+#include "obj_store/obj_store_init/obj_store_init.h"
 
 #include <gtest/gtest.h>
 
 #include <memory>
 
-namespace runai::llm::streamer::impl::s3
+namespace runai::llm::streamer::impl::obj_store
 {
 
 TEST(Creation, Sanity)
@@ -13,4 +13,4 @@ TEST(Creation, Sanity)
     EXPECT_NO_THROW(init = std::make_unique<S3Init>());
 }
 
-}; // namespace runai::llm::streamer::impl::s3
+}; // namespace runai::llm::streamer::impl::obj_store

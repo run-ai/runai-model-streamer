@@ -1,11 +1,11 @@
 #include <memory>
 
-#include "s3/s3_init/s3_init.h"
+#include "obj_store/obj_store_init/obj_store_init.h"
 
 #include "utils/logging/logging.h"
 #include "utils/env/env.h"
 
-namespace runai::llm::streamer::impl::s3
+namespace runai::llm::streamer::impl::obj_store
 {
 
 S3Init::S3Init()
@@ -34,4 +34,4 @@ S3Init::~S3Init()
     }
 }
 
-}; // namespace runai::llm::streamer::impl::s3
+}; // namespace runai::llm::streamer::impl::obj_store

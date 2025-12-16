@@ -3,7 +3,7 @@
 #include <memory>
 #include <vector>
 
-#include "common/s3_wrapper/s3_wrapper.h"
+#include "common/obj_store_wrapper/obj_store_wrapper.h"
 #include "streamer/impl/reader/reader.h"
 #include "streamer/impl/config/config.h"
 
@@ -26,17 +26,17 @@ struct S3Stop
 
 struct S3 : Reader
 {
-    S3(std::shared_ptr<common::s3::S3ClientWrapper> client, const Config & config);
+    S3(std::shared_ptr<common::obj_store::S3ClientWrapper> client, const Config & config);
     virtual ~S3() {}
 
     void read(size_t bytesize, char * buffer) override;
     void seek(size_t offset) override;
 
-    void async_read(const common::s3::S3ClientWrapper::Params & params, common::backend_api::ObjectRequestId_t request_handle, const common::Range & range, char * buffer) override;
+    void async_read(const common::obj_store::S3ClientWrapper::Params & params, common::backend_api::ObjectRequestId_t request_handle, const common::Range & range, char * buffer) override;
     common::ResponseCode async_response(std::vector<common::backend_api::Response> & responses, unsigned max_responses) override;
 
  private:
-    std::shared_ptr<common::s3::S3ClientWrapper> _client;
+    std::shared_ptr<common::obj_store::S3ClientWrapper> _client;
     const Config & _config;
 };
 

@@ -14,12 +14,12 @@
 #include "common/range/range.h"
 #include "streamer/impl/reader/reader.h"
 #include "streamer/impl/file/file.h"
-#include "streamer/impl/s3/s3.h"
+#include "streamer/impl/obj_store/obj_store.h"
 
 namespace runai::llm::streamer::impl
 {
 
-Batch::Batch(unsigned worker_index, unsigned file_index, const std::string & path, const common::s3::S3ClientWrapper::Params & params, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config) :
+Batch::Batch(unsigned worker_index, unsigned file_index, const std::string & path, const common::obj_store::S3ClientWrapper::Params & params, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config) :
     worker_index(worker_index),
     file_index(file_index),
     path(path),

@@ -34,7 +34,7 @@ TEST(Creation, Concurrency)
 
 TEST(Creation, Chunk_Size)
 {
-    const size_t min_ = common::s3::S3ClientWrapper::min_chunk_bytesize;
+    const size_t min_ = common::obj_store::S3ClientWrapper::min_chunk_bytesize;
     for (size_t expected : { 1UL, utils::random::number<size_t>(1UL, min_ - 1UL), utils::random::number<size_t>(min_, 10UL * min_)})
     {
         utils::temp::Env size_("RUNAI_STREAMER_CHUNK_BYTESIZE", expected);

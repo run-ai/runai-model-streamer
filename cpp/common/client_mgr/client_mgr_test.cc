@@ -86,14 +86,14 @@ struct ClientMgrTest : ::testing::Test
         EXPECT_EQ(ClientMgrHelper::unused(), 0);
     }
 
-    static std::shared_ptr<common::s3::StorageUri> create_uri()
+    static std::shared_ptr<common::obj_store::StorageUri> create_uri()
     {
-        return std::make_shared<common::s3::StorageUri>("s3://" + utils::random::string() + "/" + utils::random::string());
+        return std::make_shared<common::obj_store::StorageUri>("s3://" + utils::random::string() + "/" + utils::random::string());
     }
 
-    std::shared_ptr<common::s3::StorageUri> uri;
-    common::s3::Credentials credentials;
-    common::s3::S3ClientWrapper::Params params;
+    std::shared_ptr<common::obj_store::StorageUri> uri;
+    common::obj_store::Credentials credentials;
+    common::obj_store::S3ClientWrapper::Params params;
 };
 
 TEST_F(ClientMgrTest, Creation_Sanity)
@@ -174,16 +174,16 @@ TEST_F(ClientMgrTest, Credentials_Changed)
     unsigned n = utils::random::number(2, 20);
     for (unsigned i = 0; i < n; ++i)
     {
-        common::s3::Credentials new_credentials(
+        common::obj_store::Credentials new_credentials(
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr));
 
-        auto new_uri = std::make_shared<common::s3::StorageUri>(*uri);
+        auto new_uri = std::make_shared<common::obj_store::StorageUri>(*uri);
         new_uri->path = utils::random::string();
-        common::s3::S3ClientWrapper::Params new_params(new_uri, new_credentials, utils::random::number<size_t>());
+        common::obj_store::S3ClientWrapper::Params new_params(new_uri, new_credentials, utils::random::number<size_t>());
         std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
         const auto new_config = new_params.to_config(initial_params);
         bool changed = !helper->verify_credentials(new_config);
@@ -238,7 +238,7 @@ TEST_F(ClientMgrTest, Change_Bucket)
     {
         const std::string path = utils::random::string();
         uri_->path = path;
-        common::s3::S3ClientWrapper::Params new_params(uri_, credentials, utils::random::number<size_t>());
+        common::obj_store::S3ClientWrapper::Params new_params(uri_, credentials, utils::random::number<size_t>());
         std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
         const auto new_config = new_params.to_config(initial_params);
         Helper * helper = ClientMgrHelper::pop(new_config);

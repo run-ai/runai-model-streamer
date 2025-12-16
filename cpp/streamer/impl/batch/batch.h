@@ -53,7 +53,7 @@ struct Batch
   Batch(unsigned worker_index,
         unsigned file_index,
         const std::string & path,
-        const common::s3::S3ClientWrapper::Params & params,
+        const common::obj_store::S3ClientWrapper::Params & params,
         const Tasks && tasks,
         std::shared_ptr<common::Responder> responder,
         std::shared_ptr<const Config> config);
@@ -89,7 +89,7 @@ struct Batch
   std::string path;
 
   // s3 parameters
-  const common::s3::S3ClientWrapper::Params object_storage_params;
+  const common::obj_store::S3ClientWrapper::Params object_storage_params;
 
   const Tasks tasks;
 

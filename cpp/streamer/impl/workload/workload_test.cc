@@ -27,7 +27,7 @@ TEST(Workload, Sanity)
     auto num_files = utils::random::number(1, 10);
     LOG(DEBUG) << "number of files " << num_files;
 
-    common::s3::S3ClientWrapper::Params s3_params;
+    common::obj_store::S3ClientWrapper::Params s3_params;
 
     std::atomic<bool> stopped(false);
     std::vector<std::string> paths;
@@ -133,7 +133,7 @@ TEST(Workload, Stopped)
 {
     auto num_files = utils::random::number(1, 10);
 
-    common::s3::S3ClientWrapper::Params s3_params;
+    common::obj_store::S3ClientWrapper::Params s3_params;
 
     std::atomic<bool> stopped(false);
     std::vector<std::string> paths;
@@ -205,7 +205,7 @@ TEST(Workload, Stopped)
 
     ::usleep(utils::random::number(300));
 
-    common::s3::S3ClientWrapper::stop();
+    common::obj_store::S3ClientWrapper::stop();
     stopped = true;
 
     // wait for all the requests to finish
@@ -245,7 +245,7 @@ TEST(Workload, Stopped_Async)
 
     auto num_files = utils::random::number(1, 10);
 
-    common::s3::Credentials credentials(
+    common::obj_store::Credentials credentials(
         (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
         (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
         (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
@@ -295,9 +295,9 @@ TEST(Workload, Stopped_Async)
         auto total_chunks_size = std::accumulate(chunks.begin(), chunks.end(), 0u);
         EXPECT_EQ(total_chunks_size, bytesizes[file_idx]);
 
-        std::shared_ptr<common::s3::StorageUri> uri;
-        EXPECT_NO_THROW(uri = std::make_shared<common::s3::StorageUri>(paths[file_idx]));
-        common::s3::S3ClientWrapper::Params s3_params(uri, credentials, utils::random::number<size_t>());
+        std::shared_ptr<common::obj_store::StorageUri> uri;
+        EXPECT_NO_THROW(uri = std::make_shared<common::obj_store::StorageUri>(paths[file_idx]));
+        common::obj_store::S3ClientWrapper::Params s3_params(uri, credentials, utils::random::number<size_t>());
 
         Batches batches(file_idx, assigner.file_assignments(file_idx), config, responder, paths[file_idx], s3_params, chunks);
 
@@ -325,7 +325,7 @@ TEST(Workload, Stopped_Async)
     sem.wait();
     ::usleep(utils::random::number(100));
 
-    common::s3::S3ClientWrapper::stop();
+    common::obj_store::S3ClientWrapper::stop();
     stopped = true;
 
     // wait for all the requests to finish

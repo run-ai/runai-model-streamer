@@ -31,7 +31,7 @@ struct Reader
 
     // asynchronous
     // request_handle is a handle to the request, it is used to identify the request when the response is received
-    virtual void async_read(const common::s3::S3ClientWrapper::Params & params, common::backend_api::ObjectRequestId_t request_handle, const common::Range & range, char * buffer) = 0;
+    virtual void async_read(const common::obj_store::S3ClientWrapper::Params & params, common::backend_api::ObjectRequestId_t request_handle, const common::Range & range, char * buffer) = 0;
     virtual common::ResponseCode async_response(std::vector<common::backend_api::Response> & responses, unsigned max_responses) = 0;
 
     const Mode mode;

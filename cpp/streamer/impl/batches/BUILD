@@ -5,12 +5,12 @@ runai_cc_auto_library(
     deps = [
         "//streamer/impl/config",
         "//streamer/impl/batch",
-        "//common/s3_wrapper",
+        "//common/obj_store_wrapper",
         "//common/exception",
         "//common/responder",
         "//streamer/impl/file",
         "//streamer/impl/assigner/file_read_task",
-        "//streamer/impl/s3",
+        "//streamer/impl/obj_store",
         "//utils/logging",
     ],
     linkopts = [ "-lm" ]

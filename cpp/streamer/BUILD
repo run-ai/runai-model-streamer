@@ -39,12 +39,12 @@ runai_cc_test(
             "//utils/dylib",
             "//utils/logging",
             "//utils/fdlimit",
-            "//s3/s3_mock:libstreamers3.so",
+            "//obj_store/obj_store_mock:libstreamerobj_store.so",
     ],
     linkstatic=False,
     data = ["//s3/s3_mock:libstreamers3.so"],
     linkopts = [
-        "-Wl,-rpath,$$ORIGIN/../s3/s3_mock",
+        "-Wl,-rpath,$$ORIGIN/../obj_store/obj_store_mock",
     ],
 )
 

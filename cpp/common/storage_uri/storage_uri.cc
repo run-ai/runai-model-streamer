@@ -5,7 +5,7 @@
 
 #include "utils/logging/logging.h"
 
-namespace runai::llm::streamer::common::s3
+namespace runai::llm::streamer::common::obj_store
 {
 
 static const std::string gcsProtocol("gs");
@@ -46,4 +46,4 @@ StorageUri_C::StorageUri_C(const StorageUri & uri) :
     path(uri.path.c_str())
 {}
 
-}; // namespace runai::llm::streamer::common::s3
+}; // namespace runai::llm::streamer::common::obj_store

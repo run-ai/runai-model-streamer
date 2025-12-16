@@ -6,7 +6,7 @@
 
 #include "utils/random/random.h"
 
-namespace runai::llm::streamer::common::s3
+namespace runai::llm::streamer::common::obj_store
 {
 
 TEST(Uri, Empty)
@@ -69,4 +69,4 @@ TEST(Invalid, InvalidScheme)
     EXPECT_THROW(uri = std::make_unique<StorageUri>(endpoint), std::exception);
 }
 
-}; // namespace runai::llm::streamer::common::s3
+}; // namespace runai::llm::streamer::common::obj_store
