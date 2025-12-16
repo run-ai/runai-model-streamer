@@ -8,7 +8,7 @@ from runai_model_streamer.libstreamer.libstreamer import (
     runai_request,
     runai_response,
 )
-from runai_model_streamer.s3_utils.s3_utils import (
+from runai_model_streamer.obj_store_utils.obj_store_utils import (
     S3Credentials,
 )
 

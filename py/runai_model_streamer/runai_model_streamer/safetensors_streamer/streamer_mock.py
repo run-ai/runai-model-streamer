@@ -14,7 +14,7 @@ from runai_model_streamer import (
     SafetensorsStreamer as OriginalSafetensorsStreamer,
     list_safetensors as original_list_safetensors,
 )
-from runai_model_streamer.s3_utils.s3_utils import (
+from runai_model_streamer.obj_store_utils.obj_store_utils import (
     is_s3_path,
     is_gs_path,
     S3Credentials,

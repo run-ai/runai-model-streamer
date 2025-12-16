@@ -2,7 +2,7 @@ from runai_model_streamer.libstreamer import dll, t_streamer
 from typing import List, Optional, Tuple
 import ctypes
 
-from runai_model_streamer.s3_utils.s3_utils import (
+from runai_model_streamer.obj_store_utils.obj_store_utils import (
     S3Credentials,
 )
 
