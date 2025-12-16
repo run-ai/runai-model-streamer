@@ -37,7 +37,7 @@ Config::Config(unsigned concurrency, unsigned s3_concurrency, size_t s3_block_by
 }
 
 Config::Config(bool enforce_minimum /* = true */) :
-    Config(utils::getenv<unsigned long>("RUNAI_STREAMER_CONCURRENCY", 16UL),
+    Config(utils::getenv<unsigned long>("RUNAI_STREAMER_CONCURRENCY", 14UL),
            utils::getenv<unsigned long>("RUNAI_STREAMER_CONCURRENCY", 8UL),
            utils::getenv<size_t>("RUNAI_STREAMER_CHUNK_BYTESIZE", common::s3::S3ClientWrapper::default_chunk_bytesize),
            utils::getenv<size_t>("RUNAI_STREAMER_CHUNK_BYTESIZE", min_fs_block_bytesize), enforce_minimum)
