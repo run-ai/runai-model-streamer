@@ -193,24 +193,16 @@ class StreamerPatcher:
         def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
             return self.original_streamer.__exit__(exc_type, exc_value, traceback)
 
-        def stream_file(self, path: str, s3_credentials: Optional[S3Credentials] = None,
-                          device: Optional[str] = "cpu", is_distributed: bool = False) -> None:
-            logger.debug(f"[RunAI Streamer][SHIM] stream_file is called with path: {path}")
-            self.files_to_tensors_metadata = {}
-            rewritten_path = self.patcher.convert_remote_path_to_local_path(path)
-            res = self.original_streamer.stream_file(
-                rewritten_path, s3_credentials, device, is_distributed
-            )
-            self.files_to_tensors_metadata = self.original_streamer.files_to_tensors_metadata
-            return res
-
         def stream_files(self, paths: List[str], s3_credentials: Optional[S3Credentials] = None,
                            device: Optional[str] = "cpu", is_distributed: bool = False) -> None:
             logger.debug(f"[RunAI Streamer][SHIM] stream_files is called")
+            self.files_to_tensors_metadata = {}
             rewritten_paths = [self.patcher.convert_remote_path_to_local_path(p) for p in paths]
-            return self.original_streamer.stream_files(
+            res = self.original_streamer.stream_files(
                 rewritten_paths, s3_credentials, device, is_distributed
             )
+            self.files_to_tensors_metadata = self.original_streamer.files_to_tensors_metadata
+            return res
 
         def get_tensors(self) -> Iterator[torch.tensor]:
             logger.debug(f"[RunAI Streamer][SHIM] get_tensors is called")

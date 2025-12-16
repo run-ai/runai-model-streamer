@@ -53,16 +53,6 @@ class SafetensorsStreamer:
     def __exit__(self, exc_type: any, exc_value: any, traceback: any) -> None:
         return self.file_streamer.__exit__(exc_type, exc_value, traceback)
 
-    def stream_file(
-            self,
-            path: str,
-            s3_credentials : Optional[S3Credentials] = None,
-            device: Optional[str] = "cpu",
-            is_distributed: bool = False,
-        ) -> None:
-        return self.stream_files([path], s3_credentials, device, is_distributed)
-
- 
     def stream_files(
             self,
             paths: List[str],

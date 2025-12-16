@@ -13,7 +13,7 @@ class TestSafetensorsStreamer(unittest.TestCase):
         file_path = os.path.join(file_dir, "test.safetensors")
         our = {}
         with SafetensorsStreamer() as run_sf:
-            run_sf.stream_file(file_path, None, "cpu")
+            run_sf.stream_files([file_path], None, "cpu")
             for name, tensor in run_sf.get_tensors():
                 our[name] = tensor
 

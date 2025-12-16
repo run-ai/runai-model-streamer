@@ -55,7 +55,7 @@ class TestSafetensorsStreamerMock(unittest.TestCase):
         our = {}
         with SafetensorsStreamer() as run_sf: # This call is now mocked
             # Pass the *fake* path here. The patcher will rewrite it.
-            run_sf.stream_file(fake_s3_path, None, "cpu")
+            run_sf.stream_files([fake_s3_path], None, "cpu")
             for name, tensor in run_sf.get_tensors():
                 our[name] = tensor
 
@@ -94,7 +94,7 @@ class TestSafetensorsStreamerMock(unittest.TestCase):
         # 4. Run streamer logic, passing the FAKE GS PATH
         our = {}
         with SafetensorsStreamer() as run_sf:
-            run_sf.stream_file(fake_gs_path, None, "cpu")
+            run_sf.stream_files([fake_gs_path], None, "cpu")
             for name, tensor in run_sf.get_tensors():
                 our[name] = tensor
 

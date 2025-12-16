@@ -28,7 +28,7 @@ class TestDistributedSafetensorsStreamer(unittest.TestCase):
         env_vars = {"RUNAI_STREAMER_DIST": "1", "RUNAI_STREAMER_DIST_BUFFER_MIN_BYTESIZE": "0"}
         with unittest.mock.patch.dict(os.environ, env_vars):
             with SafetensorsStreamer() as run_sf:
-                run_sf.stream_file(file_path, None, "cpu", True)
+                run_sf.stream_files([file_path], None, "cpu", True)
                 for name, tensor in run_sf.get_tensors():
                     our[name] = tensor.clone().detach() # because distributed streamer has internal reusable buffer
 
@@ -64,7 +64,7 @@ class TestDistributedSafetensorsStreamer(unittest.TestCase):
         env_vars = {"RUNAI_STREAMER_DIST": "1", "RUNAI_STREAMER_DIST_BUFFER_MIN_BYTESIZE": "0"}
         with unittest.mock.patch.dict(os.environ, env_vars):
             with SafetensorsStreamer() as run_sf:
-                run_sf.stream_file(file_path, None, "cpu", False)
+                run_sf.stream_files([file_path], None, "cpu", False)
                 for name, tensor in run_sf.get_tensors():
                     our[name] = tensor.clone().detach() # because distributed streamer has internal reusable buffer
 
