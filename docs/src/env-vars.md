@@ -10,7 +10,7 @@ Positive integer value
 
 #### Default value
 
-16 for reading from file system
+17 for reading from file system
 
 8 for reading from object storage
 
