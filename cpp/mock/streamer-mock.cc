@@ -7,56 +7,10 @@
 
 #include "utils/fd/fd.h"
 #include "utils/logging/logging.h"
+#include "common/response_code/response_code.h"
 
 namespace runai::llm::streamer
 {
-
-// Response code enum matching the real implementation
-enum class ResponseCode : int
-{
-    Success = 0,
-    FinishedError,
-    FileAccessError,
-    EofError,
-    S3NotSupported,
-    GlibcPrerequisite,
-    InsufficientFdLimit,
-    InvalidParameterError,
-    EmptyRequestError,
-    BusyError,
-    CaFileNotFound,
-    UnknownError,
-    ObjPluginLoadError,
-    GCSNotSupported,
-    __Max,
-};
-
-// Response code descriptions matching the real implementation
-constexpr const char* RESPONSE_MESSAGES[] = {
-    "Request sent successfuly",
-    "Finished all responses",
-    "File access error",
-    "End of file reached",
-    "S3 not supported",
-    "GLIBC version should be at least 2.29",
-    "Increase process fd limit or decrease the concurrency level. Recommended value for the streamer alone is the concurrency multiplied by 64, in addition to your application fd usage",
-    "Invalid request parameters",
-    "Empty request parameters",
-    "Streamer is handling previous request",
-    "CA bundle file not found",
-    "Unknown Error",
-    "Error loading object storage plugin",
-    "GCS not supported",
-};
-
-const char* get_response_message(int response_code)
-{
-    if (response_code < 0 || response_code >= static_cast<int>(ResponseCode::__Max))
-    {
-        return "Invalid response code";
-    }
-    return RESPONSE_MESSAGES[response_code];
-}
 
 // State for tracking a single file read operation
 struct FileReadState
@@ -132,13 +86,13 @@ int read_chunk(FileReadState& state, unsigned* chunk_index)
 {
     if (state.is_complete)
     {
-        return static_cast<int>(ResponseCode::FinishedError);
+        return static_cast<int>(common::ResponseCode::FinishedError);
     }
 
     if (state.current_chunk_index >= state.chunk_sizes.size())
     {
         state.is_complete = true;
-        return static_cast<int>(ResponseCode::FinishedError);
+        return static_cast<int>(common::ResponseCode::FinishedError);
     }
 
     const size_t chunk_size = state.chunk_sizes[state.current_chunk_index];
@@ -152,7 +106,7 @@ int read_chunk(FileReadState& state, unsigned* chunk_index)
         {
             LOG(ERROR) << "Failed to read complete chunk. Expected " << chunk_size 
                        << " bytes, got " << bytes_read << " bytes from " << state.path;
-            return static_cast<int>(ResponseCode::EofError);
+            return static_cast<int>(common::ResponseCode::EofError);
         }
 
         *chunk_index = state.current_chunk_index;
@@ -165,12 +119,12 @@ int read_chunk(FileReadState& state, unsigned* chunk_index)
             state.is_complete = true;
         }
 
-        return static_cast<int>(ResponseCode::Success);
+        return static_cast<int>(common::ResponseCode::Success);
     }
     catch (const std::exception& e)
     {
         LOG(ERROR) << "Exception while reading chunk from " << state.path << ": " << e.what();
-        return static_cast<int>(ResponseCode::FileAccessError);
+        return static_cast<int>(common::ResponseCode::FileAccessError);
     }
 }
 
@@ -187,12 +141,12 @@ int initialize_file_read(
     // Validate inputs
     if (path == nullptr || destination == nullptr)
     {
-        return static_cast<int>(ResponseCode::InvalidParameterError);
+        return static_cast<int>(common::ResponseCode::InvalidParameterError);
     }
 
     if (num_chunks == 0 || chunk_sizes == nullptr)
     {
-        return static_cast<int>(ResponseCode::EmptyRequestError);
+        return static_cast<int>(common::ResponseCode::EmptyRequestError);
     }
 
     // Verify total bytesize matches sum of chunks
@@ -206,7 +160,7 @@ int initialize_file_read(
     {
         LOG(ERROR) << "Total chunk size (" << total_chunk_size 
                    << ") does not match bytesize (" << bytesize << ")";
-        return static_cast<int>(ResponseCode::InvalidParameterError);
+        return static_cast<int>(common::ResponseCode::InvalidParameterError);
     }
 
     // Open file
@@ -214,7 +168,7 @@ int initialize_file_read(
     if (state.file.fd() == -1)
     {
         LOG(ERROR) << "Failed to open file: " << path;
-        return static_cast<int>(ResponseCode::FileAccessError);
+        return static_cast<int>(common::ResponseCode::FileAccessError);
     }
 
     // Seek to offset
@@ -225,7 +179,7 @@ int initialize_file_read(
     catch (const std::exception& e)
     {
         LOG(ERROR) << "Failed to seek to offset " << file_offset << " in file " << path << ": " << e.what();
-        return static_cast<int>(ResponseCode::FileAccessError);
+        return static_cast<int>(common::ResponseCode::FileAccessError);
     }
 
     // Initialize state
@@ -238,7 +192,7 @@ int initialize_file_read(
     state.current_chunk_index = 0;
     state.is_complete = false;
 
-    return static_cast<int>(ResponseCode::Success);
+    return static_cast<int>(common::ResponseCode::Success);
 }
 
 } // namespace runai::llm::streamer
@@ -251,7 +205,7 @@ int runai_start(void** streamer)
     
     if (streamer == nullptr)
     {
-        return static_cast<int>(ResponseCode::InvalidParameterError);
+        return static_cast<int>(common::ResponseCode::InvalidParameterError);
     }
 
     // Reset global state
@@ -260,7 +214,7 @@ int runai_start(void** streamer)
     // Return a dummy pointer (not actually used, but kept for compatibility)
     *streamer = reinterpret_cast<void*>(0x123456789ABCDEF0);
     
-    return static_cast<int>(ResponseCode::Success);
+    return static_cast<int>(common::ResponseCode::Success);
 }
 
 void runai_end(void* streamer)
@@ -293,24 +247,24 @@ int runai_request(
     // Validate inputs
     if (streamer == nullptr)
     {
-        return static_cast<int>(ResponseCode::InvalidParameterError);
+        return static_cast<int>(common::ResponseCode::InvalidParameterError);
     }
 
     if (num_files == 0)
     {
-        return static_cast<int>(ResponseCode::EmptyRequestError);
+        return static_cast<int>(common::ResponseCode::EmptyRequestError);
     }
 
     if (paths == nullptr || file_offsets == nullptr || bytesizes == nullptr || 
         dsts == nullptr || num_sizes == nullptr || internal_sizes == nullptr)
     {
-        return static_cast<int>(ResponseCode::InvalidParameterError);
+        return static_cast<int>(common::ResponseCode::InvalidParameterError);
     }
 
     // Check if there's an active request
     if (g_state.has_active_request)
     {
-        return static_cast<int>(ResponseCode::BusyError);
+        return static_cast<int>(common::ResponseCode::BusyError);
     }
 
     // Note: credentials (key, secret, token, region, endpoint) are ignored in the mock
@@ -339,7 +293,7 @@ int runai_request(
             internal_sizes[i],
             file_state);
 
-        if (result != static_cast<int>(ResponseCode::Success))
+        if (result != static_cast<int>(common::ResponseCode::Success))
         {
             // Clean up on error
             g_state.file_states.clear();
@@ -351,7 +305,7 @@ int runai_request(
         buffer_offset += bytesizes[i];
     }
 
-    return static_cast<int>(ResponseCode::Success);
+    return static_cast<int>(common::ResponseCode::Success);
 }
 
 int runai_response(void* streamer, unsigned* file_index, unsigned* index)
@@ -361,12 +315,12 @@ int runai_response(void* streamer, unsigned* file_index, unsigned* index)
     // Validate inputs
     if (streamer == nullptr || file_index == nullptr || index == nullptr)
     {
-        return static_cast<int>(ResponseCode::InvalidParameterError);
+        return static_cast<int>(common::ResponseCode::InvalidParameterError);
     }
 
     if (!g_state.has_active_request)
     {
-        return static_cast<int>(ResponseCode::FinishedError);
+        return static_cast<int>(common::ResponseCode::FinishedError);
     }
 
     // Find the next available chunk to read
@@ -385,13 +339,13 @@ int runai_response(void* streamer, unsigned* file_index, unsigned* index)
         unsigned chunk_index;
         int result = read_chunk(file_state, &chunk_index);
         
-        if (result == static_cast<int>(ResponseCode::Success))
+        if (result == static_cast<int>(common::ResponseCode::Success))
         {
             *file_index = g_state.current_file_index;
             *index = chunk_index;
             return result;
         }
-        else if (result == static_cast<int>(ResponseCode::FinishedError))
+        else if (result == static_cast<int>(common::ResponseCode::FinishedError))
         {
             // This file is complete, try next file
             g_state.current_file_index++;
@@ -407,13 +361,13 @@ int runai_response(void* streamer, unsigned* file_index, unsigned* index)
 
     // All files are complete
     g_state.has_active_request = false;
-    return static_cast<int>(ResponseCode::FinishedError);
+    return static_cast<int>(common::ResponseCode::FinishedError);
 }
 
 const char* runai_response_str(int response_code)
 {
     using namespace runai::llm::streamer;
-    return get_response_message(response_code);
+    return common::description(response_code);
 }
 
 } // extern "C"
