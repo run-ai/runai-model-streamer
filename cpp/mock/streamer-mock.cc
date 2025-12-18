@@ -65,7 +65,7 @@ struct FileReadState
     }
 };
 
-// Global state for the mock streamer
+// Per-instance state for the mock streamer
 struct MockStreamerState
 {
     std::vector<FileReadState> file_states;
@@ -77,9 +77,6 @@ struct MockStreamerState
         , has_active_request(false)
     {}
 };
-
-// Global state instance
-static MockStreamerState g_state;
 
 // Helper function to read a chunk from a file
 int read_chunk(FileReadState& state, unsigned* chunk_index)
@@ -208,11 +205,15 @@ int runai_start(void** streamer)
         return static_cast<int>(common::ResponseCode::InvalidParameterError);
     }
 
-    // Reset global state
-    g_state = MockStreamerState();
-    
-    // Return a dummy pointer (not actually used, but kept for compatibility)
-    *streamer = reinterpret_cast<void*>(0x123456789ABCDEF0);
+    // Allocate a new state instance for this streamer
+    try
+    {
+        *streamer = new MockStreamerState();
+    }
+    catch (...)
+    {
+        return static_cast<int>(common::ResponseCode::UnknownError);
+    }
     
     return static_cast<int>(common::ResponseCode::Success);
 }
@@ -221,10 +222,19 @@ void runai_end(void* streamer)
 {
     using namespace runai::llm::streamer;
     
-    // Clean up any open files
-    g_state.file_states.clear();
-    g_state.current_file_index = 0;
-    g_state.has_active_request = false;
+    // Delete the state instance
+    try
+    {
+        auto* state = static_cast<MockStreamerState*>(streamer);
+        if (state != nullptr)
+        {
+            delete state;
+        }
+    }
+    catch (...)
+    {
+        // Ignore exceptions during cleanup
+    }
 }
 
 int runai_request(
@@ -250,6 +260,8 @@ int runai_request(
         return static_cast<int>(common::ResponseCode::InvalidParameterError);
     }
 
+    auto* state = static_cast<MockStreamerState*>(streamer);
+
     if (num_files == 0)
     {
         return static_cast<int>(common::ResponseCode::EmptyRequestError);
@@ -262,7 +274,7 @@ int runai_request(
     }
 
     // Check if there's an active request
-    if (g_state.has_active_request)
+    if (state->has_active_request)
     {
         return static_cast<int>(common::ResponseCode::BusyError);
     }
@@ -271,9 +283,9 @@ int runai_request(
     // as we read from local filesystem
 
     // Clear previous state
-    g_state.file_states.clear();
-    g_state.current_file_index = 0;
-    g_state.has_active_request = true;
+    state->file_states.clear();
+    state->current_file_index = 0;
+    state->has_active_request = true;
 
     // For CPU memory, only dsts[0] is used as a single buffer
     void* destination_buffer = dsts[0];
@@ -296,12 +308,12 @@ int runai_request(
         if (result != static_cast<int>(common::ResponseCode::Success))
         {
             // Clean up on error
-            g_state.file_states.clear();
-            g_state.has_active_request = false;
+            state->file_states.clear();
+            state->has_active_request = false;
             return result;
         }
 
-        g_state.file_states.push_back(std::move(file_state));
+        state->file_states.push_back(std::move(file_state));
         buffer_offset += bytesizes[i];
     }
 
@@ -318,20 +330,22 @@ int runai_response(void* streamer, unsigned* file_index, unsigned* index)
         return static_cast<int>(common::ResponseCode::InvalidParameterError);
     }
 
-    if (!g_state.has_active_request)
+    auto* state = static_cast<MockStreamerState*>(streamer);
+
+    if (!state->has_active_request)
     {
         return static_cast<int>(common::ResponseCode::FinishedError);
     }
 
     // Find the next available chunk to read
-    while (g_state.current_file_index < g_state.file_states.size())
+    while (state->current_file_index < state->file_states.size())
     {
-        FileReadState& file_state = g_state.file_states[g_state.current_file_index];
+        FileReadState& file_state = state->file_states[state->current_file_index];
         
         if (file_state.is_complete)
         {
             // Move to next file
-            g_state.current_file_index++;
+            state->current_file_index++;
             continue;
         }
 
@@ -341,26 +355,26 @@ int runai_response(void* streamer, unsigned* file_index, unsigned* index)
         
         if (result == static_cast<int>(common::ResponseCode::Success))
         {
-            *file_index = g_state.current_file_index;
+            *file_index = state->current_file_index;
             *index = chunk_index;
             return result;
         }
         else if (result == static_cast<int>(common::ResponseCode::FinishedError))
         {
             // This file is complete, try next file
-            g_state.current_file_index++;
+            state->current_file_index++;
             continue;
         }
         else
         {
             // Error occurred
-            g_state.has_active_request = false;
+            state->has_active_request = false;
             return result;
         }
     }
 
     // All files are complete
-    g_state.has_active_request = false;
+    state->has_active_request = false;
     return static_cast<int>(common::ResponseCode::FinishedError);
 }
 
