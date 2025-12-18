@@ -5,6 +5,7 @@ runai_portable_so(
     srcs = ["streamer-mock.cc"],
     deps = [
         "//utils/fd",
+        "//common/response_code",
     ],
     ldscript = "//streamer:streamer.ldscript",
 )

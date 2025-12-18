@@ -5,6 +5,7 @@ runai_cc_auto_library(
     deps = [
         "//utils/semaphore",
         "//utils/logging",
+        "//common/response_code",
     ],
 )
 
