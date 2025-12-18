@@ -7,7 +7,6 @@ runai_portable_so(
     ],
     deps = [
         "//streamer/impl",
-        "//common/response_code",
     ],
     ldscript = ":streamer.ldscript",
     defines = ["_RUNAI_STREAMER_SO"],

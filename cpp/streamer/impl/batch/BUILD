@@ -5,7 +5,6 @@ runai_cc_auto_library(
     deps = [
         "//common/responder",
         "//common/shared_queue",
-        "//common/response_code",
         "//streamer/impl/config",
         "//streamer/impl/file",
         "//streamer/impl/s3",
