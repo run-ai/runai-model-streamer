@@ -74,18 +74,21 @@ def is_gs_path(path: str) -> bool:
     """
     return path.startswith(GCS_PROTOCOL_PREFIX)
 
-def s3_glob(path: str, allow_pattern: Optional[List[str]] = None, s3_credentials : Optional[S3Credentials] = None) -> List[str]:
+def s3_glob(path: str, allow_pattern: Optional[List[str]] = None, ignore_pattern: Optional[List[str]] = None, is_recursive: bool = False, s3_credentials : Optional[S3Credentials] = None) -> List[str]:
     """
     Glob for S3 paths.
 
     :param path: The S3 path to glob.
     :param allow_pattern: Optional list of patterns to allow.
+    :param ignore_pattern: Optional list of patterns to ignore.
+    :param is_recursive: Whether to recurse into subdirectories.
+    :param s3_credentials: Optional S3 credentials.
     :return: List of matching S3 paths.
     """
     s3_files_module = get_s3_files_module()
     if s3_files_module is None:
         raise ImportError("S3 files module not found. Please install the required package.")
-    return s3_files_module.glob(path, allow_pattern, s3_credentials)
+    return s3_files_module.glob(path, allow_pattern, ignore_pattern, is_recursive, s3_credentials)
 
 def s3_pull_files(model_path: str,
                 dst: str,
@@ -97,18 +100,20 @@ def s3_pull_files(model_path: str,
         raise ImportError("S3 files module not found. Please install the required package.")
     return s3_files_module.pull_files(model_path, dst, allow_pattern, ignore_pattern, s3_credentials)
 
-def gcs_glob(path: str, allow_pattern: Optional[List[str]] = None) -> List[str]:
+def gcs_glob(path: str, allow_pattern: Optional[List[str]] = None, ignore_pattern: Optional[List[str]] = None, is_recursive: bool = False) -> List[str]:
     """
     Glob for GCS paths.
 
     :param path: The GCS path to glob.
     :param allow_pattern: Optional list of patterns to allow.
-    :return: List of matching S3 paths.
+    :param ignore_pattern: Optional list of patterns to ignore.
+    :param is_recursive: Whether to recurse into subdirectories.
+    :return: List of matching GCS paths.
     """
     gcs_files_module = get_gcs_files_module()
     if gcs_files_module is None:
         raise ImportError("GCS files module not found. Please install the required package.")
-    return gcs_files_module.glob(path, allow_pattern)
+    return gcs_files_module.glob(path, allow_pattern, ignore_pattern, is_recursive)
 
 def gcs_pull_files(model_path: str,
                 dst: str,

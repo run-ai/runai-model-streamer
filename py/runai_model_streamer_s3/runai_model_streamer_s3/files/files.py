@@ -4,8 +4,8 @@ import fnmatch
 import os
 import boto3
 from pathlib import Path
-
-def glob(path: str, allow_pattern: Optional[List[str]] = None, credentials: Optional[S3Credentials] = None) -> List[str]:
+import posixpath
+def glob(path: str, allow_pattern: Optional[List[str]] = None, ignore_pattern: Optional[List[str]] = None, is_recursive: bool = False, credentials: Optional[S3Credentials] = None) -> List[str]:
     session, _ = get_credentials(credentials)
     if session is None:
         s3 = boto3.client("s3")
@@ -16,7 +16,9 @@ def glob(path: str, allow_pattern: Optional[List[str]] = None, credentials: Opti
         path = f"{path}/"
     bucket_name, _, keys = list_files(s3,
                                        path=path,
-                                       allow_pattern=allow_pattern)
+                                       allow_pattern=allow_pattern,
+                                       ignore_pattern=ignore_pattern,
+                                       is_recursive=is_recursive)
     return [f"s3://{bucket_name}/{key}" for key in keys]
 
 def pull_files(model_path: str,
@@ -51,15 +53,38 @@ def list_files(
         s3,
         path: str,
         allow_pattern: Optional[List[str]] = None,
-        ignore_pattern: Optional[List[str]] = None
+        ignore_pattern: Optional[List[str]] = None,
+        is_recursive: bool = False
 ) -> Tuple[str, str, List[str]]:
     parts = removeprefix(path, 's3://').split('/')
-    prefix = '/'.join(parts[1:])
     bucket_name = parts[0]
+    
+    # Reconstruct the prefix
+    prefix = '/'.join(parts[1:]).rstrip('/')
 
-    objects = s3.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
-    paths = [obj['Key'] for obj in objects.get('Contents', [])]
+    if prefix:
+        # This ensures a trailing slash without double-slashing
+        prefix = posixpath.join(prefix, '')
 
+    paginator = s3.get_paginator('list_objects_v2')
+  
+    op_parameters = {
+        'Bucket': bucket_name,
+        'Prefix': prefix
+    }
+
+    # Only add Delimiter if we want to STOP recursion
+    if not is_recursive:
+        op_parameters['Delimiter'] = '/'
+
+    paths = []
+    for page in paginator.paginate(**op_parameters):
+        # Contents is a list of files (no folders)
+        if 'Contents' in page:
+            for obj in page['Contents']:
+                paths.append(obj['Key'])
+
+    # Filter logic remains the same
     paths = _filter_ignore(paths, ["*/"])
     if allow_pattern is not None:
         paths = _filter_allow(paths, allow_pattern)
