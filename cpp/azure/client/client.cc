@@ -23,27 +23,17 @@ using namespace Azure::Storage::Blobs;
 namespace runai::llm::streamer::impl::azure
 {
 
-// Implementation struct that holds the Azure SDK client
-struct AzureClientImpl
-{
-    std::shared_ptr<BlobServiceClient> blob_service_client;
-    std::vector<std::future<void>> active_futures;
-    std::mutex futures_mutex;
-};
-
 AzureClient::AzureClient(const common::backend_api::ObjectClientConfig_t& config) :
     _stop(false),
-    _impl(std::make_unique<AzureClientImpl>()),
     _responder(nullptr),
     _chunk_bytesize(config.default_storage_chunk_size)
 {
     // ClientConfiguration reads environment variables
-    // Override with explicit parameters if provided
-    _connection_string = _client_config.connection_string;
     _account_name = _client_config.account_name;
-    _account_key = _client_config.account_key;
-    _sas_token = _client_config.sas_token;
     _endpoint = _client_config.endpoint_url;
+#ifdef AZURITE_TESTING
+    _connection_string = _client_config.connection_string;
+#endif
 
     // Parse configuration parameters from API (overrides environment)
     auto ptr = config.initial_params;
@@ -53,27 +43,21 @@ AzureClient::AzureClient(const common::backend_api::ObjectClientConfig_t& config
         {
             const char* key = ptr->key;
             const char* value = ptr->value;
-            
-            if (strcmp(key, "connection_string") == 0)
-            {
-                _connection_string = std::string(value);
-            }
-            else if (strcmp(key, "account_name") == 0)
+
+            if (strcmp(key, "account_name") == 0)
             {
                 _account_name = std::string(value);
-            }
-            else if (strcmp(key, "account_key") == 0)
-            {
-                _account_key = std::string(value);
-            }
-            else if (strcmp(key, "sas_token") == 0)
-            {
-                _sas_token = std::string(value);
             }
             else if (strcmp(key, "endpoint") == 0)
             {
                 _endpoint = std::string(value);
             }
+#ifdef AZURITE_TESTING
+            else if (strcmp(key, "connection_string") == 0)
+            {
+                _connection_string = std::string(value);
+            }
+#endif
             else
             {
                 LOG(WARNING) << "Unknown Azure parameter: " << key;
@@ -87,22 +71,9 @@ AzureClient::AzureClient(const common::backend_api::ObjectClientConfig_t& config
         _endpoint = std::string(config.endpoint_url);
     }
 
-    // Validate credentials
-    bool has_credentials = _connection_string.has_value() || 
-                          (_account_name.has_value() && (_account_key.has_value() || _sas_token.has_value()));
-    
-    if (!has_credentials)
-    {
-        LOG(WARNING) << "No Azure credentials provided, attempting to use default Azure credential chain";
-    }
-
-    // Initialize Azure Blob Storage client with options for Azurite compatibility
+    // Initialize Azure Blob Storage client
     try {
         BlobClientOptions options;
-        // Use API version 2023-11-03 which is supported by both Azure and Azurite
-        options.ApiVersion = "2023-11-03";
-
-        LOG(INFO) << "Setting Azure SDK API version to: " << options.ApiVersion;
 
         // Apply retry configuration from ClientConfiguration
         // Reference: https://learn.microsoft.com/en-us/azure/storage/common/storage-retry-policy
@@ -110,35 +81,41 @@ AzureClient::AzureClient(const common::backend_api::ObjectClientConfig_t& config
         retry_options.MaxRetries = static_cast<int32_t>(_client_config.max_retries);
         retry_options.RetryDelay = std::chrono::milliseconds(_client_config.retry_delay_ms);
         options.Retry = retry_options;
-        
-        LOG(DEBUG) << "Azure retry policy: max_retries=" << _client_config.max_retries 
+
+        LOG(DEBUG) << "Azure retry policy: max_retries=" << _client_config.max_retries
                    << ", retry_delay_ms=" << _client_config.retry_delay_ms
                    << ", concurrency=" << _client_config.max_concurrency;
 
+#ifdef AZURITE_TESTING
         if (_connection_string.has_value()) {
-            _impl->blob_service_client = std::make_shared<BlobServiceClient>(
+            // Connection string authentication (for Azurite testing only)
+            // For Azurite, use --skipApiVersionCheck flag instead of setting API version
+            // Reference: https://learn.microsoft.com/en-us/azure/storage/common/storage-use-azurite
+            _blob_service_client = std::make_shared<BlobServiceClient>(
                 BlobServiceClient::CreateFromConnectionString(_connection_string.value(), options)
             );
-            LOG(DEBUG) << "Azure client initialized with connection string";
-        } else if (_account_name.has_value() && _account_key.has_value()) {
-            auto credential = std::make_shared<Azure::Storage::StorageSharedKeyCredential>(
-                _account_name.value(), _account_key.value()
-            );
+            LOG(DEBUG) << "Azure client initialized with connection string (Azurite testing)";
+        } else
+#endif
+        if (_account_name.has_value()) {
+            // Use DefaultAzureCredential (managed identity, Azure CLI, environment variables, etc.)
+            // Reference: https://learn.microsoft.com/en-us/azure/developer/cpp/sdk/authentication
             std::string url = _endpoint.value_or("https://" + _account_name.value() + ".blob.core.windows.net");
-            _impl->blob_service_client = std::make_shared<BlobServiceClient>(url, credential, options);
-            LOG(DEBUG) << "Azure client initialized with account key for " << url;
-        } else if (_account_name.has_value() && _sas_token.has_value()) {
-            std::string url = _endpoint.value_or("https://" + _account_name.value() + ".blob.core.windows.net");
-            url += "?" + _sas_token.value();
-            _impl->blob_service_client = std::make_shared<BlobServiceClient>(url, options);
-            LOG(DEBUG) << "Azure client initialized with SAS token";
-        } else {
-            // Use default Azure credential (managed identity, Azure CLI, etc.)
             auto credential = std::make_shared<Azure::Identity::DefaultAzureCredential>();
-            std::string url = _endpoint.value_or("https://" + _account_name.value_or("") + ".blob.core.windows.net");
-            _impl->blob_service_client = std::make_shared<BlobServiceClient>(url, credential, options);
-            LOG(DEBUG) << "Azure client initialized with default credential";
+            _blob_service_client = std::make_shared<BlobServiceClient>(url, credential, options);
+            LOG(DEBUG) << "Azure client initialized with DefaultAzureCredential for account: " << _account_name.value();
+        } else {
+#ifdef AZURITE_TESTING
+            LOG(ERROR) << "Azure credentials required. Set AZURE_STORAGE_CONNECTION_STRING or AZURE_STORAGE_ACCOUNT_NAME.";
+#else
+            LOG(ERROR) << "Azure account name is required. Set AZURE_STORAGE_ACCOUNT_NAME environment variable.";
+#endif
+            throw common::Exception(common::ResponseCode::InvalidParameterError);
         }
+
+        // Create async client with ThreadPool
+        _async_client = std::make_unique<AsyncAzureClient>(_blob_service_client, _client_config.max_concurrency);
+
     } catch (const std::exception& e) {
         LOG(ERROR) << "Failed to initialize Azure client: " << e.what();
         throw common::Exception(common::ResponseCode::InvalidParameterError);
@@ -148,33 +125,38 @@ AzureClient::AzureClient(const common::backend_api::ObjectClientConfig_t& config
 AzureClient::~AzureClient()
 {
     stop();
-
-    // Wait for all async operations to complete
-    // Futures hold shared_ptr to blob_service_client, so it stays alive until all tasks complete
-    std::vector<std::future<void>> futures_to_wait;
-    {
-        std::lock_guard<std::mutex> lock(_impl->futures_mutex);
-        futures_to_wait = std::move(_impl->active_futures);
-    }
-
-    for (auto& future : futures_to_wait) {
-        if (future.valid()) {
-            future.wait();
-        }
-    }
+    // AsyncAzureClient destructor will handle cleanup of ThreadPool
 }
 
 bool AzureClient::verify_credentials(const common::backend_api::ObjectClientConfig_t & config) const
 {
-    // TODO: Implement credential verification
-    // Compare stored credentials with new config
-    AzureClient temp_client(config);
-    
-    return (_connection_string == temp_client._connection_string &&
-            _account_name == temp_client._account_name &&
-            _account_key == temp_client._account_key &&
-            _sas_token == temp_client._sas_token &&
-            _endpoint == temp_client._endpoint);
+    // Parse config credentials without creating full client
+    ClientConfiguration temp_config;
+    std::optional<std::string> temp_account_name = temp_config.account_name;
+    std::optional<std::string> temp_endpoint = temp_config.endpoint_url;
+#ifdef AZURITE_TESTING
+    std::optional<std::string> temp_connection_string = temp_config.connection_string;
+#endif
+
+    // Override with config parameters
+    auto ptr = config.initial_params;
+    if (ptr) {
+        for (size_t i = 0; i < config.num_initial_params; ++i, ++ptr) {
+            if (strcmp(ptr->key, "account_name") == 0) temp_account_name = std::string(ptr->value);
+            else if (strcmp(ptr->key, "endpoint") == 0) temp_endpoint = std::string(ptr->value);
+#ifdef AZURITE_TESTING
+            else if (strcmp(ptr->key, "connection_string") == 0) temp_connection_string = std::string(ptr->value);
+#endif
+        }
+    }
+    if (config.endpoint_url) temp_endpoint = std::string(config.endpoint_url);
+
+#ifdef AZURITE_TESTING
+    if (_connection_string.has_value()) {
+        return (_connection_string == temp_connection_string);
+    }
+#endif
+    return (_account_name == temp_account_name || _endpoint == temp_endpoint);
 }
 
 common::backend_api::Response AzureClient::async_read_response()
@@ -223,7 +205,7 @@ common::ResponseCode AzureClient::async_read(const char* path,
     }
 
     char * buffer_ = destination_buffer;
-    
+
     // Split range into chunks
     size_t num_chunks = std::max(1UL, range.length / _chunk_bytesize);
     LOG(SPAM) << "Number of chunks is: " << num_chunks;
@@ -232,7 +214,7 @@ common::ResponseCode AzureClient::async_read(const char* path,
     auto counter = std::make_shared<std::atomic<unsigned>>(num_chunks);
     auto is_success = std::make_shared<std::atomic<bool>>(true);
 
-    // Parse Azure URI (azure://container/blob or https://account.blob.core.windows.net/container/blob)
+    // Parse Azure URI az://container/blob
     const auto uri = common::s3::StorageUri(path);
     std::string container_name(uri.bucket);
     std::string blob_name(uri.path);
@@ -244,44 +226,19 @@ common::ResponseCode AzureClient::async_read(const char* path,
     {
         size_t bytesize_ = (i == num_chunks - 1 ? total_ : _chunk_bytesize);
 
-        // Launch async task using std::async (Azure SDK clients are thread-safe)
-        // Note: future is moved into a detached state after creation to avoid destructor issues
-        auto future = std::async(std::launch::async, [
-            blob_service_client = _impl->blob_service_client,  // Capture shared_ptr to keep it alive
+        // Capture current buffer, offset for this specific chunk
+        char* chunk_buffer = buffer_;
+        size_t chunk_offset = offset_;
+        
+        // Launch async download with callback - AsyncAzureClient ThreadPool handles both download and callback
+        _async_client->DownloadBlobRangeAsync(
             container_name,
             blob_name,
-            buffer_,
+            chunk_buffer,
+            chunk_offset,
             bytesize_,
-            offset_,
-            request_id,
-            counter,
-            is_success,
-            responder,
-            chunk_index = i,
-            timeout_s = _client_config.request_timeout_s  // Capture timeout from config
-        ]() {
-            try {
-                auto container_client = blob_service_client->GetBlobContainerClient(container_name);
-                auto blob_client = container_client.GetBlockBlobClient(blob_name);
-                DownloadBlobToOptions download_options;
-                download_options.Range = Azure::Core::Http::HttpRange();
-                download_options.Range.Value().Offset = offset_;
-                download_options.Range.Value().Length = bytesize_;
-
-                // Apply timeout from ClientConfiguration
-                // Reference: https://learn.microsoft.com/en-us/azure/storage/blobs/storage-performance-checklist
-                Azure::Core::Context context;
-                if (timeout_s > 0) {
-                    auto deadline = std::chrono::system_clock::now() + std::chrono::seconds(timeout_s);
-                    context = context.WithDeadline(deadline);
-                }
-                
-                auto response = blob_client.DownloadTo(
-                    reinterpret_cast<uint8_t*>(buffer_), bytesize_, download_options, context
-                );
-                
-                if (response.Value.ContentRange.Length.HasValue() && 
-                    response.Value.ContentRange.Length.Value() == bytesize_) {
+            [request_id, counter, is_success, responder](bool success, const std::string& error_msg) {
+                if (success) {
                     const auto running = counter->fetch_sub(1);
                     LOG(SPAM) << "Async read request " << request_id << " succeeded - " << running << " running";
                     
@@ -290,37 +247,15 @@ common::ResponseCode AzureClient::async_read(const char* path,
                         responder->push(std::move(r));
                     }
                 } else {
-                    LOG(ERROR) << "Azure blob read size mismatch for request " << request_id;
+                    LOG(ERROR) << "Failed to download Azure blob of request " << request_id << ": " << error_msg;
                     bool previous = is_success->exchange(false);
                     if (previous) {
                         common::backend_api::Response r(request_id, common::ResponseCode::FileAccessError);
                         responder->push(std::move(r));
                     }
                 }
-            } catch (const Azure::Core::RequestFailedException& e) {
-                LOG(ERROR) << "Failed to download Azure blob of request " << request_id << " "
-                           << static_cast<int>(e.StatusCode) << ": " << e.what();
-                bool previous = is_success->exchange(false);
-                if (previous) {
-                    common::backend_api::Response r(request_id, common::ResponseCode::FileAccessError);
-                    responder->push(std::move(r));
-                }
-            } catch (const std::exception& e) {
-                LOG(ERROR) << "Failed to read Azure blob of request " << request_id << ": " << e.what();
-                bool previous = is_success->exchange(false);
-                if (previous) {
-                    common::backend_api::Response r(request_id, common::ResponseCode::FileAccessError);
-                    responder->push(std::move(r));
-                }
             }
-        });
-
-        // Store the future to prevent blocking on destruction
-        // (std::async futures block in destructor if not stored)
-        {
-            std::lock_guard<std::mutex> lock(_impl->futures_mutex);
-            _impl->active_futures.push_back(std::move(future));
-        }
+        );
         
         total_ -= bytesize_;
         offset_ += bytesize_;

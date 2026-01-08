@@ -3,19 +3,17 @@
 #include <string>
 #include <optional>
 
-// Note: In a real implementation, you would include Azure SDK headers:
-// #include <azure/storage/blobs.hpp>
-
 namespace runai::llm::streamer::impl::azure
 {
 
 struct ClientConfiguration
 {
-    // Azure client configuration options
-    std::optional<std::string> connection_string;
+    // Azure client configuration options (uses DefaultAzureCredential)
     std::optional<std::string> account_name;
-    std::optional<std::string> account_key;
-    std::optional<std::string> sas_token;
+#ifdef AZURITE_TESTING
+    // Connection string is only available for Azurite/local testing
+    std::optional<std::string> connection_string;
+#endif
     std::optional<std::string> endpoint_url;
     
     // Retry and timeout settings

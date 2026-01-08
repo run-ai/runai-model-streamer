@@ -6,6 +6,7 @@
 #include <optional>
 
 #include "azure/client_configuration/client_configuration.h"
+#include "azure/client/async_azure_client/async_azure_client.h"
 #include "common/backend_api/response/response.h"
 
 #include "common/backend_api/object_storage/object_storage.h"
@@ -14,11 +15,10 @@
 #include "common/shared_queue/shared_queue.h"
 #include "common/range/range.h"
 
+#include <azure/storage/blobs.hpp>
+
 namespace runai::llm::streamer::impl::azure
 {
-
-// Forward declaration for pimpl idiom
-struct AzureClientImpl;
 
 struct AzureClient : common::IClient
 {
@@ -44,15 +44,16 @@ struct AzureClient : common::IClient
     ClientConfiguration _client_config;
     const size_t _chunk_bytesize;
     
-    // Azure credentials
-    std::optional<std::string> _connection_string;
+    // Azure credentials (uses DefaultAzureCredential)
     std::optional<std::string> _account_name;
-    std::optional<std::string> _account_key;
-    std::optional<std::string> _sas_token;
     std::optional<std::string> _endpoint;
+#ifdef AZURITE_TESTING
+    std::optional<std::string> _connection_string;
+#endif
     
-    // Pimpl pointer for Azure SDK client (hides implementation details)
-    std::unique_ptr<AzureClientImpl> _impl;
+    // Azure Blob Storage client and async wrapper
+    std::shared_ptr<Azure::Storage::Blobs::BlobServiceClient> _blob_service_client;
+    std::unique_ptr<AsyncAzureClient> _async_client;
 
     // queue of asynchronous responses
     using Responder = common::SharedQueue<common::backend_api::Response>;

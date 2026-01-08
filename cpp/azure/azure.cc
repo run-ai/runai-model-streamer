@@ -7,7 +7,7 @@
 #include "utils/semver/semver.h"
 
 // For connecting to Azure Blob Storage:
-// 1. uri should be in the format azure://container/path
+// 1. uri should be in the format az://container/path
 // 2. Credentials can be provided via environment variables or config parameters
 // 3. See azure.h for detailed credential configuration options
 
@@ -74,10 +74,7 @@ common::backend_api::ResponseCode_t obj_create_client(common::backend_api::Objec
     common::ResponseCode ret = common::ResponseCode::Success;
     try
     {
-        // IMPORTANT: Do NOT reuse Azure clients! Create a fresh client each time.
-        // The responder (SharedQueue) in AzureClient is not designed for concurrent pop() calls.
-        // If multiple workload threads reuse the same client, they'll call pop() simultaneously causing crashes.
-        *out_client_handle = new AzureClient(*client_initial_config);
+        *out_client_handle = AzureClientMgr::pop(*client_initial_config);
     }
     catch(const common::Exception & e)
     {
@@ -100,8 +97,7 @@ common::backend_api::ResponseCode_t obj_remove_client(common::backend_api::Objec
     {
         if (client_handle)
         {
-            // Since we're not reusing clients, just delete it
-            delete static_cast<AzureClient *>(client_handle);
+            AzureClientMgr::push(static_cast<AzureClient *>(client_handle));
         }
     }
     catch(const std::exception & e)
@@ -190,7 +186,7 @@ common::backend_api::ResponseCode_t obj_wait_for_completions(common::backend_api
         }
 
         // For non-blocking mode, exit after first attempt
-        if (wait_mode == common::backend_api::OBJECT_WAIT_MODE_NON_BLOCKING && i == 0 && *out_num_events_retrieved == 0)
+        if (wait_mode == common::backend_api::OBJECT_WAIT_MODE_NON_BLOCKING && i == 0)
         {
             break;
         }

@@ -6,4 +6,8 @@ runai_cc_auto_library(
         "//utils/env",
         "//utils/logging",
     ],
+    defines = select({
+        "//:azurite_testing": ["AZURITE_TESTING"],
+        "//conditions:default": [],
+    }),
 )

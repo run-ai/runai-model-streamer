@@ -137,6 +137,67 @@ The session token shoud be passed as an environment variable `AWS_SESSION_TOKEN`
 
 To check if IAM role assumption is needed run `aws s3 ls s3://your-bucket-name --region your-region`. If you get a `403 Forbidden` error, you might need an assumed role
 
+#### Streaming from Azure Blob Storage
+
+> **Note:** Streaming models from Azure Blob Storage requires the installation of the streamer Azure package, as can be found [here](#azureCapabilityInstallation).
+
+To load tensors from Azure Blob Storage, replace the file path in the code above with your Azure path, e.g.:
+
+```python
+file_path = "az://my-container/my/file/path.safetensors"
+```
+
+##### Azure Authentication
+
+The streamer uses Azure's DefaultAzureCredential for authentication, which provides a seamless authentication experience across development and production environments.
+
+###### Default Azure Credential (Recommended)
+
+Set the storage account name and DefaultAzureCredential handles authentication automatically:
+
+```bash
+export AZURE_STORAGE_ACCOUNT_NAME="myaccount"
+```
+
+The DefaultAzureCredential chain tries multiple authentication methods in order:
+1. **Environment variables** (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_CLIENT_SECRET`) - for service principal authentication
+2. **Managed Identity** - no configuration needed when running in Azure (VMs, AKS, App Service, etc.)
+3. **Azure CLI** - authenticate via `az login`
+4. **Azure PowerShell** - authenticate via `Connect-AzAccount`
+5. **Azure Developer CLI** - authenticate via `azd auth login`
+
+See [DefaultAzureCredential](https://learn.microsoft.com/en-us/dotnet/azure/sdk/authentication#defaultazurecredential) for more information.
+
+###### Service Principal Authentication
+
+For automated pipelines and CI/CD, use service principal credentials:
+
+```bash
+export AZURE_STORAGE_ACCOUNT_NAME="myaccount"
+export AZURE_CLIENT_ID="your-client-id"
+export AZURE_TENANT_ID="your-tenant-id"
+export AZURE_CLIENT_SECRET="your-client-secret"
+```
+
+###### Managed Identity
+
+When running in Azure (VMs, AKS, Azure Functions, etc.), managed identity is used automatically:
+
+```bash
+export AZURE_STORAGE_ACCOUNT_NAME="myaccount"
+# No additional configuration needed - managed identity is detected automatically
+```
+
+###### Custom Endpoint (Private Endpoints)
+
+For Azure Private Endpoints or custom storage endpoints, set the endpoint URL:
+
+```bash
+export AZURE_STORAGE_ENDPOINT="https://myaccount.privatelink.blob.core.windows.net"
+```
+
+When using a custom endpoint, `AZURE_STORAGE_ACCOUNT_NAME` is optional since the endpoint URL is used directly.
+
 #### Streaming from Google cloud storage
 
 ##### SDK Authentication
