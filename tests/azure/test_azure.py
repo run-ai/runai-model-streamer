@@ -12,8 +12,12 @@ from tests.cases.testcases import compatibility_test_cases
 class AzuriteServer(ObjectStoreBackend):
     """A helper class to interact with Azurite (Azure Storage emulator) test server."""
     def __init__(self):
-        self.connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
-        self.client = BlobServiceClient.from_connection_string(self.connection_string)
+        # Use account name and key for Azurite (local emulator)
+        # Azurite requires authentication - it doesn't support anonymous access
+        account_name = os.getenv("AZURE_STORAGE_ACCOUNT_NAME")
+        account_key = os.getenv("AZURE_STORAGE_ACCOUNT_KEY")
+        endpoint = os.getenv("AZURE_STORAGE_ENDPOINT")
+        self.client = BlobServiceClient(account_url=endpoint, credential=account_key)
 
     def wait_for_startup(self, timeout=30):
         """Wait for the Azurite server to become available."""
@@ -35,10 +39,8 @@ class AzuriteServer(ObjectStoreBackend):
         container_client = self.client.get_container_client(container_name)
         
         # Create container if it doesn't exist
-        try:
+        if not container_client.exists():
             container_client.create_container()
-        except Exception:
-            pass  # Container already exists
         
         blob_name = os.path.join(directory, os.path.basename(file_path)).replace("\\", "/")
         blob_client = container_client.get_blob_client(blob_name)
@@ -49,7 +51,7 @@ class AzuriteServer(ObjectStoreBackend):
 
 TestAzureCompatibility = compatibility_test_cases(
     backend_class=AzuriteServer,
-    scheme="azure",
+    scheme="az",
     bucket_name=os.getenv("AZURE_CONTAINER")
 )
 

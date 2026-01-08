@@ -11,31 +11,27 @@ namespace runai::llm::streamer::impl::azure
 
 ClientConfiguration::ClientConfiguration()
 {
-    // Connection configuration from environment variables
-    // Reference: https://learn.microsoft.com/en-us/azure/storage/common/storage-configure-connection-string
-    const auto conn_str = utils::getenv<std::string>("AZURE_STORAGE_CONNECTION_STRING", "");
-    if (!conn_str.empty()) {
-        LOG(DEBUG) << "Using AZURE_STORAGE_CONNECTION_STRING for authentication";
-        connection_string = conn_str;
-    }
-
+    // Account name configuration from environment variable
+    // Authentication uses DefaultAzureCredential which supports:
+    // - Environment variables (AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_CLIENT_SECRET)
+    // - Managed Identity
+    // - Azure CLI
+    // - Visual Studio Code
+    // Reference: https://learn.microsoft.com/en-us/azure/developer/cpp/sdk/authentication
     const auto acct_name = utils::getenv<std::string>("AZURE_STORAGE_ACCOUNT_NAME", "");
     if (!acct_name.empty()) {
         LOG(DEBUG) << "Azure Storage account name: " << acct_name;
         account_name = acct_name;
     }
 
+#ifdef AZURITE_TESTING
+    // Account key for Azurite/local testing (only available in test builds)
     const auto acct_key = utils::getenv<std::string>("AZURE_STORAGE_ACCOUNT_KEY", "");
     if (!acct_key.empty()) {
-        LOG(DEBUG) << "Using AZURE_STORAGE_ACCOUNT_KEY for authentication";
+        LOG(DEBUG) << "Azure Storage account key is set (for Azurite/local testing)";
         account_key = acct_key;
     }
-
-    const auto sas = utils::getenv<std::string>("AZURE_STORAGE_SAS_TOKEN", "");
-    if (!sas.empty()) {
-        LOG(DEBUG) << "Using AZURE_STORAGE_SAS_TOKEN for authentication";
-        sas_token = sas;
-    }
+#endif
 
     const auto endpoint = utils::getenv<std::string>("AZURE_STORAGE_ENDPOINT", "");
     if (!endpoint.empty()) {

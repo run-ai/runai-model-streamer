@@ -6,6 +6,10 @@ cc_library(
     srcs = [
         "client.cc",
     ],
+    defines = select({
+        "//:azurite_testing": ["AZURITE_TESTING"],
+        "//conditions:default": [],
+    }),
     deps = [
         "@azure//:azure",
         "//common/backend_api/response",
@@ -18,6 +22,7 @@ cc_library(
         "//utils/logging",
         "//utils/env",
         "//azure/client_configuration",
+        "//azure/client/async_azure_client",
     ],
     visibility = ["//visibility:public"],
 )

@@ -3,6 +3,7 @@ from runai_model_streamer_azure.credentials.credentials import create_blob_servi
 
 import fnmatch
 import os
+import posixpath
 from pathlib import Path
 
 try:
@@ -23,7 +24,7 @@ def glob(path: str, allow_pattern: Optional[List[str]] = None, credentials: Opti
     List files in Azure Blob Storage matching the given pattern.
     
     Args:
-        path: Azure blob path in format "azure://container/prefix" or "https://account.blob.core.windows.net/container/prefix"
+        path: Azure blob path in format "az://container/prefix" or "https://account.blob.core.windows.net/container/prefix"
         allow_pattern: Optional list of glob patterns to include
         credentials: Optional AzureCredentials object
         
@@ -36,7 +37,7 @@ def glob(path: str, allow_pattern: Optional[List[str]] = None, credentials: Opti
         path = f"{path}/"
     
     container_name, _, keys = list_files(client, path, allow_pattern)
-    return [f"azure://{container_name}/{key}" for key in keys]
+    return [f"az://{container_name}/{key}" for key in keys]
 
 
 def pull_files(
@@ -50,7 +51,7 @@ def pull_files(
     Download files from Azure Blob Storage to local directory.
     
     Args:
-        model_path: Azure blob path in format "azure://container/prefix"
+        model_path: Azure blob path in format "az://container/prefix"
         dst: Local destination directory
         allow_pattern: Optional list of glob patterns to include
         ignore_pattern: Optional list of glob patterns to exclude
@@ -101,8 +102,8 @@ def list_files(
     Returns:
         Tuple of (container_name, prefix, list_of_blob_names)
     """
-    # Parse azure://container/prefix or https://account.blob.core.windows.net/container/prefix
-    path = removeprefix(path, 'azure://')
+    # Parse az://container/prefix or https://account.blob.core.windows.net/container/prefix
+    path = removeprefix(path, 'az://')
     if path.startswith('https://'):
         # Extract container and prefix from full URL
         parts = path.split('/')
@@ -110,14 +111,34 @@ def list_files(
         container_name = parts[3] if len(parts) > 3 else ""
         prefix = '/'.join(parts[4:]) if len(parts) > 4 else ""
     else:
-        # Simple azure://container/prefix format
+        # Simple az://container/prefix format
         parts = path.split('/', 1)
         container_name = parts[0]
         prefix = parts[1] if len(parts) > 1 else ""
+    
+    # Reconstruct the prefix
+    prefix = prefix.rstrip('/')
+    
+    if prefix:
+        # This ensures a trailing slash without double-slashing
+        prefix = posixpath.join(prefix, '')
 
     container_client = client.get_container_client(container_name)
-    blobs = container_client.list_blobs(name_starts_with=prefix)
-    paths = [blob.name for blob in blobs]
+    
+    # List all blobs with the given prefix
+    blob_items = container_client.list_blobs(name_starts_with=prefix)
+    
+    # Manually filter to achieve non-recursive behavior (like S3/GCS with delimiter)
+    # Only include blobs that are directly in the prefix directory, not in subdirectories
+    paths = []
+    for item in blob_items:
+        if hasattr(item, 'name'):
+            # Remove the prefix to get the relative path
+            relative_path = item.name[len(prefix):] if item.name.startswith(prefix) else item.name
+            # If there's no '/' in the relative path, it's directly in this directory
+            # If there is a '/', it's in a subdirectory and should be excluded
+            if '/' not in relative_path:
+                paths.append(item.name)
 
     # Filter out directories (blobs ending with /)
     paths = _filter_ignore(paths, ["*/"])

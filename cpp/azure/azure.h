@@ -6,19 +6,25 @@
 
 // For connecting to Azure Blob Storage:
 //
-// 1. Uri should be in the format azure://container/path or https://account.blob.core.windows.net/container/path
+// 1. Uri should be in the format az://container/path or https://account.blob.core.windows.net/container/path
 //
-// 2. Credentials can be provided via:
-//    - Connection string: AZURE_STORAGE_CONNECTION_STRING
-//    - Account name and key: AZURE_STORAGE_ACCOUNT_NAME and AZURE_STORAGE_ACCOUNT_KEY
-//    - SAS token: AZURE_STORAGE_ACCOUNT_NAME and AZURE_STORAGE_SAS_TOKEN
-//    - Managed Identity: Use default Azure credential chain
+// 2. Authentication using DefaultAzureCredential:
+//    - Set AZURE_STORAGE_ACCOUNT_NAME environment variable
+//    - DefaultAzureCredential tries multiple authentication methods in order:
+//      * Environment variables (AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_CLIENT_SECRET) for service principal
+//      * Managed Identity (no env vars needed when running in Azure)
+//      * Azure CLI (az login)
+//      * Azure PowerShell (Connect-AzAccount)
+//      * Azure Developer CLI (azd auth login)
 //
-// 3. Optional: Set custom endpoint with AZURE_STORAGE_ENDPOINT
+// 3. Optional configuration:
+//    - Custom endpoint: AZURE_STORAGE_ENDPOINT (for Azurite/emulators)
+//    - API version: AZURE_STORAGE_API_VERSION (default: "2023-11-03")
 //
 // Example usage:
-// azure:   AZURE_STORAGE_CONNECTION_STRING="..." <streamer app> azure://container/path
-// azure:   AZURE_STORAGE_ACCOUNT_NAME="account" AZURE_STORAGE_ACCOUNT_KEY="key" <streamer app> azure://container/path
+// managed:   AZURE_STORAGE_ACCOUNT_NAME="account" <streamer app> az://container/path
+// azurite:   AZURE_STORAGE_ACCOUNT_NAME="devstoreaccount1" AZURE_STORAGE_ENDPOINT="http://127.0.0.1:10000/devstoreaccount1" <streamer app> az://container/path
+// programmatic: Pass credentials in ObjectClientConfig_t.initial_params
 
 namespace runai::llm::streamer::impl::azure
 {

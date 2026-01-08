@@ -15,29 +15,19 @@ class AzureCredentials:
     """
     Azure Blob Storage credentials configuration.
     
-    Credentials can be provided in the following ways (in order of precedence):
-    1. Connection string (connection_string parameter)
-    2. Account name with key (account_name + account_key)
-    3. Account name with SAS token (account_name + sas_token)
-    4. Environment variables:
-       - AZURE_STORAGE_CONNECTION_STRING
-       - AZURE_STORAGE_ACCOUNT_NAME + AZURE_STORAGE_ACCOUNT_KEY
-       - AZURE_STORAGE_ACCOUNT_NAME + AZURE_STORAGE_SAS_TOKEN
-    5. Default Azure credential chain (managed identity, Azure CLI, etc.)
+    Uses DefaultAzureCredential by default, which supports:
+    - Managed Identity
+    - Azure CLI
+    - Environment credentials (AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_CLIENT_SECRET)
+    - Visual Studio Code credentials
     """
     
     def __init__(
         self,
-        connection_string: Optional[str] = None,
         account_name: Optional[str] = None,
-        account_key: Optional[str] = None,
-        sas_token: Optional[str] = None,
         endpoint: Optional[str] = None
     ):
-        self.connection_string = connection_string
         self.account_name = account_name
-        self.account_key = account_key
-        self.sas_token = sas_token
         self.endpoint = endpoint
 
 
@@ -56,17 +46,8 @@ def get_credentials(credentials: Optional[AzureCredentials] = None) -> AzureCred
         credentials = AzureCredentials()
     
     # Check environment variables if not provided
-    if not credentials.connection_string:
-        credentials.connection_string = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
-    
     if not credentials.account_name:
         credentials.account_name = os.environ.get("AZURE_STORAGE_ACCOUNT_NAME")
-    
-    if not credentials.account_key:
-        credentials.account_key = os.environ.get("AZURE_STORAGE_ACCOUNT_KEY")
-    
-    if not credentials.sas_token:
-        credentials.sas_token = os.environ.get("AZURE_STORAGE_SAS_TOKEN")
     
     if not credentials.endpoint:
         credentials.endpoint = os.environ.get("AZURE_STORAGE_ENDPOINT")
@@ -76,7 +57,10 @@ def get_credentials(credentials: Optional[AzureCredentials] = None) -> AzureCred
 
 def create_blob_service_client(credentials: Optional[AzureCredentials] = None) -> BlobServiceClient:
     """
-    Creates an Azure BlobServiceClient using the provided or resolved credentials.
+    Creates an Azure BlobServiceClient using DefaultAzureCredential.
+    
+    For local testing with Azurite, set AZURE_STORAGE_ACCOUNT_KEY environment variable
+    to use account key authentication instead (token credentials only work with HTTPS).
     
     Args:
         credentials: Optional AzureCredentials object
@@ -85,37 +69,29 @@ def create_blob_service_client(credentials: Optional[AzureCredentials] = None) -
         BlobServiceClient instance
         
     Raises:
-        ValueError: If no valid credentials are found
+        ValueError: If account name is not provided
     """
     
     creds = get_credentials(credentials)
     
-    # Priority 1: Connection string
-    if creds.connection_string:
-        return BlobServiceClient.from_connection_string(creds.connection_string)
+    if not creds.account_name:
+        raise ValueError(
+            "Azure account name is required. Set AZURE_STORAGE_ACCOUNT_NAME environment variable "
+            "or provide account_name in AzureCredentials."
+        )
     
-    # Priority 2: Account name + key
-    if creds.account_name and creds.account_key:
-        account_url = creds.endpoint or f"https://{creds.account_name}.blob.core.windows.net"
-        return BlobServiceClient(account_url=account_url, credential=creds.account_key)
+    account_url = creds.endpoint or f"https://{creds.account_name}.blob.core.windows.net"
     
-    # Priority 3: Account name + SAS token
-    if creds.account_name and creds.sas_token:
-        account_url = creds.endpoint or f"https://{creds.account_name}.blob.core.windows.net"
-        sas = creds.sas_token if creds.sas_token.startswith("?") else f"?{creds.sas_token}"
-        return BlobServiceClient(account_url=f"{account_url}{sas}")
+    # Only use account key for HTTP endpoints (Azurite/local testing)
+    # DefaultAzureCredential requires HTTPS, so this is inherently safe:
+    # - Production Azure always uses HTTPS -> DefaultAzureCredential
+    # - Azurite uses HTTP -> account key (if set)
+    is_http_endpoint = account_url.startswith("http://")
+    account_key = os.environ.get("AZURE_STORAGE_ACCOUNT_KEY") if is_http_endpoint else None
     
-    # Priority 4: Default credential chain
-    if creds.account_name:
-        account_url = creds.endpoint or f"https://{creds.account_name}.blob.core.windows.net"
-        credential = DefaultAzureCredential()
-        return BlobServiceClient(account_url=account_url, credential=credential)
+    if account_key:
+        return BlobServiceClient(account_url=account_url, credential=account_key)
     
-    raise ValueError(
-        "No valid Azure credentials found. Please provide one of:\n"
-        "- connection_string\n"
-        "- account_name + account_key\n"
-        "- account_name + sas_token\n"
-        "- account_name (will use default Azure credential chain)\n"
-        "or set corresponding environment variables."
-    )
+    # Use DefaultAzureCredential for production (HTTPS endpoints)
+    credential = DefaultAzureCredential()
+    return BlobServiceClient(account_url=account_url, credential=credential)
