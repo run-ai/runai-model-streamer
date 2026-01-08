@@ -142,36 +142,6 @@ class TestSafetensorsStreamerMock(unittest.TestCase):
             )
 
     @patch(__name__ + '.list_safetensors')
-    def test_list_safetensors_S3_MOCK_ignore_pattern(self, mock_list_safetensors):
-        """
-        Mocked test: Verifies list_safetensors shim logic.
-        """
-
-        fake_s3_path = f"s3://my-fake-bucket/{self.file_dir}"
-        patcher = StreamerPatcher(local_bucket_path=self.local_dir)
-        
-        # Connect the patch to the patcher's shim method
-        mock_list_safetensors.side_effect = patcher.shim_list_safetensors
-        
-        # Call the (now-mocked) function
-        listed_files = list_safetensors(fake_s3_path, ignore_pattern=["test_empty.*"])
-        
-        # Assertions
-        self.assertIsInstance(listed_files, list)
-        self.assertEqual(len(listed_files), 1, "No files listed by shim")
-        self.assertTrue(
-            any(f.endswith(self.file_name) for f in listed_files),
-            f"{self.file_name} not found in listed files: {listed_files}"
-        )
-
-        expected_mock_prefix = "s3://my-fake-bucket/"
-        for f in listed_files:
-            self.assertTrue(
-                f.startswith(expected_mock_prefix),
-                f"File path '{f}' does not start with the expected mock prefix '{expected_mock_prefix}'"
-            )
-
-    @patch(__name__ + '.list_safetensors')
     def test_list_safetensors_GS_MOCK(self, mock_list_safetensors):
         """
         Mocked test: Verifies list_safetensors shim logic.

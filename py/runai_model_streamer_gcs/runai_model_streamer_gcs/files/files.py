@@ -5,21 +5,20 @@ import fnmatch
 import os
 from google.cloud import storage
 from pathlib import Path
+import posixpath
 
 def _create_client() -> storage.client.Client:
     credentials = get_credentials()
     return storage.Client(credentials = credentials.gcp_credentials())
 
-def glob(path: str, allow_pattern: Optional[List[str]] = None, ignore_pattern: Optional[List[str]] = None, is_recursive: bool = False) -> List[str]:
+def glob(path: str, allow_pattern: Optional[List[str]] = None) -> List[str]:
     gcs = _create_client()
 
     if not path.endswith("/"):
         path = f"{path}/"
     bucket_name, _, keys = list_files(gcs,
                                       path=path,
-                                      allow_pattern=allow_pattern,
-                                      ignore_pattern=ignore_pattern,
-                                      is_recursive=is_recursive)
+                                      allow_pattern=allow_pattern)
     return [f"gs://{bucket_name}/{key}" for key in keys]
 
 def pull_files(model_path: str,
@@ -52,18 +51,23 @@ def list_files(
         gcs: storage.client.Client,
         path: str,
         allow_pattern: Optional[List[str]] = None,
-        ignore_pattern: Optional[List[str]] = None,
-        is_recursive: bool = False
+        ignore_pattern: Optional[List[str]] = None
 ) -> Tuple[str, str, List[str]]:
     parts = removeprefix(path, 'gs://').split('/')
-    prefix = '/'.join(parts[1:])
     bucket_name = parts[0]
+    
+    # Reconstruct the prefix
+    prefix = '/'.join(parts[1:]).rstrip('/')
+
+    if prefix:
+        # This ensures a trailing slash without double-slashing
+        prefix = posixpath.join(prefix, '')
 
     bucket = gcs.get_bucket(bucket_name)
 
     # Use delimiter to control recursion
-    # If recursive is False, delimiter='/' stops at the next folder level
-    delimiter = None if is_recursive else '/'
+    # delimiter='/' stops at the next folder level
+    delimiter = '/'
     
     blobs = bucket.list_blobs(prefix=prefix, delimiter=delimiter)
     paths = [blob.name for blob in blobs]

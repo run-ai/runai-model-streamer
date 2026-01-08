@@ -90,10 +90,10 @@ class StreamerPatcher:
         
 
     # === Shim for list_safetensors ===
-    def shim_list_safetensors(self, path: str, ignore_pattern: Optional[List[str]] = None, s3_credentials: Optional[S3Credentials] = None) -> List[str]:
+    def shim_list_safetensors(self, path: str, s3_credentials: Optional[S3Credentials] = None) -> List[str]:
         logger.debug(f"[RunAI Streamer][SHIM] list_safetensors is called with path: {path}")
         rewritten_path = self.convert_remote_path_to_local_path(path)
-        local_paths = original_list_safetensors(rewritten_path, ignore_pattern, s3_credentials)
+        local_paths = original_list_safetensors(rewritten_path, s3_credentials)
         remote_paths = [
             self.convert_local_path_to_mocked_remote_path(p, path)
             for p in local_paths

@@ -5,7 +5,8 @@ import os
 import boto3
 from pathlib import Path
 import posixpath
-def glob(path: str, allow_pattern: Optional[List[str]] = None, ignore_pattern: Optional[List[str]] = None, is_recursive: bool = False, credentials: Optional[S3Credentials] = None) -> List[str]:
+
+def glob(path: str, allow_pattern: Optional[List[str]] = None, credentials: Optional[S3Credentials] = None) -> List[str]:
     session, _ = get_credentials(credentials)
     if session is None:
         s3 = boto3.client("s3")
@@ -16,9 +17,7 @@ def glob(path: str, allow_pattern: Optional[List[str]] = None, ignore_pattern: O
         path = f"{path}/"
     bucket_name, _, keys = list_files(s3,
                                        path=path,
-                                       allow_pattern=allow_pattern,
-                                       ignore_pattern=ignore_pattern,
-                                       is_recursive=is_recursive)
+                                       allow_pattern=allow_pattern)
     return [f"s3://{bucket_name}/{key}" for key in keys]
 
 def pull_files(model_path: str,
@@ -53,8 +52,7 @@ def list_files(
         s3,
         path: str,
         allow_pattern: Optional[List[str]] = None,
-        ignore_pattern: Optional[List[str]] = None,
-        is_recursive: bool = False
+        ignore_pattern: Optional[List[str]] = None
 ) -> Tuple[str, str, List[str]]:
     parts = removeprefix(path, 's3://').split('/')
     bucket_name = parts[0]
@@ -70,12 +68,9 @@ def list_files(
   
     op_parameters = {
         'Bucket': bucket_name,
-        'Prefix': prefix
+        'Prefix': prefix,
+        'Delimiter': '/' # delimiter='/' so list is not recursive
     }
-
-    # Only add Delimiter if we want to STOP recursion
-    if not is_recursive:
-        op_parameters['Delimiter'] = '/'
 
     paths = []
     for page in paginator.paginate(**op_parameters):
