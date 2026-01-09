@@ -52,6 +52,9 @@ File::File(const std::string & path, const Config & config) :
     }
 
     // Log if O_DIRECT is enabled for this file
+    // Note: We check the environment variable again here rather than caching the result
+    // from get_open_flags() to keep the code simple and maintainable. File opening
+    // is not a hot path operation, so the minor overhead of checking twice is acceptable.
     if (is_directio_enabled())
     {
         LOG(INFO) << "Opened file " << path << " with O_DIRECT (DirectIO enabled)";
