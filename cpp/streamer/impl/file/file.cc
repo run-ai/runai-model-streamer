@@ -11,32 +11,45 @@
 namespace runai::llm::streamer::impl
 {
 
-File::File(const std::string & path, const Config & config) :
-    Reader(Reader::Mode::Sync),
-    _fd(-1),
-    _block_size(config.fs_block_bytesize)
+namespace
 {
-    // Determine open flags based on RUNAI_STREAMER_DIRECTIO environment variable.
-    // O_DIRECT enables Direct I/O, bypassing the kernel page cache for reads.
-    // This is useful to avoid double-caching when using network filesystems or
-    // when the application has its own caching layer.
-    // Note: O_DIRECT requires aligned buffers and read sizes (typically to 512-byte
-    // or filesystem block size boundaries). The existing code uses _block_size for
-    // chunked reads, which should satisfy alignment requirements on most systems.
+
+// Helper function to determine file open flags based on environment variables.
+// O_DIRECT enables Direct I/O, bypassing the kernel page cache for reads.
+// This is useful to avoid double-caching when using network filesystems or
+// when the application has its own caching layer.
+// Note: O_DIRECT requires aligned buffers and read sizes (typically to 512-byte
+// or filesystem block size boundaries). The existing code uses _block_size for
+// chunked reads, which should satisfy alignment requirements on most systems.
+int get_open_flags()
+{
     int flags = O_RDONLY;
     std::string directio_env;
     if (utils::try_getenv("RUNAI_STREAMER_DIRECTIO", directio_env) && directio_env == "1")
     {
         flags |= O_DIRECT;
-        LOG(INFO) << "Opening file " << path << " with O_DIRECT (DirectIO enabled)";
     }
+    return flags;
+}
 
-    _fd = utils::Fd(::open(path.c_str(), flags));
+} // namespace
 
+File::File(const std::string & path, const Config & config) :
+    Reader(Reader::Mode::Sync),
+    _fd(::open(path.c_str(), get_open_flags())),
+    _block_size(config.fs_block_bytesize)
+{
     if (_fd.fd() == -1)
     {
         LOG(ERROR) << "Failed to access file " << path;
         throw common::Exception(common::ResponseCode::FileAccessError);
+    }
+
+    // Log if O_DIRECT is enabled for this file
+    std::string directio_env;
+    if (utils::try_getenv("RUNAI_STREAMER_DIRECTIO", directio_env) && directio_env == "1")
+    {
+        LOG(INFO) << "Opened file " << path << " with O_DIRECT (DirectIO enabled)";
     }
 }
 
