@@ -14,18 +14,24 @@ namespace runai::llm::streamer::impl
 namespace
 {
 
-// Helper function to determine file open flags based on environment variables.
+// Helper function to check if Direct I/O is enabled via environment variable.
 // O_DIRECT enables Direct I/O, bypassing the kernel page cache for reads.
 // This is useful to avoid double-caching when using network filesystems or
 // when the application has its own caching layer.
 // Note: O_DIRECT requires aligned buffers and read sizes (typically to 512-byte
 // or filesystem block size boundaries). The existing code uses _block_size for
 // chunked reads, which should satisfy alignment requirements on most systems.
+bool is_directio_enabled()
+{
+    std::string directio_env;
+    return utils::try_getenv("RUNAI_STREAMER_DIRECTIO", directio_env) && directio_env == "1";
+}
+
+// Helper function to determine file open flags based on environment variables.
 int get_open_flags()
 {
     int flags = O_RDONLY;
-    std::string directio_env;
-    if (utils::try_getenv("RUNAI_STREAMER_DIRECTIO", directio_env) && directio_env == "1")
+    if (is_directio_enabled())
     {
         flags |= O_DIRECT;
     }
@@ -46,8 +52,7 @@ File::File(const std::string & path, const Config & config) :
     }
 
     // Log if O_DIRECT is enabled for this file
-    std::string directio_env;
-    if (utils::try_getenv("RUNAI_STREAMER_DIRECTIO", directio_env) && directio_env == "1")
+    if (is_directio_enabled())
     {
         LOG(INFO) << "Opened file " << path << " with O_DIRECT (DirectIO enabled)";
     }
