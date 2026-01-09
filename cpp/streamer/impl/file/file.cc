@@ -6,15 +6,33 @@
 
 #include "common/exception/exception.h"
 #include "utils/logging/logging.h"
+#include "utils/env/env.h"
 
 namespace runai::llm::streamer::impl
 {
 
 File::File(const std::string & path, const Config & config) :
     Reader(Reader::Mode::Sync),
-    _fd(::open(path.c_str(), O_RDONLY)),
+    _fd(-1),
     _block_size(config.fs_block_bytesize)
 {
+    // Determine open flags based on RUNAI_STREAMER_DIRECTIO environment variable.
+    // O_DIRECT enables Direct I/O, bypassing the kernel page cache for reads.
+    // This is useful to avoid double-caching when using network filesystems or
+    // when the application has its own caching layer.
+    // Note: O_DIRECT requires aligned buffers and read sizes (typically to 512-byte
+    // or filesystem block size boundaries). The existing code uses _block_size for
+    // chunked reads, which should satisfy alignment requirements on most systems.
+    int flags = O_RDONLY;
+    std::string directio_env;
+    if (utils::try_getenv("RUNAI_STREAMER_DIRECTIO", directio_env) && directio_env == "1")
+    {
+        flags |= O_DIRECT;
+        LOG(INFO) << "Opening file " << path << " with O_DIRECT (DirectIO enabled)";
+    }
+
+    _fd = utils::Fd(::open(path.c_str(), flags));
+
     if (_fd.fd() == -1)
     {
         LOG(ERROR) << "Failed to access file " << path;
