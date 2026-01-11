@@ -3,7 +3,6 @@ from typing import Iterator, Optional
 import torch
 import glob
 import os
-import fnmatch
 from typing import List
 
 from runai_model_streamer.file_streamer import FileChunks

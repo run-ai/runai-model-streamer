@@ -91,6 +91,7 @@ def s3_glob(path: str, allow_pattern: Optional[List[str]] = None, s3_credentials
 def s3_pull_files(model_path: str,
                 dst: str,
                 allow_pattern: Optional[List[str]] = None,
+                ignore_pattern: Optional[List[str]] = None,
                 s3_credentials : Optional[S3Credentials] = None,) -> None:
     s3_files_module = get_s3_files_module()
     if s3_files_module is None:
