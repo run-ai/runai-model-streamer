@@ -3,16 +3,24 @@ from runai_model_streamer_s3.credentials.credentials import get_credentials, S3C
 import fnmatch
 import os
 import boto3
+from botocore.config import Config
 from pathlib import Path
 import posixpath
 
 def glob(path: str, allow_pattern: Optional[List[str]] = None, credentials: Optional[S3Credentials] = None) -> List[str]:
     session, _ = get_credentials(credentials)
-    if session is None:
-        s3 = boto3.client("s3")
-    else:
-        s3 = session.client("s3")
+    use_virtual_addressing = os.getenv("RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING", "1")
+    
+    client_config = None
+    if use_virtual_addressing == "0":
+        client_config = Config(s3={'addressing_style': 'path'})
 
+    # Pass the config to the client constructor
+    if session is None:
+        s3 = boto3.client("s3", config=client_config)
+    else:
+        s3 = session.client("s3", config=client_config)
+    
     if not path.endswith("/"):
         path = f"{path}/"
     bucket_name, _, keys = list_files(s3,
