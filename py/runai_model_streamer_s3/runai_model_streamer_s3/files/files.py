@@ -34,10 +34,17 @@ def pull_files(model_path: str,
                 ignore_pattern: Optional[List[str]] = None,
                 credentials: Optional[S3Credentials] = None,) -> None:
     session, _ = get_credentials(credentials)
+    use_virtual_addressing = os.getenv("RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING", "1")
+    
+    client_config = None
+    if use_virtual_addressing == "0":
+        client_config = Config(s3={'addressing_style': 'path'})
+
+    # Pass the config to the client constructor
     if session is None:
-        s3 = boto3.client("s3")
+        s3 = boto3.client("s3", config=client_config)
     else:
-        s3 = session.client("s3")
+        s3 = session.client("s3", config=client_config)
 
     if not model_path.endswith("/"):
         model_path = model_path + "/"
