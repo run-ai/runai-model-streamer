@@ -62,7 +62,22 @@ def compatibility_test_cases(backend_class, scheme, bucket_name):
 
             safetensors_files = [f"{self.scheme}://{self.bucket_name}/{directory}/{os.path.basename(fp)}" for fp in file_paths if fp.endswith('.safetensors')]
             
-            result_files = list_safetensors(f"{self.scheme}://{self.bucket_name}/{directory}")
+            result_files = list_safetensors(f"{self.scheme}://{self.bucket_name}/{directory}/")
+            self.assertEqual(sorted(result_files), sorted(safetensors_files))
+
+        def test_list_files_is_not_recursive(self):
+            file_paths = [create_random_files(self.temp_dir) for _ in range(FILE_COUNT)]
+
+            directory = random_letters(10).rstrip("/")
+            subdirectory = directory + "/" + random_letters(10).rstrip("/")
+            for file_path in file_paths:
+                self.server.upload_file(self.bucket_name, subdirectory, file_path)
+
+            safetensors_files = [f"{self.scheme}://{self.bucket_name}/{subdirectory}/{os.path.basename(fp)}" for fp in file_paths if fp.endswith('.safetensors')]
+            
+            result_files = list_safetensors(f"{self.scheme}://{self.bucket_name}/{directory}/")
+            self.assertEqual(len(result_files), 0)
+            result_files = list_safetensors(f"{self.scheme}://{self.bucket_name}/{subdirectory}")
             self.assertEqual(sorted(result_files), sorted(safetensors_files))
 
         def test_pull_files(self):
