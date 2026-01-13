@@ -5,6 +5,7 @@ import fnmatch
 import os
 from google.cloud import storage
 from pathlib import Path
+import posixpath
 
 def _create_client() -> storage.client.Client:
     credentials = get_credentials()
@@ -53,11 +54,22 @@ def list_files(
         ignore_pattern: Optional[List[str]] = None
 ) -> Tuple[str, str, List[str]]:
     parts = removeprefix(path, 'gs://').split('/')
-    prefix = '/'.join(parts[1:])
     bucket_name = parts[0]
+    
+    # Reconstruct the prefix
+    prefix = '/'.join(parts[1:]).rstrip('/')
+
+    if prefix:
+        # This ensures a trailing slash without double-slashing
+        prefix = posixpath.join(prefix, '')
 
     bucket = gcs.get_bucket(bucket_name)
-    blobs = bucket.list_blobs(prefix=prefix)
+
+    # Use delimiter to control recursion
+    # delimiter='/' stops at the next folder level
+    delimiter = '/'
+    
+    blobs = bucket.list_blobs(prefix=prefix, delimiter=delimiter)
     paths = [blob.name for blob in blobs]
 
     paths = _filter_ignore(paths, ["*/"])

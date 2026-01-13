@@ -25,10 +25,13 @@ SAFETENSORS_PATTERN = "*.safetensors"
 
 def list_safetensors(path: str, s3_credentials : Optional[S3Credentials] = None) -> List[str]:
     if is_s3_path(path):
-        return s3_glob(path, [SAFETENSORS_PATTERN], s3_credentials)
-    if is_gs_path(path):
-        return gcs_glob(path, [SAFETENSORS_PATTERN])
-    return glob.glob(os.path.join(path, SAFETENSORS_PATTERN))
+        files = s3_glob(path, [SAFETENSORS_PATTERN], s3_credentials)
+    elif is_gs_path(path):
+        files = gcs_glob(path, [SAFETENSORS_PATTERN])
+    else:
+        files = glob.glob(os.path.join(path, SAFETENSORS_PATTERN))
+    
+    return files
 
 def pull_files(model_path: str,
                 dst: str,

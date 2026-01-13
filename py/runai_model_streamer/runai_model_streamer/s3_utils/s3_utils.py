@@ -80,6 +80,7 @@ def s3_glob(path: str, allow_pattern: Optional[List[str]] = None, s3_credentials
 
     :param path: The S3 path to glob.
     :param allow_pattern: Optional list of patterns to allow.
+    :param s3_credentials: Optional S3 credentials.
     :return: List of matching S3 paths.
     """
     s3_files_module = get_s3_files_module()
@@ -103,7 +104,7 @@ def gcs_glob(path: str, allow_pattern: Optional[List[str]] = None) -> List[str]:
 
     :param path: The GCS path to glob.
     :param allow_pattern: Optional list of patterns to allow.
-    :return: List of matching S3 paths.
+    :return: List of matching GCS paths.
     """
     gcs_files_module = get_gcs_files_module()
     if gcs_files_module is None:

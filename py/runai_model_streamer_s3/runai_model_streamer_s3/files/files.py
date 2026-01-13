@@ -3,15 +3,24 @@ from runai_model_streamer_s3.credentials.credentials import get_credentials, S3C
 import fnmatch
 import os
 import boto3
+from botocore.config import Config
 from pathlib import Path
+import posixpath
 
 def glob(path: str, allow_pattern: Optional[List[str]] = None, credentials: Optional[S3Credentials] = None) -> List[str]:
     session, _ = get_credentials(credentials)
-    if session is None:
-        s3 = boto3.client("s3")
-    else:
-        s3 = session.client("s3")
+    use_virtual_addressing = os.getenv("RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING", "1")
+    
+    client_config = None
+    if use_virtual_addressing == "0":
+        client_config = Config(s3={'addressing_style': 'path'})
 
+    # Pass the config to the client constructor
+    if session is None:
+        s3 = boto3.client("s3", config=client_config)
+    else:
+        s3 = session.client("s3", config=client_config)
+    
     if not path.endswith("/"):
         path = f"{path}/"
     bucket_name, _, keys = list_files(s3,
@@ -25,10 +34,17 @@ def pull_files(model_path: str,
                 ignore_pattern: Optional[List[str]] = None,
                 credentials: Optional[S3Credentials] = None,) -> None:
     session, _ = get_credentials(credentials)
+    use_virtual_addressing = os.getenv("RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING", "1")
+    
+    client_config = None
+    if use_virtual_addressing == "0":
+        client_config = Config(s3={'addressing_style': 'path'})
+
+    # Pass the config to the client constructor
     if session is None:
-        s3 = boto3.client("s3")
+        s3 = boto3.client("s3", config=client_config)
     else:
-        s3 = session.client("s3")
+        s3 = session.client("s3", config=client_config)
 
     if not model_path.endswith("/"):
         model_path = model_path + "/"
@@ -54,12 +70,31 @@ def list_files(
         ignore_pattern: Optional[List[str]] = None
 ) -> Tuple[str, str, List[str]]:
     parts = removeprefix(path, 's3://').split('/')
-    prefix = '/'.join(parts[1:])
     bucket_name = parts[0]
+    
+    # Reconstruct the prefix
+    prefix = '/'.join(parts[1:]).rstrip('/')
 
-    objects = s3.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
-    paths = [obj['Key'] for obj in objects.get('Contents', [])]
+    if prefix:
+        # This ensures a trailing slash without double-slashing
+        prefix = posixpath.join(prefix, '')
 
+    paginator = s3.get_paginator('list_objects_v2')
+
+    op_parameters = {
+        'Bucket': bucket_name,
+        'Prefix': prefix,
+        'Delimiter': '/' # delimiter='/' so list is not recursive
+    }
+
+    paths = []
+    for page in paginator.paginate(**op_parameters):
+        # Contents is a list of files (no folders)
+        if 'Contents' in page:
+            for obj in page['Contents']:
+                paths.append(obj['Key'])
+
+    # Filter logic remains the same
     paths = _filter_ignore(paths, ["*/"])
     if allow_pattern is not None:
         paths = _filter_allow(paths, allow_pattern)
