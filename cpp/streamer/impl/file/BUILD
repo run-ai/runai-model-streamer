@@ -7,5 +7,6 @@ runai_cc_auto_library(
         "//streamer/impl/reader",
         "//streamer/impl/config",
         "//utils/fd",
+        "//utils/env",
     ],
 )
