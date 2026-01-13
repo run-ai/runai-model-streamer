@@ -80,7 +80,7 @@ def list_files(
         prefix = posixpath.join(prefix, '')
 
     paginator = s3.get_paginator('list_objects_v2')
-  
+
     op_parameters = {
         'Bucket': bucket_name,
         'Prefix': prefix,

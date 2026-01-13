@@ -29,7 +29,7 @@ def list_safetensors(path: str, s3_credentials : Optional[S3Credentials] = None)
     elif is_gs_path(path):
         files = gcs_glob(path, [SAFETENSORS_PATTERN])
     else:
-        files = glob.glob(os.path.join(path, SAFETENSORS_PATTERN))  
+        files = glob.glob(os.path.join(path, SAFETENSORS_PATTERN))
     
     return files
 
