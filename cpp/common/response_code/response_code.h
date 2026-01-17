@@ -23,6 +23,7 @@ enum class ResponseCode : int
     UnknownError,
     ObjPluginLoadError,
     GCSNotSupported,
+    AzureBlobNotSupported,
     __Max,
 };
 

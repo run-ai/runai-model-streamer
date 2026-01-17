@@ -50,3 +50,10 @@ jobs:
         password: ${{ secrets.PYPI_API_TOKEN }}
         packages-dir: py/runai_model_streamer_gcs/dist/
         print-hash: true
+
+    - name: Publish Azure streamer package distributions to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        password: ${{ secrets.PYPI_API_TOKEN }}
+        packages-dir: py/runai_model_streamer_azure/dist/
+        print-hash: true

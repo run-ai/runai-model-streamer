@@ -90,10 +90,13 @@ S3ClientWrapper::BackendHandle::~BackendHandle()
 
 const ObjectPluginType ObjectPluginType::ObjStorageGCS(PluginID::GCS, obj_plugin_gcs_name, lib_streamer_gcs_so_name);
 const ObjectPluginType ObjectPluginType::ObjStorageS3(PluginID::S3, obj_plugin_s3_name, lib_streamer_s3_so_name);
+const ObjectPluginType ObjectPluginType::ObjStorageAzure(PluginID::AZURE, obj_plugin_azure_name, lib_streamer_azure_so_name);
 
 const ObjectPluginType S3ClientWrapper::BackendHandle::get_libstreamers_plugin_type(const std::shared_ptr<common::s3::StorageUri> & uri) {
     if (uri != nullptr && uri->is_gcs()) {
         return ObjectPluginType::ObjStorageGCS;
+    } else if (uri != nullptr && uri->is_azure()) {
+        return ObjectPluginType::ObjStorageAzure;
     } else {
         return ObjectPluginType::ObjStorageS3;
     }
@@ -116,6 +119,8 @@ std::shared_ptr<utils::Dylib> S3ClientWrapper::BackendHandle::open_object_storag
             throw Exception(ResponseCode::GCSNotSupported);
         case PluginID::S3:
             throw Exception(ResponseCode::S3NotSupported);
+        case PluginID::AZURE:
+            throw Exception(ResponseCode::AzureBlobNotSupported);
     }
     return nullptr;
 }

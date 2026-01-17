@@ -23,6 +23,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     curl \
     libssl-dev \
     libcurl4-openssl-dev \
+    libxml2-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN wget https://dl.min.io/server/minio/release/linux-$([ "$(uname -m)" = "aarch64" ] && echo "arm64" || echo "amd64")/minio \
@@ -35,6 +36,12 @@ RUN curl -fsSL -o fake-gcs-server_1.52.2.tar.gz https://github.com/fsouza/fake-g
     && chmod +x fake-gcs-server/fake-gcs-server \
     && mv fake-gcs-server/fake-gcs-server /usr/local/bin/fake-gcs-server \
     && rm -rf fake-gcs-server
+
+# Install Node.js and Azurite
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && npm install -g azurite \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL -o openssl-3.5.0.tar.gz https://www.openssl.org/source/openssl-3.5.0.tar.gz && \
     tar zxf openssl-3.5.0.tar.gz && \
@@ -164,3 +171,92 @@ RUN git clone --recurse-submodules --depth 1 --branch "1.11.584" https://github.
     make -j4 && \
     make install && \
     rm -rf /opt/aws-sdk-cpp
+
+RUN curl -fsSL -o libxml2-2.13.5.tar.xz https://download.gnome.org/sources/libxml2/2.13/libxml2-2.13.5.tar.xz && \
+    tar xf libxml2-2.13.5.tar.xz && \
+    cd libxml2-2.13.5 && \
+
+    AR=/usr/bin/x86_64-linux-gnu-ar \
+    AS=/usr/bin/x86_64-linux-gnu-as \
+    LD=/usr/bin/x86_64-linux-gnu-ld \
+    RANLIB=/usr/bin/x86_64-linux-gnu-ranlib \
+    CC=/usr/bin/x86_64-linux-gnu-gcc \
+    NM=/usr/bin/x86_64-linux-gnu-nm \
+    CFLAGS="-fPIC" \
+    ./configure --host=x86_64-linux-gnu \
+        --disable-shared --enable-static \
+        --without-python --without-lzma --without-zlib \
+        --prefix=/opt/x86_64-xml2 && \
+        make -j4 > /dev/null && \
+        make install > /dev/null && \
+        make distclean > /dev/null && \
+
+    AR=/usr/bin/aarch64-linux-gnu-ar \
+    AS=/usr/bin/aarch64-linux-gnu-as \
+    LD=/usr/bin/aarch64-linux-gnu-ld \
+    RANLIB=/usr/bin/aarch64-linux-gnu-ranlib \
+    CC=/usr/bin/aarch64-linux-gnu-gcc \
+    NM=/usr/bin/aarch64-linux-gnu-nm \
+    CFLAGS="-fPIC" \
+    ./configure --host=aarch64-linux-gnu \
+        --disable-shared --enable-static \
+        --without-python --without-lzma --without-zlib \
+        --prefix=/opt/aarch64-xml2 && \
+        make -j4 > /dev/null && \
+        make install > /dev/null && \
+        make distclean > /dev/null && \
+
+    cd - && \
+    rm -rf libxml2-2.13.5 libxml2-2.13.5.tar.xz
+
+# Build Azure SDK for C++ (optimized with shared CMake options)
+SHELL ["/bin/bash", "-c"]
+RUN git clone --recurse-submodules https://github.com/Azure/azure-sdk-for-cpp /opt/azure-sdk-cpp && \
+    cd /opt/azure-sdk-cpp && \
+    git checkout azure-storage-blobs_12.15.0 && \
+    \
+    # Helper function to build Azure SDK components
+    build_azure_sdk_components() { \
+        local arch=$1 prefix=$2 source=$3 extra_opts=$4; \
+        local common_opts="-DCMAKE_TOOLCHAIN_FILE=/opt/toolchains/${arch}-linux-gnu.cmake \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DCMAKE_INSTALL_PREFIX=${prefix} \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DBUILD_TESTING=OFF \
+            -DCURL_LIBRARY=${prefix%azure}curl/lib/libcurl.a \
+            -DCURL_INCLUDE_DIR=${prefix%azure}curl/include \
+            -DOPENSSL_ROOT_DIR=${prefix%azure}ssl \
+            -DOPENSSL_INCLUDE_DIR=${prefix%azure}ssl/include \
+            -DOPENSSL_CRYPTO_LIBRARY=${prefix%azure}ssl/lib/libcrypto.a \
+            -DOPENSSL_SSL_LIBRARY=${prefix%azure}ssl/lib/libssl.a \
+            -DLIBXML2_LIBRARY=${prefix%azure}xml2/lib/libxml2.a \
+            -DLIBXML2_INCLUDE_DIR=${prefix%azure}xml2/include/libxml2"; \
+        cmake -B build-${arch}-${source##*/} -S ${source} \
+            ${common_opts} \
+            -DCMAKE_PREFIX_PATH="${prefix%azure}ssl;${prefix%azure}curl;${prefix%azure}xml2${extra_opts:+;}${extra_opts}" \
+            ${@:5} && \
+        cmake --build build-${arch}-${source##*/} -j4 && \
+        cmake --install build-${arch}-${source##*/}; \
+    } && \
+    \
+    # x86_64 builds
+    build_azure_sdk_components x86_64 /opt/x86_64-azure sdk/core/azure-core "" -DBUILD_TRANSPORT_CURL=ON -DDISABLE_AZURE_CORE_OPENTELEMETRY=ON && \
+    build_azure_sdk_components x86_64 /opt/x86_64-azure sdk/storage/azure-storage-common /opt/x86_64-azure && \
+    build_azure_sdk_components x86_64 /opt/x86_64-azure sdk/storage/azure-storage-blobs /opt/x86_64-azure && \
+    build_azure_sdk_components x86_64 /opt/x86_64-azure sdk/identity/azure-identity /opt/x86_64-azure && \
+    \
+    # aarch64 builds
+    build_azure_sdk_components aarch64 /opt/aarch64-azure sdk/core/azure-core "" -DBUILD_TRANSPORT_CURL=ON -DDISABLE_AZURE_CORE_OPENTELEMETRY=ON && \
+    build_azure_sdk_components aarch64 /opt/aarch64-azure sdk/storage/azure-storage-common /opt/aarch64-azure && \
+    build_azure_sdk_components aarch64 /opt/aarch64-azure sdk/storage/azure-storage-blobs /opt/aarch64-azure && \
+    build_azure_sdk_components aarch64 /opt/aarch64-azure sdk/identity/azure-identity /opt/aarch64-azure && \
+    \
+    rm -rf /opt/azure-sdk-cpp
+
+# Create symlinks for native architecture Azure SDK
+RUN NATIVE_ARCH=$(uname -m | sed 's/x86_64/x86_64/;s/aarch64/aarch64/') && \
+    if [ -d /opt/${NATIVE_ARCH}-azure ]; then \
+        ln -sf /opt/${NATIVE_ARCH}-azure/include/azure /usr/local/include/azure && \
+        ln -sf /opt/${NATIVE_ARCH}-azure/lib/* /usr/local/lib/; \
+    fi
+

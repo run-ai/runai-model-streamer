@@ -15,6 +15,7 @@ struct StorageUri
     std::string path;
 
     bool is_gcs() const;
+    bool is_azure() const;
 };
 
 struct StorageUri_C
