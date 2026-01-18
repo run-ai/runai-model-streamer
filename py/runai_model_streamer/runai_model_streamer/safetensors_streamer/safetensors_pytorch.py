@@ -127,9 +127,6 @@ class SafetensorsMetadata:
                 except json.JSONDecodeError as e:
                     raise ValueError(f"Corrupted File: Header in {filenames[file_index]} is not valid JSON. Error: {e}")
         except Exception as e:
-            style: Same issue - use isinstance(e, ValueError) instead of string matching.
-
-Suggested change
             if isinstance(e, ValueError): raise e
             raise ValueError(f"Streamer failed to read header body (likely truncated file): {str(e)}")
 
