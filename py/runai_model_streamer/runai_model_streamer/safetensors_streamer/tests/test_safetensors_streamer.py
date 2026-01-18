@@ -168,6 +168,34 @@ class TestSafetensorsStreamer(unittest.TestCase):
             with self.assertRaises(ValueError):
                 streamer.stream_file(path, None, "cpu")
 
+    def test_truncated_tensor_data(self):
+        """
+        Test a valid header with missing/truncated tensor data.
+        Verifies that create_torch_tensor raises ValueError if buffer size mismatch.
+        """
+        # Header claims 100 bytes of data (U8 x 100)
+        header_dict = {
+            "test_tensor": {
+                "dtype": "U8",
+                "shape": [100],
+                "data_offsets": [0, 100]
+            }
+        }
+        json_str = json.dumps(header_dict)
+        
+        # We only provide 10 bytes of actual data instead of 100
+        truncated_data = b"\x00" * 10
+        path = self.create_corrupted_safetensors("truncated_body.st", len(json_str), json_str, truncated_data)
+
+        with SafetensorsStreamer() as streamer:
+            # stream_file reads the header (which is fine)
+            streamer.stream_file(path, None, "cpu")
+            
+            # get_tensors attempts to read the body. 
+            # If truncation occurs, the buffer check in create_torch_tensor MUST fail.
+            with self.assertRaises(ValueError):
+                for _ in streamer.get_tensors():
+                    pass
 
 if __name__ == "__main__":
     unittest.main()

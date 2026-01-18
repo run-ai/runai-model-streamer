@@ -52,7 +52,50 @@ def compatibility_test_cases(backend_class, scheme, bucket_name):
             equal, message = tensor_maps_are_equal(our, their)
             if not equal:
                 self.fail(f"Tensor mismatch: {message}")
+        
+        def test_safetensors_truncated_file_body(self):
+            """
+            Tests the scenario where the header is valid, but the file ends unexpectedly 
+            (EOF) while reading the tensor data.
+            """
+            import struct
+            import json
+
+            # 1. Manually craft a corrupted file
+            # Define a header expecting 100 bytes of data
+            header = {
+                "tensor_truncated": {
+                    "dtype": "U8",
+                    "shape": [100000000],
+                    "data_offsets": [0, 100000000]
+                }
+            }
+            header_json = json.dumps(header).encode('utf-8')
+            
+            filename = f"truncated_{random_letters(5)}.safetensors"
+            file_path = os.path.join(self.temp_dir, filename)
+            
+            with open(file_path, "wb") as f:
+                # Write 8-byte header length
+                f.write(struct.pack('<Q', len(header_json)))
+                # Write Header
+                f.write(header_json)
+                # Write Data: Only write 10 bytes instead of the expected 100
+                f.write(b'\x00' * 10)
+
+            # 2. Upload the corrupted file
+            self.server.upload_file(self.bucket_name, "", file_path)
+
+            # 3. Stream and expect a ValueError during iteration
+            with SafetensorsStreamer() as run_sf:
+                # The stream_file call might succeed (it only reads the header),
+                # but the iteration MUST fail when it hits the EOF in the body.
+                run_sf.stream_file(f"{self.scheme}://{self.bucket_name}/{filename}", None, "cpu")
                 
+                with self.assertRaises(ValueError):
+                    for name, tensor in run_sf.get_tensors():
+                        pass
+
         def test_list_files(self):
             file_paths = [create_random_files(self.temp_dir) for _ in range(FILE_COUNT)]
 
@@ -89,8 +132,8 @@ def compatibility_test_cases(backend_class, scheme, bucket_name):
             pull_dir = tempfile.mkdtemp()
 
             pull_files(f"{self.scheme}://{self.bucket_name}/{directory}", pull_dir, ignore_pattern=[
-                                            "*.pt", "*.safetensors", "*.bin"
-                                        ])
+                                                    "*.pt", "*.safetensors", "*.bin"
+                                                ])
 
             pulled_files = os.listdir(pull_dir)
             original_files = [os.path.basename(fp) for fp in file_paths if not (fp.endswith("pt") or fp.endswith("safetensors") or fp.endswith("bin"))]

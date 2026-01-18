@@ -13,7 +13,8 @@ def runai_start() -> t_streamer:
     streamer = t_streamer(0)
     error_code = dll.fn_runai_start(ctypes.byref(streamer))
     if error_code != SUCCESS_ERROR_CODE:
-        raise Exception(
+        # Changed from Exception to ValueError
+        raise ValueError(
             f"Could not open streamer in libstreamer due to: {runai_response_str(error_code)}"
         )
     return streamer
@@ -43,23 +44,18 @@ def runai_request(
     num_files = len(paths)
 
     # c_num_sizes: An array where each element is the number of ranges for the corresponding file.
-    # Assuming the number of ranges fits into a c_uint32.
     num_ranges_per_file_list = [len(sublist) for sublist in internal_sizes]
     c_num_sizes = (ctypes.c_uint32 * num_files)(*num_ranges_per_file_list)
 
     # c_internal_sizes: An array of pointers, where each pointer points to an array of actual range sizes.
-
-    # Create and store the actual ctypes arrays of range sizes.
     _c_internal_sizes_data_arrays = [
         (ctypes.c_uint64 * num_ranges_for_this_file)(*actual_sublist_data)
         for num_ranges_for_this_file, actual_sublist_data in zip(num_ranges_per_file_list, internal_sizes)
     ]
 
-    # Create the array of pointers that the C function expects.
     PtrToUint64ArrayType = ctypes.POINTER(ctypes.c_uint64)
     c_internal_sizes = (PtrToUint64ArrayType * num_files)()
 
-    # Populate this array of pointers.
     for i, individual_c_array_obj in enumerate(_c_internal_sizes_data_arrays):
         c_internal_sizes[i] = ctypes.cast(individual_c_array_obj, PtrToUint64ArrayType)
     
@@ -79,7 +75,7 @@ def runai_request(
         ctypes.c_char_p(s3_credentials.endpoint.encode("utf-8")) if s3_credentials is not None and s3_credentials.endpoint is not None else None,   
     )
     if error_code != SUCCESS_ERROR_CODE:
-        raise Exception(
+        raise ValueError(
             f"Could not send runai_request to libstreamer due to: {runai_response_str(error_code)}"
         )
 
@@ -90,7 +86,7 @@ def runai_response(streamer: t_streamer) -> Optional[Tuple[int, int]]:
     if error_code == FINISHED_ERROR_CODE:
         return None
     if error_code != SUCCESS_ERROR_CODE:
-        raise Exception(
+        raise ValueError(
             f"Could not receive runai_response from libstreamer due to: {runai_response_str(error_code)}"
         )
     return file_index.value, range_index.value
