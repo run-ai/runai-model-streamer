@@ -86,9 +86,17 @@ class TestSafetensorsStreamer(unittest.TestCase):
         huge_size = (100 * 1024 * 1024) + 1
         path = self.create_corrupted_safetensors("too_large.st", huge_size, b"{}")
 
+        # 1. Validate our Streamer
         with SafetensorsStreamer() as streamer:
             with self.assertRaisesRegex(ValueError, "exceeds limit"):
                 streamer.stream_file(path, None, "cpu")
+
+        # 2. Validate HF safetensors library behavior
+        # Should raise an exception because the header length is suspiciously large 
+        # or the file is smaller than claimed header.
+        with self.assertRaises(Exception, msg="HF safetensors should raise on oversized header"):
+            with safe_open(path, framework="pt", device="cpu") as f:
+                pass
 
     def test_invalid_json(self):
         """Test catching broken JSON syntax."""
@@ -96,9 +104,15 @@ class TestSafetensorsStreamer(unittest.TestCase):
         bad_json = '{"test": {"dtype": "F32", "shape": [1], "data_offsets": [0, 4]' 
         path = self.create_corrupted_safetensors("bad_json.st", len(bad_json), bad_json)
 
+        # 1. Validate our Streamer
         with SafetensorsStreamer() as streamer:
             with self.assertRaisesRegex(ValueError, "not valid JSON"):
                 streamer.stream_file(path, None, "cpu")
+
+        # 2. Validate HF safetensors library behavior
+        with self.assertRaises(Exception, msg="HF safetensors should raise on invalid JSON"):
+            with safe_open(path, framework="pt", device="cpu") as f:
+                pass
 
     def test_payload_inconsistency_shape_mismatch(self):
         """
@@ -118,10 +132,17 @@ class TestSafetensorsStreamer(unittest.TestCase):
         # Provide 4 bytes of dummy data
         path = self.create_corrupted_safetensors("mismatch.st", len(json_str), json_str, b"\x00"*4)
 
+        # 1. Validate our Streamer
         with SafetensorsStreamer() as streamer:
             # Expect the payload consistency check to fire
             with self.assertRaisesRegex(ValueError, "Shape claims 40 bytes.*but offsets reserve 4"):
                 streamer.stream_file(path, None, "cpu")
+
+        # 2. Validate HF safetensors library behavior
+        # HF safetensors validates that (end - start) matches the byte size of shape * dtype
+        with self.assertRaises(Exception, msg="HF safetensors should raise on shape/offset mismatch"):
+            with safe_open(path, framework="pt", device="cpu") as f:
+                pass
 
     def test_overlapping_tensors(self):
         """Test logic ensuring tensors do not overlap in memory."""
@@ -134,12 +155,19 @@ class TestSafetensorsStreamer(unittest.TestCase):
         json_str = json.dumps(header_dict)
         path = self.create_corrupted_safetensors("overlap.st", len(json_str), json_str, b"\x00"*20)
 
+        # 1. Validate our Streamer
         with SafetensorsStreamer() as streamer:
             # Note: Dictionary ordering in python < 3.7 might make A or B come first.
             # Our code sorts by offset, so A (start=0) comes before B (start=5).
             # The error should trigger when checking B.
             with self.assertRaisesRegex(ValueError, "overlaps with next tensor"):
                 streamer.stream_file(path, None, "cpu")
+
+        # 2. Validate HF safetensors library behavior
+        # The safetensors spec strictly forbids overlapping tensors.
+        with self.assertRaises(Exception, msg="HF safetensors should raise on overlapping tensors"):
+            with safe_open(path, framework="pt", device="cpu") as f:
+                pass
 
     def test_unknown_dtype(self):
         """Test handling of unsupported data types."""
@@ -153,20 +181,32 @@ class TestSafetensorsStreamer(unittest.TestCase):
         json_str = json.dumps(header_dict)
         path = self.create_corrupted_safetensors("bad_dtype.st", len(json_str), json_str, b"\x00"*4)
 
+        # 1. Validate our Streamer
         with SafetensorsStreamer() as streamer:
-            with self.assertRaisesRegex(ValueError, "Unknown dtype"):
+            with self.assertRaisesRegex(ValueError, "Unsupported dtype.*ALIEN_TYPE_128"):
                 streamer.stream_file(path, None, "cpu")
+
+        # 2. Validate HF safetensors library behavior
+        with self.assertRaises(Exception, msg="HF safetensors should raise on unknown dtype"):
+            with safe_open(path, framework="pt", device="cpu") as f:
+                pass
 
     def test_truncated_file_header(self):
         """Test a file that ends inside the header."""
         # Claim header is 100 bytes, but file only has 10 bytes total
         path = self.create_corrupted_safetensors("truncated.st", 100, b"short")
         
+        # 1. Validate our Streamer
         # Depending on implementation, this might raise JSON error or Truncated error.
         # But it MUST raise something.
         with SafetensorsStreamer() as streamer:
             with self.assertRaises(ValueError):
                 streamer.stream_file(path, None, "cpu")
+
+        # 2. Validate HF safetensors library behavior
+        with self.assertRaises(Exception, msg="HF safetensors should raise on truncated header"):
+            with safe_open(path, framework="pt", device="cpu") as f:
+                pass
 
     def test_truncated_tensor_data(self):
         """
@@ -187,6 +227,7 @@ class TestSafetensorsStreamer(unittest.TestCase):
         truncated_data = b"\x00" * 10
         path = self.create_corrupted_safetensors("truncated_body.st", len(json_str), json_str, truncated_data)
 
+        # 1. Validate our Streamer
         with SafetensorsStreamer() as streamer:
             # stream_file reads the header (which is fine)
             streamer.stream_file(path, None, "cpu")
@@ -196,6 +237,87 @@ class TestSafetensorsStreamer(unittest.TestCase):
             with self.assertRaises(ValueError):
                 for _ in streamer.get_tensors():
                     pass
+
+        # 2. Validate HF safetensors library behavior
+        # HF safetensors validates file size against header claims on open/mmap.
+        with self.assertRaises(Exception, msg="HF safetensors should raise on truncated data"):
+            with safe_open(path, framework="pt", device="cpu") as f:
+                # If it doesn't fail on open, try to access data
+                for k in f.keys():
+                    f.get_tensor(k)
+
+    def test_holes_between_tensors(self):
+        """
+        Test logic ensuring gaps/holes between tensors are not allowed.
+        This verifies we throw exceptions for non-contiguous tensor storage.
+        """
+        # Tensor A: [0, 10] (10 bytes)
+        # Gap: [10, 20] (10 bytes of unused data)
+        # Tensor B: [20, 30] (10 bytes)
+        header_dict = {
+            "A": {"dtype": "U8", "shape": [10], "data_offsets": [0, 10]},
+            "B": {"dtype": "U8", "shape": [10], "data_offsets": [20, 30]}
+        }
+        json_str = json.dumps(header_dict)
+        
+        # Total data needed: 30 bytes (up to end of B)
+        # We fill it with zeros. The gap bytes (index 10-19) are just unused.
+        tensor_data = b"\x00" * 30
+        
+        path = self.create_corrupted_safetensors("holes.st", len(json_str), json_str, tensor_data)
+
+        with SafetensorsStreamer() as streamer:
+            with self.assertRaises(ValueError):
+                streamer.stream_file(path, None, "cpu")
+ 
+        with self.assertRaises(Exception):
+            with safe_open(path, framework="pt", device="cpu") as f:
+                pass
+
+    def test_unsorted_header_offsets_is_allowed(self):
+        """
+        Test that the order of keys in the JSON header does NOT have to match the 
+        order of data in the file. The implementation should sort them by offset 
+        internally before processing.
+        """
+        # Physically: "First" is at [0, 10], "Second" is at [10, 20].
+        # In JSON: We put "Second" before "First" to verify sorting logic works.
+        header_dict = {
+            "Second": {"dtype": "U8", "shape": [10], "data_offsets": [10, 20]},
+            "First":  {"dtype": "U8", "shape": [10], "data_offsets": [0, 10]},
+        }
+        
+        # Data: 20 bytes total. 
+        # First 10 bytes = 1, Second 10 bytes = 2
+        tensor_data = (b"\x01" * 10) + (b"\x02" * 10)
+        
+        json_str = json.dumps(header_dict)
+        path = self.create_corrupted_safetensors("unsorted.st", len(json_str), json_str, tensor_data)
+
+        # 1. Validate our Streamer (Should Succeed)
+        with SafetensorsStreamer() as streamer:
+            streamer.stream_file(path, None, "cpu")
+            tensors = {}
+            for name, tensor in streamer.get_tensors():
+                tensors[name] = tensor
+            
+            self.assertIn("First", tensors)
+            self.assertIn("Second", tensors)
+            
+            # Verify data content to ensure we read the correct offsets
+            # "First" should be all 1s
+            self.assertTrue(torch.all(tensors["First"].eq(1)))
+            # "Second" should be all 2s
+            self.assertTrue(torch.all(tensors["Second"].eq(2)))
+
+        # 2. Validate HF safetensors library behavior (Should Succeed)
+        with safe_open(path, framework="pt", device="cpu") as f:
+            tensors = {}
+            tFirst = f.get_tensor("First")
+            tSecond = f.get_tensor("Second")
+            
+            self.assertTrue(torch.all(tFirst.eq(1)))
+            self.assertTrue(torch.all(tSecond.eq(2)))
 
 if __name__ == "__main__":
     unittest.main()

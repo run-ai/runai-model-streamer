@@ -31,22 +31,6 @@ safetenors_to_torch_dtype = {
     "F8_E4M3": torch.float8_e4m3fn,
 }
 
-# Mapping for size validation
-dtype_to_size = {
-    "F64": 8,
-    "I64": 8,
-    "F32": 4,
-    "I32": 4,
-    "F16": 2,
-    "BF16": 2,
-    "I16": 2,
-    "I8": 1,
-    "U8": 1,
-    "BOOL": 1,
-    "F8_E5M2": 1,
-    "F8_E4M3": 1,
-}
-
 class SafetensorsMetadata:
     def __init__(self, blob: any, offset: int) -> None:
         self.offset = offset
@@ -80,6 +64,10 @@ class SafetensorsMetadata:
                 required_size = current_tensor.get_bytesize()
                 if current_start + required_size > next_start:
                     raise ValueError(f"Corrupted File: Tensor '{current_tensor.name}' overlaps with next tensor. (Ends at {current_start + required_size}, next starts at {next_start})")
+
+                # Check for holes/gaps between tensors
+                if current_start + required_size < next_start:
+                     raise ValueError(f"Corrupted File: Gaps between tensors are not allowed. Tensor '{current_tensor.name}' ends at {current_start + required_size}, but next tensor starts at {next_start}.")
 
                 self.read_sizes.append(next_start - current_start)
             else:
@@ -149,10 +137,7 @@ class SafetensorMetadata:
         for dim in self.shape:
             num_elements *= dim
         
-        if self.dtype not in dtype_to_size:
-             raise ValueError(f"Unknown dtype: {self.dtype}")
-             
-        element_size = dtype_to_size[self.dtype]
+        element_size = torch.tensor([], dtype=self.get_torch_dtype()).element_size()
         expected_bytes = num_elements * element_size
         
         # 2. Calculate actual size from offsets
