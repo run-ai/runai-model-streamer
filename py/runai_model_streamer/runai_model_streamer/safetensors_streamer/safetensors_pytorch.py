@@ -54,6 +54,8 @@ class SafetensorsMetadata:
             # Logical check for individual tensor offsets
             if current_tensor.offsets.start > current_tensor.offsets.end:
                 raise ValueError(f"Corrupted Offset: Tensor '{current_tensor.name}' start ({current_tensor.offsets.start}) > end ({current_tensor.offsets.end})")
+            
+            required_size = current_tensor.get_bytesize()
 
             if i < len(self.tensors_metadata) - 1:
                 current_start = self.tensors_metadata[i].offsets.start
@@ -61,7 +63,6 @@ class SafetensorsMetadata:
                 
                 # Check for overlapping tensors
                 # If tensors overlap, next_start - current_start < size, leading to data corruption.
-                required_size = current_tensor.get_bytesize()
                 if current_start + required_size > next_start:
                     raise ValueError(f"Corrupted File: Tensor '{current_tensor.name}' overlaps with next tensor. (Ends at {current_start + required_size}, next starts at {next_start})")
 
@@ -69,9 +70,7 @@ class SafetensorsMetadata:
                 if current_start + required_size < next_start:
                      raise ValueError(f"Corrupted File: Gaps between tensors are not allowed. Tensor '{current_tensor.name}' ends at {current_start + required_size}, but next tensor starts at {next_start}.")
 
-                self.read_sizes.append(next_start - current_start)
-            else:
-                self.read_sizes.append(self.tensors_metadata[i].get_bytesize())
+            self.read_sizes.append(required_size)
 
     @staticmethod
     def from_files(fs: DistributedStreamer, filenames: List[str], s3_credentials: Optional[S3Credentials]) -> List[SafetensorsMetadata]:
