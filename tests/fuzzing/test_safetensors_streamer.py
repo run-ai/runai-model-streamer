@@ -62,6 +62,31 @@ class TestSafetensorStreamerFuzzing(unittest.TestCase):
             res = torch.all(our_tensor.eq(their[name]))
             self.assertTrue(res)
 
+    def test_truncated_safetensors_file(self):
+        """
+        Tests that a valid safetensors file which has been physically truncated
+        (EOF earlier than header expects) raises a ValueError.
+        """
+        # 1. Create a valid random file
+        file_path = create_random_safetensors(self.temp_dir)
+        original_size = os.path.getsize(file_path)
+
+        # 2. Forcefully truncate the file to 50% of its size
+        # This guarantees the file is smaller than the header claims.
+        truncated_size = original_size // 2
+        with open(file_path, "a") as f:
+            f.truncate(truncated_size)
+        
+        # 3. Assert that processing the file throws a ValueError
+        with SafetensorsStreamer() as run_sf:
+            with self.assertRaises(ValueError):
+                # The error might happen here (if header is truncated)
+                run_sf.stream_file(file_path, None, "cpu", False)
+                
+                # OR it must happen here (if header is okay but body is missing)
+                for _ in run_sf.get_tensors():
+                    pass
+
     def tearDown(self):
         shutil.rmtree(self.temp_dir)
 
