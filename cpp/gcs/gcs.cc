@@ -42,7 +42,7 @@ common::backend_api::ResponseCode_t obj_create_client(common::backend_api::Objec
     }
     catch(const std::exception & e)
     {
-        LOG(ERROR) << "Failed to create GCS client";
+        LOG(ERROR) << "Failed to create GCS client: " << e.what();
         ret = common::ResponseCode::FileAccessError;
         *out_client_handle = nullptr;
     }

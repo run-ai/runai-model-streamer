@@ -1,6 +1,7 @@
 #include "gcs/client_configuration/client_configuration.h"
 
 #include "google/cloud/storage/client.h"
+#include "google/cloud/credentials.h"
 
 #include "common/exception/exception.h"
 #include "common/response_code/response_code.h"
@@ -78,6 +79,12 @@ ClientConfiguration::ClientConfiguration()
             LOG(ERROR) << "Failed to read service account key file: " << sa_key_file_name;
             throw common::Exception(common::ResponseCode::InvalidParameterError);
         }
+    } else {
+        // Explicitly use Application Default Credentials (ADC) which includes
+        // GCE/GKE metadata server for Workload Identity support
+        LOG(DEBUG) << "Using Google Default Credentials (ADC/Workload Identity)";
+        options.set<google::cloud::UnifiedCredentialsOption>(
+            google::cloud::MakeGoogleDefaultCredentials());
     }
 }
 
