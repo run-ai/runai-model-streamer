@@ -23,6 +23,8 @@ using namespace Azure::Storage::Blobs;
 namespace runai::llm::streamer::impl::azure
 {
 
+constexpr char kAzureApplicationId[] = "azpartner-runai";
+
 AzureClient::AzureClient(const common::backend_api::ObjectClientConfig_t& config) :
     _stop(false),
     _responder(nullptr),
@@ -75,16 +77,14 @@ AzureClient::AzureClient(const common::backend_api::ObjectClientConfig_t& config
     try {
         BlobClientOptions options;
 
-        // Apply retry configuration from ClientConfiguration
-        // Reference: https://learn.microsoft.com/en-us/azure/storage/common/storage-retry-policy
-        Azure::Core::Http::Policies::RetryOptions retry_options;
-        retry_options.MaxRetries = static_cast<int32_t>(_client_config.max_retries);
-        retry_options.RetryDelay = std::chrono::milliseconds(_client_config.retry_delay_ms);
-        options.Retry = retry_options;
+        // Set application ID for telemetry (prepended to User-Agent)
+        // Reference: https://azure.github.io/azure-sdk/general_azurecore.html#user-agent-format
+        options.Telemetry.ApplicationId = kAzureApplicationId;
 
-        LOG(DEBUG) << "Azure retry policy: max_retries=" << _client_config.max_retries
-                   << ", retry_delay_ms=" << _client_config.retry_delay_ms
-                   << ", concurrency=" << _client_config.max_concurrency;
+        // Using Azure SDK defaults for retry policy
+        // Reference: https://learn.microsoft.com/en-us/azure/storage/common/storage-retry-policy
+
+        LOG(DEBUG) << "Azure client concurrency: " << _client_config.max_concurrency;
 
 #ifdef AZURITE_TESTING
         if (_connection_string.has_value()) {

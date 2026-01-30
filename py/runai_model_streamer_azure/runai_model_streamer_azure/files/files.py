@@ -1,22 +1,49 @@
 from typing import Optional, List, Tuple
-from runai_model_streamer_azure.credentials.credentials import create_blob_service_client, AzureCredentials
+from runai_model_streamer_azure.credentials.credentials import AzureCredentials, get_credentials
 
 import fnmatch
 import os
 import posixpath
 from pathlib import Path
 
-try:
-    from azure.storage.blob import BlobServiceClient
-except ImportError:
-    raise ImportError(
-        "Azure Storage packages are not installed. "
-        "Install them with: pip install azure-storage-blob azure-identity"
-    )
+from azure.storage.blob import BlobServiceClient
+
+
+# Application ID for telemetry (prepended to User-Agent)
+# Reference: https://azure.github.io/azure-sdk/general_azurecore.html#user-agent-format
+_USER_AGENT = "azpartner-runai"
 
 
 def _create_client(credentials: Optional[AzureCredentials] = None) -> BlobServiceClient:
-    return create_blob_service_client(credentials)
+    """
+    Creates an Azure BlobServiceClient.
+
+    Authentication priority:
+    1. Connection string (AZURE_STORAGE_CONNECTION_STRING) - for local testing with Azurite
+    2. DefaultAzureCredential with account URL - for production
+
+    Args:
+        credentials: Optional AzureCredentials object
+
+    Returns:
+        BlobServiceClient instance
+    """
+    creds = get_credentials(credentials)
+
+    # Use connection string if available (for Azurite/local testing)
+    if creds.connection_string:
+        return BlobServiceClient.from_connection_string(
+            creds.connection_string,
+            user_agent=_USER_AGENT
+        )
+
+    # Use account name or endpoint + DefaultAzureCredential (for production)
+    account_url = creds.endpoint or f"https://{creds.account_name}.blob.core.windows.net"
+    return BlobServiceClient(
+        account_url=account_url,
+        credential=creds.credential,
+        user_agent=_USER_AGENT
+    )
 
 
 def glob(path: str, allow_pattern: Optional[List[str]] = None, credentials: Optional[AzureCredentials] = None) -> List[str]:

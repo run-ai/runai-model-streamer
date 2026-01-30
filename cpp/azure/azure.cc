@@ -20,7 +20,9 @@ using AzureClientMgr = common::ClientMgr<AzureClient, AzureClientName>;
 // --- Backend API ---
 
 const utils::Semver min_glibc_semver = utils::Semver(common::description(static_cast<int>(common::ResponseCode::GlibcPrerequisite)));
-const size_t min_chunk_bytesize = 256 * 1024; // 256 KB minimum for Azure Blob Storage
+// Minimum chunk size aligned with S3 backend for consistency
+// Azure Blob Storage supports ranged GETs down to single bytes, but larger chunks improve throughput
+const size_t min_chunk_bytesize = 5 * 1024 * 1024; // 5 MiB (same as S3)
 
 common::backend_api::ResponseCode_t obj_open_backend(common::backend_api::ObjectBackendHandle_t* out_backend_handle)
 {
@@ -39,7 +41,7 @@ common::backend_api::ResponseCode_t obj_open_backend(common::backend_api::Object
         size_t chunk_size;
         if (utils::try_getenv("RUNAI_STREAMER_CHUNK_BYTESIZE", chunk_size))
         {
-            LOG_IF(INFO, (chunk_size < min_chunk_bytesize)) << "Minimal chunk size to read from Azure is 256 KiB";
+            LOG_IF(INFO, (chunk_size < min_chunk_bytesize)) << "Minimal chunk size to read from Azure is 5 MiB";
         }
 
         // Azure SDK doesn't require global initialization like AWS SDK

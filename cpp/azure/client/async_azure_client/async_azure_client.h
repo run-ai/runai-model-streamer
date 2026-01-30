@@ -66,7 +66,7 @@ struct AsyncAzureClient
 public:
     AsyncAzureClient(std::shared_ptr<Azure::Storage::Blobs::BlobServiceClient> client, unsigned max_pool_size);
 
-    void DownloadBlobRangeAsync(
+    inline void DownloadBlobRangeAsync(
         const std::string& container_name,
         const std::string& blob_name,
         char* buffer,

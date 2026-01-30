@@ -112,6 +112,20 @@ String
 
 None
 
+### AZURE_STORAGE_ENDPOINT
+
+Custom Azure Blob Storage endpoint URL. Use for Azure Private Endpoints or custom storage endpoints.
+
+When using a custom endpoint, `AZURE_STORAGE_ACCOUNT_NAME` is optional since the endpoint URL is used directly.
+
+#### Values accepted
+
+String (URL)
+
+#### Default value
+
+`https://<account_name>.blob.core.windows.net` (derived from AZURE_STORAGE_ACCOUNT_NAME)
+
 ### RUNAI_STREAMER_DIST
 
 Enables distributed streaming for multiple devices
