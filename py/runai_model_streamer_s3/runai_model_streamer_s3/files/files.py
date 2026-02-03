@@ -51,7 +51,8 @@ def pull_files(model_path: str,
 
     bucket_name, base_dir, files = list_files(s3, model_path,
                                                 allow_pattern,
-                                                ignore_pattern)
+                                                ignore_pattern,
+                                                recursive = True)
     if len(files) == 0:
         return
 
@@ -67,7 +68,8 @@ def list_files(
         s3,
         path: str,
         allow_pattern: Optional[List[str]] = None,
-        ignore_pattern: Optional[List[str]] = None
+        ignore_pattern: Optional[List[str]] = None,
+        recursive: bool = False
 ) -> Tuple[str, str, List[str]]:
     parts = removeprefix(path, 's3://').split('/')
     bucket_name = parts[0]
@@ -84,8 +86,11 @@ def list_files(
     op_parameters = {
         'Bucket': bucket_name,
         'Prefix': prefix,
-        'Delimiter': '/' # delimiter='/' so list is not recursive
     }
+
+    if not recursive:
+        # delimiter='/' so list is not recursive  
+        op_parameters['Delimiter'] = '/'
 
     paths = []
     for page in paginator.paginate(**op_parameters):
