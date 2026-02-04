@@ -32,7 +32,8 @@ def pull_files(model_path: str,
 
     bucket_name, base_dir, files = list_files(gcs, model_path,
                                                 allow_pattern,
-                                                ignore_pattern)
+                                                ignore_pattern,
+                                                recursive = True)
     if len(files) == 0:
         return
 
@@ -51,7 +52,8 @@ def list_files(
         gcs: storage.client.Client,
         path: str,
         allow_pattern: Optional[List[str]] = None,
-        ignore_pattern: Optional[List[str]] = None
+        ignore_pattern: Optional[List[str]] = None,
+        recursive: bool = False
 ) -> Tuple[str, str, List[str]]:
     parts = removeprefix(path, 'gs://').split('/')
     bucket_name = parts[0]
@@ -67,7 +69,7 @@ def list_files(
 
     # Use delimiter to control recursion
     # delimiter='/' stops at the next folder level
-    delimiter = '/'
+    delimiter = '/' if not recursive else None
     
     blobs = bucket.list_blobs(prefix=prefix, delimiter=delimiter)
     paths = [blob.name for blob in blobs]

@@ -140,6 +140,56 @@ def compatibility_test_cases(backend_class, scheme, bucket_name):
 
             self.assertEqual(sorted(pulled_files), sorted(original_files))
 
+        def test_pull_files_is_recursive(self):
+            """
+            This test expects pull_files to be recursive. 
+            With the current implementation of list_files, this test SHOULD FAIL.
+            """
+            # 1. Setup paths: a root directory and a nested subdirectory
+            base_directory = f"root_{random_letters(5)}"
+            sub_directory = "nested_folder"
+            
+            # Create two files: one in the root, one in the nested folder
+            root_file_path = create_random_files(self.temp_dir)
+            root_filename = os.path.basename(root_file_path)
+            
+            nested_file_path = create_random_files(self.temp_dir)
+            nested_filename = os.path.basename(nested_file_path)
+
+            # 2. Upload to S3
+            # s3://bucket/root_abc/file1.json
+            self.server.upload_file(self.bucket_name, base_directory, root_file_path)
+            # s3://bucket/root_abc/nested_folder/file2.json
+            self.server.upload_file(self.bucket_name, f"{base_directory}/{sub_directory}", nested_file_path)
+
+            # 3. Prepare local destination
+            pull_dst = tempfile.mkdtemp()
+            
+            try:
+                # 4. Pull from the base directory
+                pull_files(f"{self.scheme}://{self.bucket_name}/{base_directory}", pull_dst)
+
+                # 5. Check results
+                pulled_files_flat = []
+                for root, dirs, files in os.walk(pull_dst):
+                    for file in files:
+                        # Create relative paths like 'file1.json' or 'nested_folder/file2.json'
+                        rel_path = os.path.relpath(os.path.join(root, file), pull_dst)
+                        pulled_files_flat.append(rel_path)
+
+                # Expectation: Both files should be there if recursive
+                expected_nested_path = os.path.join(sub_directory, nested_filename)
+                
+                self.assertIn(root_filename, pulled_files_flat, "Root file was not pulled")
+                
+                # THIS IS WHERE IT WILL FAIL:
+                self.assertIn(expected_nested_path, pulled_files_flat, 
+                              f"Recursive file {expected_nested_path} was not pulled. "
+                              "The current implementation of list_files is likely non-recursive.")
+
+            finally:
+                shutil.rmtree(pull_dst)
+
         def tearDown(self):
             shutil.rmtree(self.temp_dir)
 
