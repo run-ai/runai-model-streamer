@@ -7,13 +7,15 @@
 
 #include <azure/storage/blobs.hpp>
 
+#include "common/response_code/response_code.h"
+#include "utils/logging/logging.h"
 #include "utils/threadpool/threadpool.h"
 
 namespace runai::llm::streamer::impl::azure
 {
 
 typedef std::function<void()> DownloadBlobFn;
-typedef std::function<void(bool success, const std::string& error_msg)> CompletionCallback;
+typedef std::function<void(common::ResponseCode response_code, const std::string& error_msg)> CompletionCallback;
 
 struct DownloadBlobTask {
     DownloadBlobFn taskFn;
@@ -45,15 +47,9 @@ inline DownloadBlobFn createDownloadBlobFn(
         download_options.Range.Value().Offset = offset;
         download_options.Range.Value().Length = length;
         
-        auto response = blob_client.DownloadTo(
+        blob_client.DownloadTo(
             reinterpret_cast<uint8_t*>(buffer), length, download_options
         );
-        
-        // Verify the download size
-        if (!response.Value.ContentRange.Length.HasValue() || 
-            response.Value.ContentRange.Length.Value() != length) {
-            throw std::runtime_error("Azure blob read size mismatch");
-        }
     };
 }
 

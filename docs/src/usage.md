@@ -188,16 +188,6 @@ export AZURE_STORAGE_ACCOUNT_NAME="myaccount"
 # No additional configuration needed - managed identity is detected automatically
 ```
 
-###### Custom Endpoint (Private Endpoints)
-
-For Azure Private Endpoints or custom storage endpoints, set the endpoint URL:
-
-```bash
-export AZURE_STORAGE_ENDPOINT="https://myaccount.privatelink.blob.core.windows.net"
-```
-
-When using a custom endpoint, `AZURE_STORAGE_ACCOUNT_NAME` is optional since the endpoint URL is used directly.
-
 #### Streaming from Google cloud storage
 
 ##### SDK Authentication

@@ -32,7 +32,6 @@ AzureClient::AzureClient(const common::backend_api::ObjectClientConfig_t& config
 {
     // ClientConfiguration reads environment variables
     _account_name = _client_config.account_name;
-    _endpoint = _client_config.endpoint_url;
 #ifdef AZURITE_TESTING
     _connection_string = _client_config.connection_string;
 #endif
@@ -50,10 +49,6 @@ AzureClient::AzureClient(const common::backend_api::ObjectClientConfig_t& config
             {
                 _account_name = std::string(value);
             }
-            else if (strcmp(key, "endpoint") == 0)
-            {
-                _endpoint = std::string(value);
-            }
 #ifdef AZURITE_TESTING
             else if (strcmp(key, "connection_string") == 0)
             {
@@ -65,12 +60,6 @@ AzureClient::AzureClient(const common::backend_api::ObjectClientConfig_t& config
                 LOG(WARNING) << "Unknown Azure parameter: " << key;
             }
         }
-    }
-
-    // Config endpoint_url overrides everything
-    if (config.endpoint_url)
-    {
-        _endpoint = std::string(config.endpoint_url);
     }
 
     // Initialize Azure Blob Storage client
@@ -100,7 +89,7 @@ AzureClient::AzureClient(const common::backend_api::ObjectClientConfig_t& config
         if (_account_name.has_value()) {
             // Use DefaultAzureCredential (managed identity, Azure CLI, environment variables, etc.)
             // Reference: https://learn.microsoft.com/en-us/azure/developer/cpp/sdk/authentication
-            std::string url = _endpoint.value_or("https://" + _account_name.value() + ".blob.core.windows.net");
+            std::string url = "https://" + _account_name.value() + ".blob.core.windows.net";
             auto credential = std::make_shared<Azure::Identity::DefaultAzureCredential>();
             _blob_service_client = std::make_shared<BlobServiceClient>(url, credential, options);
             LOG(DEBUG) << "Azure client initialized with DefaultAzureCredential for account: " << _account_name.value();
@@ -133,7 +122,6 @@ bool AzureClient::verify_credentials(const common::backend_api::ObjectClientConf
     // Parse config credentials without creating full client
     ClientConfiguration temp_config;
     std::optional<std::string> temp_account_name = temp_config.account_name;
-    std::optional<std::string> temp_endpoint = temp_config.endpoint_url;
 #ifdef AZURITE_TESTING
     std::optional<std::string> temp_connection_string = temp_config.connection_string;
 #endif
@@ -143,20 +131,18 @@ bool AzureClient::verify_credentials(const common::backend_api::ObjectClientConf
     if (ptr) {
         for (size_t i = 0; i < config.num_initial_params; ++i, ++ptr) {
             if (strcmp(ptr->key, "account_name") == 0) temp_account_name = std::string(ptr->value);
-            else if (strcmp(ptr->key, "endpoint") == 0) temp_endpoint = std::string(ptr->value);
 #ifdef AZURITE_TESTING
             else if (strcmp(ptr->key, "connection_string") == 0) temp_connection_string = std::string(ptr->value);
 #endif
         }
     }
-    if (config.endpoint_url) temp_endpoint = std::string(config.endpoint_url);
 
 #ifdef AZURITE_TESTING
     if (_connection_string.has_value()) {
         return (_connection_string == temp_connection_string);
     }
 #endif
-    return (_account_name == temp_account_name || _endpoint == temp_endpoint);
+    return (_account_name == temp_account_name);
 }
 
 common::backend_api::Response AzureClient::async_read_response()
@@ -237,8 +223,8 @@ common::ResponseCode AzureClient::async_read(const char* path,
             chunk_buffer,
             chunk_offset,
             bytesize_,
-            [request_id, counter, is_success, responder](bool success, const std::string& error_msg) {
-                if (success) {
+            [request_id, counter, is_success, responder](common::ResponseCode response_code, const std::string& error_msg) {
+                if (response_code == common::ResponseCode::Success) {
                     const auto running = counter->fetch_sub(1);
                     LOG(SPAM) << "Async read request " << request_id << " succeeded - " << running << " running";
                     
@@ -250,7 +236,8 @@ common::ResponseCode AzureClient::async_read(const char* path,
                     LOG(ERROR) << "Failed to download Azure blob of request " << request_id << ": " << error_msg;
                     bool previous = is_success->exchange(false);
                     if (previous) {
-                        common::backend_api::Response r(request_id, common::ResponseCode::FileAccessError);
+                        // Propagate the specific error code from Azure SDK
+                        common::backend_api::Response r(request_id, response_code);
                         responder->push(std::move(r));
                     }
                 }

@@ -20,53 +20,38 @@ class AzureCredentials:
     If values are not provided explicitly, they are loaded from environment variables:
     - AZURE_STORAGE_CONNECTION_STRING
     - AZURE_STORAGE_ACCOUNT_NAME
-    - AZURE_STORAGE_ENDPOINT
     """
 
     def __init__(
         self,
         account_name: Optional[str] = None,
-        endpoint: Optional[str] = None,
         connection_string: Optional[str] = None,
         credential: Optional[DefaultAzureCredential] = None
     ):
         self.connection_string = connection_string or os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
         self.account_name = account_name or os.environ.get("AZURE_STORAGE_ACCOUNT_NAME")
-        self.endpoint = endpoint or os.environ.get("AZURE_STORAGE_ENDPOINT")
-        self._credential = credential
+        if credential is None and not self.connection_string:
+            credential = DefaultAzureCredential()
+        self.credential = credential
+        self._validate()
 
-    @property
-    def credential(self) -> Optional[DefaultAzureCredential]:
-        """Returns the Azure credential object, creating one if not set and connection string is not used."""
-        if self._credential is None and not self.connection_string:
-            self._credential = DefaultAzureCredential()
-        return self._credential
-    
-    def validate(self) -> None:
+    def _validate(self) -> None:
         """Validates that sufficient credentials are available to create a client."""
-        if not self.connection_string and not self.account_name and not self.endpoint:
+        if not self.connection_string and not self.account_name:
             raise ValueError(
                 "Azure credentials required. Set AZURE_STORAGE_CONNECTION_STRING for local testing, "
-                "or AZURE_STORAGE_ACCOUNT_NAME/AZURE_STORAGE_ENDPOINT for production with DefaultAzureCredential."
+                "or AZURE_STORAGE_ACCOUNT_NAME for production with DefaultAzureCredential."
             )
 
 
-def get_credentials(credentials: Optional[AzureCredentials] = None) -> AzureCredentials:
+def get_credentials() -> AzureCredentials:
     """
-    Resolves Azure credentials from various sources.
-
-    Args:
-        credentials: Optional AzureCredentials object with explicit credentials.
-                     If None, creates one that loads from environment variables.
+    Creates Azure credentials from environment variables.
 
     Returns:
-        AzureCredentials object with resolved credentials
+        AzureCredentials object with credentials loaded from environment
         
     Raises:
-        ValueError: If neither connection string nor account name/endpoint is available
+        ValueError: If neither connection string nor account name is available
     """
-    if credentials is None:
-        credentials = AzureCredentials()
-    
-    credentials.validate()
-    return credentials
+    return AzureCredentials()

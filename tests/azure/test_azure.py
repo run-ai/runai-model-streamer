@@ -15,6 +15,8 @@ class AzuriteServer(ObjectStoreBackend):
         # Use connection string for Azurite (local emulator)
         # Azurite requires authentication - it doesn't support anonymous access
         connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+        if not connection_string:
+            raise EnvironmentError("AZURE_STORAGE_CONNECTION_STRING environment variable must be set for Azure tests")
         self.client = BlobServiceClient.from_connection_string(connection_string)
 
     def wait_for_startup(self, timeout=30):

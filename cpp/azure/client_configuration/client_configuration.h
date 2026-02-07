@@ -14,7 +14,6 @@ struct ClientConfiguration
     // Connection string is only available for Azurite/local testing
     std::optional<std::string> connection_string;
 #endif
-    std::optional<std::string> endpoint_url;
     
     // Concurrency settings
     unsigned int max_concurrency = 8;

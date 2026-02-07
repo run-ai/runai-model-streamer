@@ -28,20 +28,21 @@ def _create_client(credentials: Optional[AzureCredentials] = None) -> BlobServic
     Returns:
         BlobServiceClient instance
     """
-    creds = get_credentials(credentials)
+    if credentials is None:
+        credentials = get_credentials()
 
     # Use connection string if available (for Azurite/local testing)
-    if creds.connection_string:
+    if credentials.connection_string:
         return BlobServiceClient.from_connection_string(
-            creds.connection_string,
+            credentials.connection_string,
             user_agent=_USER_AGENT
         )
 
-    # Use account name or endpoint + DefaultAzureCredential (for production)
-    account_url = creds.endpoint or f"https://{creds.account_name}.blob.core.windows.net"
+    # Use account name + DefaultAzureCredential (for production)
+    account_url = f"https://{credentials.account_name}.blob.core.windows.net"
     return BlobServiceClient(
         account_url=account_url,
-        credential=creds.credential,
+        credential=credentials.credential,
         user_agent=_USER_AGENT
     )
 
@@ -63,7 +64,8 @@ def glob(path: str, allow_pattern: Optional[List[str]] = None, credentials: Opti
     if not path.endswith("/"):
         path = f"{path}/"
     
-    container_name, _, keys = list_files(client, path, allow_pattern)
+    # glob is non-recursive - only list files in the given directory
+    container_name, _, keys = list_files(client, path, allow_pattern, recursive=False)
     return [f"az://{container_name}/{key}" for key in keys]
 
 
@@ -89,8 +91,9 @@ def pull_files(
     if not model_path.endswith("/"):
         model_path = model_path + "/"
 
+    # pull_files is recursive - download all files including subdirectories
     container_name, base_dir, files = list_files(
-        client, model_path, allow_pattern, ignore_pattern
+        client, model_path, allow_pattern, ignore_pattern, recursive=True
     )
     
     if len(files) == 0:
@@ -115,7 +118,8 @@ def list_files(
     client: BlobServiceClient,
     path: str,
     allow_pattern: Optional[List[str]] = None,
-    ignore_pattern: Optional[List[str]] = None
+    ignore_pattern: Optional[List[str]] = None,
+    recursive: bool = False
 ) -> Tuple[str, str, List[str]]:
     """
     List files in Azure Blob Storage at the given path.
@@ -125,6 +129,7 @@ def list_files(
         path: Azure blob path
         allow_pattern: Optional list of glob patterns to include
         ignore_pattern: Optional list of glob patterns to exclude
+        recursive: If True, list files in subdirectories. If False, only list files directly in the path.
 
     Returns:
         Tuple of (container_name, prefix, list_of_blob_names)
@@ -144,19 +149,21 @@ def list_files(
 
     container_client = client.get_container_client(container_name)
     
-    # List all blobs with the given prefix
-    blob_items = container_client.list_blobs(name_starts_with=prefix)
-    
-    # Manually filter to achieve non-recursive behavior (like S3/GCS with delimiter)
-    # Only include blobs that are directly in the prefix directory, not in subdirectories
     paths = []
-    for item in blob_items:
-        if hasattr(item, 'name'):
-            # Remove the prefix to get the relative path
-            relative_path = item.name[len(prefix):] if item.name.startswith(prefix) else item.name
-            # If there's no '/' in the relative path, it's directly in this directory
-            # If there is a '/', it's in a subdirectory and should be excluded
-            if '/' not in relative_path:
+    if recursive:
+        # Recursive: list all blobs under the prefix
+        blob_items = container_client.list_blobs(name_starts_with=prefix)
+        for item in blob_items:
+            if hasattr(item, 'name'):
+                paths.append(item.name)
+    else:
+        # Non-recursive: use walk_blobs with delimiter to only get blobs at this level
+        # This is more efficient as Azure service handles the filtering
+        blob_items = container_client.walk_blobs(name_starts_with=prefix, delimiter='/')
+        for item in blob_items:
+            # walk_blobs returns BlobProperties for blobs and BlobPrefix for directories
+            # We only want blobs (files), not prefixes (directories)
+            if hasattr(item, 'name') and not item.name.endswith('/'):
                 paths.append(item.name)
 
     # Filter out directories (blobs ending with /)

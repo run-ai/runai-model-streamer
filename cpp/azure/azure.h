@@ -17,10 +17,7 @@
 //      * Azure PowerShell (Connect-AzAccount)
 //      * Azure Developer CLI (azd auth login)
 //
-// 3. Optional configuration:
-//    - Custom endpoint: AZURE_STORAGE_ENDPOINT (for private endpoints)
-//
-// 4. For local testing with Azurite:
+// 3. For local testing with Azurite:
 //    - Use AZURE_STORAGE_CONNECTION_STRING environment variable
 //    - Run Azurite with --skipApiVersionCheck flag
 //

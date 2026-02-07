@@ -4,18 +4,28 @@
 #include "azure/client/async_azure_client/async_azure_client.h"
 #include "utils/logging/logging.h"
 
+#include <azure/core/http/http_status_code.hpp>
+
 namespace runai::llm::streamer::impl::azure
 {
 
 void DownloadBlobTask::execute() {
     try {
         taskFn();
-        callback(true, "");
+        callback(common::ResponseCode::Success, "");
     } catch (const Azure::Core::RequestFailedException& e) {
         std::string error_msg = "Azure RequestFailed: StatusCode=" + std::to_string(static_cast<int>(e.StatusCode)) + " " + e.what();
-        callback(false, error_msg);
+        // Map HTTP status codes to appropriate response codes
+        common::ResponseCode code = common::ResponseCode::FileAccessError;
+        if (e.StatusCode == Azure::Core::Http::HttpStatusCode::NotFound) {
+            code = common::ResponseCode::FileAccessError;
+        } else if (e.StatusCode == Azure::Core::Http::HttpStatusCode::RangeNotSatisfiable) {
+            // 416 Range Not Satisfiable - requested range is past EOF
+            code = common::ResponseCode::EofError;
+        }
+        callback(code, error_msg);
     } catch (const std::exception& e) {
-        callback(false, e.what());
+        callback(common::ResponseCode::FileAccessError, e.what());
     }
 }
 
