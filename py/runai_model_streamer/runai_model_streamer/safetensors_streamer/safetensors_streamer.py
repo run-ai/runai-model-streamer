@@ -15,10 +15,13 @@ from runai_model_streamer.s3_utils.s3_utils import (
     S3Credentials,
     is_s3_path,
     is_gs_path,
+    is_azure_path,
     s3_glob,
     s3_pull_files,
     gcs_glob,
     gcs_pull_files,
+    azure_glob,
+    azure_pull_files,
 )
 
 SAFETENSORS_PATTERN = "*.safetensors"
@@ -32,6 +35,8 @@ def list_safetensors(path: str, s3_credentials : Optional[S3Credentials] = None)
         files = s3_glob(path, [SAFETENSORS_PATTERN], s3_credentials)
     elif is_gs_path(path):
         files = gcs_glob(path, [SAFETENSORS_PATTERN])
+    elif is_azure_path(path):
+        files = azure_glob(path, [SAFETENSORS_PATTERN])
     else:
         files = glob.glob(os.path.join(path, SAFETENSORS_PATTERN))
     
@@ -50,6 +55,8 @@ def pull_files(model_path: str,
         return s3_pull_files(model_path, dst, allow_pattern, ignore_pattern, s3_credentials)
     if is_gs_path(model_path):
         return gcs_pull_files(model_path, dst, allow_pattern, ignore_pattern)
+    if is_azure_path(model_path):
+        return azure_pull_files(model_path, dst, allow_pattern, ignore_pattern)
     raise NotImplementedError("pull files is not implemented for file system paths")
 
 class SafetensorsStreamer:

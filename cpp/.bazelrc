@@ -18,3 +18,6 @@ build:aarch64 --copt="-march=armv8-a+crc+crypto"
 
 build:x86_64 --platform_suffix=x86_64
 build:x86_64 --platforms=@toolchain//:x86_64
+
+# Azurite testing support (enables AZURE_STORAGE_ACCOUNT_KEY for local testing)
+build:azurite --define azurite_testing=true

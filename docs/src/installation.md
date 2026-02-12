@@ -23,3 +23,15 @@ pip install runai-model-streamer[s3]
 ```
 
 > **Warning:** Make sure you install the S3 dependency in the same version of your runai-model-streamer by running `pip install runai-model-streamer[s3]==0.3.1`.
+
+<a id="azureCapabilityInstallation"></a>
+
+### Azure Blob Storage
+
+To stream models from Azure Blob Storage, install the Azure package:
+
+```bash
+pip install runai-model-streamer[azure]
+```
+
+> **Warning:** Make sure you install the Azure dependency in the same version of your runai-model-streamer by running `pip install runai-model-streamer[azure]==0.3.1`. 

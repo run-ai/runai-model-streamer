@@ -15,6 +15,7 @@ from runai_model_streamer.s3_utils.s3_utils import (
     S3Credentials,
     is_s3_path,
     is_gs_path,
+    is_azure_path,
     get_s3_credentials_module,
 )
 
@@ -40,6 +41,8 @@ def homogeneous_paths(paths: List[str]) -> bool:
             return is_s3_path
         elif is_gs_path(path):
             return is_gs_path
+        elif is_azure_path(path):
+            return is_azure_path
         else:
             return None
 

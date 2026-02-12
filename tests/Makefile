@@ -10,7 +10,14 @@ FAKE_GCS_SERVER_ROOT := /tmp/fake-gcs-server
 FAKE_GCS_SERVER_DATA_DIR := ${FAKE_GCS_SERVER_ROOT}/data
 FAKE_GCS_SERVER_BUCKET := test-bucket
 
-.PHONY: gcs s3 fuzzing all
+AZURITE_SERVER_WORKSPACE := /tmp/azurite
+AZURITE_API_PORT := 10000
+AZURITE_ACCOUNT_NAME := devstoreaccount1
+# Well known storage account key https://github.com/Azure/Azurite?tab=readme-ov-file#default-storage-account
+AZURITE_ACCOUNT_KEY := Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==
+AZURITE_CONTAINER := test-bucket
+
+.PHONY: gcs s3 azure fuzzing all
 
 s3:
 	@echo "Starting MinIO server on port ${MINIO_API_PORT} with data directory ${MINIO_DATA_DIR}"; \
@@ -37,6 +44,22 @@ gcs:
 	wait $$FAKE_GCS_SERVER_PID 2>/dev/null || true; \
 	rm -rf ${FAKE_GCS_SERVER_ROOT}
 
+azure:
+# Developer note: To enable C++ debug logging, add these env vars to the pytest command:
+#   RUNAI_STREAMER_LOG_LEVEL=DEBUG RUNAI_STREAMER_LOG_FILE=/tmp/azure_cpp.log
+# Build Azure library with AZURITE_TESTING flag enabled
+	@echo "Building Azure library with Azurite testing support..."; \
+	make -C ../cpp build_azure_test; \
+	echo "Starting Azurite server on port ${AZURITE_API_PORT}"; \
+	azurite --silent --skipApiVersionCheck --location ${AZURITE_SERVER_WORKSPACE} --blobPort ${AZURITE_API_PORT} & \
+	AZURITE_PID=$$!; \
+	echo "Azurite PID is $$AZURITE_PID"; \
+	LD_LIBRARY_PATH="../cpp/bazel-bin/azure:$${LD_LIBRARY_PATH}" AZURE_STORAGE_CONNECTION_STRING="DefaultEndpointsProtocol=http;AccountName=${AZURITE_ACCOUNT_NAME};AccountKey=${AZURITE_ACCOUNT_KEY};BlobEndpoint=http://127.0.0.1:${AZURITE_API_PORT}/${AZURITE_ACCOUNT_NAME};" AZURE_CONTAINER=${AZURITE_CONTAINER} pytest -v azure/ 2>&1; \
+	echo "Stopping Azurite..."; \
+	kill $$AZURITE_PID; \
+	wait $$AZURITE_PID 2>/dev/null || true; \
+	rm -rf ${AZURITE_SERVER_WORKSPACE}
+
 fuzzing:
 	for i in $(shell seq 1 ${RUN_TIMES}); \
 	do \
@@ -44,4 +67,4 @@ fuzzing:
 		pytest fuzzing/; \
 	done
 
-all: fuzzing s3 gcs
+all: fuzzing s3 gcs azure

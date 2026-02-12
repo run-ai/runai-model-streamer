@@ -100,6 +100,18 @@ If not defined (default) Application Default Credentials are used.
 
 String
 
+### AZURE_STORAGE_ACCOUNT_NAME
+
+Azure Storage account name. Used with DefaultAzureCredential for authentication.
+
+#### Values accepted
+
+String
+
+#### Default value
+
+None
+
 ### RUNAI_STREAMER_DIST
 
 Enables distributed streaming for multiple devices
