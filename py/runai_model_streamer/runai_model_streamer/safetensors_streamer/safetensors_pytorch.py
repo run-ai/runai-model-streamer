@@ -1,8 +1,9 @@
 from __future__ import annotations
 import torch
+import torch.utils.dlpack
 import struct
 import json
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Any, Dict
 from runai_model_streamer.distributed_streamer.distributed_streamer import (DistributedStreamer, FileChunks)
 
 SAFETENSORS_DATA_OFFSETS_KEY = "data_offsets"
@@ -17,18 +18,29 @@ MAX_HEADER_SIZE = 100 * 1024 * 1024
 LITTLE_ENDIAN_LONG_LONG_STRUCT_FORMAT = "<Q"
 
 safetenors_to_torch_dtype = {
-    "F64": torch.float64,
-    "F32": torch.float32,
-    "F16": torch.float16,
-    "BF16": torch.bfloat16,
-    "I64": torch.int64,
-    "I32": torch.int32,
-    "I16": torch.int16,
-    "I8": torch.int8,
-    "U8": torch.uint8,
+    # --- Standard Types ---
     "BOOL": torch.bool,
-    "F8_E5M2": torch.float8_e5m2,
-    "F8_E4M3": torch.float8_e4m3fn,
+    "U8":   torch.uint8,
+    "I8":   torch.int8,
+    "I16":  torch.int16,
+    "U16":  getattr(torch, "uint16", torch.int32), # Torch doesn't have native U16 yet
+    "F16":  torch.float16,
+    "BF16": torch.bfloat16,
+    "I32":  torch.int32,
+    "U32":  getattr(torch, "uint32", torch.int64), # Fallback to I64
+    "F32":  torch.float32,
+    "F64":  torch.float64,
+    "I64":  torch.int64,
+    "U64":  torch.uint8, # Usually handled as raw bytes in PT
+    "C64":  torch.complex64,
+
+    # --- Official OCP / MX Formats according to safetensors 0.7.0 ---
+    "F4":       torch.uint8, # MXFP4 - Packed 2-per-byte
+    "F6_E2M3":  torch.uint8, # MXFP6 - Packed/Padded
+    "F6_E3M2":  torch.uint8, # MXFP6 - Packed/Padded
+    "F8_E8M0":  getattr(torch, "float8_e8m0fnu", torch.uint8),
+    "F8_E5M2":  getattr(torch, "float8_e5m2", torch.uint8),
+    "F8_E4M3":  getattr(torch, "float8_e4m3fn", torch.uint8),
 }
 
 class SafetensorsMetadata:
@@ -131,19 +143,40 @@ class SafetensorMetadata:
         self._validate_shape_consistency()
 
     def _validate_shape_consistency(self):
-        # 1. Calculate expected size from shape & dtype
+        # 1. Calculate total number of elements
         num_elements = 1
         for dim in self.shape:
             num_elements *= dim
         
-        element_size = torch.tensor([], dtype=self.get_torch_dtype()).element_size()
-        expected_bytes = num_elements * element_size
-        
-        # 2. Calculate actual size from offsets
+        # 2. Identify the actual bytes reserved in the file
         actual_bytes = self.offsets.get_diff()
         
-        # 3. Assert they match
+        # 3. Define bit-widths for sub-byte/packed types 
+        # based on the official Safetensors spec we found.
+        sub_byte_map = {
+            "F4": 4,
+            "F6_E3M2": 6,
+            "F6_E2M3": 6,
+        }
+
+        if self.dtype in sub_byte_map:
+            bits_per_element = sub_byte_map[self.dtype]
+            # Calculate bytes using ceiling division: (bits + 7) // 8
+            # This handles odd element counts (e.g., 9 elements @ 4 bits = 36 bits = 5 bytes)
+            expected_bytes = (num_elements * bits_per_element + 7) // 8
+        else:
+            # Standard byte-aligned types (8, 16, 32, 64-bit)
+            torch_dtype = self.get_torch_dtype()
+            element_size = torch.tensor([], dtype=torch_dtype).element_size()
+            expected_bytes = num_elements * element_size
+
+        # 4. Final Validation
         if expected_bytes != actual_bytes:
+            # Special Case: Some exporters don't pack sub-byte types.
+            # If expected was 4-bit packed but file provided 1-byte-per-element, we accept it.
+            if self.dtype in sub_byte_map and actual_bytes == num_elements:
+                return
+
             raise ValueError(
                 f"Corrupted Tensor '{self.name}': "
                 f"Shape claims {expected_bytes} bytes ({self.shape} x {self.dtype}), "
@@ -177,7 +210,7 @@ class Offsets:
 
 def prepare_request(
     fs: DistributedStreamer, paths: List[str], s3_credentials: Optional[S3Credentials]
-) -> List[Tuple[str, int, List[SafetensorMetadata], List[int]]]:
+) -> List[Tuple[int, List[SafetensorMetadata], List[int]]]:
     safetensors_metadatas = SafetensorsMetadata.from_files(fs, paths, s3_credentials)
     return [(
         safetensors_metadata.offset,
@@ -187,12 +220,35 @@ def prepare_request(
 
 
 def create_torch_tensor(
-    buffer: memoryview, tensor_metadata: SafetensorMetadata
-) -> torch.tensor:
+    buffer: Any, tensor_metadata: SafetensorMetadata
+) -> torch.Tensor:
     if tensor_metadata.get_item_count() == 0:
         return torch.empty(tensor_metadata.shape, dtype=tensor_metadata.get_torch_dtype())
 
-    tensor = buffer.view(tensor_metadata.get_torch_dtype())
-    
-    # Reshape the tensor to its final, correct shape.
+    target_dtype = tensor_metadata.get_torch_dtype()
+
+    if torch.is_tensor(buffer):
+        if buffer.is_cuda:
+            # --- GPU PATH (DLPack) ---
+            # to_dlpack/from_dlpack is 100% zero-copy on GPU.
+            # It preserves the slice offset and device location.
+            capsule = torch.utils.dlpack.to_dlpack(buffer)
+            # We create a new tensor from the capsule
+            tensor = torch.utils.dlpack.from_dlpack(capsule)
+            # Re-interpret as the new dtype (F8, F4, etc.)
+            return tensor.view(target_dtype).view(tensor_metadata.shape)
+        else:
+            # --- CPU PATH (NumPy) ---
+            # .numpy() on a CPU view is zero-copy.
+            np_view = buffer.detach().cpu().numpy()
+            raw_buffer = np_view.data
+    else:
+        raw_buffer = buffer
+
+    # Final construction for CPU paths
+    tensor = torch.frombuffer(
+        raw_buffer, 
+        dtype=target_dtype, 
+        count=tensor_metadata.get_item_count()
+    )
     return tensor.view(tensor_metadata.shape)
