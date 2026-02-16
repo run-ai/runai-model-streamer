@@ -17,7 +17,6 @@ MAX_HEADER_SIZE = 100 * 1024 * 1024
 
 LITTLE_ENDIAN_LONG_LONG_STRUCT_FORMAT = "<Q"
 
-# 1. Define the Base Types (Always Safe)
 safetensors_to_torch_dtype = {
     "F64": torch.float64,
     "F32": torch.float32,
@@ -30,24 +29,26 @@ safetensors_to_torch_dtype = {
     "U8":  torch.uint8,
     "BOOL": torch.bool,
     "C64": torch.complex64,
-
-    # --- OCP / MXFP / Sub-byte Types ---
-    # These are byte-aligned or packed, so mapping to uint8 is safe for streaming.
-    "F8_E8M0": torch.float8_e8m0fnu,
-    "F8_E5M2": torch.float8_e5m2,
-    "F8_E4M3": torch.float8_e4m3fn,
-    "F6_E3M2": torch.uint8,
-    "F6_E2M3": torch.uint8,
-    "F4":      torch.uint8, 
 }
 
-# 2. Conditionally Add Native Unsigned Types (Torch >= 2.3.0)
 if Version(torch.__version__) >= Version("2.3.0"):
-    safetensors_to_torch_dtype.update({
-        "U64": torch.uint64,
-        "U32": torch.uint32,
-        "U16": torch.uint16,
-    })
+    # Using getattr for safety even with version check to handle custom/stripped builds
+    for st_name, torch_name in [("U64", "uint64"), ("U32", "uint32"), ("U16", "uint16")]:
+        if hasattr(torch, torch_name):
+            safetensors_to_torch_dtype[st_name] = getattr(torch, torch_name)
+
+_EXPERIMENTAL_ALIASES = {
+    "F8_E4M3": ["float8_e4m3fn", "float8_e4m3fnuz"],
+    "F8_E5M2": ["float8_e5m2", "float8_e5m2fnuz"],
+    "F8_E8M0": ["float8_e8m0fnu", "float8_e8m0fnuz"],
+    "F4":      ["float4_e2m1fn_x2"],
+}
+
+for st_type, torch_aliases in _EXPERIMENTAL_ALIASES.items():
+    for alias in torch_aliases:
+        if hasattr(torch, alias):
+            safetensors_to_torch_dtype[st_type] = getattr(torch, alias)
+            break
 
 class SafetensorsMetadata:
     def __init__(self, blob: any, offset: int) -> None:
