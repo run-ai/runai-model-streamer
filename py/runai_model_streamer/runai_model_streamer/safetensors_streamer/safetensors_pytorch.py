@@ -4,6 +4,7 @@ import torch.utils.dlpack
 import struct
 import json
 from typing import List, Tuple, Optional, Any, Dict
+from packaging.version import Version
 from runai_model_streamer.distributed_streamer.distributed_streamer import (DistributedStreamer, FileChunks)
 
 SAFETENSORS_DATA_OFFSETS_KEY = "data_offsets"
@@ -17,31 +18,38 @@ MAX_HEADER_SIZE = 100 * 1024 * 1024
 
 LITTLE_ENDIAN_LONG_LONG_STRUCT_FORMAT = "<Q"
 
-safetenors_to_torch_dtype = {
-    # --- Standard Types ---
-    "BOOL": torch.bool,
-    "U8":   torch.uint8,
-    "I8":   torch.int8,
-    "I16":  torch.int16,
-    "U16":  getattr(torch, "uint16", torch.int32), # Torch doesn't have native U16 yet
-    "F16":  torch.float16,
+# 1. Define the Base Types (Always Safe)
+safetensors_to_torch_dtype = {
+    "F64": torch.float64,
+    "F32": torch.float32,
+    "F16": torch.float16,
     "BF16": torch.bfloat16,
-    "I32":  torch.int32,
-    "U32":  getattr(torch, "uint32", torch.int64), # Fallback to I64
-    "F32":  torch.float32,
-    "F64":  torch.float64,
-    "I64":  torch.int64,
-    "U64":  torch.uint8, # Usually handled as raw bytes in PT
-    "C64":  torch.complex64,
+    "I64": torch.int64,
+    "I32": torch.int32,
+    "I16": torch.int16,
+    "I8":  torch.int8,
+    "U8":  torch.uint8,
+    "BOOL": torch.bool,
+    "C64": torch.complex64,
 
-    # --- Official OCP / MX Formats according to safetensors 0.7.0 ---
-    "F4":       torch.uint8, # MXFP4 - Packed 2-per-byte
-    "F6_E2M3":  torch.uint8, # MXFP6 - Packed/Padded
-    "F6_E3M2":  torch.uint8, # MXFP6 - Packed/Padded
-    "F8_E8M0":  getattr(torch, "float8_e8m0fnu", torch.uint8),
-    "F8_E5M2":  getattr(torch, "float8_e5m2", torch.uint8),
-    "F8_E4M3":  getattr(torch, "float8_e4m3fn", torch.uint8),
+    # --- OCP / MXFP / Sub-byte Types ---
+    # These are byte-aligned or packed, so mapping to uint8 is safe for streaming.
+    "F8_E8M0": getattr(torch, "float8_e8m0fnu", torch.uint8),
+    "F8_E5M2": getattr(torch, "float8_e5m2", torch.uint8),
+    "F8_E4M3": getattr(torch, "float8_e4m3fn", torch.uint8),
+    "F6_E3M2": torch.uint8,
+    "F6_E2M3": torch.uint8,
+    "F4":      torch.uint8, 
+    "F4_E2M1": torch.uint8, # Alias
 }
+
+# 2. Conditionally Add Native Unsigned Types (Torch >= 2.3.0)
+if Version(torch.__version__) >= Version("2.3.0"):
+    safetensors_to_torch_dtype.update({
+        "U64": torch.uint64,
+        "U32": torch.uint32,
+        "U16": torch.uint16,
+    })
 
 class SafetensorsMetadata:
     def __init__(self, blob: any, offset: int) -> None:
@@ -194,9 +202,9 @@ class SafetensorMetadata:
 
     def get_torch_dtype(self) -> torch.dtype:
         # Handle unknown/unsupported dtypes
-        if self.dtype not in safetenors_to_torch_dtype:
+        if self.dtype not in safetensors_to_torch_dtype:
             raise ValueError(f"Unsupported dtype '{self.dtype}' in tensor '{self.name}'")
-        return safetenors_to_torch_dtype[self.dtype]
+        return safetensors_to_torch_dtype[self.dtype]
 
 
 class Offsets:
@@ -225,30 +233,7 @@ def create_torch_tensor(
     if tensor_metadata.get_item_count() == 0:
         return torch.empty(tensor_metadata.shape, dtype=tensor_metadata.get_torch_dtype())
 
-    target_dtype = tensor_metadata.get_torch_dtype()
-
-    if torch.is_tensor(buffer):
-        if buffer.is_cuda:
-            # --- GPU PATH (DLPack) ---
-            # to_dlpack/from_dlpack is 100% zero-copy on GPU.
-            # It preserves the slice offset and device location.
-            capsule = torch.utils.dlpack.to_dlpack(buffer)
-            # We create a new tensor from the capsule
-            tensor = torch.utils.dlpack.from_dlpack(capsule)
-            # Re-interpret as the new dtype (F8, F4, etc.)
-            return tensor.view(target_dtype).view(tensor_metadata.shape)
-        else:
-            # --- CPU PATH (NumPy) ---
-            # .numpy() on a CPU view is zero-copy.
-            np_view = buffer.detach().cpu().numpy()
-            raw_buffer = np_view.data
-    else:
-        raw_buffer = buffer
-
-    # Final construction for CPU paths
-    tensor = torch.frombuffer(
-        raw_buffer, 
-        dtype=target_dtype, 
-        count=tensor_metadata.get_item_count()
-    )
+    tensor = buffer.view(tensor_metadata.get_torch_dtype())
+    
+    # Reshape the tensor to its final, correct shape.
     return tensor.view(tensor_metadata.shape)

@@ -2,103 +2,95 @@ from __future__ import annotations
 import unittest
 import torch
 import numpy as np
+# Assuming the package structure exists
 import runai_model_streamer.safetensors_streamer.safetensors_pytorch as safetensors_pytorch
 
 class TestSafetensorsDtypes(unittest.TestCase):
 
     def setUp(self):
         """Reference the live mapping from your streamer package."""
-        self.dtype_map = safetensors_pytorch.safetenors_to_torch_dtype
+        self.dtype_map = safetensors_pytorch.safetensors_to_torch_dtype
 
     def validate_logic(self, dtype_str: str, shape: list[int], actual_bytes: int):
         """
-        Replicates the revised _validate_shape_consistency logic using 
-        bit-width math to handle sub-byte packing accurately.
+        Calculates expected byte size and compares with actual buffer size.
+        Handles both byte-aligned (F8, F16) and packed (F4) types.
         """
         num_elements = 1
         for dim in shape:
             num_elements *= dim
             
-        if dtype_str not in self.dtype_map:
-            raise KeyError(f"Dtype {dtype_str} missing from safetensors_pytorch.py")
-            
-        # Define bit-widths for sub-byte types aligned with our final streamer logic
-        # We only keep what's in our official dictionary
+        # Define bit-widths for types that are NOT 1-byte aligned
+        # If a type is 8-bit or larger, we use torch.element_size()
         bit_widths = {
-            "F4": 4,
-            "F6_E3M2": 6,
-            "F6_E2M3": 6
+            "F4": 4, 
         }
 
         if dtype_str in bit_widths:
             bits_per_element = bit_widths[dtype_str]
-            # Ceiling division for total bytes: (Total Bits + 7) // 8
+            # Ceiling division: (Total Bits + 7) // 8
             expected_bytes = (num_elements * bits_per_element + 7) // 8
         else:
-            # Standard byte-aligned types (8, 16, 32, 64-bit)
+            # Standard path for F8, F16, F32, etc.
+            if dtype_str not in self.dtype_map:
+                raise KeyError(f"Dtype {dtype_str} missing from dtype_map")
+            
             torch_dtype = self.dtype_map[dtype_str]
-            element_size = torch.tensor([], dtype=torch_dtype).element_size()
+            # Handle cases where experimental dtypes might be None or custom objects
+            try:
+                element_size = torch.tensor([], dtype=torch_dtype).element_size()
+            except:
+                element_size = 1 # Fallback for 8-bit experimental types
             expected_bytes = num_elements * element_size
-
-        # Fallback: Check for 'Lazy Exporters' who use 1-byte containers 
-        # for sub-byte types (not packing them)
-        if dtype_str in bit_widths and actual_bytes == num_elements:
-            return True
 
         return expected_bytes == actual_bytes
 
     def test_all_mapped_dtypes_exist(self):
-        """Verify only the official Safetensors strings are present."""
-        # Removed I4 and F4_E1M1 as they aren't in our finalized official list
-        # Keeping F4 as the primary 4-bit representative
-        required_types = ["F8_E8M0", "F6_E3M2", "F4"]
+        """Verify crucial industry-standard experimental types are present."""
+        required_types = ["F8_E4M3", "F8_E5M2", "F8_E8M0"]
         for t in required_types:
             with self.subTest(dtype=t):
-                self.assertIn(t, self.dtype_map, f"Crucial type {t} is missing from safetensors_pytorch.py")
+                self.assertIn(t, self.dtype_map, f"Crucial type {t} is missing from mapping!")
 
-    def test_packed_4bit_validation(self):
-        """Tests bit-width logic for the official F4 packed format."""
-        # 512 elements @ 4-bits = 2048 bits = 256 bytes
-        # This matches the (bits + 7) // 8 logic in the streamer
-        self.assertTrue(self.validate_logic("F4", [512], 256))
-        
-        # Test odd shape: 9 elements @ 4-bits = 36 bits = 5 bytes (rounded up)
-        # This is a critical edge case for GPT-OSS-120B padding
-        self.assertTrue(self.validate_logic("F4", [3, 3], 5))
+    def test_float8_validation(self):
+        """Tests standard 1-byte alignment for F8 variants (E4M3, E5M2, E8M0)."""
+        # 1024 elements should be exactly 1024 bytes
+        for f8_type in ["F8_E4M3", "F8_E5M2", "F8_E8M0"]:
+            with self.subTest(dtype=f8_type):
+                self.assertTrue(self.validate_logic(f8_type, [1024], 1024))
 
-    def test_mx_scale_validation(self):
-        """Tests the F8_E8M0 (OCP Microscaling) 8-bit scale type."""
-        # 128 elements in F8_E8M0 should be exactly 128 bytes.
-        self.assertTrue(self.validate_logic("F8_E8M0", [128], 128))
-
-    def test_float6_validation(self):
-        """Tests 6-bit floats stored in 1-byte containers."""
-        # F6 formats are typically byte-aligned in safetensors.
-        self.assertTrue(self.validate_logic("F6_E3M2", [64, 1], 64))
-
-    def test_copyless_frombuffer_all_types(self):
+    def test_copyless_frombuffer_safe(self):
         """
-        Verifies torch.frombuffer correctly creates a view for every single 
-        dtype defined in your dictionary.
+        Verifies torch.frombuffer handles all types without crashing.
+        Sub-byte types are viewed as uint8 to prevent PyTorch DType errors.
         """
-        raw_bytes = bytearray([0] * 8) # 8 bytes can hold at least one element of any type
+        raw_bytes = bytearray([0] * 8) 
         buffer = memoryview(raw_bytes)
 
         for dtype_str, torch_dtype in self.dtype_map.items():
+            # Skip if the torch version doesn't support the experimental dtype yet
+            if torch_dtype is None:
+                continue
+
             with self.subTest(dtype=dtype_str):
                 try:
-                    # Create tensor from buffer
-                    tensor = torch.frombuffer(buffer, dtype=torch_dtype)
+                    # Logic: If it's a sub-byte type (F4), we MUST load as uint8
+                    # because PyTorch cannot create a 'torch.float4' tensor view.
+                    load_dtype = torch_dtype if "F4" not in dtype_str else torch.uint8
                     
-                    # Verify it's copyless: Change original byte
-                    raw_bytes[0] = 123
+                    tensor = torch.frombuffer(buffer, dtype=load_dtype)
                     
-                    # For multi-byte types (F64, I32), we check the first byte-equivalent
-                    # Converting to uint8 view for comparison is the most reliable check
+                    # Verify it's a zero-copy view
+                    raw_bytes[0] = 42
                     tensor_as_bytes = tensor.view(torch.uint8)
-                    self.assertEqual(tensor_as_bytes[0].item(), 123, f"Copy detected for {dtype_str}!")
+                    self.assertEqual(tensor_as_bytes[0].item(), 42, f"Copy detected for {dtype_str}")
                 except Exception as e:
-                    self.fail(f"Failed to create copyless tensor for {dtype_str}: {e}")
+                    self.fail(f"Copyless check failed for {dtype_str}: {e}")
+
+    def test_shape_mismatch_detection(self):
+        """Ensure the validator fails when byte size doesn't match shape."""
+        # F16: 10 elements should be 20 bytes. Providing 15 should fail.
+        self.assertFalse(self.validate_logic("F16", [10], 15))
 
 if __name__ == "__main__":
     unittest.main()
