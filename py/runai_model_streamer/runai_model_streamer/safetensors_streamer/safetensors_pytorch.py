@@ -1,9 +1,8 @@
 from __future__ import annotations
 import torch
-import torch.utils.dlpack
 import struct
 import json
-from typing import List, Tuple, Optional, Any, Dict
+from typing import List, Tuple, Optional, Any
 from packaging.version import Version
 from runai_model_streamer.distributed_streamer.distributed_streamer import (DistributedStreamer, FileChunks)
 
@@ -40,7 +39,6 @@ safetensors_to_torch_dtype = {
     "F6_E3M2": torch.uint8,
     "F6_E2M3": torch.uint8,
     "F4":      torch.uint8, 
-    "F4_E2M1": torch.uint8, # Alias
 }
 
 # 2. Conditionally Add Native Unsigned Types (Torch >= 2.3.0)

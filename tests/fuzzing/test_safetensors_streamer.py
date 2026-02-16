@@ -70,18 +70,49 @@ class TestSafetensorStreamerFuzzing(unittest.TestCase):
             self.assertTrue(our_tensor.is_contiguous())
             self._compare_tensors_robustly(our_tensor, their[name], name)
 
-    def test_truncated_safetensors_file(self):
-        """Tests that truncated files raise a ValueError during streaming."""
+    def test_truncated_header(self):
+        """Tests that truncation within the JSON header raises an error."""
         file_path = create_random_safetensors(self.temp_dir)
-        original_size = os.path.getsize(file_path)
-
-        # Truncate to 50%
-        truncated_size = original_size // 2
+        
+        # Read the header length to know where the header ends
+        with open(file_path, "rb") as f:
+            header_size_bytes = f.read(8)
+            header_size = int.from_bytes(header_size_bytes, 'little')
+        
+        # Truncate to just 4 bytes into the header (mid-JSON)
+        # File = 8 bytes (size) + header_size + data
+        truncated_size = 8 + (header_size // 2)
+        
         with open(file_path, "r+b") as f:
             f.truncate(truncated_size)
         
         with SafetensorsStreamer() as run_sf:
-            # We expect a ValueError either during header parsing or data reading
+            # Should fail during header parsing/JSON decoding
+            with self.assertRaises(ValueError):
+                run_sf.stream_file(file_path, None, "cpu", False)
+                for _ in run_sf.get_tensors():
+                    pass
+
+    def test_truncated_data(self):
+        """Tests that truncation within the data section raises an error."""
+        file_path = create_random_safetensors(self.temp_dir)
+        
+        with open(file_path, "rb") as f:
+            header_size = int.from_bytes(f.read(8), 'little')
+        
+        # Header is fully intact, but data is cut short.
+        # We truncate at Header + 8 (size prefix) + a few bytes of data
+        header_end_pos = 8 + header_size
+        original_size = os.path.getsize(file_path)
+        
+        # Truncate halfway through the actual tensor data
+        truncated_size = header_end_pos + ((original_size - header_end_pos) // 2)
+        
+        with open(file_path, "r+b") as f:
+            f.truncate(truncated_size)
+        
+        with SafetensorsStreamer() as run_sf:
+            # Header parsing might pass, but reading tensor buffers must fail
             with self.assertRaises(ValueError):
                 run_sf.stream_file(file_path, None, "cpu", False)
                 for _ in run_sf.get_tensors():
