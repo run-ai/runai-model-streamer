@@ -33,9 +33,9 @@ safetensors_to_torch_dtype = {
 
     # --- OCP / MXFP / Sub-byte Types ---
     # These are byte-aligned or packed, so mapping to uint8 is safe for streaming.
-    "F8_E8M0": getattr(torch, "float8_e8m0fnu", torch.uint8),
-    "F8_E5M2": getattr(torch, "float8_e5m2", torch.uint8),
-    "F8_E4M3": getattr(torch, "float8_e4m3fn", torch.uint8),
+    "F8_E8M0": torch.float8_e8m0fnu,
+    "F8_E5M2": torch.float8_e5m2,
+    "F8_E4M3": torch.float8_e4m3fn,
     "F6_E3M2": torch.uint8,
     "F6_E2M3": torch.uint8,
     "F4":      torch.uint8, 
