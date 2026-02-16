@@ -161,35 +161,14 @@ class SafetensorMetadata:
             num_elements *= dim
         
         # 2. Identify the actual bytes reserved in the file
-        actual_bytes = self.offsets.get_diff()
-        
-        # 3. Define bit-widths for sub-byte/packed types 
-        # based on the official Safetensors spec we found.
-        sub_byte_map = {
-            "F4": 4,
-            "F6_E3M2": 6,
-            "F6_E2M3": 6,
-        }
+        actual_bytes = self.offsets.get_diff()        
 
-        if self.dtype in sub_byte_map:
-            bits_per_element = sub_byte_map[self.dtype]
-            # Calculate bytes using ceiling division: (bits + 7) // 8
-            # This handles odd element counts (e.g., 9 elements @ 4 bits = 36 bits = 5 bytes)
-            # Ceiling division: (bits + 7) // 8 rounds up to nearest byte
-            expected_bytes = (num_elements * bits_per_element + 7) // 8
-        else:
-            # Standard byte-aligned types (8, 16, 32, 64-bit)
-            torch_dtype = self.get_torch_dtype()
-            element_size = torch.tensor([], dtype=torch_dtype).element_size()
-            expected_bytes = num_elements * element_size
+        torch_dtype = self.get_torch_dtype()
+        element_size = torch.tensor([], dtype=torch_dtype).element_size()
+        expected_bytes = num_elements * element_size
 
         # 4. Final Validation
         if expected_bytes != actual_bytes:
-            # Special Case: Some exporters don't pack sub-byte types.
-            # If expected was 4-bit packed but file provided 1-byte-per-element, we accept it.
-            if self.dtype in sub_byte_map and actual_bytes == num_elements:
-                return
-
             raise ValueError(
                 f"Corrupted Tensor '{self.name}': "
                 f"Shape claims {expected_bytes} bytes ({self.shape} x {self.dtype}), "
