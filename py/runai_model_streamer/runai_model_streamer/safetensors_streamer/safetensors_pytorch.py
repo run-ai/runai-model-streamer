@@ -17,41 +17,46 @@ MAX_HEADER_SIZE = 100 * 1024 * 1024
 
 LITTLE_ENDIAN_LONG_LONG_STRUCT_FORMAT = "<Q"
 
-safetensors_to_torch_dtype = {
-    "F64": torch.float64,
-    "F32": torch.float32,
-    "F16": torch.float16,
-    "BF16": torch.bfloat16,
-    "I64": torch.int64,
-    "I32": torch.int32,
-    "I16": torch.int16,
-    "I8":  torch.int8,
-    "U8":  torch.uint8,
-    "BOOL": torch.bool,
-    "C64": torch.complex64,
-}
+def get_safetensors_dtype_map() -> dict:
+    safetensors_to_torch_dtype = {
+        "F64": torch.float64,
+        "F32": torch.float32,
+        "F16": torch.float16,
+        "BF16": torch.bfloat16,
+        "I64": torch.int64,
+        "I32": torch.int32,
+        "I16": torch.int16,
+        "I8":  torch.int8,
+        "U8":  torch.uint8,
+        "BOOL": torch.bool,
+        "C64": torch.complex64,
+    }
 
-if Version(torch.__version__) >= Version("2.3.0"):
-    # Using getattr for safety even with version check to handle custom/stripped builds
-    for st_name, torch_name in [("U64", "uint64"), ("U32", "uint32"), ("U16", "uint16")]:
-        if hasattr(torch, torch_name):
-            safetensors_to_torch_dtype[st_name] = getattr(torch, torch_name)
+    if Version(torch.__version__) >= Version("2.3.0"):
+        # Using getattr for safety even with version check to handle custom/stripped builds
+        for st_name, torch_name in [("U64", "uint64"), ("U32", "uint32"), ("U16", "uint16")]:
+            if hasattr(torch, torch_name):
+                safetensors_to_torch_dtype[st_name] = getattr(torch, torch_name)
 
-_EXPERIMENTAL_ALIASES = {
-    "F8_E4M3": ["float8_e4m3fn", "float8_e4m3fnuz"],
-    "F8_E5M2": ["float8_e5m2", "float8_e5m2fnuz"],
-    "F8_E8M0": ["float8_e8m0fnu", "float8_e8m0fnuz"],
-    "F4":      ["float4_e2m1fn_x2"],
-}
+    _EXPERIMENTAL_ALIASES = {
+        "F8_E4M3": ["float8_e4m3fn", "float8_e4m3fnuz"],
+        "F8_E5M2": ["float8_e5m2", "float8_e5m2fnuz"],
+        "F8_E8M0": ["float8_e8m0fnu", "float8_e8m0fnuz"],
+        "F4":      ["float4_e2m1fn_x2"],
+    }
 
-for st_type, torch_aliases in _EXPERIMENTAL_ALIASES.items():
-    for alias in torch_aliases:
-        if hasattr(torch, alias):
-            safetensors_to_torch_dtype[st_type] = getattr(torch, alias)
-            break
+    for st_type, torch_aliases in _EXPERIMENTAL_ALIASES.items():
+        for alias in torch_aliases:
+            if hasattr(torch, alias):
+                safetensors_to_torch_dtype[st_type] = getattr(torch, alias)
+                break
+
+    return safetensors_to_torch_dtype
+
+safetensors_to_torch_dtype = get_safetensors_dtype_map()
 
 class SafetensorsMetadata:
-    def __init__(self, blob: any, offset: int) -> None:
+    def __init__(self, blob: Any, offset: int) -> None:
         self.offset = offset
         self.tensors_metadata = []
         self.read_sizes = []
@@ -141,7 +146,7 @@ class SafetensorsMetadata:
         ) for i in range(len(filenames))] 
 
 class SafetensorMetadata:
-    def __init__(self, name: str, safetensorMetadata: any) -> None:
+    def __init__(self, name: str, safetensorMetadata: Any) -> None:
         self.name = name
         self.shape = safetensorMetadata[SAFETENSORS_SHAPE_KEY]
         self.dtype = safetensorMetadata[SAFETENSORS_DTYPE_KEY]
@@ -170,6 +175,7 @@ class SafetensorMetadata:
             bits_per_element = sub_byte_map[self.dtype]
             # Calculate bytes using ceiling division: (bits + 7) // 8
             # This handles odd element counts (e.g., 9 elements @ 4 bits = 36 bits = 5 bytes)
+            # Ceiling division: (bits + 7) // 8 rounds up to nearest byte
             expected_bytes = (num_elements * bits_per_element + 7) // 8
         else:
             # Standard byte-aligned types (8, 16, 32, 64-bit)

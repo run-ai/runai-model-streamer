@@ -13,6 +13,12 @@ def are_tensors_bitwise_identical(name, t1, t2):
     # This is the "safe" way to handle types PyTorch doesn't fully support yet
     element_size = t1.element_size()
 
+    if t1.is_complex():                                                                                                                                                                                                                                                                                                                                                           
+        # Compare real and imaginary parts separately                                                                                                                                                                                                                                                                                                                             
+        v1_real, v1_imag = t1.real, t1.imag                                                                                                                                                                                                                                                                                                                                       
+        v2_real, v2_imag = t2.real, t2.imag                                                                                                                                                                                                                                                                                                                                       
+        return (torch.equal(v1_real, v2_real) and torch.equal(v1_imag, v2_imag)), msg  
+
     try:
         if element_size == 4: # Float32 / Int32
             v1, v2 = t1.view(torch.int32), t2.view(torch.int32)
