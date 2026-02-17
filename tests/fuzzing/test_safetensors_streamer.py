@@ -9,9 +9,6 @@ from runai_model_streamer.safetensors_streamer.safetensors_streamer import (
     SafetensorsStreamer,
 )
 
-MIN_NUM_FILES = 1                                                                                                                                                                                                                                                                                                                                                             
-MAX_NUM_FILES = 20    
-
 class TestSafetensorStreamerFuzzing(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()

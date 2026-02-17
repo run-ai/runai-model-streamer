@@ -5,8 +5,8 @@ import random
 from safetensors.torch import save_file
 
 # --- Constants ---
-MIN_NUM_FILES, MAX_NUM_FILES = 1, 3
-MIN_NUM_TENSORS, MAX_NUM_TENSORS = 1, 10
+MIN_NUM_FILES, MAX_NUM_FILES = 1, 10
+MIN_NUM_TENSORS, MAX_NUM_TENSORS = 1, 20
 MAX_NUM_TENSORS_SMALL = 5
 MIN_TENSOR_NAME_LEN, MAX_TENSOR_NAME_LEN = 5, 20
 
