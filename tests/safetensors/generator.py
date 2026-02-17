@@ -38,39 +38,56 @@ if hasattr(torch, "uint32"):
 if hasattr(torch, "uint64"):
     TYPE_TO_STR[torch.uint64] = "U64"
 
+# Add experimental float8 types if available (PyTorch >= 2.1)
+if hasattr(torch, "float8_e4m3fn"):
+    TYPE_TO_STR[torch.float8_e4m3fn] = "F8_E4M3"
+if hasattr(torch, "float8_e5m2"):
+    TYPE_TO_STR[torch.float8_e5m2] = "F8_E5M2"
+if hasattr(torch, "float8_e8m0fnu"):
+    TYPE_TO_STR[torch.float8_e8m0fnu] = "F8_E8M0"
+
 # Dynamically detect which types the current safetensors version can save
-# (safetensors 0.5.3 on Python 3.8 won't support C64, U16, U32, U64)
+# This tests each type by attempting to save it with safetensors
 SAFETENSORS_SUPPORTED_TYPES = {}
 for dtype, dtype_str in TYPE_TO_STR.items():
     if _can_safetensors_save(dtype):
         SAFETENSORS_SUPPORTED_TYPES[dtype] = dtype_str
 
-EXPERIMENTAL_STR_MAP = {
-    "float8_e4m3fn": "F8_E4M3",
-    "float8_e5m2": "F8_E5M2",
-    "float8_e8m0fnu": "F8_E8M0",
-}
-
 def get_dtype_str(dtype):
+    """
+    Convert a PyTorch dtype to its safetensors string representation.
+
+    Raises ValueError if dtype is not in TYPE_TO_STR, indicating a bug in type detection.
+    """
     if dtype in TYPE_TO_STR:
         return TYPE_TO_STR[dtype]
-    d_str = str(dtype).split('.')[-1]
-    return EXPERIMENTAL_STR_MAP.get(d_str, "U8")
+
+    # If we reach here, it means a dtype was used that wasn't properly registered
+    # This indicates a bug in the type detection logic
+    raise ValueError(
+        f"Unsupported dtype {dtype}. This dtype should have been added to TYPE_TO_STR "
+        f"or filtered out by SAFETENSORS_SUPPORTED_TYPES. This is a bug in generator.py."
+    )
 
 def random_name():
     characters = string.ascii_letters + string.digits + "_"
     return "tensor_" + "".join(random.choice(characters) for _ in range(random.randint(5, 15)))
 
 def generate_random_data(min_tensors, max_tensors):
-    # Only use types that the official safetensors library supports
-    # to ensure save_file() works correctly
+    """
+    Generate random tensor data using all types supported by both PyTorch and safetensors.
+
+    SAFETENSORS_SUPPORTED_TYPES already contains only the types that:
+    1. Are available in the current PyTorch version
+    2. Can be saved by the current safetensors version
+    """
     all_available = list(SAFETENSORS_SUPPORTED_TYPES.keys())
 
-    # Add experimental types if available in PyTorch
-    # NOTE: These may not work with official save_file() and would need manual generation
-    # for name in EXPERIMENTAL_STR_MAP.keys():
-    #     if hasattr(torch, name):
-    #         all_available.append(getattr(torch, name))
+    if not all_available:
+        raise RuntimeError(
+            "No supported types detected! This should never happen. "
+            "Check that PyTorch and safetensors are properly installed."
+        )
 
     tensors = {}
     for _ in range(random.randint(min_tensors, max_tensors)):
