@@ -46,12 +46,24 @@ if hasattr(torch, "float8_e5m2"):
 if hasattr(torch, "float8_e8m0fnu"):
     TYPE_TO_STR[torch.float8_e8m0fnu] = "F8_E8M0"
 
-# Dynamically detect which types the current safetensors version can save
-# This tests each type by attempting to save it with safetensors
-SAFETENSORS_SUPPORTED_TYPES = {}
-for dtype, dtype_str in TYPE_TO_STR.items():
-    if _can_safetensors_save(dtype):
-        SAFETENSORS_SUPPORTED_TYPES[dtype] = dtype_str
+# Lazy initialization to avoid disk I/O on every import
+_SAFETENSORS_SUPPORTED_TYPES = None
+
+def get_safetensors_supported_types():
+    """
+    Get types supported by both PyTorch and safetensors.
+
+    Lazily initializes on first call to avoid disk I/O during module import.
+    This is important because _can_safetensors_save() creates temporary files
+    for each dtype, and the test suite imports this module multiple times.
+    """
+    global _SAFETENSORS_SUPPORTED_TYPES
+    if _SAFETENSORS_SUPPORTED_TYPES is None:
+        _SAFETENSORS_SUPPORTED_TYPES = {}
+        for dtype, dtype_str in TYPE_TO_STR.items():
+            if _can_safetensors_save(dtype):
+                _SAFETENSORS_SUPPORTED_TYPES[dtype] = dtype_str
+    return _SAFETENSORS_SUPPORTED_TYPES
 
 def get_dtype_str(dtype):
     """
@@ -66,7 +78,7 @@ def get_dtype_str(dtype):
     # This indicates a bug in the type detection logic
     raise ValueError(
         f"Unsupported dtype {dtype}. This dtype should have been added to TYPE_TO_STR "
-        f"or filtered out by SAFETENSORS_SUPPORTED_TYPES. This is a bug in generator.py."
+        f"or filtered out by get_safetensors_supported_types(). This is a bug in generator.py."
     )
 
 def random_name():
@@ -77,11 +89,11 @@ def generate_random_data(min_tensors, max_tensors):
     """
     Generate random tensor data using all types supported by both PyTorch and safetensors.
 
-    SAFETENSORS_SUPPORTED_TYPES already contains only the types that:
+    get_safetensors_supported_types() returns only the types that:
     1. Are available in the current PyTorch version
     2. Can be saved by the current safetensors version
     """
-    all_available = list(SAFETENSORS_SUPPORTED_TYPES.keys())
+    all_available = list(get_safetensors_supported_types().keys())
 
     if not all_available:
         raise RuntimeError(
@@ -109,36 +121,6 @@ def generate_random_data(min_tensors, max_tensors):
 
         tensors[random_name()] = t
     return tensors
-
-def save_manual_safetensors(tensors_dict, path):
-    header = {}
-    current_offset = 0
-    buffer_parts = []
-
-    for name, tensor in tensors_dict.items():
-        t = tensor.detach().cpu().contiguous()
-        # View as uint8 for raw byte extraction
-        raw_data = t.view(torch.uint8).numpy().tobytes()
-        
-        length = len(raw_data)
-        header[name] = {
-            "dtype": get_dtype_str(tensor.dtype),
-            "shape": list(tensor.shape),
-            "data_offsets": [current_offset, current_offset + length]
-        }
-        buffer_parts.append(raw_data)
-        current_offset += length
-
-    header["__metadata__"] = {"generated_by": "manual_bypass_generator"}
-    header_bytes = json.dumps(header).encode('utf-8')
-    padding = (8 - len(header_bytes) % 8) % 8
-    header_bytes += b' ' * padding
-    
-    with open(path, "wb") as f:
-        f.write(len(header_bytes).to_bytes(8, 'little'))
-        f.write(header_bytes)
-        for part in buffer_parts:
-            f.write(part)
 
 def create_random_safetensors(dir_path):
     os.makedirs(dir_path, exist_ok=True)
