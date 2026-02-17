@@ -3,7 +3,6 @@ import torch
 import struct
 import json
 from typing import List, Tuple, Optional, Any
-from packaging.version import Version
 from runai_model_streamer.distributed_streamer.distributed_streamer import (DistributedStreamer, FileChunks)
 
 SAFETENSORS_DATA_OFFSETS_KEY = "data_offsets"
@@ -32,11 +31,10 @@ def get_safetensors_dtype_map() -> dict:
         "C64": torch.complex64,
     }
 
-    if Version(torch.__version__) >= Version("2.3.0"):
-        # Using getattr for safety even with version check to handle custom/stripped builds
-        for st_name, torch_name in [("U64", "uint64"), ("U32", "uint32"), ("U16", "uint16")]:
-            if hasattr(torch, torch_name):
-                safetensors_to_torch_dtype[st_name] = getattr(torch, torch_name)
+    # Add unsigned types if available (PyTorch >= 2.3.0)
+    for st_name, torch_name in [("U64", "uint64"), ("U32", "uint32"), ("U16", "uint16")]:
+        if hasattr(torch, torch_name):
+            safetensors_to_torch_dtype[st_name] = getattr(torch, torch_name)
 
     _EXPERIMENTAL_ALIASES = {
         "F8_E4M3": ["float8_e4m3fn", "float8_e4m3fnuz"],
