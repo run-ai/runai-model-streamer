@@ -36,11 +36,16 @@ def get_safetensors_dtype_map() -> dict:
         if hasattr(torch, torch_name):
             safetensors_to_torch_dtype[st_name] = getattr(torch, torch_name)
 
+    # Experimental types with their PyTorch attribute names
+    # Note: If a type is listed here but not available in the current PyTorch version,
+    # it won't be added to the type map. If a file contains such a dtype (e.g., "F4"),
+    # get_torch_dtype() will raise a clear ValueError: "Unsupported dtype 'F4'".
+    # This is correct forward-compatible behavior - fail fast with a clear error message.
     _EXPERIMENTAL_ALIASES = {
         "F8_E4M3": ["float8_e4m3fn", "float8_e4m3fnuz"],
         "F8_E5M2": ["float8_e5m2", "float8_e5m2fnuz"],
         "F8_E8M0": ["float8_e8m0fnu", "float8_e8m0fnuz"],
-        "F4":      ["float4_e2m1fn_x2"],
+        "F4":      ["float4_e2m1fn_x2"],  # Not yet in PyTorch (as of 2.5.1)
     }
 
     for st_type, torch_aliases in _EXPERIMENTAL_ALIASES.items():

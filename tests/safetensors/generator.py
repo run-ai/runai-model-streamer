@@ -46,6 +46,10 @@ if hasattr(torch, "float8_e5m2"):
 if hasattr(torch, "float8_e8m0fnu"):
     TYPE_TO_STR[torch.float8_e8m0fnu] = "F8_E8M0"
 
+# Add experimental float4 types if available (future PyTorch)
+if hasattr(torch, "float4_e2m1fn_x2"):
+    TYPE_TO_STR[torch.float4_e2m1fn_x2] = "F4"
+
 # Lazy initialization to avoid disk I/O on every import
 _SAFETENSORS_SUPPORTED_TYPES = None
 
