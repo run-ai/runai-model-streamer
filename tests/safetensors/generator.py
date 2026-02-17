@@ -11,14 +11,25 @@ MAX_NUM_TENSORS_SMALL = 5
 MIN_TENSOR_NAME_LEN, MAX_TENSOR_NAME_LEN = 5, 20
 
 def _can_safetensors_save(dtype):
-    """Check if the current safetensors version can save this dtype."""
+    """
+    Check if the current safetensors version can save this dtype.
+
+    This is a capability-probing function that tests whether a dtype can be used.
+    It catches all exceptions broadly because:
+    - torch.zeros() may raise RuntimeError for experimental types that exist as
+      attributes but don't support tensor creation
+    - save_file() may raise various exceptions for unsupported types
+    - We want to gracefully handle any failure and return False
+    """
     import tempfile
     try:
         with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=True) as f:
             test_tensor = torch.zeros((1,), dtype=dtype)
             save_file({"test": test_tensor}, f.name)
         return True
-    except (KeyError, ValueError):
+    except Exception:
+        # Broadly catch all exceptions since this is capability probing.
+        # Any failure means "this dtype is not usable", which is what we need to know.
         return False
 
 # All types our streamer supports (for reading files)
