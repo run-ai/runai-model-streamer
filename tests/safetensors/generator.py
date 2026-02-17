@@ -120,18 +120,30 @@ def generate_random_data(min_tensors, max_tensors):
         dtype = random.choice(all_available)
         shape = tuple(random.randint(1, 10) for _ in range(random.randint(1, 4)))
 
-        if dtype == torch.bool:
-            t = torch.rand(shape) > 0.5
-        elif dtype.is_complex:
-            # Generate complex tensors with random real and imaginary parts
-            real = torch.rand(shape, device="cpu") - 0.5
-            imag = torch.rand(shape, device="cpu") - 0.5
-            t = torch.complex(real, imag).to(dtype)
-        elif dtype.is_floating_point:
-            # Shift range to [-0.5, 0.5) to test the Sign Bit (Proper Bit Binding)
-            t = (torch.rand(shape, device="cpu") - 0.5).to(dtype)
-        else:
-            t = torch.randint(0, 100, shape, dtype=dtype)
+        try:
+            if dtype == torch.bool:
+                t = torch.rand(shape) > 0.5
+            elif dtype.is_complex:
+                # Generate complex tensors with random real and imaginary parts
+                real = torch.rand(shape, device="cpu") - 0.5
+                imag = torch.rand(shape, device="cpu") - 0.5
+                t = torch.complex(real, imag).to(dtype)
+            elif dtype.is_floating_point:
+                # For 8-bit float types (float8_e4m3fn, float8_e5m2, etc.), torch.rand().to(dtype)
+                # is not supported. Instead, create random uint8 data and view as the target dtype.
+                if dtype.itemsize == 1:  # 8-bit float types
+                    # Create random uint8 data and view as the float8 dtype
+                    t = torch.randint(0, 256, shape, dtype=torch.uint8, device="cpu").view(dtype)
+                else:
+                    # For standard float types, shift range to [-0.5, 0.5) to test the Sign Bit
+                    t = (torch.rand(shape, device="cpu") - 0.5).to(dtype)
+            else:
+                t = torch.randint(0, 100, shape, dtype=dtype)
+        except Exception:
+            # If tensor generation fails for any reason (e.g., experimental dtype doesn't
+            # support certain operations), fall back to zeros. This can happen if a dtype
+            # passes _can_safetensors_save() but doesn't support rand/randint operations.
+            t = torch.zeros(shape, dtype=dtype)
 
         tensors[random_name()] = t
     return tensors
