@@ -165,7 +165,7 @@ class SafetensorMetadata:
         element_size = torch.tensor([], dtype=torch_dtype).element_size()
         expected_bytes = num_elements * element_size
 
-        # 4. Final Validation
+        # 3. Final Validation
         if expected_bytes != actual_bytes:
             raise ValueError(
                 f"Corrupted Tensor '{self.name}': "
