@@ -22,14 +22,21 @@ class TestSafetensorStreamerFuzzing(unittest.TestCase):
         """
         self.assertEqual(our_tensor.shape, their_tensor.shape, f"Shape mismatch in {name}")
         self.assertEqual(our_tensor.dtype, their_tensor.dtype, f"Dtype mismatch in {name}")
-        
-        # View as uint8 to compare raw bits. This is the gold standard for "zero-copy" verification.
-        # It ensures we loaded exactly the same bytes as the official library.
-        our_bits = our_tensor.detach().cpu().contiguous().view(torch.uint8)
-        their_bits = their_tensor.detach().cpu().contiguous().view(torch.uint8)
-        
-        # We use torch.equal on the uint8 view to verify bit-perfect loading
-        self.assertTrue(torch.equal(our_bits, their_bits), f"Bitwise data mismatch in {name}")
+
+        # Complex tensors need special handling - PyTorch doesn't allow .view(torch.uint8) on complex types
+        if our_tensor.is_complex():
+            our_real, our_imag = our_tensor.real, our_tensor.imag
+            their_real, their_imag = their_tensor.real, their_tensor.imag
+            self.assertTrue(torch.equal(our_real, their_real), f"Real part mismatch in {name}")
+            self.assertTrue(torch.equal(our_imag, their_imag), f"Imaginary part mismatch in {name}")
+        else:
+            # View as uint8 to compare raw bits. This is the gold standard for "zero-copy" verification.
+            # It ensures we loaded exactly the same bytes as the official library.
+            our_bits = our_tensor.detach().cpu().contiguous().view(torch.uint8)
+            their_bits = their_tensor.detach().cpu().contiguous().view(torch.uint8)
+
+            # We use torch.equal on the uint8 view to verify bit-perfect loading
+            self.assertTrue(torch.equal(our_bits, their_bits), f"Bitwise data mismatch in {name}")
 
     def test_safetensors_streamer(self):
         """Test streaming a single random safetensors file."""
