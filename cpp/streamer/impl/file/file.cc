@@ -6,19 +6,58 @@
 
 #include "common/exception/exception.h"
 #include "utils/logging/logging.h"
+#include "utils/env/env.h"
 
 namespace runai::llm::streamer::impl
 {
 
+namespace
+{
+
+// Helper function to check if Direct I/O is enabled via environment variable.
+// O_DIRECT enables Direct I/O, bypassing the kernel page cache for reads.
+// This is useful to avoid double-caching when using network filesystems or
+// when the application has its own caching layer.
+// Note: O_DIRECT requires aligned buffers and read sizes (typically to 512-byte
+// or filesystem block size boundaries). The existing code uses _block_size for
+// chunked reads, which should satisfy alignment requirements on most systems.
+bool is_directio_enabled()
+{
+    std::string directio_env;
+    return utils::try_getenv("RUNAI_STREAMER_DIRECTIO", directio_env) && directio_env == "1";
+}
+
+// Helper function to determine file open flags based on environment variables.
+int get_open_flags()
+{
+    int flags = O_RDONLY;
+    if (is_directio_enabled())
+    {
+        flags |= O_DIRECT;
+    }
+    return flags;
+}
+
+} // namespace
+
 File::File(const std::string & path, const Config & config) :
     Reader(Reader::Mode::Sync),
-    _fd(::open(path.c_str(), O_RDONLY)),
+    _fd(::open(path.c_str(), get_open_flags())),
     _block_size(config.fs_block_bytesize)
 {
     if (_fd.fd() == -1)
     {
         LOG(ERROR) << "Failed to access file " << path;
         throw common::Exception(common::ResponseCode::FileAccessError);
+    }
+
+    // Log if O_DIRECT is enabled for this file
+    // Note: We check the environment variable again here rather than caching the result
+    // from get_open_flags() to keep the code simple and maintainable. File opening
+    // is not a hot path operation, so the minor overhead of checking twice is acceptable.
+    if (is_directio_enabled())
+    {
+        LOG(INFO) << "Opened file " << path << " with O_DIRECT (DirectIO enabled)";
     }
 }
 
