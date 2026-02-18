@@ -2,7 +2,7 @@ from __future__ import annotations
 import torch
 import struct
 import json
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Any
 from runai_model_streamer.distributed_streamer.distributed_streamer import (DistributedStreamer, FileChunks)
 
 SAFETENSORS_DATA_OFFSETS_KEY = "data_offsets"
@@ -16,23 +16,50 @@ MAX_HEADER_SIZE = 100 * 1024 * 1024
 
 LITTLE_ENDIAN_LONG_LONG_STRUCT_FORMAT = "<Q"
 
-safetenors_to_torch_dtype = {
-    "F64": torch.float64,
-    "F32": torch.float32,
-    "F16": torch.float16,
-    "BF16": torch.bfloat16,
-    "I64": torch.int64,
-    "I32": torch.int32,
-    "I16": torch.int16,
-    "I8": torch.int8,
-    "U8": torch.uint8,
-    "BOOL": torch.bool,
-    "F8_E5M2": torch.float8_e5m2,
-    "F8_E4M3": torch.float8_e4m3fn,
-}
+def get_safetensors_dtype_map() -> dict:
+    safetensors_to_torch_dtype = {
+        "F64": torch.float64,
+        "F32": torch.float32,
+        "F16": torch.float16,
+        "BF16": torch.bfloat16,
+        "I64": torch.int64,
+        "I32": torch.int32,
+        "I16": torch.int16,
+        "I8":  torch.int8,
+        "U8":  torch.uint8,
+        "BOOL": torch.bool,
+        "C64": torch.complex64,
+    }
+
+    # Add unsigned types if available (PyTorch >= 2.3.0)
+    for st_name, torch_name in [("U64", "uint64"), ("U32", "uint32"), ("U16", "uint16")]:
+        if hasattr(torch, torch_name):
+            safetensors_to_torch_dtype[st_name] = getattr(torch, torch_name)
+
+    # Experimental types with their PyTorch attribute names
+    # Note: If a type is listed here but not available in the current PyTorch version,
+    # it won't be added to the type map. If a file contains such a dtype (e.g., "F4"),
+    # get_torch_dtype() will raise a clear ValueError: "Unsupported dtype 'F4'".
+    # This is correct forward-compatible behavior - fail fast with a clear error message.
+    _EXPERIMENTAL_ALIASES = {
+        "F8_E4M3": ["float8_e4m3fn", "float8_e4m3fnuz"],
+        "F8_E5M2": ["float8_e5m2", "float8_e5m2fnuz"],
+        "F8_E8M0": ["float8_e8m0fnu", "float8_e8m0fnuz"],
+        "F4":      ["float4_e2m1fn_x2"],  # Not yet in PyTorch (as of 2.5.1)
+    }
+
+    for st_type, torch_aliases in _EXPERIMENTAL_ALIASES.items():
+        for alias in torch_aliases:
+            if hasattr(torch, alias):
+                safetensors_to_torch_dtype[st_type] = getattr(torch, alias)
+                break
+
+    return safetensors_to_torch_dtype
+
+safetensors_to_torch_dtype = get_safetensors_dtype_map()
 
 class SafetensorsMetadata:
-    def __init__(self, blob: any, offset: int) -> None:
+    def __init__(self, blob: Any, offset: int) -> None:
         self.offset = offset
         self.tensors_metadata = []
         self.read_sizes = []
@@ -122,7 +149,7 @@ class SafetensorsMetadata:
         ) for i in range(len(filenames))] 
 
 class SafetensorMetadata:
-    def __init__(self, name: str, safetensorMetadata: any) -> None:
+    def __init__(self, name: str, safetensorMetadata: Any) -> None:
         self.name = name
         self.shape = safetensorMetadata[SAFETENSORS_SHAPE_KEY]
         self.dtype = safetensorMetadata[SAFETENSORS_DTYPE_KEY]
@@ -131,18 +158,19 @@ class SafetensorMetadata:
         self._validate_shape_consistency()
 
     def _validate_shape_consistency(self):
-        # 1. Calculate expected size from shape & dtype
+        # 1. Calculate total number of elements
         num_elements = 1
         for dim in self.shape:
             num_elements *= dim
         
-        element_size = torch.tensor([], dtype=self.get_torch_dtype()).element_size()
+        # 2. Identify the actual bytes reserved in the file
+        actual_bytes = self.offsets.get_diff()        
+
+        torch_dtype = self.get_torch_dtype()
+        element_size = torch.tensor([], dtype=torch_dtype).element_size()
         expected_bytes = num_elements * element_size
-        
-        # 2. Calculate actual size from offsets
-        actual_bytes = self.offsets.get_diff()
-        
-        # 3. Assert they match
+
+        # 3. Final Validation
         if expected_bytes != actual_bytes:
             raise ValueError(
                 f"Corrupted Tensor '{self.name}': "
@@ -161,9 +189,9 @@ class SafetensorMetadata:
 
     def get_torch_dtype(self) -> torch.dtype:
         # Handle unknown/unsupported dtypes
-        if self.dtype not in safetenors_to_torch_dtype:
+        if self.dtype not in safetensors_to_torch_dtype:
             raise ValueError(f"Unsupported dtype '{self.dtype}' in tensor '{self.name}'")
-        return safetenors_to_torch_dtype[self.dtype]
+        return safetensors_to_torch_dtype[self.dtype]
 
 
 class Offsets:
@@ -177,7 +205,7 @@ class Offsets:
 
 def prepare_request(
     fs: DistributedStreamer, paths: List[str], s3_credentials: Optional[S3Credentials]
-) -> List[Tuple[str, int, List[SafetensorMetadata], List[int]]]:
+) -> List[Tuple[int, List[SafetensorMetadata], List[int]]]:
     safetensors_metadatas = SafetensorsMetadata.from_files(fs, paths, s3_credentials)
     return [(
         safetensors_metadata.offset,
@@ -187,8 +215,8 @@ def prepare_request(
 
 
 def create_torch_tensor(
-    buffer: memoryview, tensor_metadata: SafetensorMetadata
-) -> torch.tensor:
+    buffer: Any, tensor_metadata: SafetensorMetadata
+) -> torch.Tensor:
     if tensor_metadata.get_item_count() == 0:
         return torch.empty(tensor_metadata.shape, dtype=tensor_metadata.get_torch_dtype())
 
