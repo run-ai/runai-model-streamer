@@ -38,7 +38,7 @@ struct StreamerTest : ::testing::Test
         internal_sizes.push_back(sizes.data());
         std::vector<unsigned> num_sizes;
         num_sizes.push_back(1);
-        return runai::llm::streamer::runai_request(streamer, 1, &path, &offset, &size, &dst, num_sizes.data(), internal_sizes.data(), nullptr, nullptr, nullptr, nullptr, nullptr);
+        return runai::llm::streamer::runai_request(streamer, 1, &path, &offset, &size, &dst, num_sizes.data(), internal_sizes.data(), nullptr, nullptr, nullptr, nullptr, nullptr, 0);
     }
 
     int runai_read_file(void * streamer, const char * path, size_t offset, size_t size, void * dst)
@@ -49,7 +49,7 @@ struct StreamerTest : ::testing::Test
         internal_sizes.push_back(sizes.data());
         std::vector<unsigned> num_sizes;
         num_sizes.push_back(1);
-        auto res = runai::llm::streamer::runai_request(streamer, 1, &path, &offset, &size, &dst, num_sizes.data(), internal_sizes.data(), nullptr, nullptr, nullptr, nullptr, nullptr);
+        auto res = runai::llm::streamer::runai_request(streamer, 1, &path, &offset, &size, &dst, num_sizes.data(), internal_sizes.data(), nullptr, nullptr, nullptr, nullptr, nullptr, 0);
         if (res != static_cast<int>(runai::llm::streamer::common::ResponseCode::Success))
         {
             return res;
@@ -368,7 +368,7 @@ TEST_F(StreamerTest, Multiple_Files)
     auto res = runai_start(&streamer);
     EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
 
-    EXPECT_EQ(runai_request(streamer, num_files, file_paths.data(), file_offsets.data(), sizes.data(), dsts.data(), num_ranges.data(), internal_sizes.data(), nullptr, nullptr, nullptr, nullptr, nullptr), static_cast<int>(common::ResponseCode::Success));
+    EXPECT_EQ(runai_request(streamer, num_files, file_paths.data(), file_offsets.data(), sizes.data(), dsts.data(), num_ranges.data(), internal_sizes.data(), nullptr, nullptr, nullptr, nullptr, nullptr, 0), static_cast<int>(common::ResponseCode::Success));
 
     // wait for all the responses to arrive
     unsigned r;

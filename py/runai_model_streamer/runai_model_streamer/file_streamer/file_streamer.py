@@ -58,6 +58,7 @@ class FileStreamer:
         self.start_time = timer()
         self.total_size = 0
         self.device_str = None
+        self._is_nvidia_cuda = False
         self.s3_session = None
         self.s3_credentials = None
         return self
@@ -91,19 +92,28 @@ class FileStreamer:
             device: Optional[str] = "cpu",
 ) -> None:
         if not homogeneous_paths([file_stream_request.path for file_stream_request in file_stream_requests]):
-            raise RunaiStreamerInvalidInputException("Cannot stream files from multiple source types in parallel") 
+            raise RunaiStreamerInvalidInputException("Cannot stream files from multiple source types in parallel")
 
         self.device_str = device
+        # AMD ROCm also reports "cuda" devices but has no libcuda.so — only enable the
+        # direct-to-GPU C++ path for NVIDIA (torch.version.hip is set on ROCm builds).
+        self._is_nvidia_cuda = (
+            device is not None
+            and device.startswith("cuda")
+            and torch.version.hip is None
+        )
 
         for file_stream_request in file_stream_requests:
             self.total_size += sum(file_stream_request.chunks)
             file_stream_request.path = self.handle_object_store(file_stream_request.path, credentials)
 
-        self.requests_iterator: FilesRequestsIteratorWithBuffer = FilesRequestsIteratorWithBuffer.with_memory_mode(file_stream_requests)
- 
+        self.requests_iterator: FilesRequestsIteratorWithBuffer = FilesRequestsIteratorWithBuffer.with_memory_mode(
+            file_stream_requests, device=device
+        )
+
         self.active_request = self.requests_iterator.next_request()
         if self.active_request is None:
-            return 
+            return
 
         runai_request(
             self.streamer,
@@ -113,19 +123,63 @@ class FileStreamer:
             self.requests_iterator.file_buffers,
             [file_request.chunks for file_request in self.active_request.files],
             self.s3_credentials,
+            cuda=self._is_nvidia_cuda,
         )
 
     def get_chunks(self) -> Iterator:
         if not self.streamer:
             raise ValueError("Streamer not initialized")
-        
+
         if self.active_request is None:
-            return 
-        
-        
+            return
+
+        if self._is_nvidia_cuda:
+            yield from self._get_chunks_cuda()
+        else:
+            yield from self._get_chunks_cpu()
+
+    def _get_chunks_cuda(self) -> Iterator:
+        """Yield CUDA tensor slices as each response arrives, then fire the next batch.
+
+        Data lands directly in the CUDA buffer via C++ cuMemcpyHtoDAsync using an
+        internal thread-local pinned staging buffer. We yield all tensors from the
+        current batch before reusing the buffer, so there is no aliasing.
+        """
+        while self.active_request is not None:
+            for _ in range(sum(len(f.chunks) for f in self.active_request.files)):
+                file_relative_index, chunk_relative_index = runai_response(self.streamer)
+                if chunk_relative_index is None:
+                    return
+                file_path, chunk_index, chunk_tensor = self.requests_iterator.get_global_file_and_chunk(
+                    file_relative_index, chunk_relative_index
+                )
+                yield file_path, chunk_index, chunk_tensor.view(1, -1)
+
+            self.active_request = self.requests_iterator.next_request()
+            if self.active_request is not None:
+                runai_request(
+                    self.streamer,
+                    [file_request.path for file_request in self.active_request.files],
+                    [file_request.offset for file_request in self.active_request.files],
+                    [sum(file_request.chunks) for file_request in self.active_request.files],
+                    self.requests_iterator.file_buffers,
+                    [file_request.chunks for file_request in self.active_request.files],
+                    self.s3_credentials,
+                    cuda=True,
+                )
+
+    def _get_chunks_cpu(self) -> Iterator:
+        """Yield CPU tensors as each response arrives, then fire the next batch."""
         while True:
-            yield from self.request_ready_chunks()
-            
+            for _ in range(sum(len(f.chunks) for f in self.active_request.files)):
+                file_relative_index, chunk_relative_index = runai_response(self.streamer)
+                if chunk_relative_index is None:
+                    return
+                file_path, chunk_index, chunk_buffer = self.requests_iterator.get_global_file_and_chunk(
+                    file_relative_index, chunk_relative_index
+                )
+                yield file_path, chunk_index, torch.from_numpy(chunk_buffer).view(1, -1)
+
             self.active_request = self.requests_iterator.next_request()
             if self.active_request is None:
                 break
@@ -138,29 +192,6 @@ class FileStreamer:
                 self.requests_iterator.file_buffers,
                 [file_request.chunks for file_request in self.active_request.files],
                 self.s3_credentials,
+                cuda=False,
             )
-
-    # This function iterates over indexes of ready chunks.
-    # The indexes are relative to the last request that sent
-    # And need to be translated to global index in the chunks list
-    def request_ready_chunks(self) -> Iterator:
-        for i in range(sum(len(file_request.chunks) for file_request in self.active_request.files)):
-            file_relative_index, chunk_relative_index = runai_response(self.streamer)
-            if chunk_relative_index == None:
-                return
-            
-            file_path, chunk_index, chunk_buffer = self.requests_iterator.get_global_file_and_chunk(file_relative_index, chunk_relative_index)
-            # create one dimensional tensor from the chunk buffer
-            # we return a tensor of shape (1, chunk_buffer.size)
-            # the data type of the original chunk_buffer, as created by the requests_iterator, is preserved (uint8)
-            tensor = torch.from_numpy(chunk_buffer).view(1, -1)
-
-            # currently file streamer is always reading a cpu buffer
-            # so we don't need to move the tensor to the device
-            # for future GDS/CUDA support we will need to move the tensor to the device (cpu or different device)
-            if self.device_str == "cpu":
-                yield file_path, chunk_index, tensor
-            else:
-                device_tensor = tensor.to(self.device_str)
-                yield file_path, chunk_index, device_tensor
 

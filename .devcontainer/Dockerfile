@@ -1,4 +1,13 @@
+# Extract CUDA headers from the official NVIDIA devel image.
+# Only the include directory is used — no CUDA runtime or libraries are copied.
+FROM nvidia/cuda:12.8.0-devel-ubuntu20.04 AS cuda-headers
+
 FROM ubuntu:20.04
+
+# Copy CUDA headers for compile-time type checking of the driver API (cuda.h etc.).
+# The actual libcuda.so is loaded at runtime via dlopen, so no CUDA installation
+# is required on the build host or the final image.
+COPY --from=cuda-headers /usr/local/cuda/include/ /usr/local/cuda/include/
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     python3 \

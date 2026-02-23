@@ -5,6 +5,7 @@ import enum
 import numpy as np
 import os
 import humanize
+import torch
 
 import logging
 
@@ -49,24 +50,41 @@ class FilesRequest:
 
 
 class FilesRequestsIteratorWithBuffer:
-    def __init__(self, buffer_size: int, files_chunks: List[FileChunks]) -> None:
+    def __init__(self, buffer_size: int, files_chunks: List[FileChunks], device: str = "cpu") -> None:
         self.files_requests_iterator = FilesRequestsIterator(buffer_size, files_chunks)
-        logger.debug(
-            f"[RunAI Streamer] CPU Buffer size: {humanize.naturalsize(buffer_size, binary=True)} for files: {[file_chunks.path for file_chunks in files_chunks]}"
+        # Only use the direct-to-GPU path for NVIDIA GPUs (requires libcuda.so).
+        # AMD ROCm also reports "cuda" devices but has no libcuda; torch.version.hip
+        # is set on ROCm builds, so we fall back to the CPU pageable path there.
+        self._is_nvidia_cuda = (
+            device is not None
+            and device.startswith("cuda")
+            and torch.version.hip is None
         )
-        self.buffer = np.empty(buffer_size, dtype=np.uint8)
-        self.file_buffers = []
+        if self._is_nvidia_cuda:
+            # CUDA device buffer: C++ writes directly via cuMemcpyHtoDAsync using
+            # an internal thread-local pinned staging buffer (2 MB per worker).
+            self.buffer = torch.empty(buffer_size, dtype=torch.uint8, device=device)
+            logger.debug(
+                f"[RunAI Streamer] CUDA buffer size: {humanize.naturalsize(buffer_size, binary=True)} "
+                f"on {device} for files: {[fc.path for fc in files_chunks]}"
+            )
+        else:
+            # CPU pageable buffer: used for CPU targets and as fallback for AMD ROCm.
+            self.buffer = np.empty(buffer_size, dtype=np.uint8)
+            logger.debug(
+                f"[RunAI Streamer] CPU buffer size: {humanize.naturalsize(buffer_size, binary=True)} "
+                f"for files: {[fc.path for fc in files_chunks]}"
+            )
+        self.file_buffers: List = []
 
-    def get_global_file_and_chunk(self, local_file_index: int, local_chunk_index: int) -> Tuple[str, int, memoryview]:
+    def get_global_file_and_chunk(self, local_file_index: int, local_chunk_index: int) -> Tuple:
         file_id, global_chunk_index = self.files_requests_iterator.get_global_file_and_chunk(
             local_file_index, local_chunk_index
         )
-        file_buffer = self.file_buffers[local_file_index]
-
         file_active_chunks = self.files_requests_iterator.active_request.files[local_file_index].chunks
         chunk_offset_start = sum(file_active_chunks[:local_chunk_index])
         chunk_offset_end = chunk_offset_start + file_active_chunks[local_chunk_index]
-        return file_id, global_chunk_index, file_buffer[chunk_offset_start: chunk_offset_end]
+        return file_id, global_chunk_index, self.file_buffers[local_file_index][chunk_offset_start:chunk_offset_end]
 
     def next_request(self) -> Optional[FilesRequest]:
         next_requests = self.files_requests_iterator.next_request()
@@ -79,7 +97,7 @@ class FilesRequestsIteratorWithBuffer:
             chunks_size = sum(file_request.chunks)
             self.file_buffers.append(self.buffer[global_buffer_offset: global_buffer_offset + chunks_size])
             global_buffer_offset += chunks_size
-            
+
         return next_requests
 
     @staticmethod
@@ -87,10 +105,24 @@ class FilesRequestsIteratorWithBuffer:
         memory_mode: MemoryCapMode,
         files_chunks: List[FileChunks],
         user_memory_limit: Optional[int] = None,
+        device: str = "cpu",
     ) -> FilesRequestsIteratorWithBuffer:
         memory_limit = 0
         if memory_mode == MemoryCapMode.unlimited:
-            memory_limit = sum(sum(file.chunks) for file in files_chunks)
+            total_size = sum(sum(file.chunks) for file in files_chunks)
+            is_nvidia_cuda = (
+                device is not None
+                and device.startswith("cuda")
+                and torch.version.hip is None
+            )
+            if is_nvidia_cuda and torch.cuda.is_available():
+                # For NVIDIA CUDA, cap the buffer at available GPU memory so that we
+                # don't OOM during allocation. If the model is larger than free VRAM,
+                # the buffer is reused in chunks just like the limited-memory path.
+                free_gpu, _ = torch.cuda.mem_get_info(device)
+                memory_limit = min(total_size, free_gpu)
+            else:
+                memory_limit = total_size
         elif memory_mode == MemoryCapMode.largest_chunk:
             memory_limit = max(max(file_chunks.chunks) for file_chunks in files_chunks)
         elif memory_mode == MemoryCapMode.limited:
@@ -104,12 +136,13 @@ class FilesRequestsIteratorWithBuffer:
                     f"Memory limit supplied: {user_memory_limit} cannot be smaller than: {largest_chunk}"
                 )
             memory_limit = min(user_memory_limit, sum(sum(file.chunks) for file in files_chunks))
- 
-        return FilesRequestsIteratorWithBuffer(memory_limit, files_chunks)
+
+        return FilesRequestsIteratorWithBuffer(memory_limit, files_chunks, device=device)
 
     @staticmethod
     def with_memory_mode(
         files_chunks: List[FileChunks],
+        device: str = "cpu",
     ) -> FilesRequestsIteratorWithBuffer:
         memory_limit = os.getenv(RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME)
         if memory_limit is None:
@@ -118,7 +151,7 @@ class FilesRequestsIteratorWithBuffer:
         if memory_limit is not None:
             memory_limit = int(memory_limit)
         return FilesRequestsIteratorWithBuffer.with_memory_cap(
-            memory_mode, files_chunks, memory_limit
+            memory_mode, files_chunks, memory_limit, device=device
         )
 
 class FilesRequestsIterator:

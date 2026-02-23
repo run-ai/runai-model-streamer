@@ -6,6 +6,7 @@ runai_cc_auto_library(
         "//common/responder",
         "//common/shared_queue",
         "//streamer/impl/config",
+        "//streamer/impl/cuda:cuda_loader",
         "//streamer/impl/file",
         "//streamer/impl/s3",
         "//streamer/impl/task",

@@ -16,10 +16,12 @@
 #include "streamer/impl/file/file.h"
 #include "streamer/impl/s3/s3.h"
 
+#include "streamer/impl/cuda/cuda_loader.h"
+
 namespace runai::llm::streamer::impl
 {
 
-Batch::Batch(unsigned worker_index, unsigned file_index, const std::string & path, const common::s3::S3ClientWrapper::Params & params, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config) :
+Batch::Batch(unsigned worker_index, unsigned file_index, const std::string & path, const common::s3::S3ClientWrapper::Params & params, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config, bool cuda) :
     worker_index(worker_index),
     file_index(file_index),
     path(path),
@@ -27,7 +29,8 @@ Batch::Batch(unsigned worker_index, unsigned file_index, const std::string & pat
     tasks(tasks),
     range(tasks),
     responder(responder),
-    config(config)
+    config(config),
+    _cuda(cuda)
 {
     LOG(DEBUG) << "Batch " << path << " range " << range << " ; " << this->tasks.size() << " tasks";
 }
@@ -60,7 +63,20 @@ void Batch::execute(std::atomic<bool> & stopped)
         ASSERT(!is_object_storage()) << "Unsupported reader mode for object storage backends";
 
         _reader = std::make_unique<File>(path, *config);
-        read(*config, stopped);
+
+        const auto * drv = _cuda ? cuda::CudaDriver::get() : nullptr;
+        if (drv != nullptr)
+        {
+            read_cuda(*config, stopped, *drv);
+        }
+        else
+        {
+            if (_cuda)
+            {
+                LOG(WARNING) << "CUDA driver not available; falling back to pageable memory read for " << path;
+            }
+            read(*config, stopped);
+        }
     }
     catch(const common::Exception & e)
     {
@@ -277,6 +293,114 @@ size_t Batch::Range::calculate_end(const Tasks & tasks)
 std::ostream & operator<<(std::ostream & os, const Batch::Range & r)
 {
     return os << "Range from " << r.start << " to " << r.end;
+}
+
+namespace
+{
+
+// Thread-local CUDA resources for staging reads from filesystem to device memory.
+// One instance exists per worker thread; all batches that run on the same thread
+// share the same staging buffer and CUDA stream, avoiding repeated allocations.
+struct CudaStagingBuffer
+{
+    ~CudaStagingBuffer()
+    {
+        const auto * drv = cuda::CudaDriver::get();
+        if (drv == nullptr)
+        {
+            return;
+        }
+        if (stream != nullptr)
+        {
+            drv->cuStreamDestroy(stream);
+        }
+        if (ptr != nullptr)
+        {
+            drv->cuMemFreeHost(ptr);
+        }
+    }
+
+    // Return a pinned host buffer of at least `needed` bytes, (re)allocating if required.
+    char * ensure(size_t needed, const cuda::CudaDriver & drv)
+    {
+        if (stream == nullptr)
+        {
+            // Worker threads do not automatically inherit the CUDA context from
+            // the Python main thread.  Make the already-retained primary context
+            // current for this thread before any driver API calls.
+            drv.cuCtxSetCurrent(drv.ctx);
+
+            drv.cuStreamCreate(&stream, 0);
+        }
+        if (needed > capacity)
+        {
+            if (ptr != nullptr)
+            {
+                drv.cuMemFreeHost(ptr);
+                ptr = nullptr;
+            }
+            drv.cuMemAllocHost(reinterpret_cast<void **>(&ptr), needed);
+            capacity = needed;
+        }
+        return ptr;
+    }
+
+    char * ptr = nullptr;
+    size_t capacity = 0;
+    ::CUstream stream = nullptr;
+};
+
+// One staging buffer per worker thread, shared across all batches on that thread.
+thread_local CudaStagingBuffer g_cuda_staging;
+
+} // anonymous namespace
+
+void Batch::read_cuda(const Config & config, std::atomic<bool> & stopped, const cuda::CudaDriver & drv)
+{
+    if (tasks.empty())
+    {
+        LOG(DEBUG) << "Empty batch";
+        return;
+    }
+
+    char * staging_buf = g_cuda_staging.ensure(config.fs_block_bytesize, drv);
+
+    auto file_offset = range.start;
+    char * gpu_ptr = tasks[0].destination();
+
+    const size_t num_chunks = range.size / config.fs_block_bytesize;
+
+    _reader->seek(file_offset);
+
+    size_t i = 0;
+    for (; i < num_chunks && !stopped; ++i)
+    {
+        _reader->read(config.fs_block_bytesize, staging_buf);
+        drv.cuMemcpyHtoDAsync(reinterpret_cast<::CUdeviceptr>(gpu_ptr), staging_buf, config.fs_block_bytesize, g_cuda_staging.stream);
+        drv.cuStreamSynchronize(g_cuda_staging.stream);
+
+        file_offset += config.fs_block_bytesize;
+        gpu_ptr += config.fs_block_bytesize;
+        finished_until(file_offset, common::ResponseCode::Success);
+    }
+
+    if (file_offset < range.end && !stopped)
+    {
+        ++i;
+        const size_t remaining = range.end - file_offset;
+        _reader->read(remaining, staging_buf);
+        drv.cuMemcpyHtoDAsync(reinterpret_cast<::CUdeviceptr>(gpu_ptr), staging_buf, remaining, g_cuda_staging.stream);
+        drv.cuStreamSynchronize(g_cuda_staging.stream);
+        finished_until(range.end, common::ResponseCode::Success);
+    }
+
+    LOG(DEBUG) << "Finished reading " << i << "/" << num_chunks << " chunks from file " << path
+               << " to CUDA device" << (stopped ? " - terminated" : " successfully");
+
+    if (stopped)
+    {
+        throw common::Exception(common::ResponseCode::FinishedError);
+    }
 }
 
 
