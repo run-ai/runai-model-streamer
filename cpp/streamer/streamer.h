@@ -51,7 +51,8 @@ _RUNAI_EXTERN_C int runai_request(
     const char * secret,
     const char * token,
     const char * region,
-    const char * endpoint
+    const char * endpoint,
+    int cuda  /* 0 = read to CPU host memory (dsts), non-zero = read to CUDA device memory (dsts) */
 );
 
 _RUNAI_EXTERN_C int runai_response(void * streamer, unsigned * file_index /* return parameter */, unsigned * index /* return parameter */);

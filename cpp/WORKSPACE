@@ -1,5 +1,14 @@
 load("//toolchain:configure.bzl", "configure_toolchain")
 configure_toolchain(name = "toolchain")
+
+# CUDA SDK headers for compile-time type checking.
+# Only headers are used; the runtime library is loaded via dlopen at run time.
+# Adjust the path if your CUDA installation is in a different location.
+new_local_repository(
+    name = "cuda",
+    path = "/usr/local/cuda",
+    build_file = "//third_party:cuda.BUILD",
+)
 load("//toolchain:deps.bzl", "load_toolchain_deps")
 load_toolchain_deps()
 

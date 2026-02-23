@@ -26,7 +26,8 @@ struct Batches
            std::shared_ptr<common::Responder> responder,
            const std::string & path,
            const common::s3::S3ClientWrapper::Params & params,
-           const std::vector<size_t> & internal_sizes);
+           const std::vector<size_t> & internal_sizes,
+           bool cuda = false);
 
     Batches(Batches &&) = default;
     Batches & operator=(Batches &&) = default;
@@ -67,6 +68,7 @@ struct Batches
     void handle_request(std::vector<Tasks> & v_tasks, unsigned request_index, size_t request_file_offset, size_t request_size, char * destination);
 
     unsigned _file_index;
+    bool _cuda = false;
 
     unsigned _size;
 

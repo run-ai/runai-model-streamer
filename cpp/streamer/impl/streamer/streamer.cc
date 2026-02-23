@@ -77,7 +77,7 @@ common::ResponseCode Streamer::async_read(const std::string & path, size_t file_
 
         internal_sizes_vv.push_back(internal_sizes_v);
 
-        async_request(paths, file_offsets, bytesizes, dsts, num_sizes_v, internal_sizes_vv, credentials);
+        async_request(paths, file_offsets, bytesizes, dsts, num_sizes_v, internal_sizes_vv, credentials, false);
     }
     catch(const common::Exception & e)
     {
@@ -105,7 +105,8 @@ common::ResponseCode Streamer::async_request(
     std::vector<void *> & dsts,
     std::vector<unsigned> & num_sizes,
     std::vector<std::vector<size_t>> & internal_sizes,
-    const common::s3::Credentials & credentials)
+    const common::s3::Credentials & credentials,
+    bool cuda)
 {
     // verify input
     verify_requests(paths, file_offsets, bytesizes, num_sizes, dsts);
@@ -136,7 +137,7 @@ common::ResponseCode Streamer::async_request(
     {
         auto params = handle_s3(i, paths[i], credentials);
         LOG(DEBUG) << "Creating batches for file index " << i << " path: " <<  paths[i];
-        Batches batches(i, assigner.file_assignments(i), _config, _responder, paths[i], params, internal_sizes[i]);
+        Batches batches(i, assigner.file_assignments(i), _config, _responder, paths[i], params, internal_sizes[i], cuda);
         const auto num_batches = batches.size();
         LOG(DEBUG) << "Created " << num_batches << " batches for file index " << i;
         for (size_t j = 0; j < num_batches; ++j)

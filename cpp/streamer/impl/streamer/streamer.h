@@ -44,7 +44,8 @@ struct Streamer
       std::vector<void *> & dsts,
       std::vector<unsigned> & num_sizes,
       std::vector<std::vector<size_t>> & internal_sizes,
-      const common::s3::Credentials & credentials);
+      const common::s3::Credentials & credentials,
+      bool cuda = false);
 
     // return when there is a ready chunk
     // returns common::ResponseCode::FinishedError if no responses are expected
