@@ -5,7 +5,9 @@ runai_portable_so(
     srcs = ["streamer.h",
             "streamer.cc",
     ],
-    deps = ["//streamer/impl"],
+    deps = [
+        "//streamer/impl",
+    ],
     ldscript = ":streamer.ldscript",
     defines = ["_RUNAI_STREAMER_SO"],
     linkopts = ["-lpthread", "-Wl,-rpath,$$ORIGIN"]
