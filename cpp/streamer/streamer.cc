@@ -1,6 +1,7 @@
 #include "streamer/streamer.h"
 
 #include <memory>
+#include <numeric>
 #include <string>
 #include <vector>
 
@@ -102,8 +103,15 @@ _RUNAI_EXTERN_C int runai_request(
         std::vector<std::string> paths_v(paths, paths + num_files);
         std::vector<size_t> file_offsets_v(file_offsets, file_offsets + num_files);
         std::vector<size_t> bytesizes_v(bytesizes, bytesizes + num_files);
-        std::vector<void *> dsts_v(dsts, dsts + num_files);
         std::vector<unsigned> num_sizes_v(num_sizes, num_sizes + num_files);
+
+        // For CUDA requests dsts contains one pointer per tensor (sum of all num_sizes)
+        // so that each tensor can land at its own pre-aligned GPU address.
+        // For CPU requests dsts contains one pointer per file (legacy contract).
+        const unsigned total_dsts = (cuda != 0)
+            ? std::accumulate(num_sizes, num_sizes + num_files, 0u)
+            : num_files;
+        std::vector<void *> dsts_v(dsts, dsts + total_dsts);
         std::vector<size_t *> internal_sizes_v(internal_sizes, internal_sizes + num_files);
 
         std::vector<std::vector<size_t>> internal_sizes_vv(num_files);

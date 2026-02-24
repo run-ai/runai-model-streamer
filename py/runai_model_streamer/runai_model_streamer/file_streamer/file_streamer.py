@@ -124,6 +124,7 @@ class FileStreamer:
             [file_request.chunks for file_request in self.active_request.files],
             self.s3_credentials,
             cuda=self._is_nvidia_cuda,
+            cuda_tensor_ptrs=self.requests_iterator.cuda_tensor_ptrs if self._is_nvidia_cuda else None,
         )
 
     def get_chunks(self) -> Iterator:
@@ -166,6 +167,7 @@ class FileStreamer:
                     [file_request.chunks for file_request in self.active_request.files],
                     self.s3_credentials,
                     cuda=True,
+                    cuda_tensor_ptrs=self.requests_iterator.cuda_tensor_ptrs,
                 )
 
     def _get_chunks_cpu(self) -> Iterator:

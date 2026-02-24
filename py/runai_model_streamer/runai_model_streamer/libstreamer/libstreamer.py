@@ -32,13 +32,25 @@ def runai_request(
     internal_sizes: List[List[int]],
     s3_credentials: Optional[S3Credentials] = None,
     cuda: bool = False,
+    cuda_tensor_ptrs: Optional[List[ctypes.c_void_p]] = None,
 ) -> None:
     c_paths = (ctypes.c_char_p * len(paths))(*[path.encode("utf-8") for path in paths])
     c_file_offsets = (ctypes.c_uint64 * len(file_offsets))(*file_offsets)
     c_bytesizes = (ctypes.c_uint64 * len(bytesizes))(*bytesizes)
-    if cuda:
-        # dsts are torch CUDA tensors; extract the device pointer directly.
-        dst_addrs = [ctypes.c_void_p(dst.data_ptr()) for dst in dsts]
+    if cuda and cuda_tensor_ptrs is not None:
+        # Pass one pre-aligned GPU pointer per tensor so C++ can write directly
+        # to aligned destinations without computing offsets itself.
+        dst_addrs = cuda_tensor_ptrs
+    elif cuda:
+        # Fallback: build one pointer per tensor from each per-file CUDA buffer
+        # base + cumulative offset, matching the per-tensor contract expected by C++.
+        dst_addrs = []
+        for file_idx, dst in enumerate(dsts):
+            base = dst.data_ptr()
+            offset = 0
+            for size in internal_sizes[file_idx]:
+                dst_addrs.append(ctypes.c_void_p(base + offset))
+                offset += size
     else:
         dst_addrs = [
             ctypes.cast(ctypes.c_void_p(ctypes.addressof(ctypes.c_char.from_buffer(dst))), ctypes.c_void_p)

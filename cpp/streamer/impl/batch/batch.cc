@@ -365,36 +365,32 @@ void Batch::read_cuda(const Config & config, std::atomic<bool> & stopped, const 
 
     char * staging_buf = g_cuda_staging.ensure(config.fs_block_bytesize, drv);
 
-    auto file_offset = range.start;
-    char * gpu_ptr = tasks[0].destination();
+    // Single seek: tasks within a batch are contiguous in the file.
+    _reader->seek(range.start);
 
-    const size_t num_chunks = range.size / config.fs_block_bytesize;
-
-    _reader->seek(file_offset);
-
-    size_t i = 0;
-    for (; i < num_chunks && !stopped; ++i)
+    // Iterate per-task so each tensor lands at its own pre-aligned GPU address.
+    // File reads remain sequential; only the GPU write target changes between tasks.
+    for (auto & task : tasks)
     {
-        _reader->read(config.fs_block_bytesize, staging_buf);
-        drv.cuMemcpyHtoDAsync(reinterpret_cast<::CUdeviceptr>(gpu_ptr), staging_buf, config.fs_block_bytesize, g_cuda_staging.stream);
-        drv.cuStreamSynchronize(g_cuda_staging.stream);
+        if (stopped) break;
 
-        file_offset += config.fs_block_bytesize;
-        gpu_ptr += config.fs_block_bytesize;
-        finished_until(file_offset, common::ResponseCode::Success);
+        char * gpu_ptr = task.destination();
+        size_t remaining = task.info.bytesize;
+
+        while (remaining > 0 && !stopped)
+        {
+            const size_t to_read = std::min(remaining, config.fs_block_bytesize);
+            _reader->read(to_read, staging_buf);
+            drv.cuMemcpyHtoDAsync(reinterpret_cast<::CUdeviceptr>(gpu_ptr), staging_buf, to_read, g_cuda_staging.stream);
+            drv.cuStreamSynchronize(g_cuda_staging.stream);
+            gpu_ptr   += to_read;
+            remaining -= to_read;
+        }
+
+        finished_until(task.info.end, common::ResponseCode::Success);
     }
 
-    if (file_offset < range.end && !stopped)
-    {
-        ++i;
-        const size_t remaining = range.end - file_offset;
-        _reader->read(remaining, staging_buf);
-        drv.cuMemcpyHtoDAsync(reinterpret_cast<::CUdeviceptr>(gpu_ptr), staging_buf, remaining, g_cuda_staging.stream);
-        drv.cuStreamSynchronize(g_cuda_staging.stream);
-        finished_until(range.end, common::ResponseCode::Success);
-    }
-
-    LOG(DEBUG) << "Finished reading " << i << "/" << num_chunks << " chunks from file " << path
+    LOG(DEBUG) << "Finished reading " << tasks.size() << " tasks from file " << path
                << " to CUDA device" << (stopped ? " - terminated" : " successfully");
 
     if (stopped)
