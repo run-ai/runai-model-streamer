@@ -27,7 +27,8 @@ struct Batches
            const std::string & path,
            const common::s3::S3ClientWrapper::Params & params,
            const std::vector<size_t> & internal_sizes,
-           bool cuda = false);
+           bool cuda = false,
+           std::vector<void*> cuda_tensor_dsts = {});
 
     Batches(Batches &&) = default;
     Batches & operator=(Batches &&) = default;
@@ -69,6 +70,7 @@ struct Batches
 
     unsigned _file_index;
     bool _cuda = false;
+    std::vector<void*> _cuda_tensor_dsts;
 
     unsigned _size;
 

@@ -6,6 +6,7 @@ import os
 from typing import List
 
 from runai_model_streamer.file_streamer import FileChunks
+from runai_model_streamer.file_streamer.requests_iterator import align_up, get_cuda_alignment
 
 from runai_model_streamer.distributed_streamer import DistributedStreamer
 
@@ -86,11 +87,14 @@ class SafetensorsStreamer:
             paths: List[str],
             s3_credentials : Optional[S3Credentials] = None,
             device: Optional[str] = "cpu",
-            is_distributed: bool = False, 
+            is_distributed: bool = False,
         ) -> None:
         self.files_to_tensors_metadata = {}
 
         file_stream_requests: List[FileChunks] = []
+
+        # Compute alignment for CUDA devices (default 256 bytes, disabled on CPU).
+        alignment = get_cuda_alignment() if (device and device.startswith("cuda")) else 1
 
         # metadata is created on cpu and each process reads it individually
         safetensors_metadatas = safetensors_pytorch.prepare_request(self.file_streamer, paths, s3_credentials)
@@ -99,7 +103,9 @@ class SafetensorsStreamer:
             (file_offset, tensors_metadata, tensor_sizes) = safetensors_metadatas[i]
             path = paths[i]
             self.files_to_tensors_metadata[i] = tensors_metadata
-            file_stream_requests.append(FileChunks(i, path, file_offset, tensor_sizes))
+            padded_sizes = [align_up(s, alignment) for s in tensor_sizes] if alignment > 1 else None
+            file_stream_requests.append(FileChunks(i, path, file_offset, tensor_sizes,
+                                                   buffer_strides=padded_sizes))
 
         self.file_streamer.stream_files(
             file_stream_requests,
