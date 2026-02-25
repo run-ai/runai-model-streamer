@@ -85,7 +85,7 @@ class DistributedStreamer:
         elif enable_dist == "auto":
             # here we can disable distributed streaming for specific storage types
             # for now, we allow all storage types
-            pass
+            self.is_distributed = True
         else:
             raise ValueError(f"Invalid value for RUNAI_STREAMER_DIST: {enable_dist}")
 
