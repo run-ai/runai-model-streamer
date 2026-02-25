@@ -144,6 +144,39 @@ class TestDistributedStreamer(unittest.TestCase):
         if self.rank == 0:
             print(f"\n✅ Success random files test verified on all {self.world_size} ranks.")
 
+    def test_1_auto_mode_no_distributed_with_gloo(self):
+        """RUNAI_STREAMER_DIST=auto should disable distributed streaming for gloo backend."""
+        if self.world_size < 2:
+            self.skipTest("This test requires at least 2 processes.")
+
+        self.assertEqual(dist.get_backend(), "gloo",
+                         "This test requires gloo backend to be initialized")
+
+        file_specs = [{"size": 100, "chunks": [100]}]
+        requests = self._prepare_file_requests(file_specs)
+        original_data_map = {}
+        for req in requests:
+            with open(req.path, "rb") as f:
+                original_data_map[req.id] = f.read()
+
+        with patch.dict(os.environ, {"RUNAI_STREAMER_DIST": "auto"}):
+            with DistributedStreamer() as streamer:
+                streamer.stream_files(requests, None, "cpu", True)
+                self.assertFalse(
+                    streamer.is_distributed,
+                    "Distributed streaming should be disabled for gloo backend when RUNAI_STREAMER_DIST=auto"
+                )
+                reconstructed_data_map = {req.id: [None] * len(req.chunks) for req in requests}
+                for req_id, chunk_idx, data_tensor in streamer.get_chunks():
+                    reconstructed_data_map[req_id][chunk_idx] = data_tensor.cpu().numpy().tobytes()
+
+        for req in requests:
+            reconstructed_bytes = b"".join(reconstructed_data_map[req.id])
+            self.assertEqual(original_data_map[req.id], reconstructed_bytes)
+
+        if self.rank == 0:
+            print(f"\n✅ Auto mode correctly disabled distributed streaming for gloo backend.")
+
     def test_9_failure_on_one_rank(self):
         # This test is correct and remains unchanged
         if self.world_size < 2:

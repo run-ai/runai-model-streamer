@@ -23,9 +23,6 @@ from runai_model_streamer.distributed_streamer.partition import (
 
 from runai_model_streamer.s3_utils.s3_utils import (
     S3Credentials,
-    is_s3_path,
-    is_gs_path,
-    is_azure_path,
 )
 
 from timeit import default_timer as timer
@@ -76,17 +73,16 @@ class DistributedStreamer:
             return
 
         # environment variable to override default distributed streaming
-        # by default, use distributed streaming only for object storage paths
+        # by default, use distributed streaming only for all storage types
         enable_dist = os.environ.get("RUNAI_STREAMER_DIST", "auto")
         if enable_dist == "0":
             self.is_distributed = False
         elif enable_dist == "1":
             self.is_distributed = True
         elif enable_dist == "auto":
-            if path is not None:
-                self.is_distributed = is_s3_path(path) or is_gs_path(path) or is_azure_path(path)
-            else:
-                self.is_distributed = False
+            # here we can disable distributed streaming for specific storage types
+            # for now, we allow all storage types
+            self.is_distributed = True
         else:
             raise ValueError(f"Invalid value for RUNAI_STREAMER_DIST: {enable_dist}")
 
@@ -97,7 +93,8 @@ class DistributedStreamer:
                 logger.info("[RunAI Streamer][Distributed] Torch distributed is not initialized - fallback to non distributed streaming")
             self.is_distributed = self.is_distributed and self.get_group_size() > 1
 
-       # do not distribute if backend type does not match device type
+        # Do not distribute if backend type does not match device type
+        # In auto mode, do not distribute if backend is not nccl
         if self.is_distributed:
             backend_name = dist.get_backend()
             if backend_name == "nccl" and device == "cpu":
@@ -106,7 +103,7 @@ class DistributedStreamer:
             if backend_name == "gloo" and device != "cpu":
                 logger.info("[RunAI Streamer][Distributed] Note: Torch distributed backend %s is not supported for %s device - fallback to non distributed streaming", backend_name, device)
                 self.is_distributed = False
-            if enable_dist == "auto" and backend_name != "nccl" and backend_name != "gloo":
+            if enable_dist == "auto" and backend_name != "nccl":
                 logger.info("[RunAI Streamer][Distributed] Note: Torch distributed backend %s is not supported by default for distributed streaming - To allow this backend, set RUNAI_STREAMER_DIST to `1`", backend_name)
                 self.is_distributed = False
 

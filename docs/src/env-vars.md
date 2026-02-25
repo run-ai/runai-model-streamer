@@ -116,7 +116,7 @@ None
 
 Enables distributed streaming for multiple devices
 
-`auto` enables distributed streaming only for streaming from object storage to CUDA devices
+`auto` enables distributed streaming only for streaming to CUDA devices
 
 ### Values accepted
 
