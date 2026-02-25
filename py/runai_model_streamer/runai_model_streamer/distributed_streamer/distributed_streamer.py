@@ -23,9 +23,6 @@ from runai_model_streamer.distributed_streamer.partition import (
 
 from runai_model_streamer.s3_utils.s3_utils import (
     S3Credentials,
-    is_s3_path,
-    is_gs_path,
-    is_azure_path,
 )
 
 from timeit import default_timer as timer
@@ -76,7 +73,7 @@ class DistributedStreamer:
             return
 
         # environment variable to override default distributed streaming
-        # by default, use distributed streaming only for object storage paths
+        # by default, use distributed streaming only for all storage types
         enable_dist = os.environ.get("RUNAI_STREAMER_DIST", "auto")
         if enable_dist == "0":
             self.is_distributed = False
@@ -96,7 +93,8 @@ class DistributedStreamer:
                 logger.info("[RunAI Streamer][Distributed] Torch distributed is not initialized - fallback to non distributed streaming")
             self.is_distributed = self.is_distributed and self.get_group_size() > 1
 
-       # do not distribute if backend type does not match device type
+       # Do not distribute if backend type does not match device type
+       # In auto mode, do not distribute if backend is not nccl
         if self.is_distributed:
             backend_name = dist.get_backend()
             if backend_name == "nccl" and device == "cpu":
