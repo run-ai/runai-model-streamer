@@ -93,8 +93,8 @@ class DistributedStreamer:
                 logger.info("[RunAI Streamer][Distributed] Torch distributed is not initialized - fallback to non distributed streaming")
             self.is_distributed = self.is_distributed and self.get_group_size() > 1
 
-       # Do not distribute if backend type does not match device type
-       # In auto mode, do not distribute if backend is not nccl
+        # Do not distribute if backend type does not match device type
+        # In auto mode, do not distribute if backend is not nccl
         if self.is_distributed:
             backend_name = dist.get_backend()
             if backend_name == "nccl" and device == "cpu":
