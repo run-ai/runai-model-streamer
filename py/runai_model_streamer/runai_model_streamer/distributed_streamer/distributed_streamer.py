@@ -105,7 +105,7 @@ class DistributedStreamer:
             if backend_name == "gloo" and device != "cpu":
                 logger.info("[RunAI Streamer][Distributed] Note: Torch distributed backend %s is not supported for %s device - fallback to non distributed streaming", backend_name, device)
                 self.is_distributed = False
-            if enable_dist == "auto" and backend_name != "nccl" and backend_name != "gloo":
+            if enable_dist == "auto" and backend_name != "nccl":
                 logger.info("[RunAI Streamer][Distributed] Note: Torch distributed backend %s is not supported by default for distributed streaming - To allow this backend, set RUNAI_STREAMER_DIST to `1`", backend_name)
                 self.is_distributed = False
 
