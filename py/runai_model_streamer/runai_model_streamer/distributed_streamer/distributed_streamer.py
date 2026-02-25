@@ -35,6 +35,22 @@ import humanize
 
 logger = logging.getLogger(__name__)
 
+RUNAI_STREAMER_CUDA_ALIGNMENT_ENV_VAR = "RUNAI_STREAMER_CUDA_ALIGNMENT"
+DEFAULT_DIST_BUFFER_ALIGNMENT = 512
+
+
+def get_dist_buffer_alignment() -> int:
+    return int(os.environ.get(RUNAI_STREAMER_CUDA_ALIGNMENT_ENV_VAR, str(DEFAULT_DIST_BUFFER_ALIGNMENT)))
+
+
+def aligned_offset(base_ptr: int, current_offset: int, alignment: int) -> int:
+    """Return the smallest offset >= current_offset such that (base_ptr + offset) % alignment == 0."""
+    if alignment <= 1:
+        return current_offset
+    total_addr = base_ptr + current_offset
+    padding = (-total_addr) % alignment
+    return current_offset + padding
+
 DEFAULT_BROADCAST_TIMEOUT = timedelta(seconds=600)
 
 class DistributedStreamer:
@@ -390,9 +406,16 @@ class _distributedStreamer:
         DEFAULT_BUFFER_MIN_BYTESIZE = 1024 * 1024 * 1024
         BUFFER_MIN_BYTESIZE = int(os.environ.get("RUNAI_STREAMER_DIST_BUFFER_MIN_BYTESIZE", str(DEFAULT_BUFFER_MIN_BYTESIZE))) # environment variable used for testing
         BUFFER_BYTESIZE = max(BUFFER_MIN_BYTESIZE, self.max_chunk)
+        alignment = get_dist_buffer_alignment()
 
-        data_buffer = torch.empty(BUFFER_BYTESIZE, dtype=torch.uint8, device=self.device)
-        received_buffer = torch.empty(BUFFER_BYTESIZE, dtype=torch.uint8, device=self.device)
+        # Over-allocate by alignment so we can slice to the first aligned address within each buffer.
+        # This guarantees data_buffer.data_ptr() % alignment == 0 and
+        # received_buffer.data_ptr() % alignment == 0, so any offset that is a multiple of
+        # alignment is also aligned in both buffers — required for alignment to hold on receiving ranks.
+        data_buffer_raw = torch.empty(BUFFER_BYTESIZE + alignment, dtype=torch.uint8, device=self.device)
+        received_buffer_raw = torch.empty(BUFFER_BYTESIZE + alignment, dtype=torch.uint8, device=self.device)
+        data_buffer = data_buffer_raw[(-data_buffer_raw.data_ptr()) % alignment:]
+        received_buffer = received_buffer_raw[(-received_buffer_raw.data_ptr()) % alignment:]
 
         batch_metadata_tensor = torch.zeros(MAX_CHUNKS_PER_BATCH + 1, 4, dtype=torch.int64, device=self.device)
         received_metadata_tensor = torch.zeros(MAX_CHUNKS_PER_BATCH + 1, 4, dtype=torch.int64, device=self.device)
@@ -458,6 +481,8 @@ class _distributedStreamer:
 
         current_data_size = 0
         chunk_count_in_batch = 0
+        alignment = get_dist_buffer_alignment()
+        base_ptr = data_buffer.data_ptr()
 
         while chunk_count_in_batch < max_chunks_per_batch and self.reading_from_storage:
 
@@ -474,20 +499,21 @@ class _distributedStreamer:
             ready_request_id, ready_chunk_index, cpu_buffer = chunk_item
             chunk_size = cpu_buffer.numel()
 
-            if current_data_size + chunk_size > buffer_bytesize:
+            chunk_offset = aligned_offset(base_ptr, current_data_size, alignment)
+            if chunk_offset + chunk_size > buffer_bytesize:
                 # This chunk doesn't fit, so we save it for the next batch.
                 leftover_chunk[0] = chunk_item
-                break 
+                break
 
-            data_buffer[current_data_size : current_data_size + chunk_size].copy_(cpu_buffer.squeeze())
-            
+            data_buffer[chunk_offset : chunk_offset + chunk_size].copy_(cpu_buffer.squeeze())
+
             orig_req_idx, orig_chunk_idx, _ = self.rank_dicts_map[ready_request_id][ready_chunk_index]
             batch_metadata_tensor[chunk_count_in_batch + 1].copy_(
-                torch.tensor([orig_req_idx, orig_chunk_idx, chunk_size, current_data_size])
+                torch.tensor([orig_req_idx, orig_chunk_idx, chunk_size, chunk_offset])
             )
-            
-            current_data_size += chunk_size
-            chunk_count_in_batch += 1 
+
+            current_data_size = chunk_offset + chunk_size
+            chunk_count_in_batch += 1
 
         batch_metadata_tensor[0, 0] = chunk_count_in_batch
 
