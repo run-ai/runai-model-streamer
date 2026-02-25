@@ -83,10 +83,9 @@ class DistributedStreamer:
         elif enable_dist == "1":
             self.is_distributed = True
         elif enable_dist == "auto":
-            if path is not None:
-                self.is_distributed = is_s3_path(path) or is_gs_path(path) or is_azure_path(path)
-            else:
-                self.is_distributed = False
+            # here we can disable distributed streaming for specific storage types
+            # for now, we allow all storage types
+            pass
         else:
             raise ValueError(f"Invalid value for RUNAI_STREAMER_DIST: {enable_dist}")
 
