@@ -27,8 +27,8 @@ def azure_library(name, arch):
         ] + select({
             "//:dynamic_link": ["-lz", "-lssl", "-lcrypto", "-lcurl", "-lxml2"],
             "//conditions:default": [
-                "-l:libz.a",
                 "-l:libcurl.a",
+                "-l:libz.a",
                 "-l:libssl.a",
                 "-l:libcrypto.a",
                 "-lxml2",  # Use shared libxml2 to avoid conflicts
