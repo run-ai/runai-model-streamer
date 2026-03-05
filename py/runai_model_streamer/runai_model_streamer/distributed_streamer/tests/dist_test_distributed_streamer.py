@@ -184,6 +184,8 @@ class TestDistributedStreamer(unittest.TestCase):
                     storage_ptr = data_tensor.storage().data_ptr()
                     storage_ptr_counts[storage_ptr] = storage_ptr_counts.get(storage_ptr, 0) + 1
 
+                if self.world_size < 2:
+                    self.skipTest("Alignment packing test requires at least 2 processes.")
                 self.assertTrue(
                     any(count >= 2 for count in storage_ptr_counts.values()),
                     f"Rank {self.rank}: no two tensors were packed in the same buffer batch"

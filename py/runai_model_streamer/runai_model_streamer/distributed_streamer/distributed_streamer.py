@@ -50,6 +50,7 @@ def aligned_offset(base_ptr: int, current_offset: int, alignment: int) -> int:
     total_addr = base_ptr + current_offset
     padding = (-total_addr) % alignment
     return current_offset + padding
+    
 
 DEFAULT_BROADCAST_TIMEOUT = timedelta(seconds=600)
 
@@ -414,8 +415,8 @@ class _distributedStreamer:
         # alignment is also aligned in both buffers — required for alignment to hold on receiving ranks.
         data_buffer_raw = torch.empty(BUFFER_BYTESIZE + alignment, dtype=torch.uint8, device=self.device)
         received_buffer_raw = torch.empty(BUFFER_BYTESIZE + alignment, dtype=torch.uint8, device=self.device)
-        data_buffer = data_buffer_raw[(-data_buffer_raw.data_ptr()) % alignment:]
-        received_buffer = received_buffer_raw[(-received_buffer_raw.data_ptr()) % alignment:]
+        data_buffer = data_buffer_raw if alignment <= 1 else data_buffer_raw[(-data_buffer_raw.data_ptr()) % alignment:]
+        received_buffer = received_buffer_raw if alignment <= 1 else received_buffer_raw[(-received_buffer_raw.data_ptr()) % alignment:]
 
         batch_metadata_tensor = torch.zeros(MAX_CHUNKS_PER_BATCH + 1, 4, dtype=torch.int64, device=self.device)
         received_metadata_tensor = torch.zeros(MAX_CHUNKS_PER_BATCH + 1, 4, dtype=torch.int64, device=self.device)
