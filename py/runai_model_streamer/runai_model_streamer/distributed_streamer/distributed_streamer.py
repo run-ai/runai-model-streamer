@@ -50,7 +50,7 @@ def aligned_offset(base_ptr: int, current_offset: int, alignment: int) -> int:
     total_addr = base_ptr + current_offset
     padding = (-total_addr) % alignment
     return current_offset + padding
-    
+
 
 DEFAULT_BROADCAST_TIMEOUT = timedelta(seconds=600)
 
@@ -443,7 +443,8 @@ class _distributedStreamer:
                     received_buffer,
                     batch_metadata_tensor,
                     received_metadata_tensor,
-                    leftover_chunk)
+                    leftover_chunk,
+                    alignment)
 
                 logger.debug(f"[RunAI Streamer][Distributed] Rank {self.original_group_rank}: Prefilled buffer with {chunk_count_in_batch} chunks and total size {humanize.naturalsize(current_data_size)}")
 
@@ -478,11 +479,11 @@ class _distributedStreamer:
                 received_buffer: torch.Tensor,
                 batch_metadata_tensor: torch.Tensor,
                 received_metadata_tensor: torch.Tensor,
-                leftover_chunk: List[Tuple[int, int, torch.Tensor]]) -> Tuple[int, int]:
+                leftover_chunk: List[Tuple[int, int, torch.Tensor]],
+                alignment: int) -> Tuple[int, int]:
 
         current_data_size = 0
         chunk_count_in_batch = 0
-        alignment = get_dist_buffer_alignment()
         base_ptr = data_buffer.data_ptr()
 
         while chunk_count_in_batch < max_chunks_per_batch and self.reading_from_storage:
