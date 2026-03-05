@@ -39,6 +39,7 @@ RUNAI_STREAMER_CUDA_ALIGNMENT_ENV_VAR = "RUNAI_STREAMER_CUDA_ALIGNMENT"
 DEFAULT_DIST_BUFFER_ALIGNMENT = 512
 MAX_DIST_BUFFER_ALIGNMENT = 1024 * 1024
 
+
 def get_dist_buffer_alignment() -> int:
     """
     Get the alignment for the distributed buffer.
