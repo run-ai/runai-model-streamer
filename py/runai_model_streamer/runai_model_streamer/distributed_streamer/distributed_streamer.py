@@ -97,7 +97,7 @@ class DistributedStreamer:
             return
 
         # environment variable to override default distributed streaming
-        # by default, use distributed streaming only for all storage types
+        # by default, use distributed streaming for all storage types
         enable_dist = os.environ.get("RUNAI_STREAMER_DIST", "auto")
         if enable_dist == "0":
             self.is_distributed = False
