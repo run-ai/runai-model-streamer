@@ -10,7 +10,10 @@ import time
 import random
 from unittest.mock import patch
 
-from runai_model_streamer.distributed_streamer.distributed_streamer import DistributedStreamer
+from runai_model_streamer.distributed_streamer.distributed_streamer import (
+    DistributedStreamer,
+    RUNAI_STREAMER_CUDA_ALIGNMENT_ENV_VAR,
+)
 from runai_model_streamer.file_streamer import FileChunks
 
 class TestDistributedStreamer(unittest.TestCase):
@@ -60,7 +63,6 @@ class TestDistributedStreamer(unittest.TestCase):
         return file_requests
 
     def test_1_success_data_correctness(self):
-        # This test is correct and remains unchanged
         file_specs = [{"size": 2580, "chunks": [500, 260, 260, 260, 260, 260, 260, 260, 260]}]
         requests = self._prepare_file_requests(file_specs)
         original_data_map = {}
@@ -81,7 +83,6 @@ class TestDistributedStreamer(unittest.TestCase):
                 print(f"\n✅ Success test verified on all {self.world_size} ranks.")
 
     def test_1_success_empty_file_list(self):
-        # This test is correct and remains unchanged
         requests = []
         env_vars = {"RUNAI_STREAMER_DIST": "1"}
         with patch.dict(os.environ, env_vars):
@@ -95,7 +96,6 @@ class TestDistributedStreamer(unittest.TestCase):
             print(f"\n✅ Success empty file list test verified on all {self.world_size} ranks.")
 
     def test_1_success_random_files(self):
-        # --- MODIFIED SECTION: Generate random file specifications ---
         file_specs = []
         # Use a random number of files (1 to 10)
         num_files = random.randint(1, 10)
@@ -144,8 +144,48 @@ class TestDistributedStreamer(unittest.TestCase):
         if self.rank == 0:
             print(f"\n✅ Success random files test verified on all {self.world_size} ranks.")
 
+    def test_1_success_alignment(self):
+        # Chunk sizes are random in [1, alignment*10].
+        # BUFFER_MIN_BYTESIZE = alignment*20 guarantees at least two max-size chunks fit in
+        # one batch: worst case is chunk1=alignment*10 at offset 0 and chunk2=alignment*10
+        # at offset=alignment*10, totalling alignment*20 = BUFFER_BYTESIZE exactly.
+        # With 1-20 files of 4 chunks each there are enough chunks to guarantee at least
+        # one batch where two tensors are packed together.
+            
+        if self.world_size < 2:
+            self.skipTest("Alignment packing test requires at least 2 processes.")
+
+        alignment = 512
+        num_files = random.randint(1, 20)
+        def random_chunks(n):
+            return [random.randint(1, alignment * 10) for _ in range(n)]
+
+        chunks_per_file = [random_chunks(4) for _ in range(num_files)]
+        file_specs = [
+            {"size": sum(c), "chunks": c} for c in chunks_per_file
+        ]
+        requests = self._prepare_file_requests(file_specs)
+
+        env_vars = {
+            "RUNAI_STREAMER_DIST": "1",
+            "RUNAI_STREAMER_DIST_BUFFER_MIN_BYTESIZE": str(alignment * 20),
+            RUNAI_STREAMER_CUDA_ALIGNMENT_ENV_VAR: str(alignment),
+        }
+        with patch.dict(os.environ, env_vars):
+            with DistributedStreamer() as streamer:
+                streamer.stream_files(requests, None, "cpu", True)
+
+                for _req_id, _chunk_idx, data_tensor in streamer.get_chunks():
+                    ptr = data_tensor.data_ptr()
+                    self.assertEqual(
+                        ptr % alignment, 0,
+                        f"Rank {self.rank}: tensor data_ptr 0x{ptr:x} is not aligned to {alignment} bytes"
+                    )
+
+        if self.rank == 0:
+            print(f"\n✅ Alignment test verified on all {self.world_size} ranks.")
+
     def test_9_failure_on_one_rank(self):
-        # This test is correct and remains unchanged
         if self.world_size < 2:
             self.skipTest("This failure test requires at least 2 processes.")
         
@@ -166,7 +206,6 @@ class TestDistributedStreamer(unittest.TestCase):
                         pass
         
     def test_9_timeout_failure(self):
-        # This test is correct and remains unchanged
         if self.world_size < 2:
             self.skipTest("This timeout test requires at least 2 processes.")
 
