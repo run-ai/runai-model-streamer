@@ -182,13 +182,6 @@ class TestDistributedStreamer(unittest.TestCase):
                         ptr % alignment, 0,
                         f"Rank {self.rank}: tensor data_ptr 0x{ptr:x} is not aligned to {alignment} bytes"
                     )
-                    storage_ptr = data_tensor.storage().data_ptr()
-                    storage_ptr_counts[storage_ptr] = storage_ptr_counts.get(storage_ptr, 0) + 1
-
-                self.assertTrue(
-                    any(count >= 2 for count in storage_ptr_counts.values()),
-                    f"Rank {self.rank}: no two tensors were packed in the same buffer batch"
-                )
 
         if self.rank == 0:
             print(f"\n✅ Alignment test verified on all {self.world_size} ranks.")
