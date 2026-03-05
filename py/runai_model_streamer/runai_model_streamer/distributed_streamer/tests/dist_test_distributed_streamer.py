@@ -63,7 +63,6 @@ class TestDistributedStreamer(unittest.TestCase):
         return file_requests
 
     def test_1_success_data_correctness(self):
-        # This test is correct and remains unchanged
         file_specs = [{"size": 2580, "chunks": [500, 260, 260, 260, 260, 260, 260, 260, 260]}]
         requests = self._prepare_file_requests(file_specs)
         original_data_map = {}
@@ -84,7 +83,6 @@ class TestDistributedStreamer(unittest.TestCase):
                 print(f"\n✅ Success test verified on all {self.world_size} ranks.")
 
     def test_1_success_empty_file_list(self):
-        # This test is correct and remains unchanged
         requests = []
         env_vars = {"RUNAI_STREAMER_DIST": "1"}
         with patch.dict(os.environ, env_vars):
@@ -98,7 +96,6 @@ class TestDistributedStreamer(unittest.TestCase):
             print(f"\n✅ Success empty file list test verified on all {self.world_size} ranks.")
 
     def test_1_success_random_files(self):
-        # --- MODIFIED SECTION: Generate random file specifications ---
         file_specs = []
         # Use a random number of files (1 to 10)
         num_files = random.randint(1, 10)
@@ -154,6 +151,10 @@ class TestDistributedStreamer(unittest.TestCase):
         # at offset=alignment*10, totalling alignment*20 = BUFFER_BYTESIZE exactly.
         # With 1-20 files of 4 chunks each there are enough chunks to guarantee at least
         # one batch where two tensors are packed together.
+            
+        if self.world_size < 2:
+            self.skipTest("Alignment packing test requires at least 2 processes.")
+
         alignment = 512
         num_files = random.randint(1, 20)
         def random_chunks(n):
@@ -184,8 +185,6 @@ class TestDistributedStreamer(unittest.TestCase):
                     storage_ptr = data_tensor.storage().data_ptr()
                     storage_ptr_counts[storage_ptr] = storage_ptr_counts.get(storage_ptr, 0) + 1
 
-                if self.world_size < 2:
-                    self.skipTest("Alignment packing test requires at least 2 processes.")
                 self.assertTrue(
                     any(count >= 2 for count in storage_ptr_counts.values()),
                     f"Rank {self.rank}: no two tensors were packed in the same buffer batch"
@@ -195,7 +194,6 @@ class TestDistributedStreamer(unittest.TestCase):
             print(f"\n✅ Alignment test verified on all {self.world_size} ranks.")
 
     def test_9_failure_on_one_rank(self):
-        # This test is correct and remains unchanged
         if self.world_size < 2:
             self.skipTest("This failure test requires at least 2 processes.")
         
@@ -216,7 +214,6 @@ class TestDistributedStreamer(unittest.TestCase):
                         pass
         
     def test_9_timeout_failure(self):
-        # This test is correct and remains unchanged
         if self.world_size < 2:
             self.skipTest("This timeout test requires at least 2 processes.")
 
