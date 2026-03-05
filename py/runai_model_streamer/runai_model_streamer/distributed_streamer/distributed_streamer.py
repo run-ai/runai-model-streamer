@@ -37,15 +37,15 @@ logger = logging.getLogger(__name__)
 
 RUNAI_STREAMER_CUDA_ALIGNMENT_ENV_VAR = "RUNAI_STREAMER_CUDA_ALIGNMENT"
 DEFAULT_DIST_BUFFER_ALIGNMENT = 512
-
+MAX_DIST_BUFFER_ALIGNMENT = 1024 * 1024
 
 def get_dist_buffer_alignment() -> int:
     """
     Get the alignment for the distributed buffer.
     """
     value = int(os.environ.get(RUNAI_STREAMER_CUDA_ALIGNMENT_ENV_VAR, str(DEFAULT_DIST_BUFFER_ALIGNMENT)))
-    if value < 0:
-        raise ValueError(f"Invalid negative value for RUNAI_STREAMER_CUDA_ALIGNMENT: {value}")
+    if value < 0 or value > MAX_DIST_BUFFER_ALIGNMENT:
+        raise ValueError(f"Invalid value for RUNAI_STREAMER_CUDA_ALIGNMENT: {value}, must be between 0 and {MAX_DIST_BUFFER_ALIGNMENT} bytes")
     return value
 
 
