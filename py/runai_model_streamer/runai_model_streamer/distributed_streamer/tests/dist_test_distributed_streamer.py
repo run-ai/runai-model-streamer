@@ -184,13 +184,14 @@ class TestDistributedStreamer(unittest.TestCase):
 
         if self.rank == 0:
             print(f"\n✅ Alignment test verified on all {self.world_size} ranks.")
+          
     def test_1_auto_mode_no_distributed_with_gloo(self):
         """RUNAI_STREAMER_DIST=auto should disable distributed streaming for gloo backend."""
         if self.world_size < 2:
             self.skipTest("This test requires at least 2 processes.")
 
-        self.assertEqual(dist.get_backend(), "gloo",
-                         "This test requires gloo backend to be initialized")
+        if dist.get_backend() != "gloo":
+            self.skipTest("This test requires gloo backend to be initialized")
 
         file_specs = [{"size": 100, "chunks": [100]}]
         requests = self._prepare_file_requests(file_specs)
