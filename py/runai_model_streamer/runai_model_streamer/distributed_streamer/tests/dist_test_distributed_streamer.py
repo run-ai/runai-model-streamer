@@ -184,7 +184,7 @@ class TestDistributedStreamer(unittest.TestCase):
 
         if self.rank == 0:
             print(f"\n✅ Alignment test verified on all {self.world_size} ranks.")
-          
+
     def test_1_auto_mode_no_distributed_with_gloo(self):
         """RUNAI_STREAMER_DIST=auto should disable distributed streaming for gloo backend."""
         if self.world_size < 2:
