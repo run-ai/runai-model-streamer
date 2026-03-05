@@ -44,7 +44,7 @@ def get_dist_buffer_alignment() -> int:
     Get the alignment for the distributed buffer.
     """
     value = int(os.environ.get(RUNAI_STREAMER_CUDA_ALIGNMENT_ENV_VAR, str(DEFAULT_DIST_BUFFER_ALIGNMENT)))
-    if value < 1:
+    if value < 0:
         raise ValueError(f"Invalid negative value for RUNAI_STREAMER_CUDA_ALIGNMENT: {value}")
     return value
 

@@ -175,7 +175,6 @@ class TestDistributedStreamer(unittest.TestCase):
             with DistributedStreamer() as streamer:
                 streamer.stream_files(requests, None, "cpu", True)
 
-                storage_ptr_counts = {}
                 for _req_id, _chunk_idx, data_tensor in streamer.get_chunks():
                     ptr = data_tensor.data_ptr()
                     self.assertEqual(
