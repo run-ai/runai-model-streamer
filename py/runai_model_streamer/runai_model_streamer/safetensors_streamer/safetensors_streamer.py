@@ -128,7 +128,10 @@ class ObjectStorageModel:
                     if os.path.exists(dst):
                         shutil.rmtree(dst)
                     os.makedirs(dst, exist_ok=True)
-        except:
+        except BaseException:
+            # BaseException (not Exception) is intentional: KeyboardInterrupt and
+            # SystemExit must also release the lock, otherwise sibling processes
+            # waiting on flock will block indefinitely after a Ctrl+C or SIGTERM.
             fcntl.flock(self._lock_file, fcntl.LOCK_UN)
             self._lock_file.close()
             raise
@@ -166,6 +169,10 @@ class ObjectStorageModel:
                 fcntl.flock(self._lock_file, fcntl.LOCK_UN)
             finally:
                 self._lock_file.close()
+            try:
+                os.unlink(self._lock_path)
+            except OSError:
+                pass  # already deleted by another process or never created
         return False
 
 
