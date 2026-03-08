@@ -1,13 +1,10 @@
 from __future__ import annotations
-from typing import List, Iterator, Optional
-from typing import Iterator, Optional, List
+from typing import List, Iterator, Optional, Tuple
 import torch
 import torch.distributed as dist
-import glob
 import os
 from datetime import timedelta
 import socket
-import re
 
 from runai_model_streamer.file_streamer import (
     FileStreamer,
@@ -122,7 +119,7 @@ class DistributedStreamer:
             if backend_name == "nccl" and device == "cpu":
                 logger.info("[RunAI Streamer][Distributed] Note: Torch distributed backend %s is not supported for CPU device - fallback to non distributed streaming", backend_name)
                 self.is_distributed = False
-            if backend_name == "gloo" and device != "cpu":
+            elif backend_name == "gloo" and device != "cpu":
                 logger.info("[RunAI Streamer][Distributed] Note: Torch distributed backend %s is not supported for %s device - fallback to non distributed streaming", backend_name, device)
                 self.is_distributed = False
             elif enable_dist == "auto" and backend_name != "nccl":
@@ -146,7 +143,7 @@ class DistributedStreamer:
 
         self.params.set_params(file_stream_requests)
 
-         # check if distributed streaming can be used
+        # check if distributed streaming can be used
         self.set_is_distributed(is_distributed, device)
 
         if not self.is_distributed:
