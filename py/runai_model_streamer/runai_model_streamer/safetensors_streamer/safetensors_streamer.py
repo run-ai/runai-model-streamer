@@ -73,6 +73,19 @@ class ObjectStorageModel:
     clean exit. If an exception is raised inside the block the lock is still released
     but the sentinel is NOT written, so the next process will retry the download.
 
+    Locking mechanism:
+        Uses fcntl.flock, which is supported on Linux only (not Windows).
+        The lock file is placed at dst + ".lock".
+
+        Supported: multiple processes on the same machine, whether dst is a local
+        disk or a network-mounted filesystem (NFS, EFS, etc.) — the kernel manages
+        the lock locally.
+
+        Not supported: processes on different machines sharing the same dst over
+        a network filesystem. fcntl.flock does not provide reliable cross-host
+        locking on NFS (NFSv3 and earlier silently ignore it; NFSv4 depends on
+        mount options and server support).
+
     Example::
 
         with ObjectStorageModel(model_path=url, dst=cache_dir) as obj:
