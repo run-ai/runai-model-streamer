@@ -104,7 +104,7 @@ class DistributedStreamer:
         elif enable_dist == "1":
             self.is_distributed = True
         elif enable_dist == "auto":
-             self.is_distributed = True
+            self.is_distributed = True
         else:
             raise ValueError(f"Invalid value for RUNAI_STREAMER_DIST: {enable_dist}")
 
