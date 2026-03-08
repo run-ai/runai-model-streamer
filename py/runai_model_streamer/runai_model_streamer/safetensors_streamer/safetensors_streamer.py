@@ -162,8 +162,10 @@ class ObjectStorageModel:
                         f"Failed to write download sentinel {self._sentinel!r}: {exc}"
                     ) from exc
         finally:
-            fcntl.flock(self._lock_file, fcntl.LOCK_UN)
-            self._lock_file.close()
+            try:
+                fcntl.flock(self._lock_file, fcntl.LOCK_UN)
+            finally:
+                self._lock_file.close()
         return False
 
 
