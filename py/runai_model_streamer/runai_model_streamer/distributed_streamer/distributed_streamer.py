@@ -1,13 +1,10 @@
 from __future__ import annotations
-from typing import List, Iterator, Optional
-from typing import Iterator, Optional, List
+from typing import List, Iterator, Optional, Tuple
 import torch
 import torch.distributed as dist
-import glob
 import os
 from datetime import timedelta
 import socket
-import re
 
 from runai_model_streamer.file_streamer import (
     FileStreamer,
@@ -23,9 +20,6 @@ from runai_model_streamer.distributed_streamer.partition import (
 
 from runai_model_streamer.s3_utils.s3_utils import (
     S3Credentials,
-    is_s3_path,
-    is_gs_path,
-    is_azure_path,
 )
 
 from timeit import default_timer as timer
@@ -92,7 +86,7 @@ class DistributedStreamer:
         free_memory, total_memory = torch.cuda.mem_get_info()
         return free_memory
 
-    def set_is_distributed(self, is_distributed: bool, path: str, device: str) -> None:
+    def set_is_distributed(self, is_distributed: bool, device: str) -> None:
         # check if distributed streaming should be used
 
         if not is_distributed:
@@ -100,17 +94,14 @@ class DistributedStreamer:
             return
 
         # environment variable to override default distributed streaming
-        # by default, use distributed streaming only for object storage paths
+        # by default, use distributed streaming for all storage types
         enable_dist = os.environ.get("RUNAI_STREAMER_DIST", "auto")
         if enable_dist == "0":
             self.is_distributed = False
         elif enable_dist == "1":
             self.is_distributed = True
         elif enable_dist == "auto":
-            if path is not None:
-                self.is_distributed = is_s3_path(path) or is_gs_path(path) or is_azure_path(path)
-            else:
-                self.is_distributed = False
+            self.is_distributed = True
         else:
             raise ValueError(f"Invalid value for RUNAI_STREAMER_DIST: {enable_dist}")
 
@@ -121,16 +112,17 @@ class DistributedStreamer:
                 logger.info("[RunAI Streamer][Distributed] Torch distributed is not initialized - fallback to non distributed streaming")
             self.is_distributed = self.is_distributed and self.get_group_size() > 1
 
-       # do not distribute if backend type does not match device type
+        # Do not distribute if backend type does not match device type
+        # In auto mode, do not distribute if backend is not nccl
         if self.is_distributed:
             backend_name = dist.get_backend()
             if backend_name == "nccl" and device == "cpu":
                 logger.info("[RunAI Streamer][Distributed] Note: Torch distributed backend %s is not supported for CPU device - fallback to non distributed streaming", backend_name)
                 self.is_distributed = False
-            if backend_name == "gloo" and device != "cpu":
+            elif backend_name == "gloo" and device != "cpu":
                 logger.info("[RunAI Streamer][Distributed] Note: Torch distributed backend %s is not supported for %s device - fallback to non distributed streaming", backend_name, device)
                 self.is_distributed = False
-            if enable_dist == "auto" and backend_name != "nccl" and backend_name != "gloo":
+            elif enable_dist == "auto" and backend_name != "nccl":
                 logger.info("[RunAI Streamer][Distributed] Note: Torch distributed backend %s is not supported by default for distributed streaming - To allow this backend, set RUNAI_STREAMER_DIST to `1`", backend_name)
                 self.is_distributed = False
 
@@ -151,12 +143,8 @@ class DistributedStreamer:
 
         self.params.set_params(file_stream_requests)
 
-        path = None
-        if len(file_stream_requests) > 0:
-            path = file_stream_requests[0].path
-
-         # check if distributed streaming can be used
-        self.set_is_distributed(is_distributed, path, device)
+        # check if distributed streaming can be used
+        self.set_is_distributed(is_distributed, device)
 
         if not self.is_distributed:
             self.file_streamer.stream_files(file_stream_requests, credentials, device)
