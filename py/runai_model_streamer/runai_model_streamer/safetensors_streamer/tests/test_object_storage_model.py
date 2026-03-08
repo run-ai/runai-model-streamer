@@ -84,10 +84,12 @@ class TestObjectStorageModel(unittest.TestCase):
                 p.start()
             for p in processes:
                 p.join(timeout=30)
-                if p.is_alive():
-                    p.terminate()
-                    p.join()
-                    self.fail(f"Worker process {p.pid} timed out and was terminated")
+            timed_out = [p for p in processes if p.is_alive()]
+            for p in timed_out:
+                p.terminate()
+                p.join()
+            if timed_out:
+                self.fail(f"{len(timed_out)} worker process(es) timed out and were terminated")
 
             results = [result_queue.get_nowait() for _ in range(num_processes)]
         finally:

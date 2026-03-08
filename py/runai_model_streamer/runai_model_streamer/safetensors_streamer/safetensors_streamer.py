@@ -112,15 +112,22 @@ class ObjectStorageModel:
         self._lock_path = dst + ".lock"
         self._sentinel = os.path.join(dst, self.SENTINEL_NAME)
         self._lock_file = open(self._lock_path, "w")
-        fcntl.flock(self._lock_file, fcntl.LOCK_EX)
+        fcntl.flock(self._lock_file, fcntl.LOCK_SH)  # shared: fast path for already-downloaded
         try:
             if os.path.exists(self._sentinel):
                 self._skip = True
             else:
-                self._skip = False
-                if os.path.exists(dst):
-                    shutil.rmtree(dst)
-                os.makedirs(dst, exist_ok=True)
+                # Upgrade to exclusive before modifying dst.
+                # flock upgrade is not atomic: re-check sentinel after acquiring EX
+                # because another process may have completed the download in the gap.
+                fcntl.flock(self._lock_file, fcntl.LOCK_EX)
+                if os.path.exists(self._sentinel):
+                    self._skip = True
+                else:
+                    self._skip = False
+                    if os.path.exists(dst):
+                        shutil.rmtree(dst)
+                    os.makedirs(dst, exist_ok=True)
         except:
             fcntl.flock(self._lock_file, fcntl.LOCK_UN)
             self._lock_file.close()
@@ -147,8 +154,13 @@ class ObjectStorageModel:
                         f"No files were downloaded to {self.dir!r} — "
                         "verify that the model path is correct"
                     )
-                with open(self._sentinel, "w"):
-                    pass
+                try:
+                    with open(self._sentinel, "w"):
+                        pass
+                except OSError as exc:
+                    raise RuntimeError(
+                        f"Failed to write download sentinel {self._sentinel!r}: {exc}"
+                    ) from exc
         finally:
             fcntl.flock(self._lock_file, fcntl.LOCK_UN)
             self._lock_file.close()
