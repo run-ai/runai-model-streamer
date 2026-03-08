@@ -3,6 +3,8 @@ from typing import Iterator, Optional
 import torch
 import glob
 import os
+import fcntl
+import shutil
 from typing import List
 
 from runai_model_streamer.file_streamer import FileChunks
@@ -58,6 +60,75 @@ def pull_files(model_path: str,
     if is_azure_path(model_path):
         return azure_pull_files(model_path, dst, allow_pattern, ignore_pattern)
     raise NotImplementedError("pull files is not implemented for file system paths")
+
+class ObjectStorageModel:
+    """
+    Process-safe, idempotent wrapper for downloading model files from object storage.
+
+    Multiple processes calling pull_files() concurrently with the same dst will
+    serialize via a file lock. The first process downloads; the rest wait and skip
+    (sentinel-based idempotency).
+
+    Use as a context manager. The sentinel is written and the lock is released on
+    clean exit. If an exception is raised inside the block the lock is still released
+    but the sentinel is NOT written, so the next process will retry the download.
+
+    Example::
+
+        with ObjectStorageModel(model_path=url, dst=cache_dir) as obj:
+            obj.pull_files(allow_pattern=["*.safetensors"])
+            obj.pull_files(ignore_pattern=["*.safetensors"])
+    """
+
+    SENTINEL_NAME = ".runai_complete"
+
+    def __init__(
+        self,
+        model_path: str,
+        dst: str,
+        s3_credentials: Optional[S3Credentials] = None,
+    ) -> None:
+        self.dir = dst
+        self._model_path = model_path if model_path.endswith("/") else model_path + "/"
+        self._s3_credentials = s3_credentials
+        self._lock_path = dst + ".lock"
+        self._sentinel = os.path.join(dst, self.SENTINEL_NAME)
+        self._lock_file = open(self._lock_path, "w")
+        fcntl.flock(self._lock_file, fcntl.LOCK_EX)
+        if os.path.exists(self._sentinel):
+            self._skip = True
+        else:
+            self._skip = False
+            if os.path.exists(dst):
+                shutil.rmtree(dst)
+            os.makedirs(dst, exist_ok=True)
+
+    def pull_files(
+        self,
+        allow_pattern: Optional[List[str]] = None,
+        ignore_pattern: Optional[List[str]] = None,
+    ) -> None:
+        if self._skip:
+            return
+        pull_files(self._model_path, self.dir, allow_pattern, ignore_pattern, self._s3_credentials)
+
+    def __enter__(self) -> ObjectStorageModel:
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        try:
+            if exc_type is None and not self._skip:
+                if not any(f != self.SENTINEL_NAME for f in os.listdir(self.dir)):
+                    raise RuntimeError(
+                        f"No files were downloaded to {self.dir!r} — "
+                        "verify that the model path is correct"
+                    )
+                open(self._sentinel, "w").close()
+        finally:
+            fcntl.flock(self._lock_file, fcntl.LOCK_UN)
+            self._lock_file.close()
+        return False
+
 
 class SafetensorsStreamer:
     def __init__(self) -> None:
