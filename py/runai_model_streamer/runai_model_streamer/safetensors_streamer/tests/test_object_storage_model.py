@@ -15,6 +15,10 @@ SOURCE_FILES = {
     "tokenizer.json": b'{"version": "1.0"}',
 }
 
+# Fake object storage URL used wherever ObjectStorageModel requires a valid scheme.
+# The patched pull_files ignores it and copies from self.src_dir instead.
+FAKE_MODEL_PATH = "s3://fake-bucket/fake-model"
+
 
 class TestObjectStorageModel(unittest.TestCase):
 
@@ -30,30 +34,26 @@ class TestObjectStorageModel(unittest.TestCase):
                 f.write(content)
         return src
 
-    @staticmethod
     def _fake_pull_files(
-        model_path, dst, allow_pattern=None, ignore_pattern=None, s3_credentials=None
+        self, model_path, dst, allow_pattern=None, ignore_pattern=None, s3_credentials=None
     ):
         """Simulates a download by copying source files into dst."""
-        src = model_path.rstrip("/")
-        for fname in os.listdir(src):
-            shutil.copy2(os.path.join(src, fname), os.path.join(dst, fname))
+        for fname in os.listdir(self.src_dir):
+            shutil.copy2(os.path.join(self.src_dir, fname), os.path.join(dst, fname))
 
-    @staticmethod
     def _slow_fake_pull_files(
-        model_path, dst, allow_pattern=None, ignore_pattern=None, s3_credentials=None
+        self, model_path, dst, allow_pattern=None, ignore_pattern=None, s3_credentials=None
     ):
         """Slow variant so concurrent processes actually overlap."""
         time.sleep(0.15)
-        src = model_path.rstrip("/")
-        for fname in os.listdir(src):
-            shutil.copy2(os.path.join(src, fname), os.path.join(dst, fname))
+        for fname in os.listdir(self.src_dir):
+            shutil.copy2(os.path.join(self.src_dir, fname), os.path.join(dst, fname))
 
     @staticmethod
-    def _worker(dst_dir, src_dir, result_queue):
+    def _worker(dst_dir, result_queue):
         """Entry point for each worker process (fork-safe static method)."""
         try:
-            with ObjectStorageModel(model_path=src_dir, dst=dst_dir) as obj:
+            with ObjectStorageModel(model_path=FAKE_MODEL_PATH, dst=dst_dir) as obj:
                 skipped = obj._skip
                 obj.pull_files()
             result_queue.put({"status": "ok", "skipped": skipped})
@@ -62,8 +62,10 @@ class TestObjectStorageModel(unittest.TestCase):
 
     def _run_concurrent(self, num_processes):
         """
-        Patch pull_files in the parent then fork workers.  With fork, children
+        Patch pull_files in the parent then fork workers. With fork, children
         inherit the patched module attribute and therefore call _slow_fake_pull_files.
+        _slow_fake_pull_files is an instance method bound to self, so children
+        inherit self.src_dir via the forked address space.
         """
         original = _ss_module.pull_files
         _ss_module.pull_files = self._slow_fake_pull_files
@@ -74,7 +76,7 @@ class TestObjectStorageModel(unittest.TestCase):
             processes = [
                 ctx.Process(
                     target=self._worker,
-                    args=(self.dst_dir, self.src_dir, result_queue),
+                    args=(self.dst_dir, result_queue),
                 )
                 for _ in range(num_processes)
             ]
@@ -82,6 +84,10 @@ class TestObjectStorageModel(unittest.TestCase):
                 p.start()
             for p in processes:
                 p.join(timeout=30)
+                if p.is_alive():
+                    p.terminate()
+                    p.join()
+                    self.fail(f"Worker process {p.pid} timed out and was terminated")
 
             results = [result_queue.get_nowait() for _ in range(num_processes)]
         finally:
@@ -113,7 +119,7 @@ class TestObjectStorageModel(unittest.TestCase):
         original = _ss_module.pull_files
         _ss_module.pull_files = self._fake_pull_files
         try:
-            with ObjectStorageModel(model_path=self.src_dir, dst=self.dst_dir) as obj:
+            with ObjectStorageModel(model_path=FAKE_MODEL_PATH, dst=self.dst_dir) as obj:
                 obj.pull_files()
         finally:
             _ss_module.pull_files = original
@@ -128,7 +134,7 @@ class TestObjectStorageModel(unittest.TestCase):
         original = _ss_module.pull_files
         _ss_module.pull_files = self._fake_pull_files
         try:
-            with ObjectStorageModel(model_path=self.src_dir, dst=self.dst_dir) as obj:
+            with ObjectStorageModel(model_path=FAKE_MODEL_PATH, dst=self.dst_dir) as obj:
                 obj.pull_files()
         finally:
             _ss_module.pull_files = original
@@ -141,7 +147,7 @@ class TestObjectStorageModel(unittest.TestCase):
         original = _ss_module.pull_files
         _ss_module.pull_files = self._fake_pull_files
         try:
-            with ObjectStorageModel(model_path=self.src_dir, dst=self.dst_dir) as obj:
+            with ObjectStorageModel(model_path=FAKE_MODEL_PATH, dst=self.dst_dir) as obj:
                 obj.pull_files()
                 self.assertFalse(
                     os.path.exists(os.path.join(self.dst_dir, ObjectStorageModel.SENTINEL_NAME))
@@ -164,10 +170,10 @@ class TestObjectStorageModel(unittest.TestCase):
         original = _ss_module.pull_files
         _ss_module.pull_files = counting
         try:
-            with ObjectStorageModel(model_path=self.src_dir, dst=self.dst_dir) as obj1:
+            with ObjectStorageModel(model_path=FAKE_MODEL_PATH, dst=self.dst_dir) as obj1:
                 obj1.pull_files()
 
-            with ObjectStorageModel(model_path=self.src_dir, dst=self.dst_dir) as obj2:
+            with ObjectStorageModel(model_path=FAKE_MODEL_PATH, dst=self.dst_dir) as obj2:
                 obj2.pull_files()
         finally:
             _ss_module.pull_files = original
@@ -178,10 +184,10 @@ class TestObjectStorageModel(unittest.TestCase):
         original = _ss_module.pull_files
         _ss_module.pull_files = self._fake_pull_files
         try:
-            with ObjectStorageModel(model_path=self.src_dir, dst=self.dst_dir) as obj1:
+            with ObjectStorageModel(model_path=FAKE_MODEL_PATH, dst=self.dst_dir) as obj1:
                 obj1.pull_files()
 
-            with ObjectStorageModel(model_path=self.src_dir, dst=self.dst_dir) as obj2:
+            with ObjectStorageModel(model_path=FAKE_MODEL_PATH, dst=self.dst_dir) as obj2:
                 obj2.pull_files()
         finally:
             _ss_module.pull_files = original
@@ -205,7 +211,7 @@ class TestObjectStorageModel(unittest.TestCase):
         original = _ss_module.pull_files
         _ss_module.pull_files = counting
         try:
-            with ObjectStorageModel(model_path=self.src_dir, dst=self.dst_dir) as obj:
+            with ObjectStorageModel(model_path=FAKE_MODEL_PATH, dst=self.dst_dir) as obj:
                 obj.pull_files(allow_pattern=["*.safetensors"])
                 obj.pull_files(ignore_pattern=["*.safetensors"])
         finally:
@@ -229,7 +235,7 @@ class TestObjectStorageModel(unittest.TestCase):
         original = _ss_module.pull_files
         _ss_module.pull_files = self._fake_pull_files
         try:
-            with ObjectStorageModel(model_path=self.src_dir, dst=self.dst_dir) as obj:
+            with ObjectStorageModel(model_path=FAKE_MODEL_PATH, dst=self.dst_dir) as obj:
                 obj.pull_files()
         finally:
             _ss_module.pull_files = original
@@ -237,6 +243,23 @@ class TestObjectStorageModel(unittest.TestCase):
         self.assertFalse(os.path.exists(stale), "stale file should have been removed")
         for name in SOURCE_FILES:
             self.assertTrue(os.path.exists(os.path.join(self.dst_dir, name)))
+
+    # -----------------------------------------------------------------------
+    # Single-process: invalid model_path rejected before any side effects
+    # -----------------------------------------------------------------------
+
+    def test_invalid_model_path_raises_before_lock(self):
+        with self.assertRaises(ValueError):
+            ObjectStorageModel(model_path="/local/path/model", dst=self.dst_dir)
+
+        self.assertFalse(
+            os.path.exists(self.dst_dir),
+            "dst must not be created for an invalid model_path",
+        )
+        self.assertFalse(
+            os.path.exists(self.dst_dir + ".lock"),
+            "lock file must not be created for an invalid model_path",
+        )
 
     # -----------------------------------------------------------------------
     # Single-process: empty download raises and releases lock
@@ -250,7 +273,7 @@ class TestObjectStorageModel(unittest.TestCase):
         _ss_module.pull_files = empty_pull_files
         try:
             with self.assertRaises(RuntimeError):
-                with ObjectStorageModel(model_path=self.src_dir, dst=self.dst_dir) as obj:
+                with ObjectStorageModel(model_path=FAKE_MODEL_PATH, dst=self.dst_dir) as obj:
                     obj.pull_files()
         finally:
             _ss_module.pull_files = original
@@ -268,7 +291,7 @@ class TestObjectStorageModel(unittest.TestCase):
         _ss_module.pull_files = empty_pull_files
         try:
             with self.assertRaises(RuntimeError):
-                with ObjectStorageModel(model_path=self.src_dir, dst=self.dst_dir) as obj:
+                with ObjectStorageModel(model_path=FAKE_MODEL_PATH, dst=self.dst_dir) as obj:
                     obj.pull_files()
         finally:
             _ss_module.pull_files = original
@@ -294,7 +317,7 @@ class TestObjectStorageModel(unittest.TestCase):
         _ss_module.pull_files = raising_pull_files
         try:
             with self.assertRaises(RuntimeError):
-                with ObjectStorageModel(model_path=self.src_dir, dst=self.dst_dir) as obj:
+                with ObjectStorageModel(model_path=FAKE_MODEL_PATH, dst=self.dst_dir) as obj:
                     obj.pull_files()
         finally:
             _ss_module.pull_files = original
@@ -312,7 +335,7 @@ class TestObjectStorageModel(unittest.TestCase):
         original = _ss_module.pull_files
         _ss_module.pull_files = self._fake_pull_files
         try:
-            with ObjectStorageModel(model_path=self.src_dir.rstrip("/"), dst=self.dst_dir) as obj:
+            with ObjectStorageModel(model_path="s3://fake-bucket/fake-model", dst=self.dst_dir) as obj:
                 obj.pull_files()
         finally:
             _ss_module.pull_files = original
@@ -324,7 +347,7 @@ class TestObjectStorageModel(unittest.TestCase):
         original = _ss_module.pull_files
         _ss_module.pull_files = self._fake_pull_files
         try:
-            with ObjectStorageModel(model_path=self.src_dir + "/", dst=self.dst_dir) as obj:
+            with ObjectStorageModel(model_path="s3://fake-bucket/fake-model/", dst=self.dst_dir) as obj:
                 obj.pull_files()
         finally:
             _ss_module.pull_files = original

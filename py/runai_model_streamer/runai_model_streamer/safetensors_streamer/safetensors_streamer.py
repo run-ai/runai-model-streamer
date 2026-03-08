@@ -101,6 +101,11 @@ class ObjectStorageModel:
         dst: str,
         s3_credentials: Optional[S3Credentials] = None,
     ) -> None:
+        if not (is_s3_path(model_path) or is_gs_path(model_path) or is_azure_path(model_path)):
+            raise ValueError(
+                f"model_path {model_path!r} is not a supported object storage path "
+                "(expected s3://, gs://, or az://)"
+            )
         self.dir = dst
         self._model_path = model_path if model_path.endswith("/") else model_path + "/"
         self._s3_credentials = s3_credentials
@@ -136,7 +141,8 @@ class ObjectStorageModel:
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
         try:
             if exc_type is None and not self._skip:
-                if not any(f != self.SENTINEL_NAME for f in os.listdir(self.dir)):
+                downloaded = [f for f in os.listdir(self.dir) if f != self.SENTINEL_NAME]
+                if not downloaded:
                     raise RuntimeError(
                         f"No files were downloaded to {self.dir!r} — "
                         "verify that the model path is correct"
