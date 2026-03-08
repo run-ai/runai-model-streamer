@@ -89,7 +89,7 @@ class DistributedStreamer:
         free_memory, total_memory = torch.cuda.mem_get_info()
         return free_memory
 
-    def set_is_distributed(self, is_distributed: bool, path: str, device: str) -> None:
+    def set_is_distributed(self, is_distributed: bool, device: str) -> None:
         # check if distributed streaming should be used
 
         if not is_distributed:
@@ -146,12 +146,8 @@ class DistributedStreamer:
 
         self.params.set_params(file_stream_requests)
 
-        path = None
-        if len(file_stream_requests) > 0:
-            path = file_stream_requests[0].path
-
          # check if distributed streaming can be used
-        self.set_is_distributed(is_distributed, path, device)
+        self.set_is_distributed(is_distributed, device)
 
         if not self.is_distributed:
             self.file_streamer.stream_files(file_stream_requests, credentials, device)
