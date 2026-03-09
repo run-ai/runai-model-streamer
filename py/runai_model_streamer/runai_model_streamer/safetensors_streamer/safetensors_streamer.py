@@ -169,10 +169,6 @@ class ObjectStorageModel:
                 fcntl.flock(self._lock_file, fcntl.LOCK_UN)
             finally:
                 self._lock_file.close()
-            try:
-                os.unlink(self._lock_path)
-            except OSError:
-                pass  # already deleted by another process or never created
         return False
 
 
