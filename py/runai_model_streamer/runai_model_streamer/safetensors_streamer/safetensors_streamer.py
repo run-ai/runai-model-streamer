@@ -3,6 +3,8 @@ from typing import Iterator, Optional
 import torch
 import glob
 import os
+import fcntl
+import shutil
 from typing import List
 
 from runai_model_streamer.file_streamer import FileChunks
@@ -58,6 +60,137 @@ def pull_files(model_path: str,
     if is_azure_path(model_path):
         return azure_pull_files(model_path, dst, allow_pattern, ignore_pattern)
     raise NotImplementedError("pull files is not implemented for file system paths")
+
+class ObjectStorageModel:
+    """
+    Process-safe, idempotent wrapper for downloading model files from object storage.
+
+    Multiple processes calling pull_files() concurrently with the same dst will
+    serialize via a file lock. The first process downloads; the rest wait and skip
+    (sentinel-based idempotency).
+
+    Use as a context manager. The sentinel is written and the lock is released on
+    clean exit. If an exception is raised inside the block the lock is still released
+    but the sentinel is NOT written, so the next process will retry the download.
+
+    Locking mechanism:
+        Uses fcntl.flock, which is supported on Linux only (not Windows).
+        The lock file is placed at dst + ".lock".
+
+        Supported: multiple processes on the same machine, whether dst is a local
+        disk or a network-mounted filesystem (NFS, EFS, etc.) — the kernel manages
+        the lock locally.
+
+        Not supported: processes on different machines sharing the same dst over
+        a network filesystem. fcntl.flock does not provide reliable cross-host
+        locking on NFS (NFSv3 and earlier silently ignore it; NFSv4 depends on
+        mount options and server support).
+
+    Example::
+
+        with ObjectStorageModel(model_path=url, dst=cache_dir) as obj:
+            obj.pull_files(allow_pattern=["*.safetensors"])
+            obj.pull_files(ignore_pattern=["*.safetensors"])
+    """
+
+    SENTINEL_NAME = ".runai_complete"
+
+    def __init__(
+        self,
+        model_path: str,
+        dst: str,
+        s3_credentials: Optional[S3Credentials] = None,
+    ) -> None:
+        if not (is_s3_path(model_path) or is_gs_path(model_path) or is_azure_path(model_path)):
+            raise ValueError(
+                f"model_path {model_path!r} is not a supported object storage path "
+                "(expected s3://, gs://, or az://)"
+            )
+        self.dir = dst.rstrip("/") or "/"
+        self._model_path = model_path if model_path.endswith("/") else model_path + "/"
+        self._s3_credentials = s3_credentials
+        self._lock_path = self.dir + ".lock"
+        self._sentinel = os.path.join(self.dir, self.SENTINEL_NAME)
+        self._lock_file = None
+        self._lock_file = open(self._lock_path, "a")
+        try:
+            fcntl.flock(self._lock_file, fcntl.LOCK_SH)  # shared: fast path for already-downloaded
+            if os.path.exists(self._sentinel):
+                self._skip = True
+            else:
+                # Release SH before requesting EX. Direct SH→EX promotion can
+                # deadlock if two processes both try to upgrade simultaneously:
+                # each blocks waiting for the other to release its SH, and
+                # neither ever runs again. flock(2) does not detect this cycle.
+                # Re-check sentinel after acquiring EX since another process may
+                # have completed the download in the gap.
+                fcntl.flock(self._lock_file, fcntl.LOCK_UN)
+                fcntl.flock(self._lock_file, fcntl.LOCK_EX)
+                if os.path.exists(self._sentinel):
+                    self._skip = True
+                    # Downgrade to SH: no further writes needed, allowing other
+                    # waiting processes to proceed in parallel rather than serialize.
+                    fcntl.flock(self._lock_file, fcntl.LOCK_SH)
+                else:
+                    self._skip = False
+                    if os.path.exists(self.dir):
+                        shutil.rmtree(self.dir)
+                    os.makedirs(self.dir, exist_ok=True)
+        except BaseException:
+            # BaseException (not Exception) is intentional: KeyboardInterrupt and
+            # SystemExit must also release the lock, otherwise sibling processes
+            # waiting on flock will block indefinitely after a Ctrl+C or SIGTERM.
+            if self._lock_file is not None:
+                fcntl.flock(self._lock_file, fcntl.LOCK_UN)
+                self._lock_file.close()
+            raise
+
+    def pull_files(
+        self,
+        allow_pattern: Optional[List[str]] = None,
+        ignore_pattern: Optional[List[str]] = None,
+    ) -> None:
+        if self._skip:
+            return
+        pull_files(self._model_path, self.dir, allow_pattern, ignore_pattern, self._s3_credentials)
+
+    def __del__(self) -> None:
+        # Use getattr in case __init__ raised before self._lock_file was assigned.
+        lock_file = getattr(self, '_lock_file', None)
+        if lock_file is not None and not lock_file.closed:
+            try:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
+            finally:
+                lock_file.close()
+
+    def __enter__(self) -> ObjectStorageModel:
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        try:
+            if exc_type is None and not self._skip:
+                downloaded = [f for f in os.listdir(self.dir) if f != self.SENTINEL_NAME]
+                if not downloaded:
+                    raise RuntimeError(
+                        f"No files were downloaded to {self.dir!r} — "
+                        "verify that the model path is correct"
+                    )
+                try:
+                    with open(self._sentinel, "w"):
+                        pass
+                except OSError as exc:
+                    raise RuntimeError(
+                        f"Failed to write download sentinel {self._sentinel!r}: {exc}"
+                    ) from exc
+        finally:
+            lock_file = getattr(self, '_lock_file', None)
+            if lock_file is not None:
+                try:
+                    fcntl.flock(lock_file, fcntl.LOCK_UN)
+                finally:
+                    lock_file.close()
+        return False
+
 
 class SafetensorsStreamer:
     def __init__(self) -> None:

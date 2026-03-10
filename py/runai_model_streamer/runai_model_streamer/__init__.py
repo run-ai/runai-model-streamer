@@ -1,5 +1,6 @@
 from runai_model_streamer.safetensors_streamer.safetensors_streamer import (
     SafetensorsStreamer,
+    ObjectStorageModel,
     list_safetensors,
     pull_files,
 )
@@ -12,6 +13,7 @@ import logging
 
 __all__ = [
     "SafetensorsStreamer",
+    "ObjectStorageModel",
     "DistributedStreamer",
     "FileStreamer",
     "FileChunks",
