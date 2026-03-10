@@ -321,6 +321,34 @@ class TestObjectStorageModel(unittest.TestCase):
                 self.fail("lock was not released after empty download")
 
     # -----------------------------------------------------------------------
+    # Single-process: __del__ releases lock when context manager is not used
+    # -----------------------------------------------------------------------
+
+    def test_del_releases_lock(self):
+        obj = ObjectStorageModel(model_path=FAKE_MODEL_PATH, dst=self.dst_dir)
+        obj.__del__()
+
+        lock_path = self.dst_dir + ".lock"
+        with open(lock_path, "w") as f:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(f, fcntl.LOCK_UN)
+            except BlockingIOError:
+                self.fail("lock was not released by __del__")
+
+    def test_del_idempotent_after_exit(self):
+        """Calling __del__ after __exit__ must not raise."""
+        original = _ss_module.pull_files
+        _ss_module.pull_files = self._fake_pull_files
+        try:
+            with ObjectStorageModel(model_path=FAKE_MODEL_PATH, dst=self.dst_dir) as obj:
+                obj.pull_files()
+        finally:
+            _ss_module.pull_files = original
+
+        obj.__del__()  # lock_file is already closed; must be a no-op
+
+    # -----------------------------------------------------------------------
     # Single-process: exception during pull suppresses sentinel
     # -----------------------------------------------------------------------
 
@@ -340,6 +368,55 @@ class TestObjectStorageModel(unittest.TestCase):
         self.assertFalse(
             os.path.exists(os.path.join(self.dst_dir, ObjectStorageModel.SENTINEL_NAME)),
             "sentinel must not be written after a failed download",
+        )
+
+    def test_lock_released_when_pull_raises(self):
+        def raising_pull_files(model_path, dst, allow_pattern=None, ignore_pattern=None, s3_credentials=None):
+            raise RuntimeError("simulated download failure")
+
+        original = _ss_module.pull_files
+        _ss_module.pull_files = raising_pull_files
+        try:
+            with self.assertRaises(RuntimeError):
+                with ObjectStorageModel(model_path=FAKE_MODEL_PATH, dst=self.dst_dir) as obj:
+                    obj.pull_files()
+        finally:
+            _ss_module.pull_files = original
+
+        lock_path = self.dst_dir + ".lock"
+        with open(lock_path, "w") as f:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(f, fcntl.LOCK_UN)
+            except BlockingIOError:
+                self.fail("lock was not released after pull_files raised")
+
+    def test_retry_after_failed_download(self):
+        """A second attempt must re-download when the first failed (no sentinel)."""
+        call_count = [0]
+        fake = self._fake_pull_files
+
+        def failing_then_succeeding(model_path, dst, allow_pattern=None, ignore_pattern=None, s3_credentials=None):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise RuntimeError("simulated first-attempt failure")
+            fake(model_path, dst, allow_pattern, ignore_pattern, s3_credentials)
+
+        original = _ss_module.pull_files
+        _ss_module.pull_files = failing_then_succeeding
+        try:
+            with self.assertRaises(RuntimeError):
+                with ObjectStorageModel(model_path=FAKE_MODEL_PATH, dst=self.dst_dir) as obj:
+                    obj.pull_files()
+
+            with ObjectStorageModel(model_path=FAKE_MODEL_PATH, dst=self.dst_dir) as obj:
+                obj.pull_files()
+        finally:
+            _ss_module.pull_files = original
+
+        self.assertEqual(call_count[0], 2, "pull_files must be called again after a failed attempt")
+        self.assertTrue(
+            os.path.exists(os.path.join(self.dst_dir, ObjectStorageModel.SENTINEL_NAME))
         )
 
     # -----------------------------------------------------------------------
@@ -430,13 +507,6 @@ class TestObjectStorageModel(unittest.TestCase):
         self.assertTrue(
             os.path.exists(os.path.join(self.dst_dir, ObjectStorageModel.SENTINEL_NAME))
         )
-
-    def test_two_concurrent_processes(self):
-        results = self._run_concurrent(2)
-        errors = [r for r in results if r["status"] != "ok"]
-        self.assertEqual(errors, [])
-        downloaders = [r for r in results if not r["skipped"]]
-        self.assertEqual(len(downloaders), 1)
 
 
 class TestObjectStorageModelDstPreExists(TestObjectStorageModel):

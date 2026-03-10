@@ -147,6 +147,13 @@ class ObjectStorageModel:
             return
         pull_files(self._model_path, self.dir, allow_pattern, ignore_pattern, self._s3_credentials)
 
+    def __del__(self) -> None:
+        if self._lock_file is not None and not self._lock_file.closed:
+            try:
+                fcntl.flock(self._lock_file, fcntl.LOCK_UN)
+            finally:
+                self._lock_file.close()
+
     def __enter__(self) -> ObjectStorageModel:
         return self
 
