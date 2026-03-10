@@ -5,10 +5,11 @@ import sys
 import tempfile
 import multiprocessing
 import time
-import fcntl
 
 if sys.platform != "linux":
     raise unittest.SkipTest("ObjectStorageModel uses fcntl and fork — Linux only")
+
+import fcntl
 
 import runai_model_streamer.safetensors_streamer.safetensors_streamer as _ss_module
 from runai_model_streamer.safetensors_streamer.safetensors_streamer import ObjectStorageModel
