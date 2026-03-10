@@ -124,6 +124,9 @@ class ObjectStorageModel:
                 fcntl.flock(self._lock_file, fcntl.LOCK_EX)
                 if os.path.exists(self._sentinel):
                     self._skip = True
+                    # Downgrade to SH: no further writes needed, allowing other
+                    # waiting processes to proceed in parallel rather than serialize.
+                    fcntl.flock(self._lock_file, fcntl.LOCK_SH)
                 else:
                     self._skip = False
                     if os.path.exists(self.dir):
@@ -148,11 +151,13 @@ class ObjectStorageModel:
         pull_files(self._model_path, self.dir, allow_pattern, ignore_pattern, self._s3_credentials)
 
     def __del__(self) -> None:
-        if self._lock_file is not None and not self._lock_file.closed:
+        # Use getattr in case __init__ raised before self._lock_file was assigned.
+        lock_file = getattr(self, '_lock_file', None)
+        if lock_file is not None and not lock_file.closed:
             try:
-                fcntl.flock(self._lock_file, fcntl.LOCK_UN)
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
             finally:
-                self._lock_file.close()
+                lock_file.close()
 
     def __enter__(self) -> ObjectStorageModel:
         return self
@@ -174,10 +179,12 @@ class ObjectStorageModel:
                         f"Failed to write download sentinel {self._sentinel!r}: {exc}"
                     ) from exc
         finally:
-            try:
-                fcntl.flock(self._lock_file, fcntl.LOCK_UN)
-            finally:
-                self._lock_file.close()
+            lock_file = getattr(self, '_lock_file', None)
+            if lock_file is not None:
+                try:
+                    fcntl.flock(lock_file, fcntl.LOCK_UN)
+                finally:
+                    lock_file.close()
         return False
 
 
