@@ -97,7 +97,16 @@ class TestObjectStorageModel(unittest.TestCase):
             if timed_out:
                 self.fail(f"Worker processes {[p.pid for p in timed_out]} timed out and were terminated")
 
-            results = [result_queue.get_nowait() for _ in range(num_processes)]
+            results = []
+            for _ in range(num_processes):
+                try:
+                    results.append(result_queue.get_nowait())
+                except Exception:
+                    pass  # process died without reporting
+            self.assertEqual(
+                len(results), num_processes,
+                f"Only {len(results)}/{num_processes} workers reported a result (others may have crashed)",
+            )
         finally:
             _ss_module.pull_files = original
 
