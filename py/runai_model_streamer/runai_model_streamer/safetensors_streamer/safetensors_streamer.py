@@ -113,8 +113,8 @@ class ObjectStorageModel:
         self._sentinel = os.path.join(self.dir, self.SENTINEL_NAME)
         self._lock_file = None
         self._lock_file = open(self._lock_path, "a")
-        fcntl.flock(self._lock_file, fcntl.LOCK_SH)  # shared: fast path for already-downloaded
         try:
+            fcntl.flock(self._lock_file, fcntl.LOCK_SH)  # shared: fast path for already-downloaded
             if os.path.exists(self._sentinel):
                 self._skip = True
             else:
