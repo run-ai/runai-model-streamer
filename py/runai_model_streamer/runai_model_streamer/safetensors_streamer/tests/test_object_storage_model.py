@@ -248,6 +248,29 @@ class TestObjectStorageModel(unittest.TestCase):
     # Single-process: stale dst cleanup
     # -----------------------------------------------------------------------
 
+    def test_dst_trailing_slash_lock_outside_dst(self):
+        """dst with a trailing slash must still place the lock file beside dst, not inside it.
+        If normalization is missing, shutil.rmtree(dst) deletes the lock inode and a racing
+        process creates a fresh inode at the same path, breaking mutual exclusion silently."""
+        original = _ss_module.pull_files
+        _ss_module.pull_files = self._fake_pull_files
+        trailing_dst = self.dst_dir + "/"
+        try:
+            with ObjectStorageModel(model_path=FAKE_MODEL_PATH, dst=trailing_dst) as obj:
+                obj.pull_files()
+        finally:
+            _ss_module.pull_files = original
+
+        expected_lock = self.dst_dir + ".lock"
+        self.assertTrue(
+            os.path.exists(expected_lock),
+            "lock file must be a sibling of dst, not inside it",
+        )
+        self.assertFalse(
+            os.path.exists(os.path.join(self.dst_dir, ".lock")),
+            "lock file must not be inside dst",
+        )
+
     def test_stale_dst_cleaned_before_download(self):
         os.makedirs(self.dst_dir, exist_ok=True)
         stale = os.path.join(self.dst_dir, "stale.bin")

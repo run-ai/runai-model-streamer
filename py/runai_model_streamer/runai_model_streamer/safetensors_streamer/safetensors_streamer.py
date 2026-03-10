@@ -106,11 +106,11 @@ class ObjectStorageModel:
                 f"model_path {model_path!r} is not a supported object storage path "
                 "(expected s3://, gs://, or az://)"
             )
-        self.dir = dst
+        self.dir = dst.rstrip("/") or "/"
         self._model_path = model_path if model_path.endswith("/") else model_path + "/"
         self._s3_credentials = s3_credentials
-        self._lock_path = dst + ".lock"
-        self._sentinel = os.path.join(dst, self.SENTINEL_NAME)
+        self._lock_path = self.dir + ".lock"
+        self._sentinel = os.path.join(self.dir, self.SENTINEL_NAME)
         self._lock_file = None
         self._lock_file = open(self._lock_path, "a")
         fcntl.flock(self._lock_file, fcntl.LOCK_SH)  # shared: fast path for already-downloaded
@@ -126,9 +126,9 @@ class ObjectStorageModel:
                     self._skip = True
                 else:
                     self._skip = False
-                    if os.path.exists(dst):
-                        shutil.rmtree(dst)
-                    os.makedirs(dst, exist_ok=True)
+                    if os.path.exists(self.dir):
+                        shutil.rmtree(self.dir)
+                    os.makedirs(self.dir, exist_ok=True)
         except BaseException:
             # BaseException (not Exception) is intentional: KeyboardInterrupt and
             # SystemExit must also release the lock, otherwise sibling processes
