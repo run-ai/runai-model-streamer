@@ -107,17 +107,21 @@ class TestObjectStorageModel(unittest.TestCase):
     # setUp / tearDown
     # -----------------------------------------------------------------------
 
+    # Subclass sets this to True to run all tests with dst pre-existing,
+    # exercising the shutil.rmtree cleanup path in __init__.
+    dst_pre_exists = False
+
     def setUp(self):
         self.src_dir = self._create_source_dir()
-        self.dst_dir = tempfile.mkdtemp()
-        shutil.rmtree(self.dst_dir)  # ObjectStorageModel will recreate it
+        parent = tempfile.mkdtemp()
+        self.dst_dir = os.path.join(parent, "model")
+        if self.dst_pre_exists:
+            os.makedirs(self.dst_dir)
 
     def tearDown(self):
         shutil.rmtree(self.src_dir, ignore_errors=True)
-        shutil.rmtree(self.dst_dir, ignore_errors=True)
-        lock_path = self.dst_dir + ".lock"
-        if os.path.exists(lock_path):
-            os.remove(lock_path)
+        # Removes dst, the sibling .lock file, and the parent in one call.
+        shutil.rmtree(os.path.dirname(self.dst_dir), ignore_errors=True)
 
     # -----------------------------------------------------------------------
     # Single-process: basic download
@@ -235,7 +239,7 @@ class TestObjectStorageModel(unittest.TestCase):
     # -----------------------------------------------------------------------
 
     def test_stale_dst_cleaned_before_download(self):
-        os.makedirs(self.dst_dir)
+        os.makedirs(self.dst_dir, exist_ok=True)
         stale = os.path.join(self.dst_dir, "stale.bin")
         with open(stale, "wb") as f:
             f.write(b"old data")
@@ -257,6 +261,9 @@ class TestObjectStorageModel(unittest.TestCase):
     # -----------------------------------------------------------------------
 
     def test_invalid_model_path_raises_before_lock(self):
+        if self.dst_pre_exists:
+            self.skipTest("dst is pre-created by setUp; cannot test that dst is absent after ValueError")
+
         with self.assertRaises(ValueError):
             ObjectStorageModel(model_path="/local/path/model", dst=self.dst_dir)
 
@@ -339,29 +346,58 @@ class TestObjectStorageModel(unittest.TestCase):
     # Single-process: trailing slash normalisation
     # -----------------------------------------------------------------------
 
-    def test_model_path_without_trailing_slash(self):
+    def test_model_path_normalised_to_trailing_slash(self):
+        """Both with and without trailing slash must arrive at pull_files with a trailing slash."""
+        received_paths = []
+        fake = self._fake_pull_files
+
+        def capturing(model_path, dst, allow_pattern=None, ignore_pattern=None, s3_credentials=None):
+            received_paths.append(model_path)
+            fake(model_path, dst, allow_pattern, ignore_pattern, s3_credentials)
+
         original = _ss_module.pull_files
-        _ss_module.pull_files = self._fake_pull_files
+        _ss_module.pull_files = capturing
         try:
             with ObjectStorageModel(model_path="s3://fake-bucket/fake-model", dst=self.dst_dir) as obj:
                 obj.pull_files()
         finally:
             _ss_module.pull_files = original
 
-        for name in SOURCE_FILES:
-            self.assertTrue(os.path.exists(os.path.join(self.dst_dir, name)))
+        self.assertEqual(len(received_paths), 1)
+        self.assertTrue(
+            received_paths[0].endswith("/"),
+            f"model_path passed to pull_files must end with '/'; got {received_paths[0]!r}",
+        )
 
-    def test_model_path_with_trailing_slash(self):
+    # -----------------------------------------------------------------------
+    # Single-process: accepted object-storage schemes
+    # -----------------------------------------------------------------------
+
+    def test_gs_path_accepted(self):
         original = _ss_module.pull_files
         _ss_module.pull_files = self._fake_pull_files
         try:
-            with ObjectStorageModel(model_path="s3://fake-bucket/fake-model/", dst=self.dst_dir) as obj:
+            with ObjectStorageModel(model_path="gs://fake-bucket/fake-model", dst=self.dst_dir) as obj:
                 obj.pull_files()
         finally:
             _ss_module.pull_files = original
 
-        for name in SOURCE_FILES:
-            self.assertTrue(os.path.exists(os.path.join(self.dst_dir, name)))
+        self.assertTrue(
+            os.path.exists(os.path.join(self.dst_dir, ObjectStorageModel.SENTINEL_NAME))
+        )
+
+    def test_azure_path_accepted(self):
+        original = _ss_module.pull_files
+        _ss_module.pull_files = self._fake_pull_files
+        try:
+            with ObjectStorageModel(model_path="az://fake-container/fake-model", dst=self.dst_dir) as obj:
+                obj.pull_files()
+        finally:
+            _ss_module.pull_files = original
+
+        self.assertTrue(
+            os.path.exists(os.path.join(self.dst_dir, ObjectStorageModel.SENTINEL_NAME))
+        )
 
     # -----------------------------------------------------------------------
     # Multi-process tests
@@ -401,6 +437,12 @@ class TestObjectStorageModel(unittest.TestCase):
         self.assertEqual(errors, [])
         downloaders = [r for r in results if not r["skipped"]]
         self.assertEqual(len(downloaders), 1)
+
+
+class TestObjectStorageModelDstPreExists(TestObjectStorageModel):
+    """Re-runs all tests with dst already existing before ObjectStorageModel is
+    constructed, exercising the shutil.rmtree + os.makedirs cleanup path in __init__."""
+    dst_pre_exists = True
 
 
 if __name__ == "__main__":

@@ -111,7 +111,8 @@ class ObjectStorageModel:
         self._s3_credentials = s3_credentials
         self._lock_path = dst + ".lock"
         self._sentinel = os.path.join(dst, self.SENTINEL_NAME)
-        self._lock_file = open(self._lock_path, "w")
+        self._lock_file = None
+        self._lock_file = open(self._lock_path, "a")
         fcntl.flock(self._lock_file, fcntl.LOCK_SH)  # shared: fast path for already-downloaded
         try:
             if os.path.exists(self._sentinel):
@@ -132,8 +133,9 @@ class ObjectStorageModel:
             # BaseException (not Exception) is intentional: KeyboardInterrupt and
             # SystemExit must also release the lock, otherwise sibling processes
             # waiting on flock will block indefinitely after a Ctrl+C or SIGTERM.
-            fcntl.flock(self._lock_file, fcntl.LOCK_UN)
-            self._lock_file.close()
+            if self._lock_file is not None:
+                fcntl.flock(self._lock_file, fcntl.LOCK_UN)
+                self._lock_file.close()
             raise
 
     def pull_files(
