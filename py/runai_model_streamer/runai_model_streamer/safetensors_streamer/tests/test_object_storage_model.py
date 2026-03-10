@@ -541,6 +541,59 @@ class TestObjectStorageModel(unittest.TestCase):
             os.path.exists(os.path.join(self.dst_dir, ObjectStorageModel.SENTINEL_NAME))
         )
 
+    def test_concurrent_lock_upgrade_no_deadlock(self):
+        """All processes start simultaneously before any sentinel exists, forcing them
+        all to compete for the SH→EX upgrade. The old direct-promotion code would
+        deadlock here; the release-then-acquire fix must complete within the timeout."""
+        num_processes = 4
+        # Sleep long enough that all processes acquire SH and reach the upgrade
+        # point before any of them releases.
+        original = _ss_module.pull_files
+        _ss_module.pull_files = self._slow_fake_pull_files
+
+        try:
+            ctx = multiprocessing.get_context("fork")
+            result_queue = ctx.Queue()
+            # Use a barrier so all processes enter __init__ at the same time,
+            # maximising the chance that they all hold SH simultaneously.
+            barrier = ctx.Barrier(num_processes)
+
+            def worker_with_barrier(dst_dir, q):
+                try:
+                    barrier.wait(timeout=10)
+                    with ObjectStorageModel(model_path=FAKE_MODEL_PATH, dst=dst_dir) as obj:
+                        obj.pull_files()
+                    q.put({"status": "ok"})
+                except Exception as exc:
+                    q.put({"status": "error", "error": str(exc)})
+
+            processes = [
+                ctx.Process(target=worker_with_barrier, args=(self.dst_dir, result_queue))
+                for _ in range(num_processes)
+            ]
+            for p in processes:
+                p.start()
+            timed_out = []
+            for p in processes:
+                p.join(timeout=10)
+                if p.is_alive():
+                    p.terminate()
+                    timed_out.append(p)
+            for p in timed_out:
+                p.join(timeout=5)
+        finally:
+            _ss_module.pull_files = original
+
+        self.assertEqual(timed_out, [], f"Processes deadlocked: {[p.pid for p in timed_out]}")
+        results = []
+        for _ in range(num_processes):
+            try:
+                results.append(result_queue.get_nowait())
+            except Exception:
+                pass
+        errors = [r for r in results if r["status"] != "ok"]
+        self.assertEqual(errors, [], f"Some processes failed: {errors}")
+
 
 class TestObjectStorageModelDstPreExists(TestObjectStorageModel):
     """Re-runs all tests with dst already existing before ObjectStorageModel is

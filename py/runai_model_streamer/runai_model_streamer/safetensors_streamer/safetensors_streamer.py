@@ -118,9 +118,13 @@ class ObjectStorageModel:
             if os.path.exists(self._sentinel):
                 self._skip = True
             else:
-                # Upgrade to exclusive before modifying dst.
-                # flock upgrade is not atomic: re-check sentinel after acquiring EX
-                # because another process may have completed the download in the gap.
+                # Release SH before requesting EX. Direct SH→EX promotion can
+                # deadlock if two processes both try to upgrade simultaneously:
+                # each blocks waiting for the other to release its SH, and
+                # neither ever runs again. flock(2) does not detect this cycle.
+                # Re-check sentinel after acquiring EX since another process may
+                # have completed the download in the gap.
+                fcntl.flock(self._lock_file, fcntl.LOCK_UN)
                 fcntl.flock(self._lock_file, fcntl.LOCK_EX)
                 if os.path.exists(self._sentinel):
                     self._skip = True
