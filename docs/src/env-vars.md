@@ -1,5 +1,22 @@
 ## Environment Variables
 
+### RUNAI_STREAMER_DIRECTIO
+
+Enables Direct I/O (O_DIRECT) when opening files, bypassing the kernel page cache.
+
+This is useful to avoid double-caching effects when using network filesystems (NFS, SMB) or when the application already has its own caching layer. Direct I/O requires aligned buffers and read sizes, which are automatically handled by the streamer's block-based reading mechanism.
+
+> [!WARNING]
+> Direct I/O may not be supported on all filesystems. If the filesystem does not support O_DIRECT, file opening may fail or fall back to standard I/O depending on the system.
+
+#### Values accepted
+
+`1` to enable Direct I/O, any other value or unset to use standard I/O
+
+#### Default value
+
+Unset (standard I/O with kernel page cache)
+
 ### RUNAI_STREAMER_CONCURRENCY
 
 Controls the level of concurrency and number of OS threads reading tensors from the file to the CPU buffer.
