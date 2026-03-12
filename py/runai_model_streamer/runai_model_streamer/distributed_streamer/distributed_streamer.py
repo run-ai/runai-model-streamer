@@ -11,6 +11,8 @@ from runai_model_streamer.file_streamer import (
     FileChunks,
 )
 
+from runai_model_streamer.file_streamer.requests_iterator import get_cuda_alignment
+
 from runai_model_streamer.distributed_streamer.partition import (
     partition,
     get_total_number_of_chunks,
@@ -28,20 +30,6 @@ import logging
 import humanize
 
 logger = logging.getLogger(__name__)
-
-RUNAI_STREAMER_CUDA_ALIGNMENT_ENV_VAR = "RUNAI_STREAMER_CUDA_ALIGNMENT"
-DEFAULT_DIST_BUFFER_ALIGNMENT = 512
-MAX_DIST_BUFFER_ALIGNMENT = 1024 * 1024
-
-
-def get_dist_buffer_alignment() -> int:
-    """
-    Get the alignment for the distributed buffer.
-    """
-    value = int(os.environ.get(RUNAI_STREAMER_CUDA_ALIGNMENT_ENV_VAR, str(DEFAULT_DIST_BUFFER_ALIGNMENT)))
-    if value < 0 or value > MAX_DIST_BUFFER_ALIGNMENT:
-        raise ValueError(f"Invalid value for RUNAI_STREAMER_CUDA_ALIGNMENT: {value}, must be between 0 and {MAX_DIST_BUFFER_ALIGNMENT} bytes")
-    return value
 
 
 def aligned_offset(base_ptr: int, current_offset: int, alignment: int) -> int:
@@ -402,7 +390,7 @@ class _distributedStreamer:
         DEFAULT_BUFFER_MIN_BYTESIZE = 1024 * 1024 * 1024
         BUFFER_MIN_BYTESIZE = int(os.environ.get("RUNAI_STREAMER_DIST_BUFFER_MIN_BYTESIZE", str(DEFAULT_BUFFER_MIN_BYTESIZE))) # environment variable used for testing
         BUFFER_BYTESIZE = max(BUFFER_MIN_BYTESIZE, self.max_chunk)
-        alignment = get_dist_buffer_alignment()
+        alignment = get_cuda_alignment()
 
         # Over-allocate by alignment so we can slice to the first aligned address within each buffer.
         # This guarantees data_buffer.data_ptr() % alignment == 0 and

@@ -16,7 +16,7 @@ RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME = "RUNAI_STREAMER_MEMORY_LIMIT"
 DEFAULT_MEMORY_LIMIT_STRING = "40000000000" # 40 GB (to be set to unlimited for distributed streaming)
 
 RUNAI_STREAMER_CUDA_ALIGNMENT_ENV_VAR = "RUNAI_STREAMER_CUDA_ALIGNMENT"
-DEFAULT_CUDA_ALIGNMENT = 256
+DEFAULT_CUDA_ALIGNMENT = 512
 
 def align_up(size: int, alignment: int) -> int:
     if alignment <= 1:
@@ -24,7 +24,7 @@ def align_up(size: int, alignment: int) -> int:
     return ((size + alignment - 1) // alignment) * alignment
 
 def get_cuda_alignment() -> int:
-    """Return the CUDA buffer alignment in bytes (default 256). Set to 0 or 1 to disable."""
+    """Return the CUDA buffer alignment in bytes (default 512). Set to 0 or 1 to disable."""
     val = int(os.getenv(RUNAI_STREAMER_CUDA_ALIGNMENT_ENV_VAR, str(DEFAULT_CUDA_ALIGNMENT)))
     return val if val > 1 else 1
 
