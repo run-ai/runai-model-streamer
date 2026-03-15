@@ -12,6 +12,7 @@
 
 #include "streamer/impl/workload/workload.h"
 #include "streamer/impl/assigner/assigner.h"
+#include "streamer/impl/cuda/cuda_loader.h"
 #include "common/exception/exception.h"
 #include "common/storage_uri/storage_uri.h"
 
@@ -110,6 +111,15 @@ common::ResponseCode Streamer::async_request(
 {
     // verify input
     verify_requests(paths, file_offsets, bytesizes, num_sizes, dsts);
+
+    // Initialize the CUDA driver singleton on the calling thread (the Python thread),
+    // which has the correct CUDA device context set via torch.cuda.set_device().
+    // Worker threads have no CUDA context, so if we let them trigger the lazy init
+    // they would fall back to device 0 regardless of which GPU this process uses.
+    if (cuda)
+    {
+        cuda::CudaDriver::get();
+    }
 
     auto total_sizes =  std::accumulate(num_sizes.begin(), num_sizes.end(), 0u);
 

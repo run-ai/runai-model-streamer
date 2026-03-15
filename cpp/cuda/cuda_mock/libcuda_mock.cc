@@ -7,6 +7,7 @@
 // This library is built as libcuda.so.1 and injected via DT_RPATH in test
 // binaries, taking precedence over the real driver even on GPU machines.
 
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 
@@ -81,13 +82,28 @@ CUresult cuCtxSetCurrent(CUcontext /*ctx*/)
 
 // --- Core copy: CUdeviceptr is uint64; treat as host pointer and memcpy ---
 
+static std::atomic<int> _cuMemcpyHtoDAsync_call_count{0};
+
 CUresult cuMemcpyHtoDAsync_v2(CUdeviceptr  dstDevice,
                                const void * srcHost,
                                size_t       byteCount,
                                CUstream     /*hStream*/)
 {
+    ++_cuMemcpyHtoDAsync_call_count;
     memcpy(reinterpret_cast<void *>(dstDevice), srcHost, byteCount);
     return CUDA_SUCCESS;
+}
+
+// --- Test helpers: expose call counter so Python tests can verify mock usage ---
+
+int get_cuMemcpyHtoDAsync_call_count()
+{
+    return _cuMemcpyHtoDAsync_call_count.load();
+}
+
+void reset_cuMemcpyHtoDAsync_call_count()
+{
+    _cuMemcpyHtoDAsync_call_count.store(0);
 }
 
 } // extern "C"

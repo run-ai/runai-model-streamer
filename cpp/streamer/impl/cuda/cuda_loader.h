@@ -15,13 +15,16 @@ namespace runai::llm::streamer::impl::cuda
 // Obtain the singleton via get(); returns nullptr if CUDA is unavailable at runtime.
 struct CudaDriver
 {
-    // Releases the retained primary context on destruction (see ctx below).
+    // Releases the retained primary context on destruction (see device below).
     ~CudaDriver();
 
-    // The primary CUDA context for device 0, retained once at load time.
-    // Worker threads call cuCtxSetCurrent(ctx) on first use to make it current.
-    // cuDevicePrimaryCtxRelease(0) is called in the destructor to balance the retain.
-    CUcontext ctx = nullptr;
+    // The primary CUDA context for the device that was current when the driver
+    // was first loaded, retained once at load time.  Worker threads call
+    // cuCtxSetCurrent(ctx) on first use to make it current.
+    // cuDevicePrimaryCtxRelease(device) is called in the destructor to balance
+    // the retain.
+    CUcontext ctx    = nullptr;
+    CUdevice  device = 0;
 
     CUresult (*cuStreamCreate)           (CUstream *, unsigned int flags);
     CUresult (*cuStreamDestroy)          (CUstream);

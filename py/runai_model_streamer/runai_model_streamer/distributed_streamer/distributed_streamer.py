@@ -234,6 +234,7 @@ class _distributedStreamer:
     def __init__(self, file_streamer : FileStreamer) -> None:
         self.file_streamer = file_streamer
         self.device = None
+        self._device_str = None
         self.partitions = {} # partitions of all the input file_stream_requests
         self.rank_file_chunks_list = {} # post Partitioning FileChunks to be streamed by this rank
         self.rank_dicts_map = {} # maps post partitioning FileChunks.id and chunk index to the original FileChunks.id and chunk index and chunk size
@@ -327,6 +328,7 @@ class _distributedStreamer:
     ) -> None:
 
         self.device = torch.device(device)
+        self._device_str = device
         self.my_global_rank = params.my_global_rank
         self.groups_by_ranks = params.groups_by_ranks
         self.broadcast_timeout = params.broadcast_timeout
@@ -365,14 +367,19 @@ class _distributedStreamer:
             return
 
         # read files
+        # For NVIDIA CUDA with local filesystem, stream directly to GPU via read_cuda
+        # (cuMemcpyHtoDAsync). Otherwise fall back to CPU.
+        read_device = device if self._use_cuda_direct() else "cpu"
         original_memory_limit = os.environ.get("RUNAI_STREAMER_MEMORY_LIMIT")
         try:
-            # for distributed streaming only - change default memory limit to unlimited
+            # Change default memory limit to unlimited so the file_streamer reads as
+            # much as possible in one pass. For CUDA, with_memory_cap caps the buffer
+            # at free GPU memory automatically, preventing OOM.
             if self.original_group_rank == 0:
-                logger.debug(f"[RunAI Streamer][Distributed] Setting memory limit to unlimited")
-            if original_memory_limit == None:
+                logger.debug(f"[RunAI Streamer][Distributed] Setting memory limit to unlimited, read device: {read_device}")
+            if original_memory_limit is None:
                 os.environ["RUNAI_STREAMER_MEMORY_LIMIT"] = "-1"
-            self.file_streamer.stream_files(self.rank_file_chunks_list, credentials, "cpu")
+            self.file_streamer.stream_files(self.rank_file_chunks_list, credentials, read_device)
         except Exception as e:
             raise e
         finally:
@@ -385,7 +392,11 @@ class _distributedStreamer:
     def get_chunks(self) -> Iterator:
         if not self.file_streamer:
             raise ValueError("Streamer not initialized")
-        
+
+        if self._use_cuda_direct():
+            yield from self._get_chunks_cuda()
+            return
+
         MAX_CHUNKS_PER_BATCH = 256
         DEFAULT_BUFFER_MIN_BYTESIZE = 1024 * 1024 * 1024
         BUFFER_MIN_BYTESIZE = int(os.environ.get("RUNAI_STREAMER_DIST_BUFFER_MIN_BYTESIZE", str(DEFAULT_BUFFER_MIN_BYTESIZE))) # environment variable used for testing
@@ -443,6 +454,164 @@ class _distributedStreamer:
                
         except RuntimeError as e:
             # Check if the error is a timeout
+            self.is_error = True
+            if "timed out" in str(e).lower() or "timeout" in str(e).lower():
+                logger.exception(f"[RunAI Streamer][Distributed] Rank {self.original_group_rank}: broadcast timed out - Could not complete broadcast.")
+            else:
+                logger.exception(f"[RunAI Streamer][Distributed] rank {self.original_group_rank} error: {e}")
+            raise e
+        except Exception as e:
+            self.is_error = True
+            logger.exception(f"[RunAI Streamer][Distributed] rank {self.original_group_rank} error: {e}")
+            raise e
+
+    def _all_paths_local(self) -> bool:
+        remote_prefixes = ("s3://", "gs://", "az://")
+        return all(
+            not fc.path.startswith(remote_prefixes)
+            for fc in self.rank_file_chunks_list
+        )
+
+    def _use_cuda_direct(self) -> bool:
+        return (
+            self._device_str is not None
+            and self._device_str.startswith("cuda")
+            and torch.version.hip is None
+            and torch.cuda.is_available()
+            and self._all_paths_local()
+        )
+
+    def _get_chunks_cuda(self) -> Iterator:
+        alignment = get_cuda_alignment()
+
+        # Receive buffer sized to hold one tensor at a time.
+        max_chunk = max(self.max_chunk, 1)
+        extra = alignment - 1 if alignment > 1 else 0
+        receive_buffer_raw = torch.empty(max_chunk + extra, dtype=torch.uint8, device=self.device)
+        if alignment > 1:
+            aligned_start = (-receive_buffer_raw.data_ptr()) % alignment
+            receive_buffer = receive_buffer_raw[aligned_start : aligned_start + max_chunk]
+        else:
+            receive_buffer = receive_buffer_raw
+
+        # Two-row metadata tensor: row 0 = [count, 0, 0, 0],
+        # row 1 = [orig_req_idx, orig_chunk_idx, size, 0]
+        batch_metadata_tensor = torch.zeros(2, 4, dtype=torch.int64, device=self.device)
+        received_metadata_tensor = torch.zeros(2, 4, dtype=torch.int64, device=self.device)
+
+        chunks_to_read = [self.total_chunks_to_read]
+
+        ready_chunks_iterator = self.file_streamer.get_chunks()
+
+        def chunk_generator():
+            yield from ready_chunks_iterator
+            while True:
+                yield None
+
+        chunk_gen = chunk_generator()
+
+        total_meta_bcast_time = 0.0
+        total_data_bcast_time = 0.0
+        total_sync_time = 0.0
+        total_read_time = 0.0
+        total_inter_yield_time = 0.0
+        max_inter_yield_time = 0.0
+        total_meta_item_time = 0.0
+
+        try:
+            while chunks_to_read[0] > 0:
+                total_broadcast_chunks = 0
+
+                for broadcasting_rank in range(self.group_size):
+                    global_broadcasting_rank = self.local_group_global_ranks[broadcasting_rank]
+
+                    if global_broadcasting_rank == self.original_group_rank:
+                        t0 = timer()
+                        chunk_item = next(chunk_gen) if self.reading_from_storage else None
+                        total_read_time += timer() - t0
+
+                        if chunk_item is not None:
+                            ready_request_id, ready_chunk_index, gpu_tensor = chunk_item
+                            orig_req_idx, orig_chunk_idx, _ = self.rank_dicts_map[ready_request_id][ready_chunk_index]
+                            chunk_size = gpu_tensor.numel()
+                            batch_metadata_tensor[0, 0] = 1
+                            batch_metadata_tensor[1, 0] = orig_req_idx
+                            batch_metadata_tensor[1, 1] = orig_chunk_idx
+                            batch_metadata_tensor[1, 2] = chunk_size
+                        else:
+                            batch_metadata_tensor[0, 0] = 0
+
+                        t0 = timer()
+                        dist.broadcast(batch_metadata_tensor, global_broadcasting_rank, group=self.distribution_group)
+                        total_meta_bcast_time += timer() - t0
+
+                        t0 = timer()
+                        count = batch_metadata_tensor[0, 0].item()
+                        total_meta_item_time += timer() - t0
+                        if count > 0:
+                            logger.debug(f"[RunAI Streamer][Distributed] Rank {self.original_group_rank}: Broadcasting tensor {orig_req_idx}:{orig_chunk_idx} size {humanize.naturalsize(chunk_size)}")
+                            t0 = timer()
+                            dist.broadcast(gpu_tensor, global_broadcasting_rank, group=self.distribution_group)
+                            total_data_bcast_time += timer() - t0
+                            chunks_to_read[0] -= 1
+                            total_broadcast_chunks += 1
+                            _t_yield = timer()
+                            yield orig_req_idx, orig_chunk_idx, gpu_tensor
+                            _dt = timer() - _t_yield
+                            total_inter_yield_time += _dt
+                            max_inter_yield_time = max(max_inter_yield_time, _dt)
+                        else:
+                            logger.debug(f"[RunAI Streamer][Distributed] Rank {self.original_group_rank}: No more tensors to broadcast")
+
+                    else:
+                        t0 = timer()
+                        dist.broadcast(received_metadata_tensor, global_broadcasting_rank, group=self.distribution_group)
+                        total_meta_bcast_time += timer() - t0
+
+                        t0 = timer()
+                        count = received_metadata_tensor[0, 0].item()
+                        total_meta_item_time += timer() - t0
+                        if count == 0:
+                            logger.debug(f"[RunAI Streamer][Distributed] Rank {self.original_group_rank}: No tensors from rank {global_broadcasting_rank}")
+                            continue
+
+                        orig_req_idx = received_metadata_tensor[1, 0].item()
+                        orig_chunk_idx = received_metadata_tensor[1, 1].item()
+                        chunk_size = received_metadata_tensor[1, 2].item()
+
+                        logger.debug(f"[RunAI Streamer][Distributed] Rank {self.original_group_rank}: Receiving tensor {orig_req_idx}:{orig_chunk_idx} size {humanize.naturalsize(chunk_size)} from rank {global_broadcasting_rank}")
+
+                        received_view = receive_buffer[:chunk_size]
+                        t0 = timer()
+                        torch.cuda.synchronize()
+                        total_sync_time += timer() - t0
+                        t0 = timer()
+                        dist.broadcast(received_view, global_broadcasting_rank, group=self.distribution_group)
+                        total_data_bcast_time += timer() - t0
+                        chunks_to_read[0] -= 1
+                        total_broadcast_chunks += 1
+                        _t_yield = timer()
+                        yield orig_req_idx, orig_chunk_idx, received_view
+                        _dt = timer() - _t_yield
+                        total_inter_yield_time += _dt
+                        max_inter_yield_time = max(max_inter_yield_time, _dt)
+
+                if total_broadcast_chunks == 0 and chunks_to_read[0] > 0:
+                    logger.error(f"[RunAI Streamer][Distributed] Error: rank {self.rank} is missing {chunks_to_read[0]} chunks")
+                    raise RuntimeError("No chunks to read")
+
+            logger.info(
+                f"[RunAI Streamer][Distributed] Rank {self.original_group_rank} CUDA timing: "
+                f"read={total_read_time:.3f}s  "
+                f"meta_bcast={total_meta_bcast_time:.3f}s  "
+                f"meta_item={total_meta_item_time:.3f}s  "
+                f"data_bcast={total_data_bcast_time:.3f}s  "
+                f"sync={total_sync_time:.3f}s  "
+                f"inter_yield={total_inter_yield_time:.3f}s  "
+                f"max_inter_yield={max_inter_yield_time:.3f}s"
+            )
+
+        except RuntimeError as e:
             self.is_error = True
             if "timed out" in str(e).lower() or "timeout" in str(e).lower():
                 logger.exception(f"[RunAI Streamer][Distributed] Rank {self.original_group_rank}: broadcast timed out - Could not complete broadcast.")

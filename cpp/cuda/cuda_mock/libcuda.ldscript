@@ -9,6 +9,8 @@
         cuDevicePrimaryCtxRetain;
         cuDevicePrimaryCtxRelease;
         cuCtxSetCurrent;
+        get_cuMemcpyHtoDAsync_call_count;
+        reset_cuMemcpyHtoDAsync_call_count;
 
     local: *;
 };

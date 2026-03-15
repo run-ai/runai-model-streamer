@@ -11,7 +11,7 @@ CudaDriver::~CudaDriver()
 {
     if (ctx != nullptr && cuDevicePrimaryCtxRelease != nullptr)
     {
-        cuDevicePrimaryCtxRelease(0);
+        cuDevicePrimaryCtxRelease(device);
     }
 }
 
@@ -70,16 +70,40 @@ CudaDriver load()
         return {};
     }
 
-    // Retain the primary context for device 0 once per process.
+    // Detect the current CUDA device (set by the framework, e.g. torch.cuda.set_device).
+    // In multi-GPU / tensor-parallel setups each worker process may use a different
+    // device; we must retain the primary context for THAT device, not always device 0.
+    auto cuCtxGetCurrent =
+        load_sym<CUresult(*)(CUcontext *)>(handle, "cuCtxGetCurrent");
+    auto cuCtxGetDevice =
+        load_sym<CUresult(*)(CUdevice *)>(handle, "cuCtxGetDevice");
+
+    CUdevice device = 0;  // default fallback
+    if (cuCtxGetCurrent && cuCtxGetDevice)
+    {
+        CUcontext curr_ctx = nullptr;
+        if (cuCtxGetCurrent(&curr_ctx) == CUDA_SUCCESS && curr_ctx != nullptr)
+        {
+            CUdevice curr_dev = 0;
+            if (cuCtxGetDevice(&curr_dev) == CUDA_SUCCESS)
+            {
+                device = curr_dev;
+            }
+        }
+    }
+
+    // Retain the primary context for the detected device once per process.
     // Worker threads make it current via cuCtxSetCurrent(ctx) on first use.
-    // The matching cuDevicePrimaryCtxRelease(0) is called in ~CudaDriver().
+    // The matching cuDevicePrimaryCtxRelease(device) is called in ~CudaDriver().
     auto cuDevicePrimaryCtxRetain =
         load_sym<CUresult(*)(CUcontext *, CUdevice)>(handle, "cuDevicePrimaryCtxRetain");
-    if (!cuDevicePrimaryCtxRetain || cuDevicePrimaryCtxRetain(&d.ctx, 0) != CUDA_SUCCESS)
+    if (!cuDevicePrimaryCtxRetain || cuDevicePrimaryCtxRetain(&d.ctx, device) != CUDA_SUCCESS)
     {
-        LOG(WARNING) << "[RunAI Streamer] Could not retain CUDA primary context; CUDA streaming disabled";
+        LOG(WARNING) << "[RunAI Streamer] Could not retain CUDA primary context for device "
+                     << device << "; CUDA streaming disabled";
         return {};
     }
+    d.device = device;
 
     LOG(INFO) << "[RunAI Streamer] CUDA driver loaded successfully";
     return d;

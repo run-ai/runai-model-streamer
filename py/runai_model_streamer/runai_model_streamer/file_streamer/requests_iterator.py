@@ -123,6 +123,17 @@ class FilesRequestsIteratorWithBuffer:
         return file_id, global_chunk_index, self.file_buffers[local_file_index][padded_offset:padded_offset + actual_size]
 
     def next_request(self) -> Optional[FilesRequest]:
+        if self._is_nvidia_cuda:
+            # Buffer is on GPU: drain all CUDA streams before reusing it for new
+            # writes. Guards against two classes of async operations still in flight:
+            #   1. NCCL broadcasts reading from the yielded tensor slices.
+            #   2. Async user-application ops (e.g. sharding) on those slices.
+            import time
+            _t0 = time.perf_counter()
+            torch.cuda.synchronize()
+            _sync_ms = (time.perf_counter() - _t0) * 1000
+            logger.info(f"[RunAI Streamer] cuda synchronize in next_request took {_sync_ms:.1f} ms")
+
         next_requests = self.files_requests_iterator.next_request()
         if next_requests is None or len(next_requests.files) == 0:
             return None
@@ -153,20 +164,22 @@ class FilesRequestsIteratorWithBuffer:
         device: str = "cpu",
     ) -> FilesRequestsIteratorWithBuffer:
         memory_limit = 0
+        is_nvidia_cuda = (
+            device is not None
+            and device.startswith("cuda")
+            and torch.version.hip is None
+        )
+        # Leave a 5% safety margin so PyTorch's allocator rounding doesn't cause OOM.
+        # mem_get_info returns physical free bytes, but torch.empty rounds up internally.
+        free_cuda_memory = int(torch.cuda.mem_get_info(device)[0] * 0.95) if (is_nvidia_cuda and torch.cuda.is_available()) else None
         if memory_mode == MemoryCapMode.unlimited:
             # Use padded strides for the total size so the buffer is large enough.
             total_size = sum(sum(file.effective_strides) for file in files_chunks)
-            is_nvidia_cuda = (
-                device is not None
-                and device.startswith("cuda")
-                and torch.version.hip is None
-            )
-            if is_nvidia_cuda and torch.cuda.is_available():
+            if free_cuda_memory is not None:
                 # For NVIDIA CUDA, cap the buffer at available GPU memory so that we
                 # don't OOM during allocation. If the model is larger than free VRAM,
                 # the buffer is reused in chunks just like the limited-memory path.
-                free_gpu, _ = torch.cuda.mem_get_info(device)
-                memory_limit = min(total_size, free_gpu)
+                memory_limit = min(total_size, free_cuda_memory)
             else:
                 memory_limit = total_size
         elif memory_mode == MemoryCapMode.largest_chunk:
@@ -182,6 +195,8 @@ class FilesRequestsIteratorWithBuffer:
                     f"Memory limit supplied: {user_memory_limit} cannot be smaller than: {largest_chunk}"
                 )
             memory_limit = min(user_memory_limit, sum(sum(file.effective_strides) for file in files_chunks))
+            if free_cuda_memory is not None:
+                memory_limit = min(memory_limit, free_cuda_memory)
 
         return FilesRequestsIteratorWithBuffer(memory_limit, files_chunks, device=device)
 
