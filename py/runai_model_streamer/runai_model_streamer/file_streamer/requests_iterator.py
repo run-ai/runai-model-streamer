@@ -94,6 +94,9 @@ class FilesRequestsIteratorWithBuffer:
         elif memory_mode == MemoryCapMode.largest_chunk:
             memory_limit = max(max(file_chunks.chunks) for file_chunks in files_chunks)
         elif memory_mode == MemoryCapMode.limited:
+            logger.warning(
+                "[RunAI Streamer] Limited memory mode is enabled. Performance may be degraded due to memory limitations."
+            )
             if user_memory_limit is None:
                 raise RunaiStreamerMemoryLimitException(
                     f"MemoryCapMode is Limited, but no limit supplied"
