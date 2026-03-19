@@ -90,7 +90,10 @@ AzureClient::AzureClient(const common::backend_api::ObjectClientConfig_t& config
             // Use DefaultAzureCredential (managed identity, Azure CLI, environment variables, etc.)
             // Reference: https://learn.microsoft.com/en-us/azure/developer/cpp/sdk/authentication
             std::string url = "https://" + _account_name.value() + ".blob.core.windows.net";
-            auto credential = std::make_shared<Azure::Identity::DefaultAzureCredential>();
+            // Share a single DefaultAzureCredential across all clients in the process to better
+            // utilize token caching and reduce chances of overwhelming authentication sources
+            // (e.g., IMDS) which can result in fatal throttling errors.
+            static auto credential = std::make_shared<Azure::Identity::DefaultAzureCredential>();
             _blob_service_client = std::make_shared<BlobServiceClient>(url, credential, options);
             LOG(DEBUG) << "Azure client initialized with DefaultAzureCredential for account: " << _account_name.value();
         } else {
