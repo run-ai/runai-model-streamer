@@ -101,7 +101,8 @@ extern "C" int runai_request(
     const char * secret,
     const char * token,
     const char * region,
-    const char * endpoint
+    const char * endpoint,
+    int /* cuda */
 )
 {
     __multi_state.clear();

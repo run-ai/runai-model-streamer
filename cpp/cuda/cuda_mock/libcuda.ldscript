@@ -1,0 +1,16 @@
+{
+    global:
+        cuStreamCreate;
+        cuStreamDestroy_v2;
+        cuStreamSynchronize;
+        cuMemAllocHost_v2;
+        cuMemFreeHost;
+        cuMemcpyHtoDAsync_v2;
+        cuDevicePrimaryCtxRetain;
+        cuDevicePrimaryCtxRelease;
+        cuCtxSetCurrent;
+        get_cuMemcpyHtoDAsync_call_count;
+        reset_cuMemcpyHtoDAsync_call_count;
+
+    local: *;
+};
