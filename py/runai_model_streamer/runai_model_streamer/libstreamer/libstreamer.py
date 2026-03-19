@@ -42,15 +42,10 @@ def runai_request(
         # to aligned destinations without computing offsets itself.
         dst_addrs = cuda_tensor_ptrs
     elif cuda:
-        # Fallback: build one pointer per tensor from each per-file CUDA buffer
-        # base + cumulative offset, matching the per-tensor contract expected by C++.
-        dst_addrs = []
-        for file_idx, dst in enumerate(dsts):
-            base = dst.data_ptr()
-            offset = 0
-            for size in internal_sizes[file_idx]:
-                dst_addrs.append(ctypes.c_void_p(base + offset))
-                offset += size
+        raise ValueError(
+            "cuda=True requires cuda_tensor_ptrs to be provided; "
+            "passing None would produce misaligned GPU destinations"
+        )
     else:
         dst_addrs = [
             ctypes.cast(ctypes.c_void_p(ctypes.addressof(ctypes.c_char.from_buffer(dst))), ctypes.c_void_p)

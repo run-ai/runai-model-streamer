@@ -124,11 +124,13 @@ class FilesRequestsIteratorWithBuffer:
         return file_id, global_chunk_index, self.file_buffers[local_file_index][padded_offset:padded_offset + actual_size]
 
     def next_request(self) -> Optional[FilesRequest]:
-        if self._is_nvidia_cuda:
+        if self._is_nvidia_cuda and self.file_buffers:
             # Buffer is on GPU: drain all CUDA streams before reusing it for new
             # writes. Guards against two classes of async operations still in flight:
             #   1. NCCL broadcasts reading from the yielded tensor slices.
             #   2. Async user-application ops (e.g. sharding) on those slices.
+            # Skipped on the first call (file_buffers is empty) since no GPU writes
+            # have occurred yet.
             _t0 = time.perf_counter()
             torch.cuda.synchronize()
             _sync_ms = (time.perf_counter() - _t0) * 1000

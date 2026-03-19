@@ -581,6 +581,10 @@ class _distributedStreamer:
 
                         logger.debug(f"[RunAI Streamer][Distributed] Rank {self.original_group_rank}: Receiving tensor {orig_req_idx}:{orig_chunk_idx} size {humanize.naturalsize(chunk_size)} from rank {global_broadcasting_rank}")
 
+                        # receive_buffer is 1-D (shape (max_chunk,)) while the broadcasting rank's
+                        # gpu_tensor has shape (1, N). dist.broadcast does not enforce shape equality —
+                        # it only requires the same numel() and dtype, operating on flat byte buffers
+                        # under the hood. Both sides have chunk_size uint8 elements, so this is correct.
                         received_view = receive_buffer[:chunk_size]
                         t0 = timer()
                         torch.cuda.synchronize()
