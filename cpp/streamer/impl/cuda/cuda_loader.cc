@@ -61,6 +61,7 @@ CudaDriver load()
     d.cuMemcpyHtoDAsync        = load_sym<decltype(d.cuMemcpyHtoDAsync)>        (handle, "cuMemcpyHtoDAsync_v2","cuMemcpyHtoDAsync");
     d.cuDevicePrimaryCtxRelease = load_sym<decltype(d.cuDevicePrimaryCtxRelease)>(handle, "cuDevicePrimaryCtxRelease");
     d.cuCtxSetCurrent          = load_sym<decltype(d.cuCtxSetCurrent)>          (handle, "cuCtxSetCurrent");
+    d.cuMemGetInfo             = load_sym<decltype(d.cuMemGetInfo)>             (handle, "cuMemGetInfo_v2", "cuMemGetInfo");  // optional
 
     if (!d.cuStreamCreate || !d.cuStreamDestroy || !d.cuStreamSynchronize ||
         !d.cuMemAllocHost || !d.cuMemFreeHost   || !d.cuMemcpyHtoDAsync  ||

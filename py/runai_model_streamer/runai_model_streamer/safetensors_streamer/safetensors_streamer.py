@@ -226,8 +226,10 @@ class SafetensorsStreamer:
 
         file_stream_requests: List[FileChunks] = []
 
-        # Compute alignment for CUDA devices (default 256 bytes, disabled on CPU).
-        alignment = get_cuda_alignment() if (device and device.startswith("cuda")) else 1
+        # Compute alignment only for NVIDIA CUDA (the C++ write path only pads on NVIDIA).
+        # AMD ROCm also reports "cuda" devices but uses the CPU path, so no padding there.
+        is_nvidia_cuda = device and device.startswith("cuda") and torch.version.hip is None
+        alignment = get_cuda_alignment() if is_nvidia_cuda else 1
 
         # metadata is created on cpu and each process reads it individually
         safetensors_metadatas = safetensors_pytorch.prepare_request(self.file_streamer, paths, s3_credentials)

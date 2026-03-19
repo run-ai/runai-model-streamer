@@ -34,6 +34,7 @@ struct CudaDriver
     CUresult (*cuMemcpyHtoDAsync)        (CUdeviceptr dst, const void * src, size_t count, CUstream);
     CUresult (*cuDevicePrimaryCtxRelease)(CUdevice device);
     CUresult (*cuCtxSetCurrent)          (CUcontext);
+    CUresult (*cuMemGetInfo)             (size_t *free, size_t *total);  // optional; used for diagnostics
 
     // Returns the process-wide singleton, or nullptr if libcuda.so could not be loaded.
     static const CudaDriver * get();

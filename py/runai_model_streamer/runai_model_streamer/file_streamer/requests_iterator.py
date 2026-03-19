@@ -5,6 +5,7 @@ import ctypes
 import enum
 import numpy as np
 import os
+import time
 import humanize
 import torch
 
@@ -128,7 +129,6 @@ class FilesRequestsIteratorWithBuffer:
             # writes. Guards against two classes of async operations still in flight:
             #   1. NCCL broadcasts reading from the yielded tensor slices.
             #   2. Async user-application ops (e.g. sharding) on those slices.
-            import time
             _t0 = time.perf_counter()
             torch.cuda.synchronize()
             _sync_ms = (time.perf_counter() - _t0) * 1000

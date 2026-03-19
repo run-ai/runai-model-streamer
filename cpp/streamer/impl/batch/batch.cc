@@ -328,9 +328,19 @@ struct CudaStagingBuffer
             // Worker threads do not automatically inherit the CUDA context from
             // the Python main thread.  Make the already-retained primary context
             // current for this thread before any driver API calls.
-            drv.cuCtxSetCurrent(drv.ctx);
-
-            drv.cuStreamCreate(&stream, 0);
+            CUresult res = drv.cuCtxSetCurrent(drv.ctx);
+            if (res != CUDA_SUCCESS)
+            {
+                LOG(ERROR) << "cuCtxSetCurrent failed with error " << res;
+                throw common::Exception(common::ResponseCode::UnknownError);
+            }
+            res = drv.cuStreamCreate(&stream, 0);
+            if (res != CUDA_SUCCESS)
+            {
+                stream = nullptr;
+                LOG(ERROR) << "cuStreamCreate failed with error " << res;
+                throw common::Exception(common::ResponseCode::UnknownError);
+            }
         }
         if (needed > capacity)
         {
@@ -339,7 +349,20 @@ struct CudaStagingBuffer
                 drv.cuMemFreeHost(ptr);
                 ptr = nullptr;
             }
-            drv.cuMemAllocHost(reinterpret_cast<void **>(&ptr), needed);
+            const CUresult res = drv.cuMemAllocHost(reinterpret_cast<void **>(&ptr), needed);
+            if (res != CUDA_SUCCESS)
+            {
+                ptr = nullptr;
+                size_t free_bytes = 0, total_bytes = 0;
+                if (drv.cuMemGetInfo && drv.cuMemGetInfo(&free_bytes, &total_bytes) != CUDA_SUCCESS)
+                {
+                    free_bytes = total_bytes = 0;
+                }
+                LOG(ERROR) << "cuMemAllocHost failed: tried to allocate " << needed
+                           << " bytes; free GPU memory: " << free_bytes
+                           << " / " << total_bytes << " bytes; error " << res;
+                throw common::Exception(common::ResponseCode::UnknownError);
+            }
             capacity = needed;
         }
         return ptr;
@@ -381,13 +404,26 @@ void Batch::read_cuda(const Config & config, std::atomic<bool> & stopped, const 
         {
             const size_t to_read = std::min(remaining, config.fs_block_bytesize);
             _reader->read(to_read, staging_buf);
-            drv.cuMemcpyHtoDAsync(reinterpret_cast<::CUdeviceptr>(gpu_ptr), staging_buf, to_read, g_cuda_staging.stream);
-            drv.cuStreamSynchronize(g_cuda_staging.stream);
+            CUresult res = drv.cuMemcpyHtoDAsync(reinterpret_cast<::CUdeviceptr>(gpu_ptr), staging_buf, to_read, g_cuda_staging.stream);
+            if (res != CUDA_SUCCESS)
+            {
+                LOG(ERROR) << "cuMemcpyHtoDAsync failed with error " << res;
+                throw common::Exception(common::ResponseCode::UnknownError);
+            }
+            res = drv.cuStreamSynchronize(g_cuda_staging.stream);
+            if (res != CUDA_SUCCESS)
+            {
+                LOG(ERROR) << "cuStreamSynchronize failed with error " << res;
+                throw common::Exception(common::ResponseCode::UnknownError);
+            }
             gpu_ptr   += to_read;
             remaining -= to_read;
         }
 
-        finished_until(task.info.end, common::ResponseCode::Success);
+        if (remaining == 0)
+        {
+            finished_until(task.info.end, common::ResponseCode::Success);
+        }
     }
 
     LOG(DEBUG) << "Finished reading " << tasks.size() << " tasks from file " << path
