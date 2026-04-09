@@ -44,8 +44,9 @@ struct AzureClient : common::IClient
     ClientConfiguration _client_config;
     const size_t _chunk_bytesize;
     
-    // Azure credentials (uses DefaultAzureCredential)
+    // Azure credentials
     std::optional<std::string> _account_name;
+    std::optional<std::string> _account_key;
 #ifdef AZURITE_TESTING
     std::optional<std::string> _connection_string;
 #endif

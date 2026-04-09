@@ -21,6 +21,13 @@ ClientConfiguration::ClientConfiguration()
     }
 #endif
 
+    // Account key for StorageSharedKeyCredential authentication
+    const auto acct_key = utils::getenv<std::string>("AZURE_STORAGE_ACCOUNT_KEY", "");
+    if (!acct_key.empty()) {
+        LOG(DEBUG) << "Using AZURE_STORAGE_ACCOUNT_KEY for authentication";
+        account_key = acct_key;
+    }
+
     // Account name configuration from environment variable
     // Authentication uses DefaultAzureCredential which supports:
     // - Environment variables (AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_CLIENT_SECRET)

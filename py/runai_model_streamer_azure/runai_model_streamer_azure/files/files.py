@@ -20,7 +20,8 @@ def _create_client(credentials: Optional[AzureCredentials] = None) -> BlobServic
 
     Authentication priority:
     1. Connection string (AZURE_STORAGE_CONNECTION_STRING) - for local testing with Azurite
-    2. DefaultAzureCredential with account URL - for production
+    2. Storage account key (AZURE_STORAGE_ACCOUNT_NAME + AZURE_STORAGE_ACCOUNT_KEY)
+    3. DefaultAzureCredential with account URL - for production
 
     Args:
         credentials: Optional AzureCredentials object
@@ -35,6 +36,15 @@ def _create_client(credentials: Optional[AzureCredentials] = None) -> BlobServic
     if credentials.connection_string:
         return BlobServiceClient.from_connection_string(
             credentials.connection_string,
+            user_agent=_USER_AGENT
+        )
+
+    # Use account name + account key if available (StorageSharedKeyCredential)
+    if credentials.account_key and credentials.account_name:
+        account_url = f"https://{credentials.account_name}.blob.core.windows.net"
+        return BlobServiceClient(
+            account_url=account_url,
+            credential=credentials.account_key,
             user_agent=_USER_AGENT
         )
 
