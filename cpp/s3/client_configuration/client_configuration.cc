@@ -1,5 +1,7 @@
 #include "s3/client_configuration/client_configuration.h"
 
+#include <aws/core/client/ClientConfiguration.h>
+
 #include "utils/logging/logging.h"
 #include "utils/env/env.h"
 
@@ -8,6 +10,9 @@ namespace runai::llm::streamer::impl::s3
 
 ClientConfiguration::ClientConfiguration()
 {
+    // Follow HTTP 3xx redirects (e.g., 307 from Alluxio S3 Gateway).
+    config.followRedirects = Aws::Client::FollowRedirectsPolicy::ALWAYS;
+
     unsigned long max_connections = utils::getenv<unsigned long>("RUNAI_STREAMER_S3_MAX_CONNECTIONS", 0);
     if (max_connections)
     {
