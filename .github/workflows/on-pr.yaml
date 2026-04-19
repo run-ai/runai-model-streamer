@@ -6,9 +6,19 @@ jobs:
   lifecycle-install-tests:
     name: Test, Build & Push
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     steps:
     - name: Checkout code
       uses: actions/checkout@v2
+
+    - name: Log in to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Set PACKAGE_VERSION
       run: echo "PACKAGE_VERSION=0.0.0+dev.$(git rev-parse --short HEAD)" >> $GITHUB_ENV
@@ -16,6 +26,9 @@ jobs:
     - name: Run tests and build
       uses: devcontainers/ci@v0.3
       with:
+        imageName: ghcr.io/run-ai/runai-model-streamer/devcontainer
+        cacheFrom: ghcr.io/run-ai/runai-model-streamer/devcontainer
+        push: never
         runCmd: |
           make test && \
           PACKAGE_VERSION=${{ env.PACKAGE_VERSION }} make build
