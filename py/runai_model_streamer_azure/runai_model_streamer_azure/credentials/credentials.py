@@ -9,28 +9,28 @@ class AzureCredentials:
     """
     Azure Blob Storage credentials configuration.
 
-    Uses DefaultAzureCredential by default, which supports:
-    - Managed Identity
-    - Azure CLI
-    - Environment credentials (AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_CLIENT_SECRET)
-    - Visual Studio Code credentials
+    Authentication methods (checked in this order):
+    1. Connection string: Set AZURE_STORAGE_CONNECTION_STRING
+    2. Storage account key: Set AZURE_STORAGE_ACCOUNT_NAME and AZURE_STORAGE_ACCOUNT_KEY
+    3. DefaultAzureCredential: Set AZURE_STORAGE_ACCOUNT_NAME (uses Managed Identity, Azure CLI, etc.)
 
-    For local testing, set AZURE_STORAGE_CONNECTION_STRING to use connection string auth.
-    
     If values are not provided explicitly, they are loaded from environment variables:
     - AZURE_STORAGE_CONNECTION_STRING
     - AZURE_STORAGE_ACCOUNT_NAME
+    - AZURE_STORAGE_ACCOUNT_KEY
     """
 
     def __init__(
         self,
         account_name: Optional[str] = None,
+        account_key: Optional[str] = None,
         connection_string: Optional[str] = None,
         credential: Optional[DefaultAzureCredential] = None
     ):
         self.connection_string = connection_string or os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
         self.account_name = account_name or os.environ.get("AZURE_STORAGE_ACCOUNT_NAME")
-        if credential is None and not self.connection_string:
+        self.account_key = account_key or os.environ.get("AZURE_STORAGE_ACCOUNT_KEY")
+        if credential is None and not self.connection_string and not self.account_key:
             credential = DefaultAzureCredential()
         self.credential = credential
         self._validate()

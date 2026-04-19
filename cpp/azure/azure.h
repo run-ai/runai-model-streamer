@@ -8,20 +8,27 @@
 //
 // 1. Uri should be in the format az://container/path
 //
-// 2. Authentication using DefaultAzureCredential:
-//    - Set AZURE_STORAGE_ACCOUNT_NAME environment variable
-//    - DefaultAzureCredential tries multiple authentication methods in order:
-//      * Environment variables (AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_CLIENT_SECRET) for service principal
-//      * Managed Identity (no env vars needed when running in Azure)
-//      * Azure CLI (az login)
-//      * Azure PowerShell (Connect-AzAccount)
-//      * Azure Developer CLI (azd auth login)
+// 2. Authentication methods (checked in this order):
+//    a. Connection string (Azurite testing only, requires AZURITE_TESTING build):
+//       - Set AZURE_STORAGE_CONNECTION_STRING environment variable
+//    b. Storage account key:
+//       - Set AZURE_STORAGE_ACCOUNT_NAME and AZURE_STORAGE_ACCOUNT_KEY environment variables
+//       - Uses StorageSharedKeyCredential
+//    c. DefaultAzureCredential:
+//       - Set AZURE_STORAGE_ACCOUNT_NAME environment variable
+//       - DefaultAzureCredential tries multiple authentication methods in order:
+//         * Environment variables (AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_CLIENT_SECRET) for service principal
+//         * Managed Identity (no env vars needed when running in Azure)
+//         * Azure CLI (az login)
+//         * Azure PowerShell (Connect-AzAccount)
+//         * Azure Developer CLI (azd auth login)
 //
 // 3. For local testing with Azurite:
 //    - Use AZURE_STORAGE_CONNECTION_STRING environment variable
 //    - Run Azurite with --skipApiVersionCheck flag
 //
 // Example usage:
+// key-based: AZURE_STORAGE_ACCOUNT_NAME="account" AZURE_STORAGE_ACCOUNT_KEY="key" <streamer app> az://container/path
 // managed:   AZURE_STORAGE_ACCOUNT_NAME="account" <streamer app> az://container/path
 // azurite:   AZURE_STORAGE_CONNECTION_STRING="DefaultEndpointsProtocol=http;..." <streamer app> az://container/path
 // programmatic: Pass credentials in ObjectClientConfig_t.initial_params

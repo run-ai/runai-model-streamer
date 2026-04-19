@@ -8,8 +8,9 @@ namespace runai::llm::streamer::impl::azure
 
 struct ClientConfiguration
 {
-    // Azure client configuration options (uses DefaultAzureCredential)
+    // Azure client configuration options
     std::optional<std::string> account_name;
+    std::optional<std::string> account_key;
 #ifdef AZURITE_TESTING
     // Connection string is only available for Azurite/local testing
     std::optional<std::string> connection_string;
