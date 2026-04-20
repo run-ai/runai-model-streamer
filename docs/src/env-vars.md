@@ -139,3 +139,18 @@ String `0` or `1`
 #### Default value
 
 `0`
+
+### RUNAI_STREAMER_GCS_USE_GRPC
+
+Enables the gRPC transport for the GCS client, which utilizes direct connectivity for higher throughput and lower latency when running within Google Cloud.
+
+If not defined (default) the GCS client uses the standard HTTP/JSON transport.
+
+#### Values accepted
+
+String `0` or `1`
+
+#### Default value
+
+`0`
+

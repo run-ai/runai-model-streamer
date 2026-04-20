@@ -29,7 +29,11 @@ GCSClient::GCSClient(const common::backend_api::ObjectClientConfig_t& config) :
     _responder(nullptr),
     _chunk_bytesize(config.default_storage_chunk_size)
 {
-    _client = std::make_unique<AsyncGcsClient>(_client_config.options, _client_config.max_concurrency);
+    _client = std::make_unique<AsyncGcsClient>(
+        _client_config.options, 
+        _client_config.max_concurrency,
+        _client_config.use_grpc
+    );
 }
 
 bool GCSClient::verify_credentials(const common::backend_api::ObjectClientConfig_t & config) const

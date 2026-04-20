@@ -35,7 +35,7 @@ static ReadObjectFn createReadObjectFn(google::cloud::storage::Client * client, 
 struct AsyncGcsClient
 {
 public:
-    AsyncGcsClient(google::cloud::Options opts, unsigned max_pool_size);
+    AsyncGcsClient(google::cloud::Options options, unsigned int max_concurrency, bool use_grpc = false);
 
     template<typename... Options>
     google::cloud::future<google::cloud::storage::ObjectReadStream> ReadObjectAsync(
