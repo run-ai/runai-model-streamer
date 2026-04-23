@@ -14,12 +14,12 @@ def _build_client_config() -> Optional[Config]:
     config_kwargs = {}
     if os.getenv("RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING", "1") == "0":
         config_kwargs["s3"] = {"addressing_style": "path"}
-    if RUNAI_STREAMER_S3_UNSIGNED_ENV_VAR in os.environ:
+    if os.getenv(RUNAI_STREAMER_S3_UNSIGNED_ENV_VAR, "0") == "1":
         config_kwargs["signature_version"] = UNSIGNED
     return Config(**config_kwargs) if config_kwargs else None
 
 def _build_s3_client(credentials: Optional[S3Credentials]):
-    unsigned = RUNAI_STREAMER_S3_UNSIGNED_ENV_VAR in os.environ
+    unsigned = os.getenv(RUNAI_STREAMER_S3_UNSIGNED_ENV_VAR, "0") == "1"
     session = None if unsigned else get_credentials(credentials)[0]
     client_config = _build_client_config()
     if session is None:
