@@ -1,6 +1,7 @@
 #include "gcs/client_configuration/client_configuration.h"
 
 #include "google/cloud/storage/client.h"
+#include "google/cloud/storage/grpc_plugin.h"
 
 #include "common/exception/exception.h"
 #include "common/response_code/response_code.h"
@@ -16,6 +17,8 @@ namespace runai::llm::streamer::impl::gcs
 
 ClientConfiguration::ClientConfiguration()
 {
+    use_grpc = utils::getenv<bool>("RUNAI_STREAMER_GCS_USE_GRPC", false);
+
     const auto max_connections = utils::getenv<unsigned long>("RUNAI_STREAMER_S3_MAX_CONNECTIONS", 0);
     if (max_connections) {
         max_concurrency = max_connections;

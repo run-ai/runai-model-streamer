@@ -4,6 +4,7 @@ runai_cc_auto_library(
     name = "async_gcs_client",
     deps = [
         "@google_cloud_cpp//:storage",
+        "@google_cloud_cpp//:storage_grpc",
         "//utils/threadpool",
     ],
 )

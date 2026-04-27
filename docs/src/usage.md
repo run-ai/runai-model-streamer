@@ -194,7 +194,7 @@ export AZURE_STORAGE_ACCOUNT_NAME="myaccount"
 
 GCS SDK backend is provided through the Python package `runai-model-streamer-gcs`.
 
-To authentication to GCS, there are multiple configuration options:
+To authenticate to GCS, there are multiple configuration options:
 
 1. External Credentials: If you set the `RUNAI_STREAMER_GCS_CREDENTIAL_FILE` environment variable, the
    SDK will load credentials from a JSON file at the path specified (eg: service account credentials)
@@ -205,6 +205,25 @@ To authentication to GCS, there are multiple configuration options:
 
 See [How Application Default Credentials works](https://cloud.google.com/docs/authentication/application-default-credentials)
 for more information.
+
+###### Transport Configuration
+
+By default, the GCS SDK backend communicates using the standard HTTP/JSON transport. To achieve significantly higher throughput and lower latency when running within Google Cloud (e.g., GKE or GCE), you can use [gRPC to interact with Cloud Storage](https://docs.cloud.google.com/storage/docs/enable-grpc-api). gRPC utilizes [direct connectivity](https://docs.cloud.google.com/storage/docs/direct-connectivity) between Compute Engine instances and Cloud Storage buckets, bypassing [Google Front Ends (GFEs)](https://docs.cloud.google.com/docs/security/infrastructure/design#google-frontend-service).
+
+To enable the gRPC client, set the following environment variable (Note: this variable strictly requires a numeric boolean value):
+* `RUNAI_STREAMER_GCS_USE_GRPC`: Set this to `1` to enable the gRPC transport, or `0` (the default) to use HTTP/JSON.
+
+**Verifying DirectPath Connectivity:**
+If you enable gRPC, we highly recommend verifying that direct connectivity is successfully routing your traffic, as it is needed to achieve optimal performance. If direct connectivity is unavailable in your environment, it is best to leave `RUNAI_STREAMER_GCS_USE_GRPC` unset to fall back to the default transport for the best performance.
+
+You can verify your connection by enabling the gRPC core trace logs with the following environment variables:
+
+```bash
+export GRPC_VERBOSITY=DEBUG
+export GRPC_TRACE=client_channel,xds
+```
+
+In the resulting console output, you are looking for metric blocks related to actual file downloads (e.g. `google.storage.v2.Storage/ReadObject`). To know direct connectivity is set, you need to see the `grpc_target` field in those blocks explicitly targeting `google-c2p:///storage.googleapis.com`. If your actual file downloads are instead targeting standard `dns:///storage.googleapis.com` addresses, traffic is going through the standard public Cloud Load Balancers instead of the unproxied DirectPath route, and you should disable the gRPC client. (Note: You may still see `dns:///storage.googleapis.com` targets for background routing lookups like `RouteLookupService/RouteLookup`, which is perfectly normal as long as the `ReadObject` calls use `google-c2p:///`).
 
 ##### HMAC Authentication
 
