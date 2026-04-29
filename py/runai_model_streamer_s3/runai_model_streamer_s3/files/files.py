@@ -19,8 +19,7 @@ def _build_client_config() -> Optional[Config]:
     return Config(**config_kwargs) if config_kwargs else None
 
 def _build_s3_client(credentials: Optional[S3Credentials]):
-    unsigned = os.getenv(RUNAI_STREAMER_S3_UNSIGNED_ENV_VAR, "0") == "1"
-    session = None if unsigned else get_credentials(credentials)[0]
+    session, _ = get_credentials(credentials)
     client_config = _build_client_config()
     if session is None:
         return boto3.client("s3", config=client_config)
