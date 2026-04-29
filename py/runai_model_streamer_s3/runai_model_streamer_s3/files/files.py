@@ -1,26 +1,31 @@
 from typing import Optional, List, Tuple
-from runai_model_streamer_s3.credentials.credentials import get_credentials, S3Credentials
+from runai_model_streamer_s3.credentials.credentials import get_credentials, S3Credentials, RUNAI_STREAMER_S3_UNSIGNED_ENV_VAR
 import fnmatch
 import os
 import boto3
+from botocore import UNSIGNED
 from botocore.config import Config
 from pathlib import Path
 import posixpath
 
-def glob(path: str, allow_pattern: Optional[List[str]] = None, credentials: Optional[S3Credentials] = None) -> List[str]:
-    session, _ = get_credentials(credentials)
-    use_virtual_addressing = os.getenv("RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING", "1")
-    
-    client_config = None
-    if use_virtual_addressing == "0":
-        client_config = Config(s3={'addressing_style': 'path'})
 
-    # Pass the config to the client constructor
+def _build_client_config() -> Optional[Config]:
+    config_kwargs = {}
+    if os.getenv("RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING", "1") == "0":
+        config_kwargs["s3"] = {"addressing_style": "path"}
+    if os.getenv(RUNAI_STREAMER_S3_UNSIGNED_ENV_VAR, "0") == "1":
+        config_kwargs["signature_version"] = UNSIGNED
+    return Config(**config_kwargs) if config_kwargs else None
+
+def _build_s3_client(credentials: Optional[S3Credentials]):
+    session, _ = get_credentials(credentials)
+    client_config = _build_client_config()
     if session is None:
-        s3 = boto3.client("s3", config=client_config)
-    else:
-        s3 = session.client("s3", config=client_config)
-    
+        return boto3.client("s3", config=client_config)
+    return session.client("s3", config=client_config)
+
+def glob(path: str, allow_pattern: Optional[List[str]] = None, credentials: Optional[S3Credentials] = None) -> List[str]:
+    s3 = _build_s3_client(credentials)
     if not path.endswith("/"):
         path = f"{path}/"
     bucket_name, _, keys = list_files(s3,
@@ -33,18 +38,7 @@ def pull_files(model_path: str,
                 allow_pattern: Optional[List[str]] = None,
                 ignore_pattern: Optional[List[str]] = None,
                 credentials: Optional[S3Credentials] = None,) -> None:
-    session, _ = get_credentials(credentials)
-    use_virtual_addressing = os.getenv("RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING", "1")
-    
-    client_config = None
-    if use_virtual_addressing == "0":
-        client_config = Config(s3={'addressing_style': 'path'})
-
-    # Pass the config to the client constructor
-    if session is None:
-        s3 = boto3.client("s3", config=client_config)
-    else:
-        s3 = session.client("s3", config=client_config)
+    s3 = _build_s3_client(credentials)
 
     if not model_path.endswith("/"):
         model_path = model_path + "/"

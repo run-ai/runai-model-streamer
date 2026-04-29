@@ -137,6 +137,16 @@ The session token shoud be passed as an environment variable `AWS_SESSION_TOKEN`
 
 To check if IAM role assumption is needed run `aws s3 ls s3://your-bucket-name --region your-region`. If you get a `403 Forbidden` error, you might need an assumed role
 
+###### Unsigned requests (public buckets)
+
+To access public S3 buckets that do not require authentication, set:
+
+```bash
+export RUNAI_STREAMER_S3_UNSIGNED=1
+```
+
+This configures the boto3 client to send unsigned (anonymous) requests, bypassing credential resolution entirely.
+
 #### Streaming from Azure Blob Storage
 
 > **Note:** Streaming models from Azure Blob Storage requires the installation of the streamer Azure package, as can be found [here](#azureCapabilityInstallation).

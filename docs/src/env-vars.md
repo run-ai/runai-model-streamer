@@ -90,6 +90,18 @@ Boolean `0` or `1`
 
 `1`
 
+### RUNAI_STREAMER_S3_UNSIGNED
+
+Enables unsigned (anonymous) requests to S3. Use this when accessing public S3 buckets that do not require authentication.
+
+#### Values accepted
+
+Boolean `0` or `1`
+
+#### Default value
+
+`0`
+
 ### RUNAI_STREAMER_GCS_CREDENTIAL_FILE
 
 Specifies the path to a credential file to use for GCS authentication.
