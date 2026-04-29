@@ -21,7 +21,7 @@ class S3Credentials:
         self.region_name = region_name
         self.endpoint = endpoint
 
-def get_credentials(credentials: Optional[S3Credentials] = None) -> Tuple[boto3.Session, S3Credentials]:
+def get_credentials(credentials: Optional[S3Credentials] = None) -> Tuple[Optional[boto3.Session], S3Credentials]:
     """
     Creates a boto3 session only if the environment variable RUNAI_STREAMER_NO_BOTO3_SESSION is set.
     If the variable is not set, returns None and the original credentials.
