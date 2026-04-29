@@ -90,9 +90,10 @@ class TestBuildS3Client(unittest.TestCase):
     @patch("runai_model_streamer_s3.files.files.boto3")
     @patch("runai_model_streamer_s3.files.files.get_credentials")
     def test_credentials_not_used_when_unsigned_enabled(self, mock_get_credentials, mock_boto3):
+        mock_get_credentials.return_value = (None, MagicMock())
         with patch.dict(os.environ, {files.RUNAI_STREAMER_S3_UNSIGNED_ENV_VAR: "1"}):
             files._build_s3_client(None)
-        mock_get_credentials.assert_not_called()
+        mock_get_credentials.assert_called_once()
         mock_boto3.client.assert_called_once()
 
 

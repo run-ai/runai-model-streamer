@@ -1,5 +1,5 @@
 from typing import Optional, List, Tuple
-from runai_model_streamer_s3.credentials.credentials import get_credentials, S3Credentials
+from runai_model_streamer_s3.credentials.credentials import get_credentials, S3Credentials, RUNAI_STREAMER_S3_UNSIGNED_ENV_VAR
 import fnmatch
 import os
 import boto3
@@ -8,7 +8,6 @@ from botocore.config import Config
 from pathlib import Path
 import posixpath
 
-RUNAI_STREAMER_S3_UNSIGNED_ENV_VAR = "RUNAI_STREAMER_S3_UNSIGNED"
 
 def _build_client_config() -> Optional[Config]:
     config_kwargs = {}

@@ -4,6 +4,7 @@ import os
 import boto3
 
 AWS_CA_BUNDLE_ENV = "AWS_CA_BUNDLE"
+RUNAI_STREAMER_S3_UNSIGNED_ENV_VAR = "RUNAI_STREAMER_S3_UNSIGNED"
 
 class S3Credentials:
     def __init__(
@@ -29,6 +30,14 @@ def get_credentials(credentials: Optional[S3Credentials] = None) -> Tuple[boto3.
         - boto3.Session object (or None if RUNAI_STREAMER_NO_BOTO3_SESSION is set)
         - S3Credentials object with the resolved credentials (or original if session not created)
     """
+
+    if os.getenv(RUNAI_STREAMER_S3_UNSIGNED_ENV_VAR, "0") == "1":
+        if AWS_CA_BUNDLE_ENV not in os.environ:
+            session = boto3.Session()
+            ca_bundle = session._session.get_config_variable("ca_bundle")
+            if ca_bundle is not None:
+                os.environ.setdefault(AWS_CA_BUNDLE_ENV, ca_bundle)
+        return None, credentials if credentials else S3Credentials()
 
     if "RUNAI_STREAMER_NO_BOTO3_SESSION" in os.environ:
         return None, credentials if credentials else S3Credentials()
