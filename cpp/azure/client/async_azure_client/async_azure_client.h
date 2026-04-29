@@ -10,6 +10,7 @@
 #include "common/response_code/response_code.h"
 #include "utils/logging/logging.h"
 #include "utils/threadpool/threadpool.h"
+#include "azure/azcache_provider/azcache_provider_loader.h"
 
 namespace runai::llm::streamer::impl::azure
 {
@@ -56,13 +57,26 @@ inline DownloadBlobFn createDownloadBlobFn(
 /**
  * An async wrapper for Azure Blob Storage client operations.
  * Uses ThreadPool to manage concurrent blob download operations.
+ * 
+ * When a cache provider is configured (via RUNAI_STREAMER_EXPERIMENTAL_AZURE_CACHE_LIB),
+ * the client will read from the cache instead of Azure Blob Storage.
  */
 struct AsyncAzureClient
 {
 public:
     AsyncAzureClient(std::shared_ptr<Azure::Storage::Blobs::BlobServiceClient> client, unsigned max_pool_size);
 
-    inline void DownloadBlobRangeAsync(
+    /** Returns true when a cache provider .so has been loaded (cached at construction). */
+    bool is_cache_enabled() const { return _cache_enabled; }
+
+    /**
+     * Download a range of a blob asynchronously.
+     * 
+     * When a cache provider is loaded, all reads are served from the cache.
+     * The cache provider is responsible for handling cache misses internally.
+     */
+    void DownloadBlobRangeAsync(
+        const std::string& account_name,
         const std::string& container_name,
         const std::string& blob_name,
         char* buffer,
@@ -70,14 +84,32 @@ public:
         size_t length,
         CompletionCallback callback)
     {
-        DownloadBlobFn downloadFn = createDownloadBlobFn(_client, container_name, blob_name, buffer, offset, length);
+        if (_cache_enabled)
+        {
+            DownloadBlobTask task{
+                [account_name, container_name, blob_name, buffer, offset, length]() {
+                    bool ok = AzCacheProviderLoader::instance().read(
+                        account_name, container_name, blob_name, buffer, offset, length);
+                    if (!ok)
+                    {
+                        throw std::runtime_error("Cache provider read failed");
+                    }
+                },
+                std::move(callback)
+            };
+            push_task(std::move(task));
+        }
+        else
+        {
+            DownloadBlobFn downloadFn = createDownloadBlobFn(_client, container_name, blob_name, buffer, offset, length);
 
-        DownloadBlobTask task{
-            std::move(downloadFn),
-            std::move(callback)
-        };
+            DownloadBlobTask task{
+                std::move(downloadFn),
+                std::move(callback)
+            };
 
-        push_task(std::move(task));
+            push_task(std::move(task));
+        }
     }
 
 private:
@@ -85,6 +117,7 @@ private:
 
     std::shared_ptr<Azure::Storage::Blobs::BlobServiceClient> _client;
     utils::ThreadPool<DownloadBlobTask> _pool;
+    const bool _cache_enabled;  // snapshot of cache state at construction
 };
 
 }; // namespace runai::llm::streamer::impl::azure
