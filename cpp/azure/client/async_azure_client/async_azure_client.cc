@@ -33,7 +33,8 @@ AsyncAzureClient::AsyncAzureClient(std::shared_ptr<Azure::Storage::Blobs::BlobSe
     _client(client),
     _pool([](DownloadBlobTask&& task, std::atomic<bool>& stopped) {
         task.execute();
-    }, max_pool_size)
+    }, max_pool_size),
+    _cache_enabled(AzCacheProviderLoader::instance().is_enabled())
 {
 }
 

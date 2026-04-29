@@ -188,6 +188,72 @@ export AZURE_STORAGE_ACCOUNT_NAME="myaccount"
 # No additional configuration needed - managed identity is detected automatically
 ```
 
+##### Azure Blob Cache Provider (Experimental)
+
+> **Experimental** — This feature is under active development and may change in future releases.
+
+The streamer supports pluggable cache providers for Azure Blob Storage. When a compatible cache provider package is installed (e.g., `tachyon-client`), it is auto-discovered and loaded at runtime. All blob reads are then routed through the cache provider instead of the Azure SDK, enabling integration with distributed caches to accelerate model loading.
+
+###### How it works
+
+1. Install the cache provider package alongside `runai-model-streamer` (e.g., `pip install tachyon-client`)
+2. At startup, the streamer auto-discovers the cache library in Python site-packages via `dladdr`
+3. The library is loaded via `dlopen` and the `blob_read` symbol is resolved
+4. All subsequent Azure blob reads are served through the cache provider
+5. If no cache provider is installed, reads go directly to Azure Blob Storage — no regression
+
+###### Disabling the cache
+
+To disable the cache provider even when it is installed, set:
+
+```bash
+export RUNAI_STREAMER_EXPERIMENTAL_AZURE_CACHE_ENABLED=false
+```
+
+This is the recommended way to disable caching in case of issues.
+
+###### Implementing a cache provider
+
+A cache provider is a shared library that exports a single C function:
+
+```c
+#include <stddef.h>
+#include <sys/types.h>
+
+extern "C" ssize_t blob_read(
+    const char* account,      /* Azure Storage account name */
+    const char* container,    /* Azure container name */
+    const char* blob,         /* Blob path within the container */
+    void* buf,                /* Output buffer (caller-allocated) */
+    size_t offset,            /* Byte offset within the blob */
+    size_t length,            /* Number of bytes to read */
+    char** error_string       /* On error: set to malloc'd message; caller frees */
+);
+```
+
+**Return value:** Number of bytes read on success (should equal `length`), or `-1` on error.
+
+The cache provider has full control over how data is served and cached. The cache provider is responsible for serving data and managing its own cache lifecycle. How data is cached, populated, and evicted is entirely up to the cache provider implementation.
+
+The full API contract is defined in [`cpp/azure/azcache_provider/runai_azcache_provider.h`](../cpp/azure/azcache_provider/runai_azcache_provider.h). A test reference implementation is available at [`cpp/azure/azcache_provider/simple_file_cache_test.cc`](../cpp/azure/azcache_provider/simple_file_cache_test.cc).
+
+###### Debugging
+
+Enable debug logging to verify the cache provider is loaded and serving reads:
+
+```bash
+export RUNAI_STREAMER_LOG_TO_STDERR=1
+export RUNAI_STREAMER_LOG_LEVEL=DEBUG
+```
+
+You should see:
+```text
+AzCacheProvider: auto-discovered cache library: /path/to/site-packages/py_tachyon_client/libStorageDirect.so
+AzCacheProvider: cache provider loaded successfully from /path/to/...
+```
+
+If the library is not found or fails to load, the streamer falls back to direct Azure Blob Storage access.
+
 #### Streaming from Google cloud storage
 
 ##### SDK Authentication

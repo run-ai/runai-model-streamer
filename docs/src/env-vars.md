@@ -112,6 +112,24 @@ String
 
 None
 
+### RUNAI_STREAMER_EXPERIMENTAL_AZURE_CACHE_ENABLED
+
+> **Experimental** — This feature is under active development and may change in future releases.
+
+Controls whether the Azure Blob cache provider is enabled. When a compatible cache provider package (e.g., `tachyon-client`) is installed alongside `runai-model-streamer`, the streamer auto-discovers and loads it at runtime to accelerate model loading from Azure Blob Storage via a distributed cache.
+
+Set to `false` to disable the cache provider entirely, even if the package is installed. This is the recommended way to disable caching in case of issues.
+
+See [Azure Blob Cache Provider (Experimental)](usage.md#azure-blob-cache-provider-experimental) in the usage guide for details.
+
+#### Values accepted
+
+`true`, `false`, `0`, `1`
+
+#### Default value
+
+Unset — cache is auto-enabled when a compatible cache provider package is installed
+
 ### RUNAI_STREAMER_DIST
 
 Enables distributed streaming for multiple devices
