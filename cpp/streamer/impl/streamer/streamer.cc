@@ -12,6 +12,7 @@
 
 #include "streamer/impl/workload/workload.h"
 #include "streamer/impl/assigner/assigner.h"
+#include "streamer/impl/cuda/cuda_loader.h"
 #include "common/exception/exception.h"
 #include "common/storage_uri/storage_uri.h"
 
@@ -77,7 +78,7 @@ common::ResponseCode Streamer::async_read(const std::string & path, size_t file_
 
         internal_sizes_vv.push_back(internal_sizes_v);
 
-        async_request(paths, file_offsets, bytesizes, dsts, num_sizes_v, internal_sizes_vv, credentials);
+        async_request(paths, file_offsets, bytesizes, dsts, num_sizes_v, internal_sizes_vv, credentials, false);
     }
     catch(const common::Exception & e)
     {
@@ -105,10 +106,20 @@ common::ResponseCode Streamer::async_request(
     std::vector<void *> & dsts,
     std::vector<unsigned> & num_sizes,
     std::vector<std::vector<size_t>> & internal_sizes,
-    const common::s3::Credentials & credentials)
+    const common::s3::Credentials & credentials,
+    bool cuda)
 {
     // verify input
     verify_requests(paths, file_offsets, bytesizes, num_sizes, dsts);
+
+    // Initialize the CUDA driver singleton on the calling thread (the Python thread),
+    // which has the correct CUDA device context set via torch.cuda.set_device().
+    // Worker threads have no CUDA context, so if we let them trigger the lazy init
+    // they would fall back to device 0 regardless of which GPU this process uses.
+    if (cuda)
+    {
+        cuda::CudaDriver::get();
+    }
 
     auto total_sizes =  std::accumulate(num_sizes.begin(), num_sizes.end(), 0u);
 
@@ -124,19 +135,34 @@ common::ResponseCode Streamer::async_request(
     // cancel responder in case of an error - cancelled response will not delay sending the next request
     utils::ScopeGuard __responder_release([&](){_responder->cancel();});
 
+    // When cuda=true and dsts has one entry per tensor (rather than one per file),
+    // pass only the first element to the Assigner so its size-check passes.
+    // The Assigner-computed destinations are overridden in Batches::build_tasks for CUDA.
+    const bool is_per_tensor_cuda = cuda && (dsts.size() > paths.size());
+    std::vector<void*> assigner_dsts = is_per_tensor_cuda ? std::vector<void*>{dsts[0]} : dsts;
 
     // divide reading between workers
-    Assigner assigner(paths, file_offsets, bytesizes, dsts, _config);
+    Assigner assigner(paths, file_offsets, bytesizes, assigner_dsts, _config);
 
     std::vector<Workload> workloads(assigner.num_workloads());
 
     // Create batches for each file
-
+    size_t tensor_offset = 0;
     for (size_t i = 0; i < paths.size(); ++i)
     {
         auto params = handle_s3(i, paths[i], credentials);
         LOG(DEBUG) << "Creating batches for file index " << i << " path: " <<  paths[i];
-        Batches batches(i, assigner.file_assignments(i), _config, _responder, paths[i], params, internal_sizes[i]);
+
+        // Slice the flat per-tensor dsts into a per-file vector for this file's Batches.
+        std::vector<void*> file_cuda_dsts;
+        if (is_per_tensor_cuda)
+        {
+            const size_t num_tensors = internal_sizes[i].size();
+            file_cuda_dsts.assign(dsts.begin() + tensor_offset, dsts.begin() + tensor_offset + num_tensors);
+            tensor_offset += num_tensors;
+        }
+
+        Batches batches(i, assigner.file_assignments(i), _config, _responder, paths[i], params, internal_sizes[i], cuda, std::move(file_cuda_dsts));
         const auto num_batches = batches.size();
         LOG(DEBUG) << "Created " << num_batches << " batches for file index " << i;
         for (size_t j = 0; j < num_batches; ++j)

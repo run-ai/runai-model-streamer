@@ -88,8 +88,12 @@ Batches::Batches(unsigned file_index,
                  std::shared_ptr<common::Responder> responder,
                  const std::string & path,
                  const common::s3::S3ClientWrapper::Params & params,
-                 const std::vector<size_t> & internal_sizes) :
+                 const std::vector<size_t> & internal_sizes,
+                 bool cuda,
+                 std::vector<void*> cuda_tensor_dsts) :
     _file_index(file_index),
+    _cuda(cuda),
+    _cuda_tensor_dsts(std::move(cuda_tensor_dsts)),
     _itr(file_read_tasks),
     _responder(responder)
 {
@@ -132,8 +136,14 @@ void Batches::build_tasks(std::shared_ptr<const Config> config, const std::strin
         // create tasks for the entire requested range before sending to the threadpool
         const size_t request_size = internal_sizes[request_index];
 
-        handle_request(v_tasks, request_index, request_file_offset, request_size, current_request_destination);
-        LOG(DEBUG) << "created request index " << request_index << " dst " << static_cast<void *>(current_request_destination);
+        // For CUDA with pre-aligned per-tensor destinations, use the supplied pointer directly.
+        // For CPU (or CUDA without per-tensor dsts), advance linearly through the buffer.
+        char * destination = (_cuda && !_cuda_tensor_dsts.empty())
+            ? static_cast<char*>(_cuda_tensor_dsts[request_index])
+            : current_request_destination;
+
+        handle_request(v_tasks, request_index, request_file_offset, request_size, destination);
+        LOG(DEBUG) << "created request index " << request_index << " dst " << static_cast<void *>(destination);
 
         current_request_destination += request_size;
         request_file_offset += request_size;
@@ -150,7 +160,7 @@ void Batches::build_tasks(std::shared_ptr<const Config> config, const std::strin
             continue;
         }
 
-        _batches.emplace_back(worker_index, _file_index, path, params, std::move(tasks), _responder, config);
+        _batches.emplace_back(worker_index, _file_index, path, params, std::move(tasks), _responder, config, _cuda);
     }
 
     for (auto & batch : _batches)

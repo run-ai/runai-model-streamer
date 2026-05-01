@@ -22,7 +22,7 @@ class LibstreamerDLLWrapper:
 
         self.fn_runai_request = self.lib.runai_request
         self.fn_runai_request.argtypes = [
-            t_streamer, 
+            t_streamer,
             ctypes.c_uint32, # num_files
             ctypes.POINTER(ctypes.c_char_p), # paths
             ctypes.POINTER(ctypes.c_size_t), # file_offsets
@@ -35,6 +35,7 @@ class LibstreamerDLLWrapper:
             ctypes.c_char_p, # token
             ctypes.c_char_p, # region
             ctypes.c_char_p, # endpoint
+            ctypes.c_int,    # cuda (0 = CPU, non-zero = CUDA device memory)
         ]
         self.fn_runai_request.restype = ctypes.c_int
 

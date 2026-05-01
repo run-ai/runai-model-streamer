@@ -1,5 +1,6 @@
 import unittest
 import os
+import ctypes
 import torch
 import torch.distributed as dist
 from typing import List
@@ -12,6 +13,8 @@ from unittest.mock import patch
 
 from runai_model_streamer.distributed_streamer.distributed_streamer import (
     DistributedStreamer,
+)
+from runai_model_streamer.file_streamer.requests_iterator import (
     RUNAI_STREAMER_CUDA_ALIGNMENT_ENV_VAR,
 )
 from runai_model_streamer.file_streamer import FileChunks
@@ -268,6 +271,177 @@ class TestDistributedStreamer(unittest.TestCase):
                 f"Rank {self.rank} caught an unexpected error: '{context.exception}'"
             )
             print(f"Rank {self.rank}: Correctly caught expected timeout exception.")
+
+    def _load_cuda_mock(self):
+        """Load libcuda.so.1 and return it if it is the test mock (has call counter).
+
+        Returns None if libcuda.so.1 is not found or is the real CUDA driver
+        (which does not export get_cuMemcpyHtoDAsync_call_count).  Tests that
+        call this helper must skip when it returns None.
+        """
+        try:
+            lib = ctypes.CDLL("libcuda.so.1")
+            lib.get_cuMemcpyHtoDAsync_call_count.restype = ctypes.c_int
+            # Accessing the symbol raises AttributeError on real libcuda.so.1
+            _ = lib.reset_cuMemcpyHtoDAsync_call_count
+            return lib
+        except Exception:
+            return None
+
+    def _wrap_get_chunks_as_tensors(self, streamer):
+        """Wrap file_streamer.get_chunks to convert numpy slices to CPU torch tensors.
+
+        When _use_cuda_direct is mocked, the file_streamer reads to a CPU numpy
+        buffer (device="cpu"), but _get_chunks_cuda expects torch.Tensors so it
+        can call .numel() and pass them to dist.broadcast.  This wrapper sits
+        between the two without touching any production code.
+        """
+        orig_get_chunks = streamer.distributed_streamer.file_streamer.get_chunks
+        def _tensor_get_chunks():
+            for req_id, chunk_idx, chunk in orig_get_chunks():
+                if not isinstance(chunk, torch.Tensor):
+                    chunk = torch.as_tensor(chunk)
+                yield req_id, chunk_idx, chunk
+        streamer.distributed_streamer.file_streamer.get_chunks = _tensor_get_chunks
+
+    def test_1_success_cuda_direct_data_correctness(self):
+        """Test _get_chunks_cuda tensor-by-tensor broadcast with fixed file specs.
+
+        Mocks _use_cuda_direct to force the CUDA direct path and patches
+        torch.cuda.synchronize so the test runs without GPU hardware.
+        Uses CPU tensors throughout; data correctness is verified end-to-end.
+        """
+        file_specs = [{"size": 2580, "chunks": [500, 260, 260, 260, 260, 260, 260, 260, 260]}]
+        requests = self._prepare_file_requests(file_specs)
+        original_data_map = {}
+        for req in requests:
+            with open(req.path, "rb") as f:
+                original_data_map[req.id] = f.read()
+
+        reconstructed_data_map = {req.id: [None] * len(req.chunks) for req in requests}
+        env_vars = {"RUNAI_STREAMER_DIST": "1", "RUNAI_STREAMER_DIST_BUFFER_MIN_BYTESIZE": "0"}
+        with patch.dict(os.environ, env_vars), \
+             patch("runai_model_streamer.distributed_streamer.distributed_streamer._distributedStreamer._use_cuda_direct", return_value=True), \
+             patch("torch.cuda.synchronize"):
+            with DistributedStreamer() as streamer:
+                streamer.stream_files(requests, None, "cpu", True)
+                self._wrap_get_chunks_as_tensors(streamer)
+                for req_id, chunk_idx, data_tensor in streamer.get_chunks():
+                    reconstructed_data_map[req_id][chunk_idx] = data_tensor.cpu().numpy().tobytes()
+
+        for req in requests:
+            reconstructed_bytes = b"".join(reconstructed_data_map[req.id])
+            self.assertEqual(original_data_map[req.id], reconstructed_bytes)
+
+        if self.rank == 0:
+            print(f"\n✅ CUDA direct data correctness test verified on all {self.world_size} ranks.")
+
+    def test_1_success_cuda_direct_random_files(self):
+        """Test _get_chunks_cuda tensor-by-tensor broadcast with random file/chunk sizes."""
+        num_files = random.randint(1, 10)
+        file_specs = []
+        for _ in range(num_files):
+            total_size = random.randint(1, 1 * 1024 * 1024)
+            chunks = []
+            remaining = total_size
+            while remaining > 0:
+                chunk = random.randint(1, min(remaining, 256 * 1024))
+                chunks.append(chunk)
+                remaining -= chunk
+            file_specs.append({"size": total_size, "chunks": chunks})
+
+        requests = self._prepare_file_requests(file_specs)
+        original_data_map = {}
+        for req in requests:
+            with open(req.path, "rb") as f:
+                original_data_map[req.id] = f.read()
+
+        reconstructed_data_map = {req.id: [None] * len(req.chunks) for req in requests}
+        env_vars = {"RUNAI_STREAMER_DIST": "1", "RUNAI_STREAMER_DIST_BUFFER_MIN_BYTESIZE": "0"}
+        with patch.dict(os.environ, env_vars), \
+             patch("runai_model_streamer.distributed_streamer.distributed_streamer._distributedStreamer._use_cuda_direct", return_value=True), \
+             patch("torch.cuda.synchronize"):
+            with DistributedStreamer() as streamer:
+                streamer.stream_files(requests, None, "cpu", True)
+                self._wrap_get_chunks_as_tensors(streamer)
+                for req_id, chunk_idx, data_tensor in streamer.get_chunks():
+                    reconstructed_data_map[req_id][chunk_idx] = data_tensor.cpu().numpy().tobytes()
+
+        for req in requests:
+            reconstructed_bytes = b"".join(reconstructed_data_map[req.id])
+            self.assertEqual(original_data_map[req.id], reconstructed_bytes)
+
+        if self.rank == 0:
+            print(f"\n✅ CUDA direct random files test verified on all {self.world_size} ranks.")
+
+    def test_1_success_cuda_direct_verifies_mock(self):
+        """Verify that the CUDA direct path actually calls cuMemcpyHtoDAsync.
+
+        Loads libcuda.so.1 via ctypes and checks the call counter exported by
+        the mock.  Skips automatically when the mock is not in LD_LIBRARY_PATH
+        (real GPU machine or no mock built) — identical skip logic to
+        ReadCuda/Sanity in batch_cuda_test.cc.
+
+        torch.empty is redirected to CPU so no real GPU is needed; data
+        correctness is verified end-to-end alongside the counter check.
+        """
+        if self.world_size < 2:
+            self.skipTest("Distributed CUDA direct test requires at least 2 processes.")
+
+        cuda_mock = self._load_cuda_mock()
+        if cuda_mock is None:
+            self.skipTest("Mock libcuda.so.1 not available — set LD_LIBRARY_PATH to the mock build directory.")
+
+        file_specs = [{"size": 2580, "chunks": [500, 260, 260, 260, 260, 260, 260, 260, 260]}]
+        requests = self._prepare_file_requests(file_specs)
+        original_data_map = {}
+        for req in requests:
+            with open(req.path, "rb") as f:
+                original_data_map[req.id] = f.read()
+
+        cuda_mock.reset_cuMemcpyHtoDAsync_call_count()
+
+        # Redirect torch.empty(device="cuda:X") to CPU so tests run without a GPU.
+        _orig_empty = torch.empty
+        def _cpu_empty(*args, **kwargs):
+            if str(kwargs.get("device", "")).startswith("cuda"):
+                kwargs = {**kwargs, "device": "cpu"}
+            return _orig_empty(*args, **kwargs)
+
+        reconstructed_data_map = {req.id: [None] * len(req.chunks) for req in requests}
+        env_vars = {"RUNAI_STREAMER_DIST": "1", "RUNAI_STREAMER_DIST_BUFFER_MIN_BYTESIZE": "0"}
+        with patch.dict(os.environ, env_vars), \
+             patch("torch.cuda.is_available", return_value=True), \
+             patch("torch.empty", side_effect=_cpu_empty), \
+             patch("torch.cuda.mem_get_info", return_value=(2**33, 2**33)), \
+             patch("torch.cuda.synchronize"):
+            with DistributedStreamer() as streamer:
+                # Bypass the gloo+non-cpu backend check in set_is_distributed so
+                # distributed streaming is active even with device="cuda:0".
+                def _force_distributed(is_distributed, device):
+                    streamer.is_distributed = (
+                        is_distributed
+                        and dist.is_initialized()
+                        and dist.get_world_size() > 1
+                    )
+                with patch.object(streamer, "set_is_distributed", side_effect=_force_distributed):
+                    streamer.stream_files(requests, None, "cuda:0", True)
+                for req_id, chunk_idx, data_tensor in streamer.get_chunks():
+                    reconstructed_data_map[req_id][chunk_idx] = data_tensor.cpu().numpy().tobytes()
+
+        call_count = cuda_mock.get_cuMemcpyHtoDAsync_call_count()
+        self.assertGreater(
+            call_count, 0,
+            f"Rank {self.rank}: expected cuMemcpyHtoDAsync to be called but count was {call_count}"
+        )
+
+        for req in requests:
+            reconstructed_bytes = b"".join(reconstructed_data_map[req.id])
+            self.assertEqual(original_data_map[req.id], reconstructed_bytes)
+
+        if self.rank == 0:
+            print(f"\n✅ CUDA mock verified: cuMemcpyHtoDAsync called {call_count} times, data correct on all {self.world_size} ranks.")
+
 
 if __name__ == '__main__':
     unittest.main()
