@@ -11,6 +11,7 @@
 
 #include <azure/storage/blobs.hpp>
 #include <azure/identity/default_azure_credential.hpp>
+#include <azure/identity/managed_identity_credential.hpp>
 #include <azure/storage/common/storage_credential.hpp>
 #include <azure/core/exception.hpp>
 
@@ -34,6 +35,7 @@ AzureClient::AzureClient(const common::backend_api::ObjectClientConfig_t& config
     // ClientConfiguration reads environment variables
     _account_name = _client_config.account_name;
     _account_key = _client_config.account_key;
+    _client_id = _client_config.client_id;
 #ifdef AZURITE_TESTING
     _connection_string = _client_config.connection_string;
 #endif
@@ -61,6 +63,10 @@ AzureClient::AzureClient(const common::backend_api::ObjectClientConfig_t& config
                 _connection_string = std::string(value);
             }
 #endif
+            else if (strcmp(key, "client_id") == 0)
+            {
+                _client_id = std::string(value);
+            }
             else
             {
                 LOG(WARNING) << "Unknown Azure parameter: " << key;
@@ -101,15 +107,32 @@ AzureClient::AzureClient(const common::backend_api::ObjectClientConfig_t& config
                 _blob_service_client = std::make_shared<BlobServiceClient>(url, credential, options);
                 LOG(DEBUG) << "Azure client initialized with StorageSharedKeyCredential for account: " << _account_name.value();
             } else {
-                // Use DefaultAzureCredential (managed identity, Azure CLI, environment variables, etc.)
-                // Reference: https://learn.microsoft.com/en-us/azure/developer/cpp/sdk/authentication
                 std::string url = "https://" + _account_name.value() + ".blob.core.windows.net";
-                // Share a single DefaultAzureCredential across all clients in the process to better
-                // utilize token caching and reduce chances of overwhelming authentication sources
-                // (e.g., IMDS) which can result in fatal throttling errors.
-                static auto credential = std::make_shared<Azure::Identity::DefaultAzureCredential>();
+                std::shared_ptr<Azure::Core::Credentials::TokenCredential> credential;
+
+                // Try DefaultAzureCredential first, fall back to ManagedIdentityCredential
+                // with explicit client_id (through AZURE_CLIENT_ID env variable).
+                try {
+                    LOG(DEBUG) << "Trying DefaultAzureCredential";
+                    auto default_cred = std::make_shared<Azure::Identity::DefaultAzureCredential>();
+                    Azure::Core::Credentials::TokenRequestContext token_ctx;
+                    token_ctx.Scopes = {"https://storage.azure.com/.default"};
+                    Azure::Core::Context ctx;
+                    (void)default_cred->GetToken(token_ctx, ctx); // force auth now
+                    credential = default_cred;
+                    LOG(DEBUG) << "Azure client initialized with DefaultAzureCredential for account: " << _account_name.value();
+                } catch (const std::exception& e) {
+                    LOG(WARNING) << "DefaultAzureCredential failed: " << e.what();
+                    if (_client_id.has_value()) {
+                        LOG(DEBUG) << "Falling back to ManagedIdentityCredential";
+                        credential = std::make_shared<Azure::Identity::ManagedIdentityCredential>(_client_id.value());
+                        LOG(DEBUG) << "Azure client initialized with ManagedIdentityCredential for account: " << _account_name.value();
+                    } else {
+                        throw;
+                    }
+                }
                 _blob_service_client = std::make_shared<BlobServiceClient>(url, credential, options);
-                LOG(DEBUG) << "Azure client initialized with DefaultAzureCredential for account: " << _account_name.value();
+                LOG(DEBUG) << "Azure client initialized with token credential for account: " << _account_name.value();
             }
         } else {
 #ifdef AZURITE_TESTING
@@ -141,6 +164,7 @@ bool AzureClient::verify_credentials(const common::backend_api::ObjectClientConf
     ClientConfiguration temp_config;
     std::optional<std::string> temp_account_name = temp_config.account_name;
     std::optional<std::string> temp_account_key = temp_config.account_key;
+    std::optional<std::string> temp_client_id = temp_config.client_id;
 #ifdef AZURITE_TESTING
     std::optional<std::string> temp_connection_string = temp_config.connection_string;
 #endif
@@ -151,6 +175,7 @@ bool AzureClient::verify_credentials(const common::backend_api::ObjectClientConf
         for (size_t i = 0; i < config.num_initial_params; ++i, ++ptr) {
             if (strcmp(ptr->key, "account_name") == 0) temp_account_name = std::string(ptr->value);
             else if (strcmp(ptr->key, "account_key") == 0) temp_account_key = std::string(ptr->value);
+            else if (strcmp(ptr->key, "client_id") == 0) temp_client_id = std::string(ptr->value);
 #ifdef AZURITE_TESTING
             else if (strcmp(ptr->key, "connection_string") == 0) temp_connection_string = std::string(ptr->value);
 #endif
@@ -162,7 +187,9 @@ bool AzureClient::verify_credentials(const common::backend_api::ObjectClientConf
         return (_connection_string == temp_connection_string);
     }
 #endif
-    return (_account_name == temp_account_name) && (_account_key == temp_account_key);
+    return (_account_name == temp_account_name)
+        && (_account_key == temp_account_key)
+        && (_client_id == temp_client_id);
 }
 
 common::backend_api::Response AzureClient::async_read_response()

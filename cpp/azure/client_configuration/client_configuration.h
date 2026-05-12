@@ -11,6 +11,8 @@ struct ClientConfiguration
     // Azure client configuration options
     std::optional<std::string> account_name;
     std::optional<std::string> account_key;
+    // Client ID for user-assigned managed identity
+    std::optional<std::string> client_id;
 #ifdef AZURITE_TESTING
     // Connection string is only available for Azurite/local testing
     std::optional<std::string> connection_string;
