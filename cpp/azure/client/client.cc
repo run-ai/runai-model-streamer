@@ -27,6 +27,27 @@ namespace runai::llm::streamer::impl::azure
 
 constexpr char kAzureApplicationId[] = "azpartner-runai";
 
+// Thread-safe singleton providing shared DefaultAzureCredential instance.
+// All AzureClient instances share the same credential object and its token cache,
+// avoiding duplicate IMDS/Azure AD requests under concurrent load.
+// GetToken() is called once during initialization as a fail-fast mechanism to validate
+// the credential chain early (catches missing env vars, IMDS unavailable, etc.).
+std::shared_ptr<Azure::Identity::DefaultAzureCredential> GetSharedDefaultAzureCredential() {
+    static std::shared_ptr<Azure::Identity::DefaultAzureCredential> shared_credential;
+    static std::once_flag init_flag;
+    std::call_once(init_flag, []() {
+        auto cred = std::make_shared<Azure::Identity::DefaultAzureCredential>();
+        // Validate credential chain early via GetToken() as fail-fast mechanism.
+        Azure::Core::Credentials::TokenRequestContext token_ctx;
+        token_ctx.Scopes = {"https://storage.azure.com/.default"};
+        Azure::Core::Context ctx = Azure::Core::Context::ApplicationContext.WithDeadline(
+            std::chrono::system_clock::now() + std::chrono::seconds(5));
+        (void)cred->GetToken(token_ctx, ctx); // throws if credential chain fails
+        shared_credential = cred; // only assign if GetToken() succeeds
+    });
+    return shared_credential;
+}
+
 AzureClient::AzureClient(const common::backend_api::ObjectClientConfig_t& config) :
     _stop(false),
     _responder(nullptr),
@@ -110,16 +131,14 @@ AzureClient::AzureClient(const common::backend_api::ObjectClientConfig_t& config
                 std::string url = "https://" + _account_name.value() + ".blob.core.windows.net";
                 std::shared_ptr<Azure::Core::Credentials::TokenCredential> credential;
 
-                // Try DefaultAzureCredential first, fall back to ManagedIdentityCredential
-                // with explicit client_id (through AZURE_CLIENT_ID env variable).
+                // Try DefaultAzureCredential first, fall back to ManagedIdentityCredential.
+                // NOTE: Uses a shared process-level DefaultAzureCredential singleton that calls
+                // GetToken() once during initialization (fail-fast validation). All clients share
+                // the same instance and its cached token, avoiding IMDS throttling under concurrent load.
+                // Subsequent clients reuse the validated shared instance and its token cache.
                 try {
                     LOG(DEBUG) << "Trying DefaultAzureCredential";
-                    auto default_cred = std::make_shared<Azure::Identity::DefaultAzureCredential>();
-                    Azure::Core::Credentials::TokenRequestContext token_ctx;
-                    token_ctx.Scopes = {"https://storage.azure.com/.default"};
-                    Azure::Core::Context ctx;
-                    (void)default_cred->GetToken(token_ctx, ctx); // force auth now
-                    credential = default_cred;
+                    credential = GetSharedDefaultAzureCredential();
                     LOG(DEBUG) << "Azure client initialized with DefaultAzureCredential for account: " << _account_name.value();
                 } catch (const std::exception& e) {
                     LOG(WARNING) << "DefaultAzureCredential failed: " << e.what();
