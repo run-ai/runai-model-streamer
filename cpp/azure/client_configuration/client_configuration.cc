@@ -29,16 +29,17 @@ ClientConfiguration::ClientConfiguration()
     }
 
     // Account name configuration from environment variable
-    // Authentication uses DefaultAzureCredential which supports:
-    // - Environment variables (AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_CLIENT_SECRET)
-    // - Managed Identity
-    // - Azure CLI
-    // - Visual Studio Code
-    // Reference: https://learn.microsoft.com/en-us/azure/developer/cpp/sdk/authentication
     const auto acct_name = utils::getenv<std::string>("AZURE_STORAGE_ACCOUNT_NAME", "");
     if (!acct_name.empty()) {
         LOG(DEBUG) << "Azure Storage account name: " << acct_name;
         account_name = acct_name;
+    }
+
+    // Client ID used for fallback authentication when DefaultAzureCredential cannot authenticate.
+    const auto cid = utils::getenv<std::string>("AZURE_CLIENT_ID", "");
+    if (!cid.empty()) {
+        LOG(DEBUG) << "May be AZURE_CLIENT_ID for Managed Identity authentication as a fallback option";
+        client_id = cid;
     }
 
     unsigned nprocs = std::thread::hardware_concurrency();
