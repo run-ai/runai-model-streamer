@@ -185,7 +185,7 @@ def list_files(
             # walk_blobs returns BlobProperties for blobs and BlobPrefix for directories
             # We only want blobs (files), not prefixes (directories)
 
-            # When listing against ADLS we might encounter directories thatdo not have a trailing slash 
+            # When listing against ADLS, we might encounter directories that don't have a trailing slash 
             # So, we use metadata to filter them out
             if hasattr(item, 'name') and not item.name.endswith('/') and not _is_adls_directory(item):
                 paths.append(item.name)
@@ -222,14 +222,14 @@ def removeprefix(s: str, prefix: str) -> str:
         return s[len(prefix):]
     return s
 
-def _is_adls_directory(self, blob: BlobProperties) -> bool:
+def _is_adls_directory(blob: BlobProperties) -> bool:
         # Directory stubs in HNS accounts are zero-byte blobs with hdi_isfolder=true metadata 
         metadata = getattr(blob, "metadata", None) 
-        if metadata is not None: 
-            if blob.size == 0 and str(blob.metadata.get("hdi_isfolder")).lower() == "true":
+        if metadata is not None and blob.size == 0: 
+            if blob.size == 0 and str(metadata.get("hdi_isfolder")).lower() == "true":
                 return True 
             
             # Handle capitalized case 
-            if blob.size == 0 and str(blob.metadata.get("Hdi_isfolder")).lower() == "true":
+            if blob.size == 0 and str(metadata.get("Hdi_isfolder")).lower() == "true":
                 return True
         return False
