@@ -228,8 +228,4 @@ def _is_adls_directory(blob: BlobProperties) -> bool:
         if metadata is not None and blob.size == 0: 
             if blob.size == 0 and str(metadata.get("hdi_isfolder")).lower() == "true":
                 return True 
-            
-            # Handle capitalized case 
-            if blob.size == 0 and str(metadata.get("Hdi_isfolder")).lower() == "true":
-                return True
         return False
