@@ -1,4 +1,4 @@
-load("//:rules.bzl", "runai_cc_auto_library")
+load("//:rules.bzl", "runai_cc_auto_library", "runai_cc_test")
 
 runai_cc_auto_library(
     name = "client",
@@ -16,4 +16,10 @@ runai_cc_auto_library(
         "//utils/env",
         "//utils/fd",
     ],
+)
+
+runai_cc_test(
+    name = "client_test",
+    srcs = ["client_test.cc"],
+    deps = [":client"],
 )

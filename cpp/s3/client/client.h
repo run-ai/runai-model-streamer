@@ -5,6 +5,8 @@
 #include <string>
 #include <optional>
 
+#include <aws/core/http/Scheme.h>
+
 #include "s3/client_configuration/client_configuration.h"
 #include "common/backend_api/response/response.h"
 
@@ -17,6 +19,17 @@
 
 namespace runai::llm::streamer::impl::s3
 {
+
+// Strip the scheme (http:// or https://) from an endpoint URL and return the
+// corresponding Aws::Http::Scheme.  When no scheme is present the endpoint is
+// returned unchanged and the scheme defaults to HTTPS.
+struct EndpointParseResult
+{
+    Aws::String host;
+    Aws::Http::Scheme scheme;
+};
+
+EndpointParseResult parse_endpoint_scheme(const Aws::String & endpoint);
 
 struct S3ClientBase : common::IClient
 {

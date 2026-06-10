@@ -1,4 +1,5 @@
 
+#include <aws/core/http/Scheme.h>
 #include <aws/s3-crt/model/GetObjectRequest.h>
 
 #include <cstring>
@@ -18,6 +19,34 @@
 
 namespace runai::llm::streamer::impl::s3
 {
+
+static bool starts_with_ci(const Aws::String & str, const Aws::String & prefix)
+{
+    if (str.size() < prefix.size()) return false;
+    for (size_t i = 0; i < prefix.size(); ++i)
+    {
+        if (std::tolower(static_cast<unsigned char>(str[i])) !=
+            std::tolower(static_cast<unsigned char>(prefix[i])))
+            return false;
+    }
+    return true;
+}
+
+EndpointParseResult parse_endpoint_scheme(const Aws::String & endpoint)
+{
+    const Aws::String https_prefix("https://");
+    const Aws::String http_prefix("http://");
+
+    if (starts_with_ci(endpoint, https_prefix))
+    {
+        return { endpoint.substr(https_prefix.size()), Aws::Http::Scheme::HTTPS };
+    }
+    if (starts_with_ci(endpoint, http_prefix))
+    {
+        return { endpoint.substr(http_prefix.size()), Aws::Http::Scheme::HTTP };
+    }
+    return { endpoint, Aws::Http::Scheme::HTTPS };
+}
 
 std::optional<Aws::String> convert(const char * input)
 {
@@ -105,7 +134,20 @@ S3Client::S3Client(const common::backend_api::ObjectClientConfig_t & config) :
 {
     if (_endpoint.has_value()) // endpoint passed as parameter by user application (in credentials)
     {
-        _client_config.config.endpointOverride = _endpoint.value();
+        // Strip the scheme from the endpoint and set it separately.
+        // Including http:// in endpointOverride causes the CRT to produce
+        // absolute-form request lines (GET http://host/path) which most
+        // S3-compatible servers reject.
+        auto parsed = parse_endpoint_scheme(_endpoint.value());
+        if (parsed.host.empty())
+        {
+            LOG(ERROR) << "Endpoint is empty after stripping scheme from " << _endpoint.value();
+            throw common::Exception(common::ResponseCode::FileAccessError);
+        }
+        _client_config.config.endpointOverride = parsed.host;
+        _client_config.config.scheme = parsed.scheme;
+        LOG(DEBUG) << "Setting endpoint override to " << parsed.host
+                   << " with scheme " << (parsed.scheme == Aws::Http::Scheme::HTTPS ? "HTTPS" : "HTTP");
     }
 
     if (utils::try_getenv("RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING", _client_config.config.useVirtualAddressing))
