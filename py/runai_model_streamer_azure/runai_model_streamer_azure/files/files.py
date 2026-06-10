@@ -224,9 +224,9 @@ def _is_adls_directory(blob: BlobProperties) -> bool:
     # When listing against ADLS, we might hit directory stubs (hdi_isfolder=true) that don't have a trailing slash
     # So, we use metadata to filter them out
     return (
-    blob.size == 0
-    and blob.metadata is not None
-    and (blob.metadata.get("hdi_isfolder") == "true" or
-         blob.metadata.get("Hdi_isfolder") == "true" # Sometimes, the service returns this metadata key capitalized 
-        )
+        blob.size == 0
+        and blob.metadata is not None
+        and (blob.metadata.get("hdi_isfolder") == "true" 
+            or blob.metadata.get("Hdi_isfolder") == "true" # Sometimes, the service returns this metadata key capitalized 
+            )
     )
