@@ -139,6 +139,7 @@ class DistributedStreamer:
             credentials: Optional[S3Credentials],
             device: str,
             is_distributed: bool,
+            enable_cache: bool = False,
     ) -> None:
 
         self.params.set_params(file_stream_requests)
@@ -147,9 +148,9 @@ class DistributedStreamer:
         self.set_is_distributed(is_distributed, device)
 
         if not self.is_distributed:
-            self.file_streamer.stream_files(file_stream_requests, credentials, device)
+            self.file_streamer.stream_files(file_stream_requests, credentials, device, enable_cache=enable_cache)
         else:
-            self.distributed_streamer.stream_files(file_stream_requests, credentials, device, self.params)
+            self.distributed_streamer.stream_files(file_stream_requests, credentials, device, self.params, enable_cache=enable_cache)
 
     def get_chunks(self) -> Iterator:
         if not self.file_streamer:
@@ -335,7 +336,8 @@ class _distributedStreamer:
             file_stream_requests: List[FileChunks],
             credentials: Optional[S3Credentials],
             device: str,
-            params : _distributedStreamerParams
+            params : _distributedStreamerParams,
+            enable_cache: bool = False,
     ) -> None:
 
         self.device = torch.device(device)
@@ -376,6 +378,9 @@ class _distributedStreamer:
             logger.debug(f"[RunAI Streamer][Distributed] Rank {self.original_group_rank}: No chunks to read from storage")
             return
 
+        # Set distributed config on cache so each rank caches its own partition
+        self.file_streamer._cache.set_distributed(self.rank, self.group_size)
+
         # read files
         original_memory_limit = os.environ.get("RUNAI_STREAMER_MEMORY_LIMIT")
         try:
@@ -384,7 +389,7 @@ class _distributedStreamer:
                 logger.debug(f"[RunAI Streamer][Distributed] Setting memory limit to unlimited")
             if original_memory_limit == None:
                 os.environ["RUNAI_STREAMER_MEMORY_LIMIT"] = "-1"
-            self.file_streamer.stream_files(self.rank_file_chunks_list, credentials, "cpu")
+            self.file_streamer.stream_files(self.rank_file_chunks_list, credentials, "cpu", enable_cache=enable_cache)
         except Exception as e:
             raise e
         finally:
