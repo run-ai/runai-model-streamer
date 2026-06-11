@@ -74,7 +74,7 @@ class TestListFiles(unittest.TestCase):
             self.make_blob("adls-dir1", size=0, metadata={"hdi_isfolder": "true"}), 
             self.make_blob("dir2/"),
             self.make_blob("empty-blob", size=0),
-            self.make_blob("adls-caps", size=0, metadata={"Hdi_isfolder": "True"}),  
+            self.make_blob("adls-caps", size=0, metadata={"Hdi_isfolder": "true"}),  
             self.make_blob("empty-file", size=0, metadata={"Hdi_isfolder": "false"}),
         ]
 
