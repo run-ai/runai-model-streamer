@@ -20,13 +20,10 @@
 namespace runai::llm::streamer::impl::s3
 {
 
-// Strip the scheme (http:// or https://) from an endpoint URL and return the
-// corresponding Aws::Http::Scheme.  When no scheme is present the endpoint is
-// returned unchanged and the scheme defaults to HTTPS.
 struct EndpointParseResult
 {
     Aws::String host;
-    Aws::Http::Scheme scheme;
+    std::optional<Aws::Http::Scheme> scheme;
 };
 
 EndpointParseResult parse_endpoint_scheme(const Aws::String & endpoint);

@@ -45,7 +45,7 @@ EndpointParseResult parse_endpoint_scheme(const Aws::String & endpoint)
     {
         return { endpoint.substr(http_prefix.size()), Aws::Http::Scheme::HTTP };
     }
-    return { endpoint, Aws::Http::Scheme::HTTPS };
+    return { endpoint, std::nullopt };
 }
 
 std::optional<Aws::String> convert(const char * input)
@@ -139,15 +139,22 @@ S3Client::S3Client(const common::backend_api::ObjectClientConfig_t & config) :
         // absolute-form request lines (GET http://host/path) which most
         // S3-compatible servers reject.
         auto parsed = parse_endpoint_scheme(_endpoint.value());
-        if (parsed.host.empty())
+        if (parsed.host.empty() || parsed.host[0] == ':')
         {
-            LOG(ERROR) << "Endpoint is empty after stripping scheme from " << _endpoint.value();
+            LOG(ERROR) << "Invalid endpoint (no host): " << _endpoint.value();
             throw common::Exception(common::ResponseCode::FileAccessError);
         }
         _client_config.config.endpointOverride = parsed.host;
-        _client_config.config.scheme = parsed.scheme;
-        LOG(DEBUG) << "Setting endpoint override to " << parsed.host
-                   << " with scheme " << (parsed.scheme == Aws::Http::Scheme::HTTPS ? "HTTPS" : "HTTP");
+        if (parsed.scheme.has_value())
+        {
+            _client_config.config.scheme = parsed.scheme.value();
+            LOG(DEBUG) << "Setting endpoint override to " << parsed.host
+                       << " with scheme " << (parsed.scheme.value() == Aws::Http::Scheme::HTTPS ? "HTTPS" : "HTTP");
+        }
+        else
+        {
+            LOG(DEBUG) << "Setting endpoint override to " << parsed.host << " (no explicit scheme)";
+        }
     }
 
     if (utils::try_getenv("RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING", _client_config.config.useVirtualAddressing))
