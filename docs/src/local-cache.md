@@ -3,7 +3,6 @@
 ## Overview
 
 When streaming models from object storage (S3, GCS, Azure), the first load downloads tensor data over the network. With local caching enabled, this data is simultaneously written to a local NVMe directory. On subsequent loads, the streamer reads directly from local NVMe instead of re-downloading — significantly reducing model loading time.
-Changes implemented in https://github.com/wwvela/runai-model-streamer/commits/Cache/
 
 ## How to Enable
 
