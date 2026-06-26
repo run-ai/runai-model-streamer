@@ -218,6 +218,15 @@ class StreamCache:
             elapsed = time.time() - self._cache_start_time if self._cache_start_time else 0
             logger.info(f"[RunAI Streamer][Cache] All files cached in {elapsed:.1f}s")
 
+    def finalize_all(self) -> None:
+        """Finalize all remaining cache writers."""
+        for path in list(self._writers.keys()):
+            self.finalize(path)
+
+    def has_pending_writers(self) -> bool:
+        """Return True if there are open cache writers."""
+        return len(self._writers) > 0
+
     def abort_all(self) -> None:
         """Clean up incomplete writers on error."""
         for writer in self._writers.values():

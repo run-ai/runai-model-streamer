@@ -198,8 +198,7 @@ class FileStreamer:
 
         # Finalize all remaining cache writers after streaming completes.
         if self._cache.enabled:
-            for path in list(self._cache._writers.keys()):
-                self._cache.finalize(path)
+            self._cache.finalize_all()
 
     # This function iterates over indexes of ready chunks.
     # The indexes are relative to the last request that sent
@@ -232,7 +231,7 @@ class FileStreamer:
 
     def _cache_current_batch(self) -> None:
         """Write batch data to cache, finalize files as they complete."""
-        if not self._cache.enabled or not self._cache._writers or self.active_request is None:
+        if not self._cache.enabled or not self._cache.has_pending_writers() or self.active_request is None:
             return
 
         for i, file_request in enumerate(self.active_request.files):
