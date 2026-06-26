@@ -204,14 +204,14 @@ class FileStreamer:
     # The indexes are relative to the last request that sent
     # And need to be translated to global index in the chunks list
     def request_ready_chunks(self) -> Iterator:
-        for i in range(sum(len(file_request.chunks) for file_request in self.active_request.files)):
+        for _ in range(sum(len(file_request.chunks) for file_request in self.active_request.files)):
             try:
                 file_relative_index, chunk_relative_index = runai_response(self.streamer)
             except ValueError as e:
                 current_files = [(f.path, f.offset, sum(f.chunks)) for f in self.active_request.files]
                 logger.error(f"[RunAI Streamer][Cache] Read error. Current batch files: {current_files}")
                 raise
-            if chunk_relative_index == None:
+            if chunk_relative_index is None:
                 return
 
             file_path, chunk_index, chunk_buffer = self.requests_iterator.get_global_file_and_chunk(file_relative_index, chunk_relative_index)

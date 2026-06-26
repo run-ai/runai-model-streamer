@@ -112,7 +112,7 @@ class StreamCache:
     """
 
     def __init__(self, cache_dir: Optional[str] = None) -> None:
-        self._cache_dir = cache_dir or os.getenv(RUNAI_STREAMER_CACHE_DIR_ENV)
+        self._cache_dir = (cache_dir or os.getenv(RUNAI_STREAMER_CACHE_DIR_ENV) or "").strip() or None
         self._writers: Dict[str, _CacheWriter] = {}
         self._cache_start_time: Optional[float] = None
         self._rank: int = 0
