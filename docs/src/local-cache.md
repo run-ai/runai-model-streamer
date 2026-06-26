@@ -138,7 +138,7 @@ Multiple TP workers run as separate processes and may try to cache the same file
 
 - Each worker writes to its own `.partial.<pid>` file (unique per process)
 - On finalize, if the final file already exists (another worker finished first), the worker silently cleans up its partial file
-- No corruption, no errors — first writer wins
+- No corruption from the race — first writer wins, others clean up silently. Other I/O failures (disk full, permissions) are logged as errors.
 
 ## Performance Characteristics
 
@@ -152,7 +152,7 @@ Multiple TP workers run as separate processes and may try to cache the same file
 The first-load overhead comes from inline `os.write()` calls. This is minimal because:
 - NVMe write bandwidth is high (~5 GB/s)
 - Writes use the buffer protocol (no Python-level copy)
-- Files are finalized (fsync + rename) incrementally as each completes
+- Files are finalized (atomic rename + sentinel write) incrementally as each completes
 
 ## Logging
 
