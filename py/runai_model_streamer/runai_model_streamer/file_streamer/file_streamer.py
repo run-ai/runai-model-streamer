@@ -234,19 +234,23 @@ class FileStreamer:
         if not self._cache.enabled or not self._cache.has_pending_writers() or self.active_request is None:
             return
 
-        for i, file_request in enumerate(self.active_request.files):
-            original_path = file_request.path
+        try:
+            for i, file_request in enumerate(self.active_request.files):
+                original_path = file_request.path
 
-            buf = self.requests_iterator.file_buffers[i]
-            size = sum(file_request.chunks)
-            if size == 0:
-                continue
+                buf = self.requests_iterator.file_buffers[i]
+                size = sum(file_request.chunks)
+                if size == 0:
+                    continue
 
-            data = memoryview(buf)[:size]
+                data = memoryview(buf)[:size]
 
-            self._cache.append_data(original_path, data)
-            self._cache_written_bytes[original_path] = self._cache_written_bytes.get(original_path, 0) + size
+                self._cache.append_data(original_path, data)
+                self._cache_written_bytes[original_path] = self._cache_written_bytes.get(original_path, 0) + size
 
-            # Finalize as soon as all bytes for this file are written
-            if self._cache_written_bytes[original_path] >= self._cache_expected_bytes.get(original_path, 0):
-                self._cache.finalize(original_path)
+                # Finalize as soon as all bytes for this file are written
+                if self._cache_written_bytes[original_path] >= self._cache_expected_bytes.get(original_path, 0):
+                    self._cache.finalize(original_path)
+        except OSError as e:
+            logger.warning(f"[RunAI Streamer][Cache] Cache write failed ({e}), disabling cache for this session")
+            self._cache.abort_all()
