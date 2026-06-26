@@ -200,7 +200,10 @@ class StreamCache:
             self._cache_start_time = time.time()
 
         logger.info(f"[RunAI Streamer][Cache] Opening cache writer for: {remote_path} ({total_bytes} bytes, rank={self._rank}, tp={self._world_size})")
-        self._writers[remote_path] = _CacheWriter(self._cache_dir, remote_path, file_offset, self._rank, self._world_size)
+        try:
+            self._writers[remote_path] = _CacheWriter(self._cache_dir, remote_path, file_offset, self._rank, self._world_size)
+        except OSError as e:
+            logger.warning(f"[RunAI Streamer][Cache] Failed to create cache writer for {remote_path}: {e} — caching skipped for this file")
 
     def append_data(self, remote_path: str, data: bytes) -> None:
         """Append streamed data to the cache file."""
