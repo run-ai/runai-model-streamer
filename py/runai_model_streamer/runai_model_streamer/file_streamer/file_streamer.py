@@ -75,6 +75,8 @@ class FileStreamer:
         logger.info(
             f"[RunAI Streamer] Overall time to stream {humanize.naturalsize(size, binary=True)} of all files to {self.device_str}: {round(elapsed_time, 2)}s, {humanize.naturalsize(throughput, binary=True)}/s"
         )
+        if exc_type is not None and self._cache.enabled:
+            self._cache.abort_all()
         if self.streamer:
             runai_end(self.streamer)
 
@@ -115,12 +117,16 @@ class FileStreamer:
 
         # Check cache: only use cached paths if ALL unique files hit cache (the C++ layer
         # does not support mixed local/remote paths in a single request).
+        # Build lookup once to avoid TOCTOU race (file could be deleted between check and use).
         use_cache = enable_cache and self._cache.enabled
         unique_paths = list(dict.fromkeys(self._cache_original_paths))
-        all_cached = use_cache and all(
-            self._cache.cached_path_and_offset(p) is not None
-            for p in unique_paths
-        )
+        cache_lookup = {}
+        if use_cache:
+            for p in unique_paths:
+                result = self._cache.cached_path_and_offset(p)
+                if result is not None:
+                    cache_lookup[p] = result
+        all_cached = use_cache and len(cache_lookup) == len(unique_paths)
 
         if use_cache:
             num_files = len(self._cache_original_paths)
@@ -134,7 +140,7 @@ class FileStreamer:
         for i, file_stream_request in enumerate(file_stream_requests):
             if all_cached:
                 original = self._cache_original_paths[i]
-                cached_path, _ = self._cache.cached_path_and_offset(original)
+                cached_path, _ = cache_lookup[original]
                 file_stream_request.path = cached_path
                 # Set offset to cumulative position within the cached file
                 file_stream_request.offset = cache_offset_tracker.get(original, 0)
