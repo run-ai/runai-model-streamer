@@ -168,7 +168,8 @@ class StreamCache:
                     )
                     return None
             except (json.JSONDecodeError, OSError):
-                pass  # Old-format sentinel, trust the key-based matching
+                logger.info(f"[RunAI Streamer][Cache] INVALID: {remote_path} sentinel unreadable — treating as miss")
+                return None
 
             file_size = os.path.getsize(local_path)
             logger.info(f"[RunAI Streamer][Cache] HIT: {remote_path} -> {local_path} ({file_size} bytes)")
