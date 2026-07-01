@@ -108,6 +108,11 @@ struct S3ClientWrapper
       common::ResponseCode async_read(const Params & params, backend_api::ObjectRequestId_t request_id, const Range & ranges, char * buffer);
       common::ResponseCode async_read_response(std::vector<backend_api::ObjectCompletionEvent_t> & event_buffer, unsigned max_events_to_retrieve);
 
+      common::ResponseCode list_files(const char* prefix, int is_recursive,
+                                      backend_api::ObjectFileEntry_t** out_entries,
+                                      unsigned* out_num_entries);
+      void free_file_list(backend_api::ObjectFileEntry_t* entries, unsigned num_entries);
+
       // stop - stops the responder of each S3 client, in order to notify callers which sent a request and are waiting for a response
       //        required for stopping the threadpool workers, which are bloking on the client responder
       static void stop();

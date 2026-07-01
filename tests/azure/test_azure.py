@@ -6,7 +6,7 @@ from azure.storage.blob import BlobServiceClient
 from azure.core.exceptions import ServiceRequestError, ResourceNotFoundError
 
 from tests.cases.interface import ObjectStoreBackend
-from tests.cases.testcases import compatibility_test_cases
+from tests.cases.testcases import compatibility_test_cases, list_files_test_cases
 
 
 class AzuriteServer(ObjectStoreBackend):
@@ -50,6 +50,12 @@ class AzuriteServer(ObjectStoreBackend):
 
 
 TestAzureCompatibility = compatibility_test_cases(
+    backend_class=AzuriteServer,
+    scheme="az",
+    bucket_name=os.getenv("AZURE_CONTAINER")
+)
+
+TestAzureListFiles = list_files_test_cases(
     backend_class=AzuriteServer,
     scheme="az",
     bucket_name=os.getenv("AZURE_CONTAINER")

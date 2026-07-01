@@ -7,7 +7,7 @@ from google.auth.credentials import AnonymousCredentials
 from google.api_core import exceptions as gcs_exceptions
 
 from tests.cases.interface import ObjectStoreBackend
-from tests.cases.testcases import compatibility_test_cases
+from tests.cases.testcases import compatibility_test_cases, list_files_test_cases
 
 class FakeGCSServer(ObjectStoreBackend):
     """A helper class to interact with a GCS-compatible test server."""
@@ -44,6 +44,12 @@ class FakeGCSServer(ObjectStoreBackend):
 
 
 TestGCSCompatibility = compatibility_test_cases(
+    backend_class = FakeGCSServer,
+    scheme = "gs",
+    bucket_name = os.getenv("GCS_BUCKET")
+)
+
+TestGCSListFiles = list_files_test_cases(
     backend_class = FakeGCSServer,
     scheme = "gs",
     bucket_name = os.getenv("GCS_BUCKET")

@@ -82,4 +82,18 @@ extern "C" common::backend_api::ResponseCode_t obj_cancel_all_reads();
 // release clients
 extern "C" common::backend_api::ResponseCode_t obj_remove_all_clients();
 
+// list files
+extern "C" common::backend_api::ResponseCode_t obj_list_files(
+    common::backend_api::ObjectClientHandle_t client_handle,
+    const char* prefix,
+    int is_recursive,
+    common::backend_api::ObjectFileEntry_t** out_entries,
+    unsigned* out_num_entries
+);
+
+extern "C" void obj_free_file_list(
+    common::backend_api::ObjectFileEntry_t* entries,
+    unsigned num_entries
+);
+
 }; //namespace runai::llm::streamer::impl::azure

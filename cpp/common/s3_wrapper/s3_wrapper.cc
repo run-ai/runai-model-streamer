@@ -266,6 +266,31 @@ common::ResponseCode S3ClientWrapper::async_read_response(std::vector<backend_ap
     return ret;
 }
 
+common::ResponseCode S3ClientWrapper::list_files(
+    const char* prefix,
+    int is_recursive,
+    common::backend_api::ObjectFileEntry_t** out_entries,
+    unsigned* out_num_entries)
+{
+    auto list_files_ = _backend_handle->dylib_ptr->dlsym<
+        common::backend_api::ResponseCode_t(*)(
+            common::backend_api::ObjectClientHandle_t,
+            const char*,
+            int,
+            common::backend_api::ObjectFileEntry_t**,
+            unsigned*)>("obj_list_files");
+    return list_files_(_s3_client, prefix, is_recursive, out_entries, out_num_entries);
+}
+
+void S3ClientWrapper::free_file_list(
+    common::backend_api::ObjectFileEntry_t* entries,
+    unsigned num_entries)
+{
+    auto free_file_list_ = _backend_handle->dylib_ptr->dlsym<
+        void(*)(common::backend_api::ObjectFileEntry_t*, unsigned)>("obj_free_file_list");
+    free_file_list_(entries, num_entries);
+}
+
 common::backend_api::ObjectShutdownPolicy_t S3ClientWrapper::get_backend_shutdown_policy(std::shared_ptr<S3ClientWrapper::BackendHandle> handle)
 {
     ASSERT(handle != nullptr) << "object storage backend handle is not initialized";

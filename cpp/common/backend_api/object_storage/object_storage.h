@@ -201,4 +201,40 @@ ResponseCode_t obj_cancel_all_reads();
  */
 ResponseCode_t obj_remove_all_clients();
 
+// --- File Listing ---
+
+/**
+ * A single entry returned by obj_list_files.
+ * 'path' is heap-allocated (strdup) and must be freed via obj_free_file_list.
+ */
+struct ObjectFileEntry_t
+{
+    char*  path;  // full URI (e.g. "s3://bucket/key"), null-terminated
+    size_t size;  // file size in bytes
+};
+
+/**
+ * Synchronously lists all files under a given URI prefix.
+ * Cloud pagination is handled internally; the full result is returned in one call.
+ *
+ * - client_handle   - handle obtained from obj_create_client
+ * - prefix          - full URI prefix to list (e.g. "s3://bucket/models/")
+ * - is_recursive    - 0 = immediate children only, non-zero = all descendants
+ * - out_entries     - set to a malloc'd array of ObjectFileEntry_t; free with obj_free_file_list
+ * - out_num_entries - number of entries in *out_entries
+ * Returns Success or an error code.
+ */
+ResponseCode_t obj_list_files(
+    ObjectClientHandle_t  client_handle,
+    const char*           prefix,
+    int                   is_recursive,
+    ObjectFileEntry_t**   out_entries,
+    unsigned*             out_num_entries
+);
+
+/**
+ * Frees the array returned by obj_list_files.
+ */
+void obj_free_file_list(ObjectFileEntry_t* entries, unsigned num_entries);
+
 } // namespace runai::llm::streamer::common::backend_api

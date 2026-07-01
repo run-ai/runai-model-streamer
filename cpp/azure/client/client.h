@@ -4,6 +4,8 @@
 #include <memory>
 #include <string>
 #include <optional>
+#include <utility>
+#include <vector>
 
 #include "azure/client_configuration/client_configuration.h"
 #include "azure/client/async_azure_client/async_azure_client.h"
@@ -28,12 +30,15 @@ struct AzureClient : common::IClient
     // verify that client's credentials have not changed
     bool verify_credentials(const common::backend_api::ObjectClientConfig_t & config) const;
 
-    common::ResponseCode async_read(const char* path, 
-                                    common::backend_api::ObjectRange_t range, 
-                                    char* destination_buffer, 
+    common::ResponseCode async_read(const char* path,
+                                    common::backend_api::ObjectRange_t range,
+                                    char* destination_buffer,
                                     common::backend_api::ObjectRequestId_t request_id);
 
     common::backend_api::Response async_read_response();
+
+    common::ResponseCode list_files(const char* prefix, int is_recursive,
+                                    std::vector<std::pair<std::string, size_t>>& results);
 
     // Stop sending requests to the object store
     // If stopped before all requests for an async_read() call are sent, subsequent request chunks will not be sent.

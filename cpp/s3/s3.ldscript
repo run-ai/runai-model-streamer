@@ -9,5 +9,7 @@
         obj_cancel_all_reads;
         obj_remove_all_clients;
         obj_get_backend_shutdown_policy;
+        obj_list_files;
+        obj_free_file_list;
     local: *;
 };

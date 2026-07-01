@@ -4,6 +4,8 @@
 #include <memory>
 #include <string>
 #include <optional>
+#include <utility>
+#include <vector>
 
 #include <aws/core/http/Scheme.h>
 
@@ -58,6 +60,11 @@ struct S3Client : S3ClientBase
                                                    common::backend_api::ObjectRequestId_t request_id);
 
     common::backend_api::Response async_read_response();
+
+    // Synchronously lists all objects under prefix (full URI, e.g. "s3://bucket/models/").
+    // Appends (full_uri, size) pairs to results; handles S3 pagination internally.
+    common::ResponseCode list_files(const char* prefix, int is_recursive,
+                                    std::vector<std::pair<std::string, size_t>>& results);
 
     // Stop sending requests to the object store
     // Requests that were already sent cannot be cancelled, since the Aws S3CrtClient does not support aborting requests

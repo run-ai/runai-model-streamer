@@ -46,5 +46,29 @@ class LibstreamerDLLWrapper:
         self.fn_runai_response_str.argtypes = [ctypes.c_int]
         self.fn_runai_response_str.restype = ctypes.c_char_p
 
+        RunaiFileListCallback = ctypes.CFUNCTYPE(
+            None,                # return void
+            ctypes.c_char_p,     # path
+            ctypes.c_size_t,     # file_size
+            ctypes.c_void_p,     # user_data
+        )
+        self.RunaiFileListCallback = RunaiFileListCallback
+
+        self.fn_runai_list_files = self.lib.runai_list_files
+        self.fn_runai_list_files.argtypes = [
+            ctypes.c_char_p,                         # prefix
+            ctypes.c_int,                            # is_recursive
+            ctypes.POINTER(ctypes.c_char_p),         # allow_patterns
+            ctypes.c_uint,                           # num_allow_patterns
+            ctypes.POINTER(ctypes.c_char_p),         # ignore_patterns
+            ctypes.c_uint,                           # num_ignore_patterns
+            RunaiFileListCallback,                   # callback
+            ctypes.c_void_p,                         # user_data
+            ctypes.POINTER(ctypes.c_char_p),         # param_keys
+            ctypes.POINTER(ctypes.c_char_p),         # param_values
+            ctypes.c_uint,                           # num_params
+        ]
+        self.fn_runai_list_files.restype = ctypes.c_int
+
 
 dll = LibstreamerDLLWrapper(STREAMER_LIBRARY)

@@ -161,4 +161,45 @@ void GCSClient::stop()
     }
 }
 
+common::ResponseCode GCSClient::list_files(
+    const char* prefix,
+    int is_recursive,
+    std::vector<std::pair<std::string, size_t>>& results)
+{
+    const auto uri = common::s3::StorageUri(prefix);
+    const std::string uri_prefix = uri.scheme + "://" + uri.bucket + "/";
+
+    google::cloud::storage::Client gcs_client(_client_config.options);
+
+    namespace gcs = google::cloud::storage;
+
+    auto list_objects = [&](auto&&... opts)
+    {
+        for (auto&& meta : gcs_client.ListObjects(uri.bucket, opts...))
+        {
+            if (!meta)
+            {
+                LOG(ERROR) << "GCS ListObjects error: " << meta.status().message();
+                return common::ResponseCode::FileAccessError;
+            }
+            const auto& name = meta->name();
+            if (!name.empty() && name.back() == '/')
+            {
+                continue;
+            }
+            results.emplace_back(uri_prefix + name, static_cast<size_t>(meta->size()));
+        }
+        return common::ResponseCode::Success;
+    };
+
+    if (is_recursive)
+    {
+        return list_objects(gcs::Prefix(uri.path));
+    }
+    else
+    {
+        return list_objects(gcs::Prefix(uri.path), gcs::Delimiter("/"));
+    }
+}
+
 }; // namespace runai::llm::streamer::impl::gcs

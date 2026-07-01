@@ -317,4 +317,50 @@ common::ResponseCode AzureClient::async_read(const char* path,
     return _stop ? common::ResponseCode::FinishedError : common::ResponseCode::Success;
 }
 
+common::ResponseCode AzureClient::list_files(
+    const char* prefix,
+    int is_recursive,
+    std::vector<std::pair<std::string, size_t>>& results)
+{
+    const auto uri = common::s3::StorageUri(prefix);
+    const std::string uri_prefix = uri.scheme + "://" + uri.bucket + "/";
+
+    auto container_client = _blob_service_client->GetBlobContainerClient(uri.bucket);
+
+    ListBlobsOptions options;
+    if (!uri.path.empty())
+    {
+        options.Prefix = uri.path;
+    }
+
+    auto process_page = [&](const auto& page_result)
+    {
+        for (const auto& blob : page_result.Blobs)
+        {
+            if (!blob.Name.empty() && blob.Name.back() == '/')
+            {
+                continue;
+            }
+            results.emplace_back(uri_prefix + blob.Name, static_cast<size_t>(blob.BlobSize));
+        }
+    };
+
+    if (is_recursive)
+    {
+        for (auto page = container_client.ListBlobs(options); page.HasPage(); page.MoveToNextPage())
+        {
+            process_page(page);
+        }
+    }
+    else
+    {
+        for (auto page = container_client.ListBlobsByHierarchy("/", options); page.HasPage(); page.MoveToNextPage())
+        {
+            process_page(page);
+        }
+    }
+
+    return common::ResponseCode::Success;
+}
+
 } // namespace runai::llm::streamer::impl::azure

@@ -12,6 +12,7 @@ from runai_model_streamer.safetensors_streamer.safetensors_streamer import (
     list_safetensors,
     pull_files
 )
+from runai_model_streamer.file_streamer.file_streamer import FileStreamer
 
 METADATA_SUFFIX = ['safetensors', 'json', 'config', 'xml', 'pt', 'bin']
 FILE_COUNT = 5
@@ -194,3 +195,95 @@ def compatibility_test_cases(backend_class, scheme, bucket_name):
             shutil.rmtree(self.temp_dir)
 
     return TestObjectStorageCompatibility
+
+
+def list_files_test_cases(backend_class, scheme, bucket_name):
+    class TestListFilesCompatibility(unittest.TestCase):
+        @classmethod
+        def setUpClass(cls):
+            cls.server = backend_class()
+            cls.server.wait_for_startup()
+            cls.bucket_name = bucket_name
+            cls.scheme = scheme
+
+        def setUp(self):
+            self.temp_dir = tempfile.mkdtemp()
+            self.directory = random_letters(10)
+
+        def tearDown(self):
+            shutil.rmtree(self.temp_dir)
+
+        def _upload(self, directory, file_paths):
+            for fp in file_paths:
+                self.server.upload_file(self.bucket_name, directory, fp)
+
+        def _write(self, filename, content=b"x"):
+            path = os.path.join(self.temp_dir, filename)
+            with open(path, "wb") as f:
+                f.write(content)
+            return path
+
+        def _prefix(self, subdir=""):
+            base = f"{self.scheme}://{self.bucket_name}/{self.directory}"
+            return f"{base}/{subdir}" if subdir else f"{base}/"
+
+        def test_basic_listing(self):
+            files = [create_random_files(self.temp_dir) for _ in range(3)]
+            self._upload(self.directory, files)
+
+            results = FileStreamer().list_files(self._prefix())
+            result_paths = {r[0] for r in results}
+
+            for fp in files:
+                expected = f"{self.scheme}://{self.bucket_name}/{self.directory}/{os.path.basename(fp)}"
+                self.assertIn(expected, result_paths)
+
+        def test_returns_correct_sizes(self):
+            content = b"known content 123"
+            fp = self._write("known.bin", content)
+            self._upload(self.directory, [fp])
+
+            results = FileStreamer().list_files(self._prefix())
+            by_path = {r[0]: r[1] for r in results}
+            expected_path = f"{self.scheme}://{self.bucket_name}/{self.directory}/known.bin"
+            self.assertEqual(by_path[expected_path], len(content))
+
+        def test_recursive(self):
+            root_file = create_random_files(self.temp_dir)
+            nested_file = create_random_files(self.temp_dir)
+            self._upload(self.directory, [root_file])
+            self._upload(f"{self.directory}/subdir", [nested_file])
+
+            nested_path = f"{self.scheme}://{self.bucket_name}/{self.directory}/subdir/{os.path.basename(nested_file)}"
+
+            recursive_paths = {r[0] for r in FileStreamer().list_files(self._prefix(), is_recursive=True)}
+            non_recursive_paths = {r[0] for r in FileStreamer().list_files(self._prefix(), is_recursive=False)}
+
+            self.assertIn(nested_path, recursive_paths)
+            self.assertNotIn(nested_path, non_recursive_paths)
+
+        def test_allow_pattern(self):
+            fp_st = self._write("model.safetensors", b"model data")
+            fp_js = self._write("config.json", b"config data")
+            self._upload(self.directory, [fp_st, fp_js])
+
+            results = FileStreamer().list_files(self._prefix(), allow_patterns=["*.safetensors"])
+            paths = {r[0] for r in results}
+            self.assertTrue(all(p.endswith(".safetensors") for p in paths))
+            self.assertFalse(any(p.endswith(".json") for p in paths))
+
+        def test_ignore_pattern(self):
+            fp_st = self._write("model.safetensors", b"model data")
+            fp_js = self._write("config.json", b"config data")
+            self._upload(self.directory, [fp_st, fp_js])
+
+            results = FileStreamer().list_files(self._prefix(), ignore_patterns=["*.json"])
+            paths = {r[0] for r in results}
+            self.assertFalse(any(p.endswith(".json") for p in paths))
+            self.assertTrue(any(p.endswith(".safetensors") for p in paths))
+
+        def test_empty_prefix(self):
+            results = FileStreamer().list_files(self._prefix())
+            self.assertEqual(results, [])
+
+    return TestListFilesCompatibility

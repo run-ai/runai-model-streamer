@@ -1,10 +1,11 @@
-from typing import List, Iterator, Optional
+from typing import Dict, List, Iterator, Optional, Tuple
 from timeit import default_timer as timer
 from runai_model_streamer.libstreamer.libstreamer import (
     runai_start,
     runai_end,
     runai_request,
-    runai_response
+    runai_response,
+    runai_list_files,
 )
 from runai_model_streamer.file_streamer.requests_iterator import (
     FilesRequestsIteratorWithBuffer,
@@ -83,6 +84,43 @@ class FileStreamer:
                 self.s3_session, self.s3_credentials = s3_credentials_module.get_credentials(credentials)
         return path
 
+
+    def list_files(
+        self,
+        prefix: str,
+        is_recursive: bool = True,
+        allow_patterns: Optional[List[str]] = None,
+        ignore_patterns: Optional[List[str]] = None,
+        credentials: Optional[S3Credentials] = None,
+    ) -> List[Tuple[str, int]]:
+        s3_credentials = None
+        if s3_credentials_module and is_s3_path(prefix):
+            _, s3_credentials = s3_credentials_module.get_credentials(credentials)
+
+        params: Optional[Dict[str, str]] = None
+        if s3_credentials is not None:
+            params = {}
+            if s3_credentials.access_key_id:
+                params["key"] = s3_credentials.access_key_id
+            if s3_credentials.secret_access_key:
+                params["secret"] = s3_credentials.secret_access_key
+            if s3_credentials.session_token:
+                params["token"] = s3_credentials.session_token
+            if s3_credentials.region_name:
+                params["region"] = s3_credentials.region_name
+            if s3_credentials.endpoint:
+                params["endpoint"] = s3_credentials.endpoint
+
+        results: List[Tuple[str, int]] = []
+        runai_list_files(
+            prefix,
+            lambda path, size: results.append((path, size)),
+            is_recursive=is_recursive,
+            allow_patterns=allow_patterns,
+            ignore_patterns=ignore_patterns,
+            params=params,
+        )
+        return results
 
     def stream_files(
             self,

@@ -34,6 +34,9 @@ struct GCSClient : common::IClient
 
     common::backend_api::Response async_read_response();
 
+    common::ResponseCode list_files(const char* prefix, int is_recursive,
+                                    std::vector<std::pair<std::string, size_t>>& results);
+
     // Stop sending requests to the object store
     // If stopped before all requests for an async_read() call are sent, subsequent request chunks will not be sent.
     void stop();

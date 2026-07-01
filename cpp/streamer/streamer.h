@@ -11,6 +11,8 @@ namespace runai::llm::streamer
     #define _RUNAI_EXTERN_C
 #endif
 
+typedef void (*RunaiFileListCallback)(const char* path, size_t file_size, void* user_data);
+
 // Library for reading a large file concurrently to a given host memory buffer
 // Reads a single file at a time
 // NOT THREAD SAFE - caller must not send requests and responses in parallel
@@ -57,5 +59,39 @@ _RUNAI_EXTERN_C int runai_request(
 _RUNAI_EXTERN_C int runai_response(void * streamer, unsigned * file_index /* return parameter */, unsigned * index /* return parameter */);
 
 _RUNAI_EXTERN_C const char * runai_response_str(int response_code);
+
+// List files at the given object storage prefix.
+//
+// For each matching entry the callback is invoked as:
+//   callback(path, file_size, user_data)
+// where path is the full object URI and file_size is the size in bytes.
+// user_data is passed through to every callback invocation unchanged.
+//
+// Example:
+//   struct Result { std::vector<std::pair<std::string,size_t>> files; };
+//   Result result;
+//   runai_list_files("s3://my-bucket/models/", 1,
+//       nullptr, 0, nullptr, 0,
+//       [](const char* p, size_t sz, void* ud) {
+//           static_cast<Result*>(ud)->files.emplace_back(p, sz);
+//       }, &result,
+//       keys, vals, num_params);
+//
+// allow_patterns / ignore_patterns are fnmatch(3) patterns; NULL means no filter.
+// param_keys / param_values are parallel arrays of credential/config key-value pairs
+// (recognised keys: "key", "secret", "token", "region", "endpoint").
+_RUNAI_EXTERN_C int runai_list_files(
+    const char *             prefix,
+    int                      is_recursive,
+    const char **            allow_patterns,
+    unsigned                 num_allow_patterns,
+    const char **            ignore_patterns,
+    unsigned                 num_ignore_patterns,
+    RunaiFileListCallback    callback,
+    void *                   user_data,
+    const char **            param_keys,
+    const char **            param_values,
+    unsigned                 num_params
+);
 
 } // namespace runai::llm::streamer

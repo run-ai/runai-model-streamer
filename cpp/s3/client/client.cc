@@ -1,6 +1,7 @@
 
 #include <aws/core/http/Scheme.h>
 #include <aws/s3-crt/model/GetObjectRequest.h>
+#include <aws/s3-crt/model/ListObjectsV2Request.h>
 
 #include <cstring>
 #include <algorithm>
@@ -307,6 +308,59 @@ void S3Client::stop()
     {
         _responder->stop();
     }
+}
+
+common::ResponseCode S3Client::list_files(
+    const char* prefix,
+    int is_recursive,
+    std::vector<std::pair<std::string, size_t>>& results)
+{
+    const auto uri = common::s3::StorageUri(prefix);
+
+    Aws::S3Crt::Model::ListObjectsV2Request request;
+    request.SetBucket(uri.bucket.c_str());
+    request.SetPrefix(uri.path.c_str());
+    if (!is_recursive)
+    {
+        request.SetDelimiter("/");
+    }
+
+    const std::string uri_prefix = uri.scheme + "://" + uri.bucket + "/";
+
+    bool done = false;
+    while (!done)
+    {
+        auto outcome = _client->ListObjectsV2(request);
+        if (!outcome.IsSuccess())
+        {
+            const auto& err = outcome.GetError();
+            LOG(ERROR) << "S3 ListObjectsV2 failed: " << err.GetExceptionName() << ": " << err.GetMessage();
+            return common::ResponseCode::FileAccessError;
+        }
+
+        const auto& result = outcome.GetResult();
+        for (const auto& obj : result.GetContents())
+        {
+            const auto& key = obj.GetKey();
+            // skip zero-byte directory marker objects (keys ending with "/")
+            if (!key.empty() && key.back() == '/')
+            {
+                continue;
+            }
+            results.emplace_back(uri_prefix + std::string(key), static_cast<size_t>(obj.GetSize()));
+        }
+
+        if (result.GetIsTruncated())
+        {
+            request.SetContinuationToken(result.GetNextContinuationToken());
+        }
+        else
+        {
+            done = true;
+        }
+    }
+
+    return common::ResponseCode::Success;
 }
 
 }; // namespace runai::llm::streamer::impl::s3

@@ -1,7 +1,9 @@
 #include <fcntl.h>
+#include <fnmatch.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <cstring>
+#include <filesystem>
 #include <vector>
 #include "utils/fd/fd.h"
 #include "utils/logging/logging.h"
@@ -140,4 +142,73 @@ extern "C" const char * runai_response_str(int response_code)
 {
     return 0;
 }
+
+extern "C" int runai_list_files(
+    const char *  prefix,
+    int           is_recursive,
+    const char ** allow_patterns,
+    unsigned      num_allow_patterns,
+    const char ** ignore_patterns,
+    unsigned      num_ignore_patterns,
+    void (*callback)(const char*, size_t, void*),
+    void *        user_data,
+    const char ** param_keys,
+    const char ** param_values,
+    unsigned      num_params)
+{
+    namespace fs = std::filesystem;
+
+    // Object storage paths are not supported in the mock
+    if (::strncmp(prefix, "s3://", 5) == 0 ||
+        ::strncmp(prefix, "gs://", 5) == 0 ||
+        ::strncmp(prefix, "az://", 5) == 0)
+    {
+        return 0;
+    }
+
+    const fs::path root(prefix);
+    if (!fs::exists(root))
+    {
+        return 1;
+    }
+
+    auto fire = [&](const fs::path& p, size_t size)
+    {
+        const char* cpath = p.c_str();
+        if (num_allow_patterns > 0)
+        {
+            bool matched = false;
+            for (unsigned j = 0; j < num_allow_patterns; ++j)
+            {
+                if (::fnmatch(allow_patterns[j], cpath, 0) == 0) { matched = true; break; }
+            }
+            if (!matched) return;
+        }
+        for (unsigned j = 0; j < num_ignore_patterns; ++j)
+        {
+            if (::fnmatch(ignore_patterns[j], cpath, 0) == 0) return;
+        }
+        callback(cpath, size, user_data);
+    };
+
+    auto visit = [&](const fs::directory_entry& entry)
+    {
+        if (entry.is_regular_file())
+        {
+            fire(entry.path(), static_cast<size_t>(entry.file_size()));
+        }
+    };
+
+    if (is_recursive)
+    {
+        for (const auto& e : fs::recursive_directory_iterator(root)) visit(e);
+    }
+    else
+    {
+        for (const auto& e : fs::directory_iterator(root)) visit(e);
+    }
+
+    return 0;
+}
+
 } // namespace runai::llm::streamer

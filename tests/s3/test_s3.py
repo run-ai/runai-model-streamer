@@ -11,7 +11,7 @@ from botocore.exceptions import NoCredentialsError, ClientError
 from safetensors.torch import safe_open
 
 from tests.cases.interface import ObjectStoreBackend
-from tests.cases.testcases import compatibility_test_cases
+from tests.cases.testcases import compatibility_test_cases, list_files_test_cases
 from tests.safetensors.generator import create_random_safetensors
 from tests.safetensors.comparison import tensor_maps_are_equal
 from runai_model_streamer.safetensors_streamer.safetensors_streamer import (
@@ -56,6 +56,12 @@ class MinioServer(ObjectStoreBackend):
         s3_client.upload_file(file, bucket, os.path.join(directory, os.path.basename(file)))
 
 TestS3ompatibility = compatibility_test_cases(
+    backend_class = MinioServer,
+    scheme = "s3",
+    bucket_name = os.getenv("AWS_BUCKET")
+)
+
+TestS3ListFiles = list_files_test_cases(
     backend_class = MinioServer,
     scheme = "s3",
     bucket_name = os.getenv("AWS_BUCKET")

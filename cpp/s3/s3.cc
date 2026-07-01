@@ -2,6 +2,7 @@
 #include "s3/s3_init/s3_init.h"
 #include "s3/client/client.h"
 
+#include "common/backend_api/object_storage/list_files_impl.h"
 #include "common/client_mgr/client_mgr.h"
 #include "common/exception/exception.h"
 #include "utils/env/env.h"
@@ -206,6 +207,24 @@ common::backend_api::ResponseCode_t obj_wait_for_completions(common::backend_api
         LOG(ERROR) << "Caught exception while sending async request";
     }
     return common::ResponseCode::UnknownError;
+}
+
+common::backend_api::ResponseCode_t obj_list_files(
+    common::backend_api::ObjectClientHandle_t client_handle,
+    const char* prefix,
+    int is_recursive,
+    common::backend_api::ObjectFileEntry_t** out_entries,
+    unsigned* out_num_entries)
+{
+    return common::backend_api::impl_obj_list_files<S3Client>(
+        client_handle, prefix, is_recursive, out_entries, out_num_entries);
+}
+
+void obj_free_file_list(
+    common::backend_api::ObjectFileEntry_t* entries,
+    unsigned num_entries)
+{
+    common::backend_api::impl_obj_free_file_list(entries, num_entries);
 }
 
 }; // namespace runai::llm::streamer::impl::s3
