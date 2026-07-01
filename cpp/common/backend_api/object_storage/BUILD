@@ -1,8 +1,18 @@
-load("//:rules.bzl", "runai_cc_auto_library")
+load("//:rules.bzl", "runai_cc_auto_library", "runai_cc_test")
 
 runai_cc_auto_library(
     name = "object_storage",
     deps = [
         "//common/response",
+    ],
+)
+
+runai_cc_test(
+    name = "list_files_impl_test",
+    srcs = ["list_files_impl_test.cc"],
+    deps = [
+        ":object_storage",
+        "//common/response_code",
+        "//utils/logging",
     ],
 )

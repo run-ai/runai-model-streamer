@@ -1,6 +1,9 @@
 #include "streamer/impl/streamer/streamer.h"
 
+#include <fnmatch.h>
+
 #include <atomic>
+#include <filesystem>
 #include <memory>
 #include <numeric>
 #include <string>
@@ -204,7 +207,7 @@ void Streamer::verify_requests(std::vector<std::string> & paths, std::vector<siz
     }
 }
 
-common::s3::S3ClientWrapper::Params Streamer::handle_s3(unsigned file_index, const std::string & path, const common::s3::Credentials & credentials)
+std::shared_ptr<common::s3::StorageUri> Streamer::try_parse_uri(const std::string & path)
 {
     std::shared_ptr<common::s3::StorageUri> uri;
     try
@@ -214,6 +217,12 @@ common::s3::S3ClientWrapper::Params Streamer::handle_s3(unsigned file_index, con
     catch(const std::exception& e)
     {
     }
+    return uri;
+}
+
+common::s3::S3ClientWrapper::Params Streamer::handle_s3(unsigned file_index, const std::string & path, const common::s3::Credentials & credentials)
+{
+    auto uri = try_parse_uri(path);
 
     if (uri != nullptr && _s3 == nullptr)
     {
@@ -236,6 +245,100 @@ common::s3::S3ClientWrapper::Params Streamer::handle_s3(unsigned file_index, con
     }
 
     return common::s3::S3ClientWrapper::Params(uri, credentials, _config->s3_block_bytesize);
+}
+
+std::vector<std::pair<std::string, size_t>> Streamer::list_files(
+    const std::string & prefix,
+    bool is_recursive,
+    const std::vector<std::string> & allow_patterns,
+    const std::vector<std::string> & ignore_patterns,
+    const common::s3::Credentials & credentials)
+{
+    // fnmatch(3) filtering, matching the behavior of Python fnmatch.fnmatch(path, pattern)
+    auto keep = [&](const char * path) -> bool
+    {
+        if (!allow_patterns.empty())
+        {
+            bool matched = false;
+            for (const auto & p : allow_patterns)
+            {
+                if (fnmatch(p.c_str(), path, 0) == 0) { matched = true; break; }
+            }
+            if (!matched) return false;
+        }
+        for (const auto & p : ignore_patterns)
+        {
+            if (fnmatch(p.c_str(), path, 0) == 0) return false;
+        }
+        return true;
+    };
+
+    std::vector<std::pair<std::string, size_t>> results;
+
+    auto uri = try_parse_uri(prefix);
+
+    if (uri != nullptr)
+    {
+        // Any code path that uses the S3 plugin must release its clients and the
+        // backend handle when the streamer shuts down (~Streamer). stop() and the
+        // fd limit are streaming-only: listing is a single synchronous call with no
+        // in-flight async reads and no threadpool workers to unblock.
+        if (_s3 == nullptr)
+        {
+            _s3 = std::make_unique<S3Cleanup>();
+        }
+
+        common::s3::S3ClientWrapper::Params params(uri, credentials, _config->s3_block_bytesize);
+        common::s3::S3ClientWrapper wrapper(params);
+
+        common::backend_api::ObjectFileEntry_t * entries = nullptr;
+        unsigned num_entries = 0;
+        auto ret = wrapper.list_files(prefix.c_str(), is_recursive ? 1 : 0, &entries, &num_entries);
+        if (ret != common::ResponseCode::Success)
+        {
+            throw common::Exception(ret); // entries is not allocated on error
+        }
+
+        // free_file_list is a no-op for nullptr (empty listing); ScopeGuard is
+        // constructed only on the success path so it never fires on error.
+        utils::ScopeGuard guard([&]{ wrapper.free_file_list(entries, num_entries); });
+
+        for (unsigned i = 0; i < num_entries; ++i)
+        {
+            if (keep(entries[i].path))
+            {
+                results.emplace_back(entries[i].path, entries[i].size);
+            }
+        }
+    }
+    else
+    {
+        namespace fs = std::filesystem;
+        const fs::path root(prefix);
+        if (!fs::exists(root))
+        {
+            throw common::Exception(common::ResponseCode::FileAccessError);
+        }
+
+        auto process = [&](const fs::directory_entry & entry)
+        {
+            if (entry.is_regular_file() && keep(entry.path().c_str()))
+            {
+                results.emplace_back(entry.path().string(), static_cast<size_t>(entry.file_size()));
+            }
+        };
+
+        if (is_recursive)
+        {
+            for (const auto & e : fs::recursive_directory_iterator(root)) process(e);
+        }
+        else
+        {
+            for (const auto & e : fs::directory_iterator(root)) process(e);
+        }
+    }
+
+    return results;
 }
 
 }; // namespace runai::llm::streamer::impl

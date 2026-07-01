@@ -2,9 +2,14 @@
 
 #include <unistd.h>
 
+#include <cstdlib>
+#include <cstring>
 #include <map>
 #include <mutex>
 #include <set>
+#include <string>
+#include <utility>
+#include <vector>
 #include <atomic>
 
 #include "common/s3_credentials/s3_credentials.h"
@@ -24,6 +29,10 @@ std::mutex __mutex;
 std::atomic<bool> __stopped(false);
 std::atomic<bool> __opened(false);
 common::backend_api::ObjectShutdownPolicy_t __shutdown_policy = common::backend_api::OBJECT_SHUTDOWN_POLICY_ON_PROCESS_EXIT;
+
+std::vector<std::pair<std::string, size_t>> __mock_files;
+common::backend_api::ResponseCode_t __mock_list_files_response = common::ResponseCode::Success;
+int __mock_last_list_files_is_recursive = -1;
 
 void runai_s3_mock_set_backend_shutdown_policy(common::backend_api::ObjectShutdownPolicy_t policy)
 {
@@ -266,11 +275,90 @@ common::backend_api::ResponseCode_t obj_cancel_all_reads()
     return common::ResponseCode::Success;
 }
 
+void runai_mock_s3_set_files(const char** paths, const size_t* sizes, unsigned count)
+{
+    const auto guard = std::unique_lock<std::mutex>(__mutex);
+    __mock_files.clear();
+    for (unsigned i = 0; i < count; ++i)
+    {
+        __mock_files.emplace_back(paths[i], sizes[i]);
+    }
+}
+
+void runai_mock_s3_set_list_files_response(common::backend_api::ResponseCode_t response)
+{
+    const auto guard = std::unique_lock<std::mutex>(__mutex);
+    __mock_list_files_response = response;
+}
+
+int runai_mock_s3_last_list_files_is_recursive()
+{
+    const auto guard = std::unique_lock<std::mutex>(__mutex);
+    return __mock_last_list_files_is_recursive;
+}
+
+common::backend_api::ResponseCode_t obj_list_files(
+    common::backend_api::ObjectClientHandle_t client_handle,
+    const char* prefix,
+    int is_recursive,
+    common::backend_api::ObjectFileEntry_t** out_entries,
+    unsigned* out_num_entries)
+{
+    const auto guard = std::unique_lock<std::mutex>(__mutex);
+
+    __mock_last_list_files_is_recursive = is_recursive;
+
+    if (!__mock_clients.count(client_handle) || __mock_unused.count(client_handle))
+    {
+        LOG(ERROR) << "Mock client " << client_handle << " not found or unused";
+        return common::ResponseCode::UnknownError;
+    }
+
+    if (__mock_list_files_response != common::ResponseCode::Success)
+    {
+        return __mock_list_files_response; // out_entries left untouched on error
+    }
+
+    *out_num_entries = static_cast<unsigned>(__mock_files.size());
+    if (__mock_files.empty())
+    {
+        *out_entries = nullptr;
+        return common::ResponseCode::Success;
+    }
+
+    auto* entries = new common::backend_api::ObjectFileEntry_t[__mock_files.size()];
+    for (size_t i = 0; i < __mock_files.size(); ++i)
+    {
+        entries[i].path = ::strdup(__mock_files[i].first.c_str());
+        entries[i].size = __mock_files[i].second;
+    }
+    *out_entries = entries;
+    return common::ResponseCode::Success;
+}
+
+void obj_free_file_list(common::backend_api::ObjectFileEntry_t* entries, unsigned num_entries)
+{
+    if (entries == nullptr)
+    {
+        return;
+    }
+    for (unsigned i = 0; i < num_entries; ++i)
+    {
+        ::free(entries[i].path);
+    }
+    delete[] entries;
+}
+
 void runai_mock_s3_cleanup()
 {
     runai_mock_s3_set_response_time_ms(0);
     __stopped = false;
     runai_s3_mock_set_backend_shutdown_policy(common::backend_api::OBJECT_SHUTDOWN_POLICY_ON_PROCESS_EXIT);
+
+    const auto guard = std::unique_lock<std::mutex>(__mutex);
+    __mock_files.clear();
+    __mock_list_files_response = common::ResponseCode::Success;
+    __mock_last_list_files_is_recursive = -1;
 }
 
 bool runai_mock_s3_is_shutdown()

@@ -2,6 +2,8 @@
 
 #include <gtest/gtest.h>
 #include <atomic>
+#include <string>
+#include <utility>
 #include <vector>
 #include <set>
 
@@ -455,6 +457,124 @@ TEST(AsyncRequest, InvalidScheme)
     std::vector<std::vector<size_t>> internal_sizes =  { sizes };
 
     EXPECT_THROW(streamer.async_request(paths, file_offsets, bytesizes, dsts, num_sizes, internal_sizes, credentials), runai::llm::streamer::common::Exception);
+}
+
+namespace
+{
+
+std::set<std::string> paths_of(const std::vector<std::pair<std::string, size_t>> & entries)
+{
+    std::set<std::string> result;
+    for (const auto & entry : entries)
+    {
+        result.insert(entry.first);
+    }
+    return result;
+}
+
+} // namespace
+
+TEST(ListFiles, FilesystemBasicListingAndSizes)
+{
+    Streamer streamer;
+    common::s3::Credentials credentials;
+
+    utils::temp::Dir dir;
+    const auto data_a = utils::random::buffer(utils::random::number(1, 1000));
+    const auto data_b = utils::random::buffer(utils::random::number(1, 1000));
+    utils::temp::File a(dir.path, "a.bin", data_a);
+    utils::temp::File b(dir.path, "b.bin", data_b);
+
+    const auto entries = streamer.list_files(dir.path, true, {}, {}, credentials);
+
+    EXPECT_EQ(entries.size(), 2u);
+    bool found_a = false;
+    bool found_b = false;
+    for (const auto & entry : entries)
+    {
+        if (entry.first == a.path) { EXPECT_EQ(entry.second, data_a.size()); found_a = true; }
+        if (entry.first == b.path) { EXPECT_EQ(entry.second, data_b.size()); found_b = true; }
+    }
+    EXPECT_TRUE(found_a);
+    EXPECT_TRUE(found_b);
+}
+
+TEST(ListFiles, FilesystemRecursive)
+{
+    Streamer streamer;
+    common::s3::Credentials credentials;
+
+    utils::temp::Dir dir;
+    utils::temp::File root_file(dir.path, "root.bin", utils::random::buffer(10));
+    utils::temp::Dir sub(dir.path, "subdir");
+    utils::temp::File nested(sub.path, "nested.bin", utils::random::buffer(10));
+
+    const auto recursive = paths_of(streamer.list_files(dir.path, true, {}, {}, credentials));
+    const auto non_recursive = paths_of(streamer.list_files(dir.path, false, {}, {}, credentials));
+
+    EXPECT_TRUE(recursive.count(root_file.path));
+    EXPECT_TRUE(recursive.count(nested.path));
+
+    EXPECT_TRUE(non_recursive.count(root_file.path));
+    EXPECT_FALSE(non_recursive.count(nested.path));
+}
+
+TEST(ListFiles, FilesystemAllowPattern)
+{
+    Streamer streamer;
+    common::s3::Credentials credentials;
+
+    utils::temp::Dir dir;
+    utils::temp::File st(dir.path, "model.safetensors", utils::random::buffer(10));
+    utils::temp::File js(dir.path, "config.json", utils::random::buffer(10));
+
+    const auto paths = paths_of(streamer.list_files(dir.path, true, {"*.safetensors"}, {}, credentials));
+
+    EXPECT_TRUE(paths.count(st.path));
+    EXPECT_FALSE(paths.count(js.path));
+}
+
+TEST(ListFiles, FilesystemIgnorePattern)
+{
+    Streamer streamer;
+    common::s3::Credentials credentials;
+
+    utils::temp::Dir dir;
+    utils::temp::File st(dir.path, "model.safetensors", utils::random::buffer(10));
+    utils::temp::File js(dir.path, "config.json", utils::random::buffer(10));
+
+    const auto paths = paths_of(streamer.list_files(dir.path, true, {}, {"*.json"}, credentials));
+
+    EXPECT_TRUE(paths.count(st.path));
+    EXPECT_FALSE(paths.count(js.path));
+}
+
+TEST(ListFiles, FilesystemNonExistentPathThrows)
+{
+    Streamer streamer;
+    common::s3::Credentials credentials;
+
+    const std::string missing = "./" + utils::random::string() + "/" + utils::random::string();
+    try
+    {
+        streamer.list_files(missing, true, {}, {}, credentials);
+        FAIL() << "expected an exception for a non-existent path";
+    }
+    catch (const common::Exception & e)
+    {
+        EXPECT_EQ(e.error(), common::ResponseCode::FileAccessError);
+    }
+}
+
+TEST(ListFiles, FilesystemEmptyDirectory)
+{
+    Streamer streamer;
+    common::s3::Credentials credentials;
+
+    utils::temp::Dir dir;
+
+    const auto entries = streamer.list_files(dir.path, true, {}, {}, credentials);
+    EXPECT_TRUE(entries.empty());
 }
 
 }; // namespace runai::llm::streamer::impl

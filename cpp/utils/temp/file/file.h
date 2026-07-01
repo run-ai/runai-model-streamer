@@ -31,6 +31,27 @@ struct Path
     void _delete();
 };
 
+// RAII temporary directory: created on construction and recursively removed on destruction
+struct Dir
+{
+    Dir(
+        const std::string & dir = ".",
+        const std::string & name = random::string());
+    ~Dir();
+
+    Dir(Dir &&);
+    Dir(const Dir &) = delete;
+
+    Dir & operator=(Dir &&);
+    Dir & operator=(const Dir &) = delete;
+
+    std::string name;
+    std::string path;
+
+ private:
+    void _delete();
+};
+
 struct File
 {
     File(

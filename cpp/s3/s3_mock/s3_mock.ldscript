@@ -5,6 +5,11 @@
         runai_mock_s3_cleanup;
         runai_s3_mock_set_backend_shutdown_policy;
         runai_mock_s3_is_shutdown;
+        runai_mock_s3_set_files;
+        runai_mock_s3_set_list_files_response;
+        runai_mock_s3_last_list_files_is_recursive;
+        obj_list_files;
+        obj_free_file_list;
         obj_open_backend;
         obj_close_backend;
         obj_create_client;

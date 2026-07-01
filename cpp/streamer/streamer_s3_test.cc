@@ -467,4 +467,107 @@ TEST_F(StreamerTest, Multiple_Files_Error)
     EXPECT_EQ(verify_mock(), 0);
 }
 
+namespace
+{
+
+// Collects the (path, size) pairs delivered to the runai_list_files callback
+struct ListFilesResult
+{
+    std::vector<std::pair<std::string, size_t>> files;
+};
+
+void list_files_collect(const char* path, size_t size, void* user_data)
+{
+    static_cast<ListFilesResult*>(user_data)->files.emplace_back(path, size);
+}
+
+} // namespace
+
+TEST_F(StreamerTest, ListFiles_S3_ReturnsEntriesAndCleansUp)
+{
+    utils::Dylib dylib("libstreamers3.so");
+    auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
+    auto is_shutdown = dylib.dlsym<bool(*)()>("runai_mock_s3_is_shutdown");
+    auto set_files = dylib.dlsym<void(*)(const char**, const size_t*, unsigned)>("runai_mock_s3_set_files");
+    auto set_backend_shutdown_policy = dylib.dlsym<void(*)(common::backend_api::ObjectShutdownPolicy_t)>("runai_s3_mock_set_backend_shutdown_policy");
+    set_backend_shutdown_policy(common::backend_api::ObjectShutdownPolicy_t::OBJECT_SHUTDOWN_POLICY_ON_STREAMER_SHUTDOWN);
+
+    std::vector<const char*> paths = {"s3://bucket/models/a.safetensors", "s3://bucket/models/b.bin"};
+    const std::vector<size_t> sizes = {111, 222};
+    set_files(paths.data(), sizes.data(), paths.size());
+
+    ListFilesResult result;
+    auto res = runai_list_files("s3://bucket/models/", 1, nullptr, 0, nullptr, 0, list_files_collect, &result, nullptr, nullptr, 0);
+
+    EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
+    ASSERT_EQ(result.files.size(), 2u);
+
+    std::map<std::string, size_t> by_path;
+    for (const auto& f : result.files)
+    {
+        by_path[f.first] = f.second;
+    }
+    EXPECT_EQ(by_path["s3://bucket/models/a.safetensors"], 111u);
+    EXPECT_EQ(by_path["s3://bucket/models/b.bin"], 222u);
+
+    // S3Cleanup ran on Streamer destruction: clients released and backend closed
+    EXPECT_EQ(verify_mock(), 0);
+    EXPECT_TRUE(is_shutdown());
+}
+
+TEST_F(StreamerTest, ListFiles_S3_AppliesPatternFilters)
+{
+    utils::Dylib dylib("libstreamers3.so");
+    auto set_files = dylib.dlsym<void(*)(const char**, const size_t*, unsigned)>("runai_mock_s3_set_files");
+
+    std::vector<const char*> paths = {"s3://bucket/m/model.safetensors", "s3://bucket/m/config.json"};
+    const std::vector<size_t> sizes = {10, 20};
+    set_files(paths.data(), sizes.data(), paths.size());
+
+    std::vector<const char*> allow = {"*.safetensors"};
+
+    ListFilesResult result;
+    auto res = runai_list_files("s3://bucket/m/", 1, allow.data(), allow.size(), nullptr, 0, list_files_collect, &result, nullptr, nullptr, 0);
+
+    EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
+    ASSERT_EQ(result.files.size(), 1u);
+    EXPECT_EQ(result.files[0].first, "s3://bucket/m/model.safetensors");
+}
+
+TEST_F(StreamerTest, ListFiles_S3_ForwardsIsRecursive)
+{
+    utils::Dylib dylib("libstreamers3.so");
+    auto set_files = dylib.dlsym<void(*)(const char**, const size_t*, unsigned)>("runai_mock_s3_set_files");
+    auto last_is_recursive = dylib.dlsym<int(*)()>("runai_mock_s3_last_list_files_is_recursive");
+
+    std::vector<const char*> paths = {"s3://bucket/x/f.bin"};
+    const std::vector<size_t> sizes = {1};
+    set_files(paths.data(), sizes.data(), paths.size());
+
+    ListFilesResult result;
+    runai_list_files("s3://bucket/x/", 0, nullptr, 0, nullptr, 0, list_files_collect, &result, nullptr, nullptr, 0);
+    EXPECT_EQ(last_is_recursive(), 0);
+
+    runai_list_files("s3://bucket/x/", 1, nullptr, 0, nullptr, 0, list_files_collect, &result, nullptr, nullptr, 0);
+    EXPECT_EQ(last_is_recursive(), 1);
+}
+
+TEST_F(StreamerTest, ListFiles_S3_ErrorPropagates)
+{
+    utils::Dylib dylib("libstreamers3.so");
+    auto set_files = dylib.dlsym<void(*)(const char**, const size_t*, unsigned)>("runai_mock_s3_set_files");
+    auto set_response = dylib.dlsym<void(*)(common::backend_api::ResponseCode_t)>("runai_mock_s3_set_list_files_response");
+
+    std::vector<const char*> paths = {"s3://bucket/x/f.bin"};
+    const std::vector<size_t> sizes = {1};
+    set_files(paths.data(), sizes.data(), paths.size());
+    set_response(common::ResponseCode::FileAccessError);
+
+    ListFilesResult result;
+    auto res = runai_list_files("s3://bucket/x/", 1, nullptr, 0, nullptr, 0, list_files_collect, &result, nullptr, nullptr, 0);
+
+    EXPECT_EQ(res, static_cast<int>(common::ResponseCode::FileAccessError));
+    EXPECT_TRUE(result.files.empty());
+}
+
 }; // namespace runai::llm::streamer

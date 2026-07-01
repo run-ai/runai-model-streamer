@@ -4,6 +4,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <filesystem>
+#include <system_error>
 #include <utility>
 
 #include "utils/fd/fd.h"
@@ -68,6 +70,55 @@ void Path::_delete()
     ASSERT(!Path::is_directory(path)) << "Removing directory is not implemented";
 
     PASSERT(::unlink(path.c_str()) != -1) << "Failed removing file '" << path << "'";
+}
+
+Dir::Dir(const std::string & dir, const std::string & name) :
+    name(name),
+    path(dir + (name.empty() ? "" : "/") + name)
+{
+    std::filesystem::create_directories(path);
+}
+
+Dir::Dir(Dir && other)
+{
+    *this = std::move(other);
+}
+
+Dir & Dir::operator=(Dir && other)
+{
+    _delete();
+
+    name = other.name;
+    path = other.path;
+
+    other.path = other.name = "";
+
+    return *this;
+}
+
+Dir::~Dir()
+{
+    try
+    {
+        _delete();
+    }
+    catch (...)
+    {}
+}
+
+void Dir::_delete()
+{
+    if (path.empty())
+    {
+        return;
+    }
+
+    std::error_code ec;
+    std::filesystem::remove_all(path, ec);
+    if (ec)
+    {
+        LOG(ERROR) << "Failed removing directory '" << path << "': " << ec.message();
+    }
 }
 
 File::File(const std::string & dir, const std::string & name, const std::vector<uint8_t> & data) :

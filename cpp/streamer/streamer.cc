@@ -1,16 +1,13 @@
 #include "streamer/streamer.h"
 
-#include <filesystem>
-#include <fnmatch.h>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "common/exception/exception.h"
 #include "common/response_code/response_code.h"
 #include "common/s3_credentials/s3_credentials.h"
-#include "common/s3_wrapper/s3_wrapper.h"
 #include "streamer/impl/streamer/streamer.h"
-#include "utils/scope_guard/scope_guard.h"
 
 namespace runai::llm::streamer
 {
@@ -186,79 +183,37 @@ _RUNAI_EXTERN_C int runai_list_files(
         if (!prefix || !callback)
             return static_cast<int>(common::ResponseCode::InvalidParameterError);
 
-        auto fire = [&](const char* path, size_t size)
+        const char *key = nullptr, *secret = nullptr, *token = nullptr,
+                   *region = nullptr, *endpoint = nullptr;
+        for (unsigned i = 0; i < num_params; ++i)
         {
-            if (num_allow_patterns > 0)
-            {
-                bool matched = false;
-                for (unsigned j = 0; j < num_allow_patterns; ++j)
-                    if (fnmatch(allow_patterns[j], path, 0) == 0) { matched = true; break; }
-                if (!matched) return;
-            }
-            for (unsigned j = 0; j < num_ignore_patterns; ++j)
-                if (fnmatch(ignore_patterns[j], path, 0) == 0) return;
-            callback(path, size, user_data);
-        };
-
-        // Try to parse as an object storage URI; nullptr means local filesystem path
-        std::shared_ptr<common::s3::StorageUri> uri;
-        try { uri = std::make_shared<common::s3::StorageUri>(prefix); }
-        catch (...) {}
-
-        if (uri != nullptr)
-        {
-            const char *key = nullptr, *secret = nullptr, *token = nullptr,
-                       *region = nullptr, *endpoint = nullptr;
-            for (unsigned i = 0; i < num_params; ++i)
-            {
-                if (!param_keys || !param_keys[i]) continue;
-                const std::string k(param_keys[i]);
-                if      (k == "key")      key      = param_values[i];
-                else if (k == "secret")   secret   = param_values[i];
-                else if (k == "token")    token    = param_values[i];
-                else if (k == "region")   region   = param_values[i];
-                else if (k == "endpoint") endpoint = param_values[i];
-            }
-
-            common::s3::Credentials credentials(key, secret, token, region, endpoint);
-            common::s3::S3ClientWrapper::Params params(uri, credentials, common::s3::S3ClientWrapper::default_chunk_bytesize);
-            common::s3::S3ClientWrapper wrapper(params);
-
-            common::backend_api::ObjectFileEntry_t* entries = nullptr;
-            unsigned num_entries = 0;
-            auto ret = wrapper.list_files(prefix, is_recursive, &entries, &num_entries);
-            if (ret != common::ResponseCode::Success)
-                return static_cast<int>(ret); // entries not allocated on error
-
-            // ScopeGuard is constructed only on the success path: entries is either
-            // nullptr (empty directory, delete[] nullptr is a no-op) or a valid allocation.
-            utils::ScopeGuard guard([&]{ wrapper.free_file_list(entries, num_entries); });
-
-            for (unsigned i = 0; i < num_entries; ++i)
-                fire(entries[i].path, entries[i].size);
+            if (!param_keys || !param_keys[i]) continue;
+            const std::string k(param_keys[i]);
+            const char* v = param_values ? param_values[i] : nullptr;
+            if      (k == "key")      key      = v;
+            else if (k == "secret")   secret   = v;
+            else if (k == "token")    token    = v;
+            else if (k == "region")   region   = v;
+            else if (k == "endpoint") endpoint = v;
         }
-        else
+        common::s3::Credentials credentials(key, secret, token, region, endpoint);
+
+        std::vector<std::string> allow, ignore;
+        for (unsigned i = 0; i < num_allow_patterns; ++i) allow.emplace_back(allow_patterns[i]);
+        for (unsigned i = 0; i < num_ignore_patterns; ++i) ignore.emplace_back(ignore_patterns[i]);
+
+        impl::Streamer streamer;
+        const auto files = streamer.list_files(prefix, is_recursive != 0, allow, ignore, credentials);
+        for (const auto & entry : files)
         {
-            namespace fs = std::filesystem;
-            const fs::path root(prefix);
-            if (!fs::exists(root))
-                return static_cast<int>(common::ResponseCode::FileAccessError);
-
-            auto process = [&](const fs::directory_entry& entry)
-            {
-                if (entry.is_regular_file())
-                    fire(entry.path().c_str(), static_cast<size_t>(entry.file_size()));
-            };
-
-            if (is_recursive)
-                for (const auto& e : fs::recursive_directory_iterator(root))
-                    process(e);
-            else
-                for (const auto& e : fs::directory_iterator(root))
-                    process(e);
+            callback(entry.first.c_str(), entry.second, user_data);
         }
 
         return static_cast<int>(common::ResponseCode::Success);
+    }
+    catch (const common::Exception & e)
+    {
+        return static_cast<int>(e.error());
     }
     catch (...)
     {

@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "utils/threadpool/threadpool.h"
@@ -61,7 +62,19 @@ struct Streamer
     // returns common::ResponseCode::Success if successful or error code
     common::ResponseCode async_read(const std::string & path, size_t offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes, const common::s3::Credentials & credentials);
 
+    // List files under prefix, which may be an object storage URI or a local filesystem path.
+    // Applies fnmatch allow/ignore filtering (empty vectors mean no filter) and returns
+    // (full path, size) pairs. Throws common::Exception on error.
+    std::vector<std::pair<std::string, size_t>> list_files(
+      const std::string & prefix,
+      bool is_recursive,
+      const std::vector<std::string> & allow_patterns,
+      const std::vector<std::string> & ignore_patterns,
+      const common::s3::Credentials & credentials);
+
  private:
+    // Try to parse path as an object storage URI; returns nullptr for a filesystem path
+    std::shared_ptr<common::s3::StorageUri> try_parse_uri(const std::string & path);
     common::s3::S3ClientWrapper::Params handle_s3(unsigned file_index, const std::string & path, const common::s3::Credentials & credentials);
     void verify_requests(std::vector<std::string> & paths, std::vector<size_t> & file_offsets, std::vector<size_t> & bytesizes, std::vector<unsigned> & num_sizes, std::vector<void *> & dsts);
 
