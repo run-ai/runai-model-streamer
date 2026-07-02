@@ -47,4 +47,22 @@ struct Env
     std::string value;
 };
 
+// Unsets an environment variable for the lifetime of the object and restores its
+// previous value (or leaves it unset) on destruction
+struct UnsetEnv
+{
+    explicit UnsetEnv(const std::string & name);
+    ~UnsetEnv();
+
+    UnsetEnv(UnsetEnv &&) = delete;
+    UnsetEnv(const UnsetEnv &) = delete;
+
+    UnsetEnv & operator=(UnsetEnv &&) = delete;
+    UnsetEnv & operator=(const UnsetEnv &) = delete;
+
+    std::string name;
+    std::string previous_value;
+    bool had_value = false;
+};
+
 } // namespace runai::llm::streamer::utils::temp

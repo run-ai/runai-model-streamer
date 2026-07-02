@@ -152,7 +152,8 @@ common::backend_api::ObjectClientConfig_t make_config(std::vector<common::backen
 TEST(CaBundle, ResolvedFromConfigProfile)
 {
     // ensure the environment variable does not shadow the profile setting
-    ::unsetenv("AWS_CA_BUNDLE");
+    // (restored on scope exit to avoid cross-test pollution)
+    utils::temp::UnsetEnv ca_bundle_env("AWS_CA_BUNDLE");
 
     utils::temp::Dir dir;
     const std::string config_path = dir.path + "/aws_config";

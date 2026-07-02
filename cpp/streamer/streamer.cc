@@ -199,8 +199,8 @@ _RUNAI_EXTERN_C int runai_list_files(
         common::s3::Credentials credentials(key, secret, token, region, endpoint);
 
         std::vector<std::string> allow, ignore;
-        for (unsigned i = 0; i < num_allow_patterns; ++i) allow.emplace_back(allow_patterns[i]);
-        for (unsigned i = 0; i < num_ignore_patterns; ++i) ignore.emplace_back(ignore_patterns[i]);
+        for (unsigned i = 0; allow_patterns && i < num_allow_patterns; ++i) allow.emplace_back(allow_patterns[i]);
+        for (unsigned i = 0; ignore_patterns && i < num_ignore_patterns; ++i) ignore.emplace_back(ignore_patterns[i]);
 
         impl::Streamer streamer;
         const auto files = streamer.list_files(prefix, is_recursive != 0, allow, ignore, credentials);

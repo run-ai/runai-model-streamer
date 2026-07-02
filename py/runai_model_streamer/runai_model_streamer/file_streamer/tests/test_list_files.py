@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from runai_model_streamer.file_streamer.file_streamer import FileStreamer
+from runai_model_streamer.libstreamer.libstreamer import runai_list_files
 from runai_model_streamer.s3_utils.s3_utils import S3Credentials
 
 
@@ -82,6 +83,20 @@ class TestListFilesFilesystem(unittest.TestCase):
     def test_nonexistent_path_raises(self):
         with self.assertRaises(ValueError):
             FileStreamer().list_files(os.path.join(self.temp_dir, "does_not_exist"))
+
+    def test_callback_exception_is_reraised(self):
+        # an exception raised inside the callback must propagate out of
+        # runai_list_files rather than be swallowed by the ctypes boundary
+        self._write("a.txt", b"hello")
+
+        class BoomError(Exception):
+            pass
+
+        def raising_callback(path, size):
+            raise BoomError("callback failed")
+
+        with self.assertRaises(BoomError):
+            runai_list_files(self.temp_dir, raising_callback, is_recursive=True)
 
 
 # ---------------------------------------------------------------------------

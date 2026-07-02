@@ -158,6 +158,11 @@ extern "C" int runai_list_files(
 {
     namespace fs = std::filesystem;
 
+    if (prefix == nullptr || callback == nullptr)
+    {
+        return -1;
+    }
+
     // Object storage paths are not supported in the mock
     if (::strncmp(prefix, "s3://", 5) == 0 ||
         ::strncmp(prefix, "gs://", 5) == 0 ||
@@ -175,7 +180,7 @@ extern "C" int runai_list_files(
     auto fire = [&](const fs::path& p, size_t size)
     {
         const char* cpath = p.c_str();
-        if (num_allow_patterns > 0)
+        if (allow_patterns != nullptr && num_allow_patterns > 0)
         {
             bool matched = false;
             for (unsigned j = 0; j < num_allow_patterns; ++j)
@@ -184,7 +189,7 @@ extern "C" int runai_list_files(
             }
             if (!matched) return;
         }
-        for (unsigned j = 0; j < num_ignore_patterns; ++j)
+        for (unsigned j = 0; ignore_patterns != nullptr && j < num_ignore_patterns; ++j)
         {
             if (::fnmatch(ignore_patterns[j], cpath, 0) == 0) return;
         }

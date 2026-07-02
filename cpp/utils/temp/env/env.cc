@@ -55,4 +55,34 @@ Env::~Env()
     }
 }
 
+UnsetEnv::UnsetEnv(const std::string & name) :
+    name(name)
+{
+    const char * previous = ::getenv(name.c_str());
+    if (previous != nullptr)
+    {
+        had_value = true;
+        previous_value = previous;
+    }
+    if (::unsetenv(name.c_str()) == -1)
+    {
+        LOG(ERROR) << "Failed unsetting environment variable '" << name << "'";
+    }
+}
+
+UnsetEnv::~UnsetEnv()
+{
+    if (had_value)
+    {
+        if (::setenv(name.c_str(), previous_value.c_str(), 1 /* overwrite */) == -1)
+        {
+            LOG(ERROR) << "Failed restoring environment variable '" << name << "'";
+        }
+    }
+    else if (::unsetenv(name.c_str()) == -1)
+    {
+        LOG(ERROR) << "Failed unsetting environment variable '" << name << "'";
+    }
+}
+
 } // namespace runai::llm::streamer::utils::temp

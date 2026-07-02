@@ -205,7 +205,9 @@ ResponseCode_t obj_remove_all_clients();
 
 /**
  * A single entry returned by obj_list_files.
- * 'path' is heap-allocated (strdup) and must be freed via obj_free_file_list.
+ * 'path' points into a buffer owned by the entry array; it is NOT an independent
+ * allocation. Do not free/delete individual paths. The whole result (entries and
+ * all their paths) is released as one unit via obj_free_file_list.
  */
 struct ObjectFileEntry_t
 {
@@ -220,9 +222,13 @@ struct ObjectFileEntry_t
  * - client_handle   - handle obtained from obj_create_client
  * - prefix          - full URI prefix to list (e.g. "s3://bucket/models/")
  * - is_recursive    - 0 = immediate children only, non-zero = all descendants
- * - out_entries     - set to a malloc'd array of ObjectFileEntry_t; free with obj_free_file_list
+ * - out_entries     - set to a single heap-allocated array of ObjectFileEntry_t (the
+ *                     entries and their path strings share one allocation); release
+ *                     the whole thing with obj_free_file_list and never free the
+ *                     entries or individual paths directly. Set to nullptr when empty.
  * - out_num_entries - number of entries in *out_entries
- * Returns Success or an error code.
+ * Returns Success or an error code. On error nothing is allocated and the output
+ * parameters are left untouched.
  */
 ResponseCode_t obj_list_files(
     ObjectClientHandle_t  client_handle,
@@ -233,7 +239,8 @@ ResponseCode_t obj_list_files(
 );
 
 /**
- * Frees the array returned by obj_list_files.
+ * Frees the result returned by obj_list_files as a single allocation (entries and
+ * all their path strings). Safe to call with a nullptr entries pointer.
  */
 void obj_free_file_list(ObjectFileEntry_t* entries, unsigned num_entries);
 

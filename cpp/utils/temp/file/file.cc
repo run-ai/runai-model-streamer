@@ -76,6 +76,9 @@ Dir::Dir(const std::string & dir, const std::string & name) :
     name(name),
     path(dir + (name.empty() ? "" : "/") + name)
 {
+    // An empty name collapses path to dir, which would make _delete() recursively
+    // remove the caller-supplied directory instead of an owned temp subdirectory
+    ASSERT(!name.empty()) << "Temporary directory name must not be empty";
     std::filesystem::create_directories(path);
 }
 

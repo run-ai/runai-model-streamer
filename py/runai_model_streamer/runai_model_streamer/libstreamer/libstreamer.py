@@ -103,11 +103,19 @@ def runai_list_files(
     ignore_patterns: Optional[List[str]] = None,
     params: Optional[Dict[str, str]] = None,
 ) -> None:
-    results_holder = []
+    # Exceptions raised inside a ctypes callback do not propagate through the C
+    # call (they are routed to sys.unraisablehook). Capture the first one and
+    # re-raise it after runai_list_files returns so callers can detect failures.
+    callback_error: List[Exception] = []
 
     @dll.RunaiFileListCallback
     def _cb(path: bytes, size: int, _user_data: None) -> None:
-        callback(path.decode("utf-8"), size)
+        if callback_error:
+            return
+        try:
+            callback(path.decode("utf-8"), size)
+        except Exception as exc:
+            callback_error.append(exc)
 
     def make_pattern_array(patterns):
         if not patterns:
@@ -137,6 +145,9 @@ def runai_list_files(
         _cb, None,
         keys_arr, values_arr, num_params,
     )
+    # a callback failure is the root cause, so surface it before the error code
+    if callback_error:
+        raise callback_error[0]
     if error_code != SUCCESS_ERROR_CODE:
         raise ValueError(
             f"runai_list_files failed: {runai_response_str(error_code)}"
