@@ -21,5 +21,15 @@ runai_cc_auto_library(
 runai_cc_test(
     name = "client_test",
     srcs = ["client_test.cc"],
-    deps = [":client"],
+    deps = [
+        ":client",
+        "//s3/s3_init",
+        "//common/exception",
+        "//common/response_code",
+        "//common/s3_credentials",
+        "//common/backend_api/object_storage",
+        "//utils/temp/file",
+        "//utils/temp/env",
+        "//utils/random",
+    ],
 )

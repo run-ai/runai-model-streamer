@@ -54,6 +54,13 @@ def homogeneous_paths(paths: List[str]) -> bool:
     return True
 
 class FileStreamer:
+    def __init__(self) -> None:
+        # Initialized here (not only in __enter__) so methods such as list_files
+        # can be used without entering the context manager
+        self.streamer = None
+        self.s3_session = None
+        self.s3_credentials = None
+
     def __enter__(self) -> "FileStreamer":
         self.streamer = runai_start()
         self.start_time = timer()
@@ -93,23 +100,24 @@ class FileStreamer:
         ignore_patterns: Optional[List[str]] = None,
         credentials: Optional[S3Credentials] = None,
     ) -> List[Tuple[str, int]]:
-        s3_credentials = None
-        if s3_credentials_module and is_s3_path(prefix):
-            _, s3_credentials = s3_credentials_module.get_credentials(credentials)
+        # Resolve credentials through the same path as streaming: this creates and
+        # retains the boto3 session (self.s3_session) and the resolved credentials
+        # (self.s3_credentials) for s3 paths
+        self.handle_object_store(prefix, credentials)
 
         params: Optional[Dict[str, str]] = None
-        if s3_credentials is not None:
+        if self.s3_credentials is not None:
             params = {}
-            if s3_credentials.access_key_id:
-                params["key"] = s3_credentials.access_key_id
-            if s3_credentials.secret_access_key:
-                params["secret"] = s3_credentials.secret_access_key
-            if s3_credentials.session_token:
-                params["token"] = s3_credentials.session_token
-            if s3_credentials.region_name:
-                params["region"] = s3_credentials.region_name
-            if s3_credentials.endpoint:
-                params["endpoint"] = s3_credentials.endpoint
+            if self.s3_credentials.access_key_id:
+                params["key"] = self.s3_credentials.access_key_id
+            if self.s3_credentials.secret_access_key:
+                params["secret"] = self.s3_credentials.secret_access_key
+            if self.s3_credentials.session_token:
+                params["token"] = self.s3_credentials.session_token
+            if self.s3_credentials.region_name:
+                params["region"] = self.s3_credentials.region_name
+            if self.s3_credentials.endpoint:
+                params["endpoint"] = self.s3_credentials.endpoint
 
         results: List[Tuple[str, int]] = []
         runai_list_files(

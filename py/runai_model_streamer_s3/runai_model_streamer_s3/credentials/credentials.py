@@ -5,6 +5,7 @@ import boto3
 
 AWS_CA_BUNDLE_ENV = "AWS_CA_BUNDLE"
 RUNAI_STREAMER_S3_UNSIGNED_ENV_VAR = "RUNAI_STREAMER_S3_UNSIGNED"
+RUNAI_STREAMER_NO_BOTO3_SESSION_ENV_VAR = "RUNAI_STREAMER_NO_BOTO3_SESSION"
 
 class S3Credentials:
     def __init__(
@@ -23,23 +24,27 @@ class S3Credentials:
 
 def get_credentials(credentials: Optional[S3Credentials] = None) -> Tuple[Optional[boto3.Session], S3Credentials]:
     """
-    Creates a boto3 session only if the environment variable RUNAI_STREAMER_NO_BOTO3_SESSION is set.
-    If the variable is not set, returns None and the original credentials.
+    Resolves S3 credentials, optionally via a boto3 session.
+
+    By default (RUNAI_STREAMER_NO_BOTO3_SESSION=1) no boto3 session is created:
+    the credentials are returned as provided and the C++ layer authenticates using
+    the AWS default credential provider chain (environment, profile, SSO, IMDS, etc.),
+    or the explicitly provided credentials. Set RUNAI_STREAMER_NO_BOTO3_SESSION=0 to
+    resolve credentials through a boto3 session in Python and pass the resolved
+    (frozen) credentials to the C++ layer.
 
     Returns:
-        - boto3.Session object (or None if RUNAI_STREAMER_NO_BOTO3_SESSION is set)
-        - S3Credentials object with the resolved credentials (or original if session not created)
+        - boto3.Session object (or None when no session is created)
+        - S3Credentials object with the resolved credentials (or the provided ones)
     """
 
+    # CA bundle resolution (AWS_CA_BUNDLE env or the profile "ca_bundle" setting)
+    # is handled by the C++ layer, so no boto3 session is needed for unsigned or
+    # no-session modes.
     if os.getenv(RUNAI_STREAMER_S3_UNSIGNED_ENV_VAR, "0") == "1":
-        if AWS_CA_BUNDLE_ENV not in os.environ:
-            session = boto3.Session()
-            ca_bundle = session._session.get_config_variable("ca_bundle")
-            if ca_bundle is not None:
-                os.environ.setdefault(AWS_CA_BUNDLE_ENV, ca_bundle)
         return None, credentials if credentials else S3Credentials()
 
-    if "RUNAI_STREAMER_NO_BOTO3_SESSION" in os.environ:
+    if os.getenv(RUNAI_STREAMER_NO_BOTO3_SESSION_ENV_VAR, "1") == "1":
         return None, credentials if credentials else S3Credentials()
 
     session = boto3.Session(
@@ -59,13 +64,7 @@ def get_credentials(credentials: Optional[S3Credentials] = None) -> Tuple[Option
         secret_access_key=frozen_creds.secret_key if frozen_creds else None,
         session_token=frozen_creds.token if frozen_creds else None,
         region_name=session.region_name,
-        endpoint=credentials.endpoint if credentials else None, 
+        endpoint=credentials.endpoint if credentials else None,
     )
 
-    # set ca_bundle if exists and AWS_CA_BUNDLE is undefined
-    if AWS_CA_BUNDLE_ENV not in os.environ:
-        ca_bundle = session._session.get_config_variable("ca_bundle")
-        if ca_bundle is not None:
-            os.environ.setdefault(AWS_CA_BUNDLE_ENV, ca_bundle)
- 
     return session, new_credentials

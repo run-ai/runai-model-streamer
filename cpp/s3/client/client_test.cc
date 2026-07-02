@@ -1,6 +1,22 @@
 #include "s3/client/client.h"
 
+#include <aws/core/config/ConfigAndCredentialsCacheManager.h>
+
 #include <gtest/gtest.h>
+
+#include <cstdlib>
+#include <fstream>
+#include <string>
+#include <vector>
+
+#include "s3/s3_init/s3_init.h"
+#include "common/exception/exception.h"
+#include "common/response_code/response_code.h"
+#include "common/s3_credentials/s3_credentials.h"
+#include "common/backend_api/object_storage/object_storage.h"
+#include "utils/temp/file/file.h"
+#include "utils/temp/env/env.h"
+#include "utils/random/random.h"
 
 namespace runai::llm::streamer::impl::s3
 {
@@ -104,6 +120,71 @@ TEST(ParseEndpointScheme, PortWithoutHost)
     EXPECT_EQ(result.host, ":9000");
     ASSERT_TRUE(result.scheme.has_value());
     EXPECT_EQ(result.scheme.value(), Aws::Http::Scheme::HTTP);
+}
+
+namespace
+{
+
+void write_config_with_ca_bundle(const std::string & path, const std::string & ca_bundle)
+{
+    std::ofstream out(path, std::ios::trunc);
+    out << "[default]\n";
+    out << "ca_bundle = " << ca_bundle << "\n";
+}
+
+common::backend_api::ObjectClientConfig_t make_config(std::vector<common::backend_api::ObjectConfigParam_t> & params)
+{
+    // provide a region so the underlying S3 client can be constructed
+    params.push_back(common::backend_api::ObjectConfigParam_t{common::s3::Credentials::REGION_KEY, "us-east-1"});
+
+    common::backend_api::ObjectClientConfig_t config{};
+    config.endpoint_url = nullptr;
+    config.default_storage_chunk_size = 8 * 1024 * 1024;
+    config.initial_params = params.data();
+    config.num_initial_params = static_cast<unsigned>(params.size());
+    return config;
+}
+
+} // namespace
+
+// Verifies that when AWS_CA_BUNDLE is not set, the S3 client resolves the CA
+// bundle from the "ca_bundle" setting in the shared AWS config profile.
+TEST(CaBundle, ResolvedFromConfigProfile)
+{
+    // ensure the environment variable does not shadow the profile setting
+    ::unsetenv("AWS_CA_BUNDLE");
+
+    utils::temp::Dir dir;
+    const std::string config_path = dir.path + "/aws_config";
+    const std::string missing_ca = dir.path + "/missing_ca.pem";
+    utils::temp::File valid_ca(dir.path, "ca.pem", utils::random::buffer(32));
+
+    // point the SDK at our temporary config file
+    utils::temp::Env config_file_env("AWS_CONFIG_FILE", config_path);
+
+    S3Init init;
+
+    std::vector<common::backend_api::ObjectConfigParam_t> params;
+    const auto config = make_config(params);
+
+    // 1) ca_bundle points to a non-existent file -> the client rejects it.
+    //    This only fires if the profile ca_bundle was actually read.
+    write_config_with_ca_bundle(config_path, missing_ca);
+    Aws::Config::ReloadCachedConfigFile();
+    try
+    {
+        S3Client client(config);
+        FAIL() << "expected CaFileNotFound for a missing ca_bundle from the config profile";
+    }
+    catch (const common::Exception & e)
+    {
+        EXPECT_EQ(e.error(), common::ResponseCode::CaFileNotFound);
+    }
+
+    // 2) ca_bundle points to an existing file -> accepted, client is created
+    write_config_with_ca_bundle(config_path, valid_ca.path);
+    Aws::Config::ReloadCachedConfigFile();
+    EXPECT_NO_THROW(S3Client client(config));
 }
 
 }; // namespace runai::llm::streamer::impl::s3

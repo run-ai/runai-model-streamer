@@ -1,4 +1,7 @@
 
+#include <aws/core/auth/AWSCredentials.h>
+#include <aws/core/auth/AWSCredentialsProvider.h>
+#include <aws/core/config/ConfigAndCredentialsCacheManager.h>
 #include <aws/core/http/Scheme.h>
 #include <aws/s3-crt/model/GetObjectRequest.h>
 #include <aws/s3-crt/model/ListObjectsV2Request.h>
@@ -92,6 +95,17 @@ S3ClientBase::S3ClientBase(const common::backend_api::ObjectClientConfig_t & con
             }
         }
     }
+
+    // Build explicit credentials when an access key was provided; otherwise leave
+    // _client_credentials null so the client falls back to the AWS default
+    // credential provider chain (environment, profile, SSO, IMDS, etc.)
+    if (_key.has_value() && _secret.has_value())
+    {
+        _client_credentials = std::make_unique<Aws::Auth::AWSCredentials>(
+            _key.value(),
+            _secret.value(),
+            _token.has_value() ? _token.value() : Aws::String(""));
+    }
 }
 
 bool S3ClientBase::verify_credentials_member(const std::optional<Aws::String>& member, const std::optional<Aws::String>& value, const char * name) const
@@ -169,7 +183,20 @@ S3Client::S3Client(const common::backend_api::ObjectClientConfig_t & config) :
         _client_config.config.region = _region.value();
     }
 
-    if (utils::try_getenv("AWS_CA_BUNDLE", _client_config.config.caFile))
+    // Resolve the TLS CA bundle: the AWS_CA_BUNDLE environment variable takes
+    // precedence; otherwise fall back to the "ca_bundle" setting in the shared
+    // AWS config profile (~/.aws/config), matching boto3/aws-cli behavior. The
+    // config file is already parsed and cached by Aws::InitAPI (see s3_init).
+    if (!utils::try_getenv("AWS_CA_BUNDLE", _client_config.config.caFile))
+    {
+        const auto ca_bundle = Aws::Config::GetCachedConfigValue(Aws::Auth::GetConfigProfileName(), "ca_bundle");
+        if (!ca_bundle.empty())
+        {
+            _client_config.config.caFile = ca_bundle;
+        }
+    }
+
+    if (!_client_config.config.caFile.empty())
     {
         LOG(DEBUG) << "Setting s3 configuration ca certificate file to " << _client_config.config.caFile;
 

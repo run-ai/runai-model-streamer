@@ -107,21 +107,11 @@ file_path = "s3://my-bucket/my/file/path.safetensors"
 
 #### S3 authentication
 
-By default, the streamer performs authentication via boto3 to obtain credentials, which are then passed to the S3 client in `libstreamers3.so`.
+###### Authentication via AWS CPP SDK (default)
 
-This is the recommended way to load tensors from AWS S3 storage
+By default, the S3 client in `libstreamers3.so` authenticates itself using the AWS C++ SDK's default credential provider chain. No boto3 session is created.
 
-###### HTTPS certificate
-
-Custom certificates file can be passed using `AWS_CA_BUNDLE=path/to/ca_file`
-
-The file path can also be configured in `~/.aws/config` file with `ca_bundle = /path/to/ca_file`, in case the authentication is via boto3 (`RUNAI_STREAMER_NO_BOTO3_SESSION=0` which is the default)
-
-###### Authentication via AWS CPP SDK 
-
-The boto3 authentication can be disabled by setting `RUNAI_STREAMER_NO_BOTO3_SESSION=1`.
-
-In this case credentials can be passed in one of the following ways:
+Credentials are resolved from any of the following:
 
 1. Environment variables `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
 
@@ -136,6 +126,16 @@ e.g. `aws sts assume-role --role-arn arn:aws:iam::<account_name>:role/<role> --r
 The session token shoud be passed as an environment variable `AWS_SESSION_TOKEN`
 
 To check if IAM role assumption is needed run `aws s3 ls s3://your-bucket-name --region your-region`. If you get a `403 Forbidden` error, you might need an assumed role
+
+###### Authentication via boto3
+
+Setting `RUNAI_STREAMER_NO_BOTO3_SESSION=0` makes the streamer resolve credentials via a boto3 session in Python and pass the resolved credentials to the S3 client in `libstreamers3.so`. This is useful when credentials are only reachable through boto3 (for example an SSO or `credential_process` profile).
+
+###### HTTPS certificate
+
+Custom certificates file can be passed using `AWS_CA_BUNDLE=path/to/ca_file`
+
+The file path can also be configured in the `~/.aws/config` file with `ca_bundle = /path/to/ca_file`. This is honored in both authentication modes.
 
 ###### Unsigned requests (public buckets)
 
