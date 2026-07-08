@@ -34,6 +34,10 @@ struct Reader
     virtual void async_read(const common::s3::S3ClientWrapper::Params & params, common::backend_api::ObjectRequestId_t request_handle, const common::Range & range, char * buffer) = 0;
     virtual common::ResponseCode async_response(std::vector<common::backend_api::Response> & responses, unsigned max_responses) = 0;
 
+    // In-flight window (bytes) the backend advertises for submission throttling.
+    // Default is unbounded; object-storage readers override it with the plugin value.
+    virtual size_t max_inflight_bytes() const { return static_cast<size_t>(-1); }
+
     const Mode mode;
 };
 

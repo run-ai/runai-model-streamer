@@ -5,6 +5,7 @@ runai_cc_auto_library(
     deps = [
         "@aws",
         "//common/storage_uri",
+        "//common/backend_api/object_storage",
         "//utils/env",
         "//utils/logging",
     ],

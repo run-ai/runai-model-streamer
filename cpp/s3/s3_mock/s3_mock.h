@@ -14,6 +14,11 @@ namespace runai::llm::streamer::common::s3
 extern "C" common::backend_api::ResponseCode_t obj_open_backend(common::backend_api::ObjectBackendHandle_t* out_backend_handle);
 extern "C" common::backend_api::ResponseCode_t obj_close_backend(common::backend_api::ObjectBackendHandle_t backend_handle);
 extern "C" common::backend_api::ObjectShutdownPolicy_t obj_get_backend_shutdown_policy();
+extern "C" common::backend_api::ResponseCode_t obj_get_backend_config(
+    common::backend_api::ObjectBackendHandle_t backend_handle,
+    const char* key,
+    char* out_value_buffer,
+    unsigned int* in_out_buffer_len);
 // --- Client API ---
 
 extern "C" common::backend_api::ResponseCode_t obj_create_client(
@@ -64,6 +69,17 @@ extern "C" void runai_mock_s3_set_list_files_response(common::backend_api::Respo
 extern "C" int runai_mock_s3_last_list_files_is_recursive();
 
 extern "C" void runai_mock_s3_set_response_time_ms(unsigned milliseconds);
+// Sets the in-flight window (bytes) reported by obj_get_backend_config("max_inflight_bytes").
+extern "C" void runai_mock_s3_set_inflight_window(size_t bytes);
+// Peak per-client in-flight (submitted-but-not-completed) request count observed since the last cleanup.
+extern "C" size_t runai_mock_s3_max_concurrent();
+// Fail (with FileAccessError) the completion of any read whose path contains substr; "" / nullptr disables.
+extern "C" void runai_mock_s3_set_failing_path(const char* substr);
+// Peak number of completion events returned by a single obj_wait_for_completions call since the last cleanup.
+extern "C" size_t runai_mock_s3_max_events_per_wait();
+// When enabled, obj_wait_for_completions appends a FinishedError sentinel event (handle 0) after the
+// ready completions, mimicking the azure/gcs plugins' responder-drain behavior.
+extern "C" void runai_mock_s3_set_append_finished_sentinel(bool enabled);
 extern "C" void runai_s3_mock_set_backend_shutdown_policy(common::backend_api::ObjectShutdownPolicy_t policy);
 extern "C" int runai_mock_s3_clients();
 extern "C" void runai_mock_s3_cleanup();

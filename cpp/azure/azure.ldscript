@@ -3,6 +3,7 @@
     obj_open_backend;
     obj_close_backend;
     obj_get_backend_shutdown_policy;
+    obj_get_backend_config;
     obj_create_client;
     obj_remove_client;
     obj_request_read;

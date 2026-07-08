@@ -30,13 +30,10 @@ struct Workload
 
  private:
     common::ResponseCode verify_batch(const Batch & batch);
-    void wait_for_responses(std::atomic<bool> & stopped);
     void async_read(std::atomic<bool> & stopped);
-    common::ResponseCode handle_batch(unsigned file_index, Batch & batch, std::atomic<bool> & stopped);
     void assign_global_ids();
  private:
     std::map<unsigned, Batch> _batches_by_file_index;
-    std::map<unsigned, common::ResponseCode> _error_by_file_index;
     bool _is_object_storage = false;
     std::shared_ptr<Reader> _reader;
     size_t _total_tasks = 0;

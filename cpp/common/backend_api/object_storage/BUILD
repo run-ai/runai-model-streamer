@@ -4,6 +4,7 @@ runai_cc_auto_library(
     name = "object_storage",
     deps = [
         "//common/response",
+        "//utils/logging",
     ],
 )
 

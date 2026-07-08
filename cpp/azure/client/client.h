@@ -44,11 +44,15 @@ struct AzureClient : common::IClient
     // If stopped before all requests for an async_read() call are sent, subsequent request chunks will not be sent.
     void stop();
 
+    // In-flight window (bytes) advertised to the generic layer: async threadpool size x chunk x margin
+    size_t max_inflight_bytes() const { return _max_inflight_bytes; }
+
  private:
     std::atomic<bool> _stop;
     ClientConfiguration _client_config;
     const size_t _chunk_bytesize;
-    
+    size_t _max_inflight_bytes = 0;
+
     // Azure credentials
     std::optional<std::string> _account_name;
     std::optional<std::string> _account_key;

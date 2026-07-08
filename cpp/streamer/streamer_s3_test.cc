@@ -179,6 +179,247 @@ TEST_F(StreamerTest, Async_Read)
     EXPECT_EQ(verify_mock(), 0);
 }
 
+TEST_F(StreamerTest, Async_Read_Bounded_By_Window)
+{
+    utils::Dylib dylib("libstreamers3.so");
+    auto mock_cleanup = dylib.dlsym<void(*)()>("runai_mock_s3_cleanup");
+    auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
+    auto set_window = dylib.dlsym<void(*)(size_t)>("runai_mock_s3_set_inflight_window");
+    auto max_concurrent = dylib.dlsym<size_t(*)()>("runai_mock_s3_max_concurrent");
+
+    // Bound the in-flight window. The effective chunk size is clamped to the 5 MiB S3
+    // minimum, so the per-client window is at most window_bytes / 5 MiB chunks.
+    const size_t min_chunk = 5 * 1024 * 1024;
+    const size_t window_chunks = 5;
+    set_window(window_chunks * min_chunk);
+
+    void * streamer;
+    ASSERT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
+
+    auto res = runai_request(streamer,
+                    num_files,
+                    file_names.data(),
+                    file_offsets.data(),
+                    sizes.data(),
+                    dsts.data(),
+                    num_ranges.data(),
+                    internal_sizes.data(),
+                    nullptr,
+                    nullptr,
+                    nullptr,
+                    nullptr,
+                    nullptr);
+    EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
+
+    // every sub-request still completes successfully under the bounded window
+    unsigned r;
+    unsigned file_index;
+    for (unsigned i = 0; i < num_expected_responses; ++i)
+    {
+        r = utils::random::number();
+        file_index = utils::random::number();
+        auto response_code = runai_response(streamer, &file_index, &r);
+        EXPECT_EQ(response_code, static_cast<int>(common::ResponseCode::Success));
+        if (response_code != static_cast<int>(common::ResponseCode::Success))
+        {
+            break;
+        }
+        EXPECT_LT(file_index, num_files);
+        EXPECT_EQ(expected_response[file_index].count(r), 1);
+        expected_response[file_index].erase(r);
+    }
+
+    // the per-client in-flight never exceeded the configured window (windowing is enforced),
+    // and the window was actually exercised (something was in flight)
+    const size_t peak = max_concurrent();
+    EXPECT_LE(peak, window_chunks);
+    EXPECT_GT(peak, 0u);
+
+    runai_end(streamer);
+    mock_cleanup();
+    EXPECT_EQ(verify_mock(), 0);
+}
+
+TEST_F(StreamerTest, Async_Read_Per_File_Error_Isolation)
+{
+    if (num_files < 2)
+    {
+        GTEST_SKIP() << "needs at least two files to observe per-file isolation";
+    }
+
+    utils::Dylib dylib("libstreamers3.so");
+    auto mock_cleanup = dylib.dlsym<void(*)()>("runai_mock_s3_cleanup");
+    auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
+    auto set_failing_path = dylib.dlsym<void(*)(const char*)>("runai_mock_s3_set_failing_path");
+
+    // fail every read of file 0 (its object key is unique); all other files must still succeed
+    const unsigned failing_file = 0;
+    set_failing_path(s3_paths[failing_file].c_str());
+
+    void * streamer;
+    ASSERT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
+
+    auto res = runai_request(streamer,
+                    num_files,
+                    file_names.data(),
+                    file_offsets.data(),
+                    sizes.data(),
+                    dsts.data(),
+                    num_ranges.data(),
+                    internal_sizes.data(),
+                    nullptr,
+                    nullptr,
+                    nullptr,
+                    nullptr,
+                    nullptr);
+    EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
+
+    unsigned failed = 0;
+    unsigned succeeded = 0;
+    for (unsigned i = 0; i < num_expected_responses; ++i)
+    {
+        unsigned r = utils::random::number();
+        unsigned file_index = utils::random::number();
+        auto response_code = runai_response(streamer, &file_index, &r);
+        ASSERT_LT(file_index, num_files);
+
+        if (file_index == failing_file)
+        {
+            // the failing file's ranges report the error - isolated to this file
+            EXPECT_EQ(response_code, static_cast<int>(common::ResponseCode::FileAccessError));
+            ++failed;
+        }
+        else
+        {
+            // every other file completes successfully with its expected range indices
+            EXPECT_EQ(response_code, static_cast<int>(common::ResponseCode::Success));
+            EXPECT_EQ(expected_response[file_index].count(r), 1);
+            expected_response[file_index].erase(r);
+            ++succeeded;
+        }
+    }
+
+    // exactly the failing file's ranges failed; all other files' ranges succeeded
+    EXPECT_EQ(failed, num_ranges[failing_file]);
+    EXPECT_EQ(succeeded, num_expected_responses - num_ranges[failing_file]);
+    for (unsigned i = 0; i < num_files; ++i)
+    {
+        if (i != failing_file)
+        {
+            EXPECT_TRUE(expected_response[i].empty());
+        }
+    }
+
+    runai_end(streamer);
+    mock_cleanup();
+    EXPECT_EQ(verify_mock(), 0);
+}
+
+TEST_F(StreamerTest, Async_Read_Batched_Completions)
+{
+    utils::Dylib dylib("libstreamers3.so");
+    auto mock_cleanup = dylib.dlsym<void(*)()>("runai_mock_s3_cleanup");
+    auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
+    auto max_events_per_wait = dylib.dlsym<size_t(*)()>("runai_mock_s3_max_events_per_wait");
+
+    // default mock window is unbounded, so every chunk is in flight before the first wait and
+    // a single obj_wait_for_completions returns many completions - exercising max_responses > 1
+    void * streamer;
+    ASSERT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
+
+    auto res = runai_request(streamer,
+                    num_files,
+                    file_names.data(),
+                    file_offsets.data(),
+                    sizes.data(),
+                    dsts.data(),
+                    num_ranges.data(),
+                    internal_sizes.data(),
+                    nullptr,
+                    nullptr,
+                    nullptr,
+                    nullptr,
+                    nullptr);
+    EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
+
+    // every sub-request still completes successfully when completions are drained in batches
+    for (unsigned i = 0; i < num_expected_responses; ++i)
+    {
+        unsigned r = utils::random::number();
+        unsigned file_index = utils::random::number();
+        auto response_code = runai_response(streamer, &file_index, &r);
+        EXPECT_EQ(response_code, static_cast<int>(common::ResponseCode::Success));
+        if (response_code != static_cast<int>(common::ResponseCode::Success))
+        {
+            break;
+        }
+        EXPECT_LT(file_index, num_files);
+        EXPECT_EQ(expected_response[file_index].count(r), 1);
+        expected_response[file_index].erase(r);
+    }
+
+    // at least one wait returned more than one completion (batch drain was actually exercised)
+    EXPECT_GT(max_events_per_wait(), 1u);
+
+    runai_end(streamer);
+    mock_cleanup();
+    EXPECT_EQ(verify_mock(), 0);
+}
+
+TEST_F(StreamerTest, Async_Read_Tolerates_Finished_Sentinel)
+{
+    utils::Dylib dylib("libstreamers3.so");
+    auto mock_cleanup = dylib.dlsym<void(*)()>("runai_mock_s3_cleanup");
+    auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
+    auto set_append_sentinel = dylib.dlsym<void(*)(bool)>("runai_mock_s3_set_append_finished_sentinel");
+
+    // mimic azure/gcs: obj_wait_for_completions appends a FinishedError sentinel (handle 0)
+    // once the ready completions drain. The worker must skip it, not fail on the 0 handle.
+    set_append_sentinel(true);
+
+    void * streamer;
+    ASSERT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
+
+    auto res = runai_request(streamer,
+                    num_files,
+                    file_names.data(),
+                    file_offsets.data(),
+                    sizes.data(),
+                    dsts.data(),
+                    num_ranges.data(),
+                    internal_sizes.data(),
+                    nullptr,
+                    nullptr,
+                    nullptr,
+                    nullptr,
+                    nullptr);
+    EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
+
+    // every sub-request still completes successfully despite the interleaved sentinel events
+    for (unsigned i = 0; i < num_expected_responses; ++i)
+    {
+        unsigned r = utils::random::number();
+        unsigned file_index = utils::random::number();
+        auto response_code = runai_response(streamer, &file_index, &r);
+        EXPECT_EQ(response_code, static_cast<int>(common::ResponseCode::Success));
+        if (response_code != static_cast<int>(common::ResponseCode::Success))
+        {
+            break;
+        }
+        EXPECT_LT(file_index, num_files);
+        EXPECT_EQ(expected_response[file_index].count(r), 1);
+        expected_response[file_index].erase(r);
+    }
+    for (unsigned i = 0; i < num_files; ++i)
+    {
+        EXPECT_TRUE(expected_response[i].empty());
+    }
+
+    runai_end(streamer);
+    mock_cleanup();
+    EXPECT_EQ(verify_mock(), 0);
+}
+
 TEST_F(StreamerTest, Increase_Insufficient_Fd_Limit)
 {
     utils::Dylib dylib("libstreamers3.so");

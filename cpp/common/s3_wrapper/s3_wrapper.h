@@ -108,6 +108,11 @@ struct S3ClientWrapper
       common::ResponseCode async_read(const Params & params, backend_api::ObjectRequestId_t request_id, const Range & ranges, char * buffer);
       common::ResponseCode async_read_response(std::vector<backend_api::ObjectCompletionEvent_t> & event_buffer, unsigned max_events_to_retrieve);
 
+      // In-flight window (bytes) the backend advertises for submission throttling, via
+      // obj_get_backend_config("max_inflight_bytes"). Returns SIZE_MAX (unbounded) when
+      // the plugin does not provide the key (e.g. gcs/azure).
+      size_t max_inflight_bytes();
+
       common::ResponseCode list_files(const char* prefix, int is_recursive,
                                       backend_api::ObjectFileEntry_t** out_entries,
                                       unsigned* out_num_entries);

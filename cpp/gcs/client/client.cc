@@ -29,6 +29,12 @@ GCSClient::GCSClient(const common::backend_api::ObjectClientConfig_t& config) :
     _responder(nullptr),
     _chunk_bytesize(config.default_storage_chunk_size)
 {
+    // advertise an in-flight window sized to the async threadpool: margin x pool x chunk,
+    // floored at two chunks so the window can always keep the pool busy
+    _max_inflight_bytes = std::max(
+        static_cast<size_t>(common::backend_api::inflight_window_margin() * _client_config.max_concurrency * _chunk_bytesize),
+        static_cast<size_t>(2) * _chunk_bytesize);
+
     _client = std::make_unique<AsyncGcsClient>(
         _client_config.options, 
         _client_config.max_concurrency,

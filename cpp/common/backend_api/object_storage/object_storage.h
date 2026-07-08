@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdlib>
 
 #include "common/response/response.h"
+#include "utils/logging/logging.h"
 
 namespace runai::llm::streamer::common::backend_api
 {
@@ -26,6 +28,26 @@ typedef enum {
 } ObjectShutdownPolicy_t;
 
 using ResponseCode_t = common::ResponseCode;
+
+// Multiplier applied to a backend's raw in-flight capacity when advertising
+// max_inflight_bytes (see obj_get_backend_config), giving completion-driven refill enough
+// headroom to keep the backend busy during the completion -> resubmit round-trip.
+// Defaults to 1.5; override with RUNAI_STREAMER_INFLIGHT_WINDOW_MARGIN (a positive float).
+inline double inflight_window_margin()
+{
+    if (const char* env = std::getenv("RUNAI_STREAMER_INFLIGHT_WINDOW_MARGIN"))
+    {
+        char* end = nullptr;
+        const double value = std::strtod(env, &end);
+        if (end != env && value > 0.0)
+        {
+            return value;
+        }
+        LOG(ERROR) << "Ignoring invalid RUNAI_STREAMER_INFLIGHT_WINDOW_MARGIN='" << env
+                   << "'; expected a positive float, using default 1.5";
+    }
+    return 1.5;
+}
 
 // --- Config Params ---
 struct ObjectConfigParam_t

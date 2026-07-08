@@ -71,12 +71,19 @@ struct S3Client : S3ClientBase
     // The S3CrtClient d'tor will wait for response of all teh sent requests, which can take a while
     void stop();
 
+    // In-flight submission window (bytes) for this client: a bandwidth-delay product from
+    // the configured chunk size (ObjectClientConfig_t.default_storage_chunk_size) and the
+    // target throughput (throughputTargetGbps). Surfaced to the generic layer via the
+    // backend config query.
+    size_t max_inflight_bytes() const { return _max_inflight_bytes; }
+
     using S3ClientBase::verify_credentials;
 
  private:
     std::atomic<bool> _stop;
     ClientConfiguration _client_config;
     std::unique_ptr<Aws::S3Crt::S3CrtClient> _client;
+    size_t _max_inflight_bytes = 0;
 
     // queue of asynchronous responses
     using Responder = common::SharedQueue<common::backend_api::Response>;

@@ -4,6 +4,7 @@ runai_cc_auto_library(
     name = "workload",
     deps = [
         "//utils/logging",
+        "//utils/capacity_queue",
         "//common/s3_wrapper",
         "//common/exception",
         "//common/response_code",

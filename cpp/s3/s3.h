@@ -37,6 +37,15 @@ namespace runai::llm::streamer::impl::s3
 extern "C" common::backend_api::ResponseCode_t obj_open_backend(common::backend_api::ObjectBackendHandle_t* out_backend_handle);
 extern "C" common::backend_api::ResponseCode_t obj_close_backend(common::backend_api::ObjectBackendHandle_t backend_handle);
 extern "C" common::backend_api::ObjectShutdownPolicy_t obj_get_backend_shutdown_policy();
+
+// Query a backend-wide configuration value by key. Currently supports
+// "max_inflight_bytes" (the S3 in-flight submission window, bytes).
+extern "C" common::backend_api::ResponseCode_t obj_get_backend_config(
+    common::backend_api::ObjectBackendHandle_t backend_handle,
+    const char* key,
+    char* out_value_buffer,
+    unsigned int* in_out_buffer_len);
+
 // --- Client API ---
 
 extern "C" common::backend_api::ResponseCode_t obj_create_client(

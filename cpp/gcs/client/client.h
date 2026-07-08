@@ -41,10 +41,14 @@ struct GCSClient : common::IClient
     // If stopped before all requests for an async_read() call are sent, subsequent request chunks will not be sent.
     void stop();
 
+    // In-flight window (bytes) advertised to the generic layer: async threadpool size x chunk x margin
+    size_t max_inflight_bytes() const { return _max_inflight_bytes; }
+
  private:
     std::atomic<bool> _stop;
     ClientConfiguration _client_config;
     const size_t _chunk_bytesize;
+    size_t _max_inflight_bytes = 0;
     std::unique_ptr<AsyncGcsClient> _client;
 
     // queue of asynchronous responses

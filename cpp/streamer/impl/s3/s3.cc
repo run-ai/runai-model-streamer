@@ -57,6 +57,11 @@ common::ResponseCode S3::async_response(std::vector<common::backend_api::Respons
     return common::ResponseCode::Success;
 }
 
+size_t S3::max_inflight_bytes() const
+{
+    return _client->max_inflight_bytes();
+}
+
 S3Cleanup::~S3Cleanup()
 {
     try

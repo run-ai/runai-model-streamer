@@ -35,6 +35,8 @@ struct S3 : Reader
     void async_read(const common::s3::S3ClientWrapper::Params & params, common::backend_api::ObjectRequestId_t request_handle, const common::Range & range, char * buffer) override;
     common::ResponseCode async_response(std::vector<common::backend_api::Response> & responses, unsigned max_responses) override;
 
+    size_t max_inflight_bytes() const override;
+
  private:
     std::shared_ptr<common::s3::S3ClientWrapper> _client;
     const Config & _config;
