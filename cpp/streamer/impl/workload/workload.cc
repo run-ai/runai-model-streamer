@@ -321,8 +321,16 @@ void Workload::async_read(std::atomic<bool> & stopped)
                     break;
                 }
 
+                // Hard range check before the (unsigned) subtraction: a stale/cancelled
+                // completion or a buggy backend could deliver a handle outside this workload's
+                // reserved block. Guarding here (not just via ASSERT, which is stripped in
+                // release builds) prevents an out-of-bounds read of chunk_task_idx.
+                if (response.handle < chunk_id_base || response.handle - chunk_id_base >= total_chunks)
+                {
+                    LOG(ERROR) << "Received response with out-of-range handle " << response.handle;
+                    throw common::Exception(common::ResponseCode::UnknownError);
+                }
                 const size_t rel = response.handle - chunk_id_base;
-                ASSERT(rel < total_chunks) << "Received response with unknown handle " << response.handle;
                 complete_chunk(chunk_task_idx[rel], response.ret);
             }
 

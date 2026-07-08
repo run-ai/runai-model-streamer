@@ -128,7 +128,7 @@ common::backend_api::ResponseCode_t obj_get_backend_config(common::backend_api::
     }
     catch(const std::exception& e)
     {
-        LOG(ERROR) << "Caught exception in obj_get_backend_config";
+        LOG(ERROR) << "Caught exception in obj_get_backend_config: " << e.what();
     }
     return common::ResponseCode::UnknownError;
 }
