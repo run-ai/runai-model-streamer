@@ -39,7 +39,7 @@ inline double inflight_window_margin()
     {
         char* end = nullptr;
         const double value = std::strtod(env, &end);
-        if (end != env && value > 0.0)
+        if (end != env && *end == '\0' && value > 0.0)
         {
             return value;
         }

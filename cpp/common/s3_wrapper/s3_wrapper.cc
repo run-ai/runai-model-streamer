@@ -84,8 +84,9 @@ size_t S3ClientWrapper::max_inflight_bytes()
     }
     catch (...)
     {
-        // plugin does not export obj_get_backend_config (e.g. gcs / azure / mock):
-        // dlsym throws for the missing symbol -> treat the window as unbounded
+        // Defensive fallback: all current object-storage plugins (s3 / gcs / azure and the
+        // s3 mock) export obj_get_backend_config, but an older or third-party plugin may not.
+        // dlsym throws for a missing symbol -> treat the window as unbounded.
         return unbounded;
     }
 }

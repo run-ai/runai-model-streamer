@@ -280,11 +280,23 @@ common::backend_api::ResponseCode_t S3Client::async_read(const char* path,
             return stream.release();
         });
 
-    _client->GetObjectAsync(*request, [request, responder = _responder, request_id](const Aws::S3Crt::S3CrtClient*, const Aws::S3Crt::Model::GetObjectRequest&,
+    _client->GetObjectAsync(*request, [request, responder = _responder, request_id, bytesize](const Aws::S3Crt::S3CrtClient*, const Aws::S3Crt::Model::GetObjectRequest&,
                                                                     const Aws::S3Crt::Model::GetObjectOutcome& outcome,
                                                                     const std::shared_ptr<const Aws::Client::AsyncCallerContext>&) {
         if (outcome.IsSuccess())
         {
+            // A success outcome does not guarantee the body matched the requested range: a
+            // mis-serving endpoint (e.g. a 200 full-object response instead of a 206 partial)
+            // can under- or over-fill the caller's fixed buffer, leaving stale bytes in the
+            // tail. Verify the reported length before reporting the chunk done.
+            const long long content_length = outcome.GetResult().GetContentLength();
+            if (content_length != static_cast<long long>(bytesize))
+            {
+                LOG(ERROR) << "Async read chunk of request " << request_id << " returned "
+                           << content_length << " bytes, expected " << bytesize;
+                responder->push(common::backend_api::Response(request_id, common::ResponseCode::FileTruncatedError));
+                return;
+            }
             LOG(SPAM) << "Async read chunk of request " << request_id << " succeeded";
             responder->push(common::backend_api::Response(request_id, common::ResponseCode::Success));
         }

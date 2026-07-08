@@ -37,6 +37,8 @@ constexpr std::array<const char *, static_cast<size_t>(ResponseCode::__Max)> __m
     "Unknown Error",
     "Error loading object storage plugin",
     "GCS not supported",
+    "Azure Blob not supported",
+    "Object storage returned an unexpected number of bytes for the requested range (truncated or over-length response)",
 };
 
 const char * description(int response_code)

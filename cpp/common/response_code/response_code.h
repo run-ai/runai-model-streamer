@@ -24,6 +24,7 @@ enum class ResponseCode : int
     ObjPluginLoadError,
     GCSNotSupported,
     AzureBlobNotSupported,
+    FileTruncatedError,
     __Max,
 };
 
