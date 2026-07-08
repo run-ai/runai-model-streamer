@@ -42,14 +42,6 @@ size_t Batch::end_offset() const
     return range.end;
 }
 
-void Batch::request(std::shared_ptr<Reader> reader, std::atomic<bool> & stopped)
-{
-    ASSERT(reader != nullptr) << "Reader is not initialized";
-    ASSERT(is_object_storage()) << "S3 params are not initialized";
-
-    request_async_read(reader.get(), stopped);
-}
-
 void Batch::execute(std::atomic<bool> & stopped)
 {
     LOG(DEBUG) << "Start reading from file " << path;
@@ -148,31 +140,6 @@ void Batch::read(const Config & config, std::atomic<bool> & stopped)
     if (stopped)
     {
         throw common::Exception(common::ResponseCode::FinishedError);
-    }
-}
-
-void Batch::request_async_read(Reader * reader, std::atomic<bool> & stopped)
-{
-    if (stopped)
-    {
-        throw common::Exception(common::ResponseCode::FinishedError);
-    }
-
-    // For CPU buffer we assume that all the requests are written to a single continous buffer
-
-    // request asynchronous read for each task
-    for (auto & task : tasks)
-    {
-        auto dst = task.destination();
-        common::Range range(task.info.offset, task.info.bytesize);
-        if (range.size == 0)
-        {
-            // tensors of size zero are valid, but empty request can be invalid in the storage backend
-            LOG(DEBUG) << "Found task of zero size - return response and don't pass to backend";
-            handle_task_response(common::ResponseCode::Success, &task);
-            continue;
-        }
-        reader->async_read(object_storage_params, task.info.global_id, range, dst);
     }
 }
 

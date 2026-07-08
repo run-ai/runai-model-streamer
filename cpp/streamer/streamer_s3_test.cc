@@ -322,8 +322,11 @@ TEST_F(StreamerTest, Async_Read_Batched_Completions)
     auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
     auto max_events_per_wait = dylib.dlsym<size_t(*)()>("runai_mock_s3_max_events_per_wait");
 
-    // default mock window is unbounded, so every chunk is in flight before the first wait and
-    // a single obj_wait_for_completions returns many completions - exercising max_responses > 1
+    // raise the internal batch size so the worker requests many completions per wait (the
+    // production default is 1); the mock's window is unbounded, so every chunk is in flight
+    // before the first wait and a single obj_wait_for_completions returns many completions
+    utils::temp::Env max_responses("RUNAI_STREAMER_INTERNAL_MAX_RESPONSES", 64UL);
+
     void * streamer;
     ASSERT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
 
@@ -372,6 +375,11 @@ TEST_F(StreamerTest, Async_Read_Tolerates_Finished_Sentinel)
     auto mock_cleanup = dylib.dlsym<void(*)()>("runai_mock_s3_cleanup");
     auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
     auto set_append_sentinel = dylib.dlsym<void(*)(bool)>("runai_mock_s3_set_append_finished_sentinel");
+
+    // raise the internal batch size (>1) so obj_wait_for_completions has room to append the
+    // sentinel after the ready completions - at the production default of 1 the buffer is full
+    // after one real event and the sentinel path would never be exercised
+    utils::temp::Env max_responses("RUNAI_STREAMER_INTERNAL_MAX_RESPONSES", 64UL);
 
     // mimic azure/gcs: obj_wait_for_completions appends a FinishedError sentinel (handle 0)
     // once the ready completions drain. The worker must skip it, not fail on the 0 handle.

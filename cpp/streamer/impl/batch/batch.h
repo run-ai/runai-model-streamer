@@ -67,9 +67,6 @@ struct Batch
   // read the batch synchronously
   void execute(std::atomic<bool> & stopped);
 
-  // request the batch asynchronously
-  void request(std::shared_ptr<Reader> reader, std::atomic<bool> & stopped);
-
   // handle response from the reader
   void handle_response(const common::backend_api::Response & response, const Task * task_ptr);
 
@@ -102,10 +99,6 @@ struct Batch
 
  private:
   void read(const Config & config, std::atomic<bool> & stopped);
-
-  void async_wait(Reader * reader, std::atomic<bool> & stopped);
-
-  void request_async_read(Reader * reader, std::atomic<bool> & stopped);
 
   // handle response from a single task
   void handle_task_response(const common::ResponseCode response_code, const Task * task_ptr);

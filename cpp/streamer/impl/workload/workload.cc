@@ -16,6 +16,7 @@
 #include "common/backend_api/response/response.h"
 
 #include "utils/capacity_queue/capacity_queue.h"
+#include "utils/env/env.h"
 #include "utils/logging/logging.h"
 
 namespace runai::llm::streamer::impl
@@ -288,9 +289,11 @@ void Workload::async_read(std::atomic<bool> & stopped)
         // prime the window, then refill as completions free credit
         pump();
 
-        // request completions in batches; the reader may return several ready completions per
-        // call (max_responses > 1), each handled independently below
-        const unsigned max_responses = 64;
+        // Request one completion at a time by default for prompt, per-completion window refill.
+        // The drain loop handles a batch of several responses correctly (and tolerates the
+        // drained-responder sentinel), so RUNAI_STREAMER_INTERNAL_MAX_RESPONSES can raise this to
+        // reduce wait() calls at the cost of refill granularity (internal tuning / test knob).
+        const unsigned max_responses = static_cast<unsigned>(std::max(1UL, utils::getenv<unsigned long>("RUNAI_STREAMER_INTERNAL_MAX_RESPONSES", 1UL)));
 
         while (completed_chunks < total_chunks)
         {
