@@ -188,6 +188,35 @@ class TestFilesRequestsIterator(unittest.TestCase):
         res = requests_iterator.next_request()
         self.assertIsNone(res)
 
+    def test_next_request_empty_file_first_does_not_terminate(self):
+        requests_iterator = FilesRequestsIterator(
+            100, [FileChunks(17, "empty.txt", 0, []), FileChunks(18, "a.txt", 10, [5])]
+        )
+
+        files_requests = requests_iterator.next_request()
+        self.assertIsNotNone(files_requests)
+        self.assertEqual([f.id for f in files_requests.files], [18])
+        self.assertEqual(files_requests.files[0].chunks, [5])
+
+        self.assertIsNone(requests_iterator.next_request())
+
+    def test_next_request_empty_files_between_data_files(self):
+        requests_iterator = FilesRequestsIterator(
+            100,
+            [
+                FileChunks(17, "a.txt", 10, [1, 2]),
+                FileChunks(18, "empty1.txt", 0, []),
+                FileChunks(19, "empty2.txt", 0, []),
+                FileChunks(20, "b.txt", 10, [3]),
+            ],
+        )
+
+        files_requests = requests_iterator.next_request()
+        self.assertIsNotNone(files_requests)
+        self.assertEqual([f.id for f in files_requests.files], [17, 20])
+
+        self.assertIsNone(requests_iterator.next_request())
+
 class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
     def test_memory_cap_unlimited(self):
         requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(

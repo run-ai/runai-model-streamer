@@ -152,10 +152,20 @@ class FilesRequestsIterator:
             file_chunks = file_chunks_iterator.next_chunks(
                 self.memory_limit - current_request_memory_size
             )
-            if file_chunks_iterator.is_finished():
+            finished = file_chunks_iterator.is_finished()
+            if finished:
                 self.q.popleft()
             
             if len(file_chunks.chunks) == 0 or sum(file_chunks.chunks) == 0:
+                if finished:
+                    # The file itself has no data to stream (e.g. an empty
+                    # safetensors shard): skip it and keep packing from the
+                    # next file. Terminating here would silently drop every
+                    # remaining file in the queue.
+                    continue
+                # The next chunk does not fit into this request's remaining
+                # buffer budget: close this request; the file stays queued
+                # for the next request.
                 break
 
             files_request.append(file_chunks)
