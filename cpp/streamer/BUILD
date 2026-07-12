@@ -25,6 +25,7 @@ runai_cc_test(
             "//utils/temp/env",
             "//utils/fd",
             "//utils/logging",
+            "//utils/thread",
     ],
     linkstatic=False,
 )

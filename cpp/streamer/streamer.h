@@ -56,11 +56,54 @@ _RUNAI_EXTERN_C int runai_request(
     const char * endpoint
 );
 
+// Multi-request submit. Credentials/config are passed as a key-value dictionary
+// (param_keys / param_values / num_params), matching runai_list_files; recognised keys:
+// "key", "secret", "token", "region", "endpoint".
+//  out_submission_id : set (on Success) to the id identifying this submission; use it to demux
+//                      responses from runai_response_ex.
+//  stream_id         : reserved for future multi-stream support; must be 0 in this version.
+_RUNAI_EXTERN_C int runai_request_ex(
+    void * streamer,
+    unsigned * out_submission_id /* return parameter */,
+    unsigned num_files,
+    const char ** paths,
+    size_t * file_offsets,
+    size_t * bytesizes,
+    void ** dsts,
+    unsigned * num_sizes,
+    size_t ** internal_sizes,
+    const char ** param_keys,
+    const char ** param_values,
+    unsigned num_params,
+    unsigned stream_id
+);
+
 _RUNAI_EXTERN_C int runai_response(void * streamer, unsigned * file_index /* return parameter */, unsigned * index /* return parameter */);
+
+// Multi-request response. Returns the next ready sub-range from any in-flight submission.
+//  out_submission_id : set to the owning submission's id (which submission this response is for).
+//  file_index, index : the file and sub-range within that submission.
+//  submission_done   : set to 1 iff this was the submission's last response (it is now complete).
+//  stream_id         : reserved; must be 0.
+//  timeout_ms        : max time to wait for a response; 0 blocks indefinitely.
+// ret is the truthful per-sub-range code (Success or a specific error), TimedOut on timeout, or
+// FinishedError on teardown.
+_RUNAI_EXTERN_C int runai_response_ex(
+    void * streamer,
+    unsigned * out_submission_id /* return parameter */,
+    unsigned * file_index /* return parameter */,
+    unsigned * index /* return parameter */,
+    int * submission_done /* return parameter */,
+    unsigned stream_id,
+    unsigned timeout_ms
+);
 
 _RUNAI_EXTERN_C const char * runai_response_str(int response_code);
 
 // List files at the given object storage prefix.
+//
+// streamer is a handle from runai_start; listing reuses its object-storage clients, backend
+// handle and resolved credentials rather than creating throwaway ones.
 //
 // For each matching entry the callback is invoked as:
 //   callback(path, file_size, user_data)
@@ -70,7 +113,7 @@ _RUNAI_EXTERN_C const char * runai_response_str(int response_code);
 // Example:
 //   struct Result { std::vector<std::pair<std::string,size_t>> files; };
 //   Result result;
-//   runai_list_files("s3://my-bucket/models/", 1,
+//   runai_list_files(streamer, "s3://my-bucket/models/", 1,
 //       nullptr, 0, nullptr, 0,
 //       [](const char* p, size_t sz, void* ud) {
 //           static_cast<Result*>(ud)->files.emplace_back(p, sz);
@@ -81,6 +124,7 @@ _RUNAI_EXTERN_C const char * runai_response_str(int response_code);
 // param_keys / param_values are parallel arrays of credential/config key-value pairs
 // (recognised keys: "key", "secret", "token", "region", "endpoint").
 _RUNAI_EXTERN_C int runai_list_files(
+    void *                   streamer,
     const char *             prefix,
     int                      is_recursive,
     const char **            allow_patterns,

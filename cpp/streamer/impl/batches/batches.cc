@@ -27,7 +27,7 @@ Batches::BatchItr::BatchItr(const std::vector<FileReadTask> & file_read_tasks) :
     _current_task_index(0)
 {
     ASSERT(_num_batches) << "Zero file read requests";
-    _current_worker_index = file_read_tasks[_current_task_index].worker_index;
+    _current_workload_index = file_read_tasks[_current_task_index].workload_index;
     _current_worker_bytesize = file_read_tasks[_current_task_index].size;
 }
 
@@ -36,9 +36,9 @@ unsigned Batches::BatchItr::current_index() const
     return _current_task_index;
 }
 
-unsigned Batches::BatchItr::current_worker_index() const
+unsigned Batches::BatchItr::current_workload_index() const
 {
-    return _current_worker_index;
+    return _current_workload_index;
 }
 
 const FileReadTask & Batches::BatchItr::read_task(unsigned index) const
@@ -52,9 +52,9 @@ unsigned Batches::BatchItr::workers() const
     return _num_batches;
 }
 
-unsigned Batches::BatchItr::worker_index(unsigned index) const
+unsigned Batches::BatchItr::workload_index(unsigned index) const
 {
-    return read_task(index).worker_index;
+    return read_task(index).workload_index;
 }
 
 const FileReadTask & Batches::BatchItr::current_read_task() const
@@ -73,7 +73,7 @@ size_t Batches::BatchItr::consume(size_t bytesize)
     {
         // advance to the next worker
         ++_current_task_index;
-        _current_worker_index = worker_index(_current_task_index);
+        _current_workload_index = workload_index(_current_task_index);
         _current_worker_bytesize = read_task(_current_task_index).size;
     }
 
@@ -82,13 +82,15 @@ size_t Batches::BatchItr::consume(size_t bytesize)
     return to_read;
 }
 
-Batches::Batches(unsigned file_index,
+Batches::Batches(unsigned submission_id,
+                 unsigned file_index,
                  const std::vector<FileReadTask> & file_read_tasks,
                  std::shared_ptr<const Config> config,
                  std::shared_ptr<common::Responder> responder,
                  const std::string & path,
                  const common::s3::S3ClientWrapper::Params & params,
                  const std::vector<size_t> & internal_sizes) :
+    _submission_id(submission_id),
     _file_index(file_index),
     _itr(file_read_tasks),
     _responder(responder)
@@ -141,16 +143,16 @@ void Batches::build_tasks(std::shared_ptr<const Config> config, const std::strin
 
     for (unsigned i = 0; i < num_workers; ++i)
     {
-        const auto worker_index = _itr.worker_index(i);
+        const auto workload_index = _itr.workload_index(i);
         auto & tasks = v_tasks[i];
         auto size = tasks.size();
         if (size == 0)
         {
-            LOG(WARNING) << "Zero tasks for worker index " << _itr.worker_index(i);
+            LOG(WARNING) << "Zero tasks for worker index " << _itr.workload_index(i);
             continue;
         }
 
-        _batches.emplace_back(worker_index, _file_index, path, params, std::move(tasks), _responder, config);
+        _batches.emplace_back(_submission_id, workload_index, _file_index, path, params, std::move(tasks), _responder, config);
     }
 
     for (auto & batch : _batches)
@@ -175,8 +177,8 @@ void Batches::handle_request(std::vector<Tasks> & v_tasks, unsigned request_inde
     {
         auto to_read = _itr.consume(bytes_to_request);
         Task::Info info(task_offset, to_read, destination_offset);
-        auto worker_index = _itr.current_index();
-        infos.try_emplace(worker_index, std::move(info));
+        auto workload_index = _itr.current_index();
+        infos.try_emplace(workload_index, std::move(info));
         task_offset += to_read;
         bytes_to_request -= to_read;
         destination_offset += to_read;

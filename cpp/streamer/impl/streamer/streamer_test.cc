@@ -389,8 +389,10 @@ TEST(Async, Zero_Bytes_To_Read_Error)
     }
 }
 
-TEST(Async, Busy_Error)
+TEST(Async, ConcurrentRequests)
 {
+    // Multiple submissions are now accepted concurrently (no BusyError). Each is demuxed on the
+    // shared persistent responder and both are delivered, then FinishedError once drained.
     auto size = utils::random::number(100, 1000);
     const auto data = utils::random::buffer(size);
     utils::temp::File file(data);
@@ -406,24 +408,25 @@ TEST(Async, Busy_Error)
 
     Streamer streamer(config);
 
-    std::vector<unsigned char> dst(size);
+    // disjoint destination buffers, one per concurrent submission
+    std::vector<unsigned char> dst1(size), dst2(size);
     std::vector<size_t> sizes;
     sizes.push_back(size);
 
-    // first request succeeds
-    EXPECT_EQ(streamer.async_read(file.path, 0, size, dst.data(), 1, sizes.data(), credentials), common::ResponseCode::Success);
+    // both requests are accepted - the second does NOT return BusyError
+    EXPECT_EQ(streamer.async_read(file.path, 0, size, dst1.data(), 1, sizes.data(), credentials), common::ResponseCode::Success);
+    EXPECT_EQ(streamer.async_read(file.path, 0, size, dst2.data(), 1, sizes.data(), credentials), common::ResponseCode::Success);
 
-    // second request fails
-    EXPECT_EQ(streamer.async_read(file.path, 0, size, dst.data(), 1, sizes.data(), credentials), common::ResponseCode::BusyError);
-
-    // read response of the first request
+    // both submissions' responses are delivered, then FinishedError once nothing is outstanding
+    EXPECT_EQ(streamer.response().ret, common::ResponseCode::Success);
     EXPECT_EQ(streamer.response().ret, common::ResponseCode::Success);
     EXPECT_EQ(streamer.response().ret, common::ResponseCode::FinishedError);
 
     for (size_t i = 0; i < size; ++i)
     {
-        EXPECT_EQ(dst[i], expected[i]);
-        if (dst[i] != expected[i])
+        EXPECT_EQ(dst1[i], expected[i]);
+        EXPECT_EQ(dst2[i], expected[i]);
+        if (dst1[i] != expected[i] || dst2[i] != expected[i])
         {
             break;
         }

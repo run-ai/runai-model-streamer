@@ -50,7 +50,8 @@ struct Batch
   Batch(Batch &&) = default;
   Batch & operator=(Batch &&) = default;
 
-  Batch(unsigned worker_index,
+  Batch(unsigned submission_id,
+        unsigned workload_index,
         unsigned file_index,
         const std::string & path,
         const common::s3::S3ClientWrapper::Params & params,
@@ -79,7 +80,10 @@ struct Batch
 
   bool is_object_storage() const;
 
-  unsigned worker_index;
+  // id of the owning submission (one runai_request(_ex) call); stamped on every response
+  unsigned submission_id = 0;
+
+  unsigned workload_index;
 
   // source file
   unsigned file_index;

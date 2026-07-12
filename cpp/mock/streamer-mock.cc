@@ -144,6 +144,7 @@ extern "C" const char * runai_response_str(int response_code)
 }
 
 extern "C" int runai_list_files(
+    void *        streamer,
     const char *  prefix,
     int           is_recursive,
     const char ** allow_patterns,
@@ -158,7 +159,7 @@ extern "C" int runai_list_files(
 {
     namespace fs = std::filesystem;
 
-    if (prefix == nullptr || callback == nullptr)
+    if (streamer == nullptr || prefix == nullptr || callback == nullptr)
     {
         return -1;
     }

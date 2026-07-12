@@ -56,6 +56,7 @@ class LibstreamerDLLWrapper:
 
         self.fn_runai_list_files = self.lib.runai_list_files
         self.fn_runai_list_files.argtypes = [
+            t_streamer,                              # streamer
             ctypes.c_char_p,                         # prefix
             ctypes.c_int,                            # is_recursive
             ctypes.POINTER(ctypes.c_char_p),         # allow_patterns

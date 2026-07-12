@@ -20,7 +20,8 @@ namespace runai::llm::streamer::impl
 
 struct Batches
 {
-    Batches(unsigned file_index,
+    Batches(unsigned submission_id,
+           unsigned file_index,
            const std::vector<FileReadTask> & file_read_tasks,
            std::shared_ptr<const Config> config,
            std::shared_ptr<common::Responder> responder,
@@ -43,20 +44,20 @@ struct Batches
         BatchItr(const std::vector<FileReadTask> & file_read_tasks);
 
         unsigned current_index() const;
-        unsigned current_worker_index() const;
+        unsigned current_workload_index() const;
         size_t consume(size_t bytesize);
 
         const FileReadTask & current_read_task() const;
         const FileReadTask & read_task(unsigned i) const;
 
         unsigned workers() const;
-        unsigned worker_index(unsigned index) const;
+        unsigned workload_index(unsigned index) const;
 
      private:
         const std::vector<FileReadTask> & _file_read_tasks;
         const unsigned _num_batches;
         unsigned _current_task_index;
-        unsigned _current_worker_index;
+        unsigned _current_workload_index;
         size_t _current_worker_bytesize;
     };
 
@@ -65,6 +66,8 @@ struct Batches
 
     // create tasks of a given request
     void handle_request(std::vector<Tasks> & v_tasks, unsigned request_index, size_t request_file_offset, size_t request_size, char * destination);
+
+    unsigned _submission_id;
 
     unsigned _file_index;
 

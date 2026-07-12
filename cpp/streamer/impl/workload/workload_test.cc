@@ -78,12 +78,12 @@ TEST(Workload, Sanity)
             auto total_chunks_size = std::accumulate(chunks.begin(), chunks.end(), 0u);
             EXPECT_EQ(total_chunks_size, bytesizes[file_idx]);
 
-            Batches batches(file_idx, assigner.file_assignments(file_idx), config, responder, file[file_idx].path, s3_params, chunks);
+            Batches batches(utils::random::number(), file_idx, assigner.file_assignments(file_idx), config, responder, file[file_idx].path, s3_params, chunks);
 
             for (size_t j = 0; j < batches.size(); ++j)
             {
                 auto & batch = batches[j];
-                workloads[batch.worker_index].add_batch(std::move(batch));
+                workloads[batch.workload_index].add_batch(std::move(batch));
             }
 
             for (unsigned i = 0; i < num_chunks[file_idx]; ++i)
@@ -183,7 +183,7 @@ TEST(Workload, Stopped)
         auto total_chunks_size = std::accumulate(chunks.begin(), chunks.end(), 0u);
         EXPECT_EQ(total_chunks_size, bytesizes[file_idx]);
 
-        Batches batches(file_idx, assigner.file_assignments(file_idx), config, responder, file[file_idx].path, s3_params, chunks);
+        Batches batches(utils::random::number(), file_idx, assigner.file_assignments(file_idx), config, responder, file[file_idx].path, s3_params, chunks);
 
         for (size_t j = 0; j < batches.size(); ++j)
         {
@@ -299,7 +299,7 @@ TEST(Workload, Stopped_Async)
         EXPECT_NO_THROW(uri = std::make_shared<common::s3::StorageUri>(paths[file_idx]));
         common::s3::S3ClientWrapper::Params s3_params(uri, credentials, utils::random::number<size_t>());
 
-        Batches batches(file_idx, assigner.file_assignments(file_idx), config, responder, paths[file_idx], s3_params, chunks);
+        Batches batches(utils::random::number(), file_idx, assigner.file_assignments(file_idx), config, responder, paths[file_idx], s3_params, chunks);
 
         for (size_t j = 0; j < batches.size(); ++j)
         {

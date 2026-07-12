@@ -39,6 +39,7 @@ constexpr std::array<const char *, static_cast<size_t>(ResponseCode::__Max)> __m
     "GCS not supported",
     "Azure Blob not supported",
     "Object storage returned an unexpected number of bytes for the requested range (truncated or over-length response)",
+    "Timed out waiting for a response",
 };
 
 const char * description(int response_code)

@@ -5,13 +5,13 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from runai_model_streamer.file_streamer.file_streamer import FileStreamer
-from runai_model_streamer.libstreamer.libstreamer import runai_list_files
+from runai_model_streamer.libstreamer.libstreamer import runai_list_files, runai_start, runai_end
 from runai_model_streamer.s3_utils.s3_utils import S3Credentials
 
 
 def _list_files_stub(entries):
     """Returns a side_effect for mock runai_list_files that fires the callback with given (path, size) pairs."""
-    def stub(prefix, callback, is_recursive=True, allow_patterns=None, ignore_patterns=None, params=None):
+    def stub(streamer, prefix, callback, is_recursive=True, allow_patterns=None, ignore_patterns=None, params=None):
         for path, size in entries:
             callback(path, size)
     return stub
@@ -95,8 +95,12 @@ class TestListFilesFilesystem(unittest.TestCase):
         def raising_callback(path, size):
             raise BoomError("callback failed")
 
-        with self.assertRaises(BoomError):
-            runai_list_files(self.temp_dir, raising_callback, is_recursive=True)
+        streamer = runai_start()
+        try:
+            with self.assertRaises(BoomError):
+                runai_list_files(streamer, self.temp_dir, raising_callback, is_recursive=True)
+        finally:
+            runai_end(streamer)
 
 
 # ---------------------------------------------------------------------------

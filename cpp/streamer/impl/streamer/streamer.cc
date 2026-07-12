@@ -29,7 +29,10 @@ Streamer::Streamer(Config config) :
     _pool([&](Workload&& workload, std::atomic<bool> & stopped)
         {
             workload.execute(stopped);
-        }, _config->max_concurrency())
+        }, _config->max_concurrency()),
+    // One PERSISTENT responder for the streamer's lifetime, shared by all submissions and
+    // demuxed by submission_id. increment() grows its expected count per accepted submission.
+    _responder(std::make_shared<common::Responder>(0, common::QueueMode::PERSISTENT))
 {
     LOG(DEBUG) << config;
 }
@@ -39,6 +42,8 @@ Streamer::~Streamer()
     try
     {
         LOG(DEBUG) << "Streamer shutting down";
+        // unblock any consumer parked in response()/pop() on the persistent responder
+        _responder->stop();
     }
     catch(...)
     {}
@@ -54,7 +59,8 @@ common::ResponseCode Streamer::sync_read(const std::string & path, size_t file_o
         return r;
     }
 
-    return _responder->pop().ret;
+    // route through response() so the submission's registry record is consumed/forgotten
+    return response().ret;
 }
 
 common::ResponseCode Streamer::async_read(const std::string & path, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes, const common::s3::Credentials & credentials)
@@ -91,6 +97,12 @@ common::ResponseCode Streamer::async_read(const std::string & path, size_t file_
     return ret;
 }
 
+bool Streamer::busy() const
+{
+    // not drained: some submission still has responses in flight or waiting to be consumed
+    return _responder != nullptr && !_responder->finished();
+}
+
 common::Response Streamer::response()
 {
     if (_responder == nullptr)
@@ -98,7 +110,40 @@ common::Response Streamer::response()
         return common::Response(common::ResponseCode::FinishedError);
     }
 
-    return _responder->pop();
+    // Legacy finish-on-drain, kept at the streamer level: the persistent responder never
+    // self-finishes, so when nothing is outstanding (all pushed and popped) we report the
+    // historical FinishedError rather than blocking for a future submission.
+    if (_responder->finished())
+    {
+        return common::Response(common::ResponseCode::FinishedError);
+    }
+
+    auto r = _responder->pop();
+
+    // account for the consumed response (per-submission throughput + reclamation). The legacy
+    // path ignores whether this was the submission's last response; runai_response_ex uses it.
+    if (r.ret != common::ResponseCode::FinishedError && r.ret != common::ResponseCode::TimedOut)
+    {
+        consume_submission_response(r.submission_id);
+    }
+
+    return r;
+}
+
+common::Response Streamer::response_ex(unsigned timeout_ms, bool & submission_done)
+{
+    submission_done = false;
+
+    // Persistent + timed pop: a drained-but-open responder is not terminal (it blocks / times
+    // out); FinishedError comes only from teardown. Completion is per-submission, tracked below.
+    auto r = _responder->pop(timeout_ms);
+
+    if (r.ret != common::ResponseCode::FinishedError && r.ret != common::ResponseCode::TimedOut)
+    {
+        submission_done = consume_submission_response(r.submission_id);
+    }
+
+    return r;
 }
 
 common::ResponseCode Streamer::async_request(
@@ -108,25 +153,24 @@ common::ResponseCode Streamer::async_request(
     std::vector<void *> & dsts,
     std::vector<unsigned> & num_sizes,
     std::vector<std::vector<size_t>> & internal_sizes,
-    const common::s3::Credentials & credentials)
+    const common::s3::Credentials & credentials,
+    unsigned * out_submission_id)
 {
     // verify input
     verify_requests(paths, file_offsets, bytesizes, num_sizes, dsts);
 
-    auto total_sizes =  std::accumulate(num_sizes.begin(), num_sizes.end(), 0u);
+    const auto total_sizes = std::accumulate(num_sizes.begin(), num_sizes.end(), 0u);
+    const size_t total_bytes = std::accumulate(bytesizes.begin(), bytesizes.end(), static_cast<size_t>(0));
 
-    if (_responder && !_responder->finished())
+    // Mint the submission id up front so batches can be stamped with it. The submission is only
+    // committed (registered + increment + dispatched) once fully built, so a build failure below
+    // just returns the error and leaks the id harmlessly - no registry entry, no increment, no
+    // workloads, and no shared cancel() that would disturb other submissions on the responder.
+    const unsigned submission_id = generate_submission_id();
+    if (out_submission_id != nullptr)
     {
-        LOG(ERROR) << "Previous request is still running";
-        throw common::Exception(common::ResponseCode::BusyError);
+        *out_submission_id = submission_id;
     }
-
-    // expecting for total of num_sizes responses
-    _responder = std::make_shared<common::Responder>(total_sizes);
-
-    // cancel responder in case of an error - cancelled response will not delay sending the next request
-    utils::ScopeGuard __responder_release([&](){_responder->cancel();});
-
 
     // divide reading between workers
     Assigner assigner(paths, file_offsets, bytesizes, dsts, _config);
@@ -138,8 +182,8 @@ common::ResponseCode Streamer::async_request(
     for (size_t i = 0; i < paths.size(); ++i)
     {
         auto params = handle_s3(i, paths[i], credentials);
-        LOG(DEBUG) << "Creating batches for file index " << i << " path: " <<  paths[i];
-        Batches batches(i, assigner.file_assignments(i), _config, _responder, paths[i], params, internal_sizes[i]);
+        LOG(DEBUG) << "Submission " << submission_id << " creating batches for file index " << i << " path: " <<  paths[i];
+        Batches batches(submission_id, i, assigner.file_assignments(i), _config, _responder, paths[i], params, internal_sizes[i]);
         const auto num_batches = batches.size();
         LOG(DEBUG) << "Created " << num_batches << " batches for file index " << i;
         for (size_t j = 0; j < num_batches; ++j)
@@ -151,34 +195,83 @@ common::ResponseCode Streamer::async_request(
                 continue;
             }
 
-            const auto worker_index = batch.worker_index;
+            const auto workload_index = batch.workload_index;
 
-            LOG(DEBUG) << "Batch: file index " << batch.file_index << " with " << batch.tasks.size() << " tasks for worker " << worker_index << " total bytes " << batch.total_bytes();
+            LOG(DEBUG) << "Submission " << submission_id << " Batch: file index " << batch.file_index << " with " << batch.tasks.size() << " tasks for workload " << workload_index << " total bytes " << batch.total_bytes();
 
-            const auto & result = workloads[worker_index].add_batch(std::move(batch));
-            LOG(DEBUG) << "Added batch to worker " << worker_index << " with result " << result;
+            const auto & result = workloads[workload_index].add_batch(std::move(batch));
+            LOG(DEBUG) << "Submission " << submission_id << " added batch to workload " << workload_index << " with result " << result;
             if (result != common::ResponseCode::Success)
             {
-                LOG(ERROR) << "Failed to add batch to worker " << worker_index << " error: " << result;
-                return result;
+                LOG(ERROR) << "Submission " << submission_id << " failed to add batch to workload " << workload_index << " error: " << result;
+                return result; // nothing committed yet
             }
         }
     }
 
-    // send batches to threadpool
+    // Commit the submission: register it, grow the persistent responder's expected count, then
+    // dispatch. increment() must happen before any workload runs so _running covers the responses.
+    register_submission(submission_id, total_sizes, total_bytes);
+    _responder->increment(total_sizes);
+
     for (auto & workload : workloads)
     {
         if (workload.size() > 0)
         {
-            LOG(DEBUG) << "sending workload to worker with batches " << workload.size();
+            LOG(DEBUG) << "Submission " << submission_id << " sending workload to worker with batches " << workload.size();
 
             _pool.push(std::move(workload));
         }
     }
 
-    __responder_release.cancel();
-
     return common::ResponseCode::Success;
+}
+
+unsigned Streamer::generate_submission_id()
+{
+    const auto guard = std::unique_lock<std::mutex>(_submissions_mutex);
+
+    unsigned id;
+    do
+    {
+        id = _next_submission_id++;              // unsigned wrap is well-defined
+        if (id == 0) id = _next_submission_id++; // 0 is reserved (Response default / "none")
+    }
+    while (_submissions.count(id) != 0);         // after a 2^32 wrap, skip a still-live id
+
+    return id;
+}
+
+void Streamer::register_submission(unsigned submission_id, unsigned expected, size_t total_bytes)
+{
+    const auto guard = std::unique_lock<std::mutex>(_submissions_mutex);
+    _submissions[submission_id] = Submission{ expected, total_bytes, std::chrono::steady_clock::now() };
+}
+
+bool Streamer::consume_submission_response(unsigned submission_id)
+{
+    const auto guard = std::unique_lock<std::mutex>(_submissions_mutex);
+
+    auto it = _submissions.find(submission_id);
+    if (it == _submissions.end())
+    {
+        // Not registered / already forgotten. Should not happen in normal flow; treat as done.
+        LOG(DEBUG) << "Consumed a response for unknown submission " << submission_id;
+        return true;
+    }
+
+    if (--it->second.remaining == 0)
+    {
+        const auto & sub = it->second;
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - sub.submit_time).count();
+        const auto bps = (ms > 0) ? (sub.total_bytes * 1000 / static_cast<size_t>(ms)) : 0;
+        LOG(INFO) << "Submission " << submission_id << " completed: " << utils::logging::human_readable_size(sub.total_bytes)
+                  << " in " << ms << " ms, " << utils::logging::human_readable_size(bps) << "/s";
+        _submissions.erase(it);
+        return true;
+    }
+
+    return false;
 }
 
 void Streamer::verify_requests(std::vector<std::string> & paths, std::vector<size_t> & file_offsets, std::vector<size_t> & bytesizes, std::vector<unsigned> & num_sizes, std::vector<void *> & dsts)
@@ -224,24 +317,31 @@ common::s3::S3ClientWrapper::Params Streamer::handle_s3(unsigned file_index, con
 {
     auto uri = try_parse_uri(path);
 
-    if (uri != nullptr && _s3 == nullptr)
+    if (uri != nullptr)
     {
-        // adjust fd limit acording to concurrency
-        auto fd_limit = utils::get_cur_file_descriptors();
-        LOG(DEBUG) << "Process file descriptors limit is " << fd_limit << " and concurrency level is " << _config->s3_concurrency;
-        const auto desired_fd_limit = _config->s3_concurrency * 64;
-        if (fd_limit < desired_fd_limit)
+        // streaming-only setup (fd limit + stop), once. If the fd-limit raise throws
+        // (InsufficientFdLimit) the flag stays unset, so a later submission retries.
+        std::call_once(_s3_stream_init_flag, [this]()
         {
-            if (desired_fd_limit > utils::get_max_file_descriptors())
+            // adjust fd limit acording to concurrency
+            auto fd_limit = utils::get_cur_file_descriptors();
+            LOG(DEBUG) << "Process file descriptors limit is " << fd_limit << " and concurrency level is " << _config->s3_concurrency;
+            const auto desired_fd_limit = _config->s3_concurrency * 64;
+            if (fd_limit < desired_fd_limit)
             {
-                LOG(ERROR) << "Insufficient file descriptors limit " << fd_limit << " for concurrency level " << _config->s3_concurrency << " ; increase fd limit to " << desired_fd_limit << " or higher, depending on your application fd usage";
-                throw common::Exception(common::ResponseCode::InsufficientFdLimit);
+                if (desired_fd_limit > utils::get_max_file_descriptors())
+                {
+                    LOG(ERROR) << "Insufficient file descriptors limit " << fd_limit << " for concurrency level " << _config->s3_concurrency << " ; increase fd limit to " << desired_fd_limit << " or higher, depending on your application fd usage";
+                    throw common::Exception(common::ResponseCode::InsufficientFdLimit);
+                }
+                LOG(INFO) << "Increasing fd soft limit to " << desired_fd_limit << " for concurrency level " << _config->s3_concurrency;
+                _fd_limit = std::make_unique<utils::FdLimitSetter>(desired_fd_limit);
             }
-            LOG(INFO) << "Increasing fd soft limit to " << desired_fd_limit << " for concurrency level " << _config->s3_concurrency;
-            _fd_limit = std::make_unique<utils::FdLimitSetter>(desired_fd_limit);
-        }
-        _s3_stop = std::make_unique<S3Stop>();
-        _s3 = std::make_unique<S3Cleanup>();
+            _s3_stop = std::make_unique<S3Stop>();
+        });
+
+        // S3Cleanup: shared by list_files and streaming, created once
+        std::call_once(_s3_cleanup_init_flag, [this]() { _s3 = std::make_unique<S3Cleanup>(); });
     }
 
     return common::s3::S3ClientWrapper::Params(uri, credentials, _config->s3_block_bytesize);
@@ -279,14 +379,11 @@ std::vector<std::pair<std::string, size_t>> Streamer::list_files(
 
     if (uri != nullptr)
     {
-        // Any code path that uses the S3 plugin must release its clients and the
-        // backend handle when the streamer shuts down (~Streamer). stop() and the
-        // fd limit are streaming-only: listing is a single synchronous call with no
-        // in-flight async reads and no threadpool workers to unblock.
-        if (_s3 == nullptr)
-        {
-            _s3 = std::make_unique<S3Cleanup>();
-        }
+        // Any code path that uses the S3 plugin must release its clients and the backend handle
+        // when the streamer shuts down (~Streamer). stop() and the fd limit are streaming-only:
+        // listing is a single synchronous call with no in-flight async reads and no threadpool
+        // workers to unblock. Shares the S3Cleanup once_flag with handle_s3 so it is created once.
+        std::call_once(_s3_cleanup_init_flag, [this]() { _s3 = std::make_unique<S3Cleanup>(); });
 
         common::s3::S3ClientWrapper::Params params(uri, credentials, _config->s3_block_bytesize);
         common::s3::S3ClientWrapper wrapper(params);

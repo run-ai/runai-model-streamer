@@ -96,6 +96,7 @@ def runai_response_str(response_code: int) -> str:
 
 
 def runai_list_files(
+    streamer: t_streamer,
     prefix: str,
     callback: Callable[[str, int], None],
     is_recursive: bool = True,
@@ -138,6 +139,7 @@ def runai_list_files(
         num_params = 0
 
     error_code = dll.fn_runai_list_files(
+        streamer,
         prefix.encode("utf-8"),
         int(is_recursive),
         allow_arr, num_allow,

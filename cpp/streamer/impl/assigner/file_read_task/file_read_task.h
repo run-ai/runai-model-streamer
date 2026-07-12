@@ -9,7 +9,7 @@ namespace runai::llm::streamer::impl
 
 struct FileReadTask
 {
-    FileReadTask(unsigned worker_index,
+    FileReadTask(unsigned workload_index,
                  unsigned file_idx,
                  const std::string& p,
                  size_t offset,
@@ -19,7 +19,7 @@ struct FileReadTask
     FileReadTask(FileReadTask&&) = default;
     FileReadTask& operator=(FileReadTask&&) = default;
 
-    unsigned worker_index;
+    unsigned workload_index;
 
     unsigned original_file_index; // Index from the input vectors
     std::string path;             // Path of the file to read

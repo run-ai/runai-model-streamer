@@ -746,7 +746,9 @@ TEST_F(StreamerTest, ListFiles_S3_ReturnsEntriesAndCleansUp)
     set_files(paths.data(), sizes.data(), paths.size());
 
     ListFilesResult result;
-    auto res = runai_list_files("s3://bucket/models/", 1, nullptr, 0, nullptr, 0, list_files_collect, &result, nullptr, nullptr, 0);
+    void * streamer = nullptr;
+    ASSERT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
+    auto res = runai_list_files(streamer, "s3://bucket/models/", 1, nullptr, 0, nullptr, 0, list_files_collect, &result, nullptr, nullptr, 0);
 
     EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
     ASSERT_EQ(result.files.size(), 2u);
@@ -760,6 +762,7 @@ TEST_F(StreamerTest, ListFiles_S3_ReturnsEntriesAndCleansUp)
     EXPECT_EQ(by_path["s3://bucket/models/b.bin"], 222u);
 
     // S3Cleanup ran on Streamer destruction: clients released and backend closed
+    runai_end(streamer);
     EXPECT_EQ(verify_mock(), 0);
     EXPECT_TRUE(is_shutdown());
 }
@@ -776,7 +779,10 @@ TEST_F(StreamerTest, ListFiles_S3_AppliesPatternFilters)
     std::vector<const char*> allow = {"*.safetensors"};
 
     ListFilesResult result;
-    auto res = runai_list_files("s3://bucket/m/", 1, allow.data(), allow.size(), nullptr, 0, list_files_collect, &result, nullptr, nullptr, 0);
+    void * streamer = nullptr;
+    ASSERT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
+    auto res = runai_list_files(streamer, "s3://bucket/m/", 1, allow.data(), allow.size(), nullptr, 0, list_files_collect, &result, nullptr, nullptr, 0);
+    runai_end(streamer);
 
     EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
     ASSERT_EQ(result.files.size(), 1u);
@@ -794,11 +800,16 @@ TEST_F(StreamerTest, ListFiles_S3_ForwardsIsRecursive)
     set_files(paths.data(), sizes.data(), paths.size());
 
     ListFilesResult result;
-    runai_list_files("s3://bucket/x/", 0, nullptr, 0, nullptr, 0, list_files_collect, &result, nullptr, nullptr, 0);
+    void * streamer = nullptr;
+    ASSERT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
+
+    runai_list_files(streamer, "s3://bucket/x/", 0, nullptr, 0, nullptr, 0, list_files_collect, &result, nullptr, nullptr, 0);
     EXPECT_EQ(last_is_recursive(), 0);
 
-    runai_list_files("s3://bucket/x/", 1, nullptr, 0, nullptr, 0, list_files_collect, &result, nullptr, nullptr, 0);
+    runai_list_files(streamer, "s3://bucket/x/", 1, nullptr, 0, nullptr, 0, list_files_collect, &result, nullptr, nullptr, 0);
     EXPECT_EQ(last_is_recursive(), 1);
+
+    runai_end(streamer);
 }
 
 TEST_F(StreamerTest, ListFiles_S3_ErrorPropagates)
@@ -813,7 +824,10 @@ TEST_F(StreamerTest, ListFiles_S3_ErrorPropagates)
     set_response(common::ResponseCode::FileAccessError);
 
     ListFilesResult result;
-    auto res = runai_list_files("s3://bucket/x/", 1, nullptr, 0, nullptr, 0, list_files_collect, &result, nullptr, nullptr, 0);
+    void * streamer = nullptr;
+    ASSERT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
+    auto res = runai_list_files(streamer, "s3://bucket/x/", 1, nullptr, 0, nullptr, 0, list_files_collect, &result, nullptr, nullptr, 0);
+    runai_end(streamer);
 
     EXPECT_EQ(res, static_cast<int>(common::ResponseCode::FileAccessError));
     EXPECT_TRUE(result.files.empty());

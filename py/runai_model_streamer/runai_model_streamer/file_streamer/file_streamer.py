@@ -119,15 +119,26 @@ class FileStreamer:
             if self.s3_credentials.endpoint:
                 params["endpoint"] = self.s3_credentials.endpoint
 
+        # Listing reuses the streamer (its object-storage clients / backend handle / credentials).
+        # When called outside the context manager (self.streamer is None), start a temporary
+        # streamer just for this call and end it afterwards.
+        owns_streamer = self.streamer is None
+        streamer = runai_start() if owns_streamer else self.streamer
+
         results: List[Tuple[str, int]] = []
-        runai_list_files(
-            prefix,
-            lambda path, size: results.append((path, size)),
-            is_recursive=is_recursive,
-            allow_patterns=allow_patterns,
-            ignore_patterns=ignore_patterns,
-            params=params,
-        )
+        try:
+            runai_list_files(
+                streamer,
+                prefix,
+                lambda path, size: results.append((path, size)),
+                is_recursive=is_recursive,
+                allow_patterns=allow_patterns,
+                ignore_patterns=ignore_patterns,
+                params=params,
+            )
+        finally:
+            if owns_streamer:
+                runai_end(streamer)
         return results
 
     def stream_files(

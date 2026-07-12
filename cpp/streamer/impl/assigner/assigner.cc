@@ -75,13 +75,13 @@ _num_workers(_is_object_storage ? _config->s3_concurrency : _config->concurrency
     size_t current_file_index = 0;
     size_t current_offset_within_file = file_offsets[0]; // Start at the beginning of the first file's range
 
-    for (unsigned worker_idx = 0; worker_idx < _num_workers && current_file_index < num_files; ++worker_idx)
+    for (unsigned workload_idx = 0; workload_idx < _num_workers && current_file_index < num_files; ++workload_idx)
     {
-        size_t target_bytes_for_this_worker = (worker_idx == 0 ? base_bytes_per_worker + base_bytes_remainder : base_bytes_per_worker);
+        size_t target_bytes_for_this_worker = (workload_idx == 0 ? base_bytes_per_worker + base_bytes_remainder : base_bytes_per_worker);
 
         size_t bytes_assigned_to_this_worker = 0;
 
-        LOG(DEBUG) << "Assigning work to worker " << worker_idx << ", target bytes: " << target_bytes_for_this_worker;
+        LOG(DEBUG) << "Assigning work to worker " << workload_idx << ", target bytes: " << target_bytes_for_this_worker;
 
         while (current_file_index < num_files)
         {
@@ -115,9 +115,9 @@ _num_workers(_is_object_storage ? _config->s3_concurrency : _config->concurrency
             {
                  // Create Task
 
-                 LOG(DEBUG) << "Assigned read file task to worker " << worker_idx << " file index: " << current_file_index << " file offset: " << current_offset_within_file << " bytesize: " << bytes_to_assign_now << " destination " << static_cast<void *>(current_global_dst_ptr);
-                _worker_assignments[worker_idx].tasks.emplace_back(
-                    worker_idx,
+                 LOG(DEBUG) << "Assigned read file task to worker " << workload_idx << " file index: " << current_file_index << " file offset: " << current_offset_within_file << " bytesize: " << bytes_to_assign_now << " destination " << static_cast<void *>(current_global_dst_ptr);
+                _worker_assignments[workload_idx].tasks.emplace_back(
+                    workload_idx,
                     current_file_index,
                     file_path,
                     current_offset_within_file,
@@ -126,11 +126,11 @@ _num_workers(_is_object_storage ? _config->s3_concurrency : _config->concurrency
 
                 // --- Update State ---
                 bytes_assigned_to_this_worker += bytes_to_assign_now;
-                _worker_assignments[worker_idx].total_bytes += bytes_to_assign_now;
+                _worker_assignments[workload_idx].total_bytes += bytes_to_assign_now;
                 current_offset_within_file += bytes_to_assign_now;
                 current_global_dst_offset += bytes_to_assign_now; // Advance global destination offset
 
-                LOG(SPAM) << "  Worker " << worker_idx << ": Assigned task - File " << current_file_index
+                LOG(SPAM) << "  Worker " << workload_idx << ": Assigned task - File " << current_file_index
                             << " ('" << file_path << "'), Offset " << current_offset_within_file - bytes_to_assign_now
                             << ", Size " << bytes_to_assign_now;
             }
@@ -149,7 +149,7 @@ _num_workers(_is_object_storage ? _config->s3_concurrency : _config->concurrency
             }
         } // End while loop for assigning work to current worker
 
-        LOG(DEBUG) << "Finished assignment for worker " << worker_idx << ", total bytes assigned: " << bytes_assigned_to_this_worker;
+        LOG(DEBUG) << "Finished assignment for worker " << workload_idx << ", total bytes assigned: " << bytes_assigned_to_this_worker;
     } // End for loop iterating through workers
 
     // Verification

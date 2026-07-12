@@ -19,8 +19,9 @@
 namespace runai::llm::streamer::impl
 {
 
-Batch::Batch(unsigned worker_index, unsigned file_index, const std::string & path, const common::s3::S3ClientWrapper::Params & params, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config) :
-    worker_index(worker_index),
+Batch::Batch(unsigned submission_id, unsigned workload_index, unsigned file_index, const std::string & path, const common::s3::S3ClientWrapper::Params & params, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config) :
+    submission_id(submission_id),
+    workload_index(workload_index),
     file_index(file_index),
     path(path),
     object_storage_params(params),
@@ -90,7 +91,7 @@ void Batch::handle_error(common::ResponseCode response_code)
         {
             if (task.finished_request(response_code))
             {
-                common::Response response(file_index, task.request->index, task.request->ret());
+                common::Response response(submission_id, file_index, task.request->index, task.request->ret());
                 responder->push(std::move(response), task.request->bytesize);
             }
         }
@@ -166,7 +167,7 @@ void Batch::handle_task_response(const common::ResponseCode response_code, const
     LOG(SPAM) << "Received object storage response: File index " << file_index << " request index " << task_ptr->request->index << " ret " << response_code;
     if (task_ptr->finished_request(response_code))
     {
-        common::Response request_response(file_index, task_ptr->request->index, task_ptr->request->ret());
+        common::Response request_response(submission_id, file_index, task_ptr->request->index, task_ptr->request->ret());
         responder->push(std::move(request_response), task_ptr->request->bytesize);
     }
 }
@@ -184,7 +185,7 @@ void Batch::finished_until(size_t file_offset, common::ResponseCode ret /*= comm
         if (tasks[i].finished_request(ret))
         {
             const auto & r = tasks[i].request;
-            common::Response response(file_index, r->index, r->ret());
+            common::Response response(submission_id, file_index, r->index, r->ret());
             LOG(SPAM) << "Sending response " << response;
             responder->push(std::move(response), tasks[i].request->bytesize);
         }
