@@ -14,6 +14,7 @@
 //#include "common/range/range.h"
 
 #include "streamer/impl/config/config.h"
+#include "streamer/impl/cuda/cuda_loader.h"
 #include "streamer/impl/task/task.h"
 #include "streamer/impl/reader/reader.h"
 
@@ -56,7 +57,8 @@ struct Batch
         const common::s3::S3ClientWrapper::Params & params,
         const Tasks && tasks,
         std::shared_ptr<common::Responder> responder,
-        std::shared_ptr<const Config> config);
+        std::shared_ptr<const Config> config,
+        bool cuda = false);
 
   // total number of requested bytes
   size_t total_bytes() const;
@@ -99,6 +101,7 @@ struct Batch
 
  private:
   void read(const Config & config, std::atomic<bool> & stopped);
+  void read_cuda(const Config & config, std::atomic<bool> & stopped, const cuda::CudaDriver & drv);
 
   // handle response from a single task
   void handle_task_response(const common::ResponseCode response_code, const Task * task_ptr);
@@ -106,6 +109,8 @@ struct Batch
  private:
   // index of first unfinished task
   unsigned _unfinished = 0;
+
+  bool _cuda = false;
 
   std::unique_ptr<Reader> _reader;
 };

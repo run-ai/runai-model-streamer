@@ -31,14 +31,26 @@ def runai_request(
     dsts: List[memoryview],
     internal_sizes: List[List[int]],
     s3_credentials: Optional[S3Credentials] = None,
+    cuda: bool = False,
+    cuda_tensor_ptrs: Optional[List[ctypes.c_void_p]] = None,
 ) -> None:
     c_paths = (ctypes.c_char_p * len(paths))(*[path.encode("utf-8") for path in paths])
     c_file_offsets = (ctypes.c_uint64 * len(file_offsets))(*file_offsets)
     c_bytesizes = (ctypes.c_uint64 * len(bytesizes))(*bytesizes)
-    dst_addrs = [
-        ctypes.cast(ctypes.c_void_p(ctypes.addressof(ctypes.c_char.from_buffer(dst))), ctypes.c_void_p)
-        for dst in dsts
-    ]
+    if cuda and cuda_tensor_ptrs is not None:
+        # Pass one pre-aligned GPU pointer per tensor so C++ can write directly
+        # to aligned destinations without computing offsets itself.
+        dst_addrs = cuda_tensor_ptrs
+    elif cuda:
+        raise ValueError(
+            "cuda=True requires cuda_tensor_ptrs to be provided; "
+            "passing None would produce misaligned GPU destinations"
+        )
+    else:
+        dst_addrs = [
+            ctypes.cast(ctypes.c_void_p(ctypes.addressof(ctypes.c_char.from_buffer(dst))), ctypes.c_void_p)
+            for dst in dsts
+        ]
     c_dsts = (ctypes.c_void_p * len(dst_addrs))(*dst_addrs)
     
     num_files = len(paths)
@@ -65,14 +77,15 @@ def runai_request(
         c_paths,
         c_file_offsets,
         c_bytesizes,
-        c_dsts, 
+        c_dsts,
         c_num_sizes,
         c_internal_sizes,
         ctypes.c_char_p(s3_credentials.access_key_id.encode("utf-8")) if s3_credentials is not None and s3_credentials.access_key_id is not None else None,
         ctypes.c_char_p(s3_credentials.secret_access_key.encode("utf-8")) if s3_credentials is not None and s3_credentials.secret_access_key is not None else None,
         ctypes.c_char_p(s3_credentials.session_token.encode("utf-8")) if s3_credentials is not None and s3_credentials.session_token is not None else None,
         ctypes.c_char_p(s3_credentials.region_name.encode("utf-8")) if s3_credentials is not None and s3_credentials.region_name is not None else None,
-        ctypes.c_char_p(s3_credentials.endpoint.encode("utf-8")) if s3_credentials is not None and s3_credentials.endpoint is not None else None,   
+        ctypes.c_char_p(s3_credentials.endpoint.encode("utf-8")) if s3_credentials is not None and s3_credentials.endpoint is not None else None,
+        ctypes.c_int(1 if cuda else 0),
     )
     if error_code != SUCCESS_ERROR_CODE:
         raise ValueError(

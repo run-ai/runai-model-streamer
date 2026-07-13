@@ -6,6 +6,7 @@ runai_cc_auto_library(
         "//streamer/impl/assigner",
         "//streamer/impl/config",
         "//streamer/impl/batches",
+        "//streamer/impl/cuda:cuda_loader",
         "//streamer/impl/workload",
         "//common/responder",
         "//utils/threadpool",

@@ -136,7 +136,8 @@ TEST_F(StreamerTest, Async_Read)
                         credentials_c.secret_access_key,
                         credentials_c.session_token,
                         credentials_c.region,
-                        credentials_c.endpoint);
+                        credentials_c.endpoint,
+                             0);
     }
     else
     {
@@ -152,7 +153,8 @@ TEST_F(StreamerTest, Async_Read)
                         nullptr,
                         nullptr,
                         nullptr,
-                        nullptr);
+                        nullptr,
+                         0);
     }
 
     EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
@@ -460,7 +462,8 @@ TEST_F(StreamerTest, Increase_Insufficient_Fd_Limit)
                             credentials_c.secret_access_key,
                             credentials_c.session_token,
                             credentials_c.region,
-                            credentials_c.endpoint);
+                            credentials_c.endpoint,
+                             0);
         }
         else
         {
@@ -476,7 +479,8 @@ TEST_F(StreamerTest, Increase_Insufficient_Fd_Limit)
                             nullptr,
                             nullptr,
                             nullptr,
-                            nullptr);
+                            nullptr,
+                             0);
         }
         EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
 
@@ -520,7 +524,8 @@ TEST_F(StreamerTest, Stop_Before_Async_Read)
                             credentials_c.secret_access_key,
                             credentials_c.session_token,
                             credentials_c.region,
-                            credentials_c.endpoint);
+                            credentials_c.endpoint,
+                             0);
         }
         else
         {
@@ -536,7 +541,8 @@ TEST_F(StreamerTest, Stop_Before_Async_Read)
                             nullptr,
                             nullptr,
                             nullptr,
-                            nullptr);
+                            nullptr,
+                             0);
         }
 
         // request was not sent to the S3 server
@@ -584,7 +590,8 @@ TEST_F(StreamerTest, End_During_Async_Read)
                             credentials_c.secret_access_key,
                             credentials_c.session_token,
                             credentials_c.region,
-                            credentials_c.endpoint);
+                            credentials_c.endpoint,
+                             0);
         }
         else
         {
@@ -600,7 +607,8 @@ TEST_F(StreamerTest, End_During_Async_Read)
                             nullptr,
                             nullptr,
                             nullptr,
-                            nullptr);
+                            nullptr,
+                             0);
         }
 
         ::usleep(utils::random::number(300));
@@ -635,7 +643,8 @@ TEST_F(StreamerTest, Multiple_Files)
                              credentials_c.secret_access_key,
                              credentials_c.session_token,
                              credentials_c.region,
-                             credentials_c.endpoint);
+                             credentials_c.endpoint,
+                             0);
 
     EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
 
@@ -687,7 +696,8 @@ TEST_F(StreamerTest, Multiple_Files_Error)
                              credentials_c.secret_access_key,
                              credentials_c.session_token,
                              credentials_c.region,
-                             credentials_c.endpoint);
+                             credentials_c.endpoint,
+                             0);
 
     EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
 
