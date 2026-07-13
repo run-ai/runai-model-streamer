@@ -156,6 +156,28 @@ def create_random_safetensors(dir_path):
     save_file(tensors, path)
     return path
 
+def create_sized_safetensors(dir_path, filename="big.safetensors", num_tensors=8, elements_per_tensor=1_000_000):
+    """
+    Create a safetensors file with a controllable, non-trivial payload (default ~32 MB:
+    8 tensors x 1M float32). Large enough that streaming is not instantaneous, so tests
+    can tear the streamer down while reads are still in flight.
+
+    Every tensor gets a DISTINCT, position-sensitive value range (tensor i holds
+    [i*N, (i+1)*N)) so an exact element-wise comparison actually validates the data part:
+    it catches wrong offsets within a tensor and cross-tensor swaps, which identical
+    payloads would hide. Values stay below 2**24 so they are exactly representable in
+    float32 (8 * 1M = 8M < 16.7M), keeping the comparison exact.
+    """
+    os.makedirs(dir_path, exist_ok=True)
+    path = os.path.join(dir_path, filename)
+    tensors = {
+        f"tensor_{i}": torch.arange(i * elements_per_tensor, (i + 1) * elements_per_tensor, dtype=torch.float32)
+        for i in range(num_tensors)
+    }
+    # Use official library to ensure compatibility
+    save_file(tensors, path)
+    return path
+
 def create_random_multi_safetensors(dir_path):
     """Generates multiple safetensors files to simulate a sharded model."""
     os.makedirs(dir_path, exist_ok=True)

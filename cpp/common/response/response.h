@@ -26,11 +26,12 @@ struct Response
     // id of the owning submission (one runai_request(_ex) call); 0 by default
     unsigned submission_id = 0;
 
-    // index of file
-    unsigned file_index;
+    // index of file (0 by default: sentinel responses - FinishedError/TimedOut, built via the
+    // 1-arg ctor - carry no file/sub-range, and the C API copies these out unconditionally)
+    unsigned file_index = 0;
 
     // index of sub request
-    unsigned index;
+    unsigned index = 0;
 
 
     // response code

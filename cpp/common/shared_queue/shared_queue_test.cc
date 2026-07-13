@@ -364,25 +364,6 @@ void run_stop_unblocks_blocked_consumer(QueueMode mode)
     EXPECT_EQ(result.load(), static_cast<int>(ResponseCode::FinishedError));
 }
 
-void run_cancel_unblocks_blocked_consumer(QueueMode mode)
-{
-    // A consumer blocked in pop(0) with an outstanding request must be woken by cancel() with
-    // FinishedError - exercises the _canceled post-wake branch. _running > 0 so cancel() posts.
-    auto responder = SharedQueue<Response>(1, mode);
-
-    std::atomic<int> result{ -1 };
-    auto consumer = utils::Thread([&]()
-    {
-        result.store(static_cast<int>(responder.pop(0).ret));
-    });
-
-    usleep(100 * 1000);
-    responder.cancel();
-    consumer.join(); // must not deadlock
-
-    EXPECT_EQ(result.load(), static_cast<int>(ResponseCode::FinishedError));
-}
-
 } // namespace
 
 TEST(FinishOnDrain, Delivery)                     { run_delivery(QueueMode::FINISH_ON_DRAIN); }
@@ -399,9 +380,6 @@ TEST(Persistent,    BlockedPopWokenByPush)        { run_blocked_pop_woken_by_pus
 
 TEST(FinishOnDrain, StopUnblocksBlockedConsumer)  { run_stop_unblocks_blocked_consumer(QueueMode::FINISH_ON_DRAIN); }
 TEST(Persistent,    StopUnblocksBlockedConsumer)  { run_stop_unblocks_blocked_consumer(QueueMode::PERSISTENT); }
-
-TEST(FinishOnDrain, CancelUnblocksBlockedConsumer){ run_cancel_unblocks_blocked_consumer(QueueMode::FINISH_ON_DRAIN); }
-TEST(Persistent,    CancelUnblocksBlockedConsumer){ run_cancel_unblocks_blocked_consumer(QueueMode::PERSISTENT); }
 
 // --- Mode-specific: the drained-state semantics that differ between the two modes ---
 

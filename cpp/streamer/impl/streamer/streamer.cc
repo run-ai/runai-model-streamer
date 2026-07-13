@@ -7,6 +7,7 @@
 #include <memory>
 #include <numeric>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -166,11 +167,9 @@ common::ResponseCode Streamer::async_request(
     // committed (registered + increment + dispatched) once fully built, so a build failure below
     // just returns the error and leaks the id harmlessly - no registry entry, no increment, no
     // workloads, and no shared cancel() that would disturb other submissions on the responder.
-    const unsigned submission_id = generate_submission_id();
-    if (out_submission_id != nullptr)
-    {
-        *out_submission_id = submission_id;
-    }
+    // out_submission_id is written only on the success path (below), so a failed request never
+    // hands back an id the caller could wait on.
+    const unsigned submission_id = _submissions.generate();
 
     // divide reading between workers
     Assigner assigner(paths, file_offsets, bytesizes, dsts, _config);
@@ -211,63 +210,70 @@ common::ResponseCode Streamer::async_request(
 
     // Commit the submission: register it, grow the persistent responder's expected count, then
     // dispatch. increment() must happen before any workload runs so _running covers the responses.
-    register_submission(submission_id, total_sizes, total_bytes);
+    _submissions.add(submission_id, total_sizes, total_bytes);
     _responder->increment(total_sizes);
 
-    for (auto & workload : workloads)
-    {
-        if (workload.size() > 0)
-        {
-            LOG(DEBUG) << "Submission " << submission_id << " sending workload to worker with batches " << workload.size();
+    // The drain guard relies on push_back's strong guarantee for the workload whose push throws,
+    // which holds only because Workload's move is noexcept (so the throw is the node allocation,
+    // before the move). Enforce it so a future throwing-move member fails the build here.
+    static_assert(std::is_nothrow_move_constructible<Workload>::value,
+                  "Workload move must be noexcept for the async_request dispatch drain to be safe");
 
-            _pool.push(std::move(workload));
+    // If dispatch throws (e.g. bad_alloc) after increment(), drain the not-yet-dispatched
+    // workloads (index >= next) as UnknownError on unwind, so every sub-range still completes and
+    // the responder/registry reach zero - the consumer gets a clean failure instead of hanging.
+    // The exception then propagates and the caller maps it to UnknownError.
+    size_t next = 0;
+    utils::ScopeGuard drain_guard([&]() { drain_undispatched(submission_id, workloads, next); });
+
+    for (; next < workloads.size(); ++next) // ++next runs after the body, so a throwing push leaves next at it
+    {
+        if (workloads[next].size() > 0)
+        {
+            LOG(DEBUG) << "Submission " << submission_id << " sending workload to worker with batches " << workloads[next].size();
+
+            _pool.push(std::move(workloads[next]));
         }
+    }
+
+    drain_guard.cancel(); // all workloads dispatched
+
+    // committed: expose the id only now, so a failed request never returns an id to wait on
+    if (out_submission_id != nullptr)
+    {
+        *out_submission_id = submission_id;
     }
 
     return common::ResponseCode::Success;
 }
 
-unsigned Streamer::generate_submission_id()
+void Streamer::drain_undispatched(unsigned submission_id, std::vector<Workload> & workloads, size_t from)
 {
-    const auto guard = std::unique_lock<std::mutex>(_submissions_mutex);
+    LOG(ERROR) << "Submission " << submission_id << " failed to dispatch; draining undispatched workloads as errors";
 
-    unsigned id;
-    do
+    // Only workloads[from .. end] - the failed one and the un-attempted ones. workloads[0 .. from)
+    // were already moved into the pool and are intentionally not referenced.
+    for (size_t i = from; i < workloads.size(); ++i)
     {
-        id = _next_submission_id++;              // unsigned wrap is well-defined
-        if (id == 0) id = _next_submission_id++; // 0 is reserved (Response default / "none")
+        if (workloads[i].size() > 0)
+        {
+            try { workloads[i].fail(common::ResponseCode::UnknownError); }
+            catch (...) {} // best-effort under severe OOM
+        }
     }
-    while (_submissions.count(id) != 0);         // after a 2^32 wrap, skip a still-live id
-
-    return id;
-}
-
-void Streamer::register_submission(unsigned submission_id, unsigned expected, size_t total_bytes)
-{
-    const auto guard = std::unique_lock<std::mutex>(_submissions_mutex);
-    _submissions[submission_id] = Submission{ expected, total_bytes, std::chrono::steady_clock::now() };
 }
 
 bool Streamer::consume_submission_response(unsigned submission_id)
 {
-    const auto guard = std::unique_lock<std::mutex>(_submissions_mutex);
+    // SubmissionsMgr owns the registry + its mutex (a strict leaf); logging happens here, outside
+    // that lock. Consuming a response for an unknown submission is an accounting bug and ASSERTs
+    // inside consume() rather than returning.
+    const auto result = _submissions.consume(submission_id);
 
-    auto it = _submissions.find(submission_id);
-    if (it == _submissions.end())
+    if (result.outcome == SubmissionsMgr::Result::Outcome::Completed)
     {
-        // Not registered / already forgotten. Should not happen in normal flow; treat as done.
-        LOG(DEBUG) << "Consumed a response for unknown submission " << submission_id;
-        return true;
-    }
-
-    if (--it->second.remaining == 0)
-    {
-        const auto & sub = it->second;
-        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - sub.submit_time).count();
-        const auto bps = (ms > 0) ? (sub.total_bytes * 1000 / static_cast<size_t>(ms)) : 0;
-        LOG(INFO) << "Submission " << submission_id << " completed: " << utils::logging::human_readable_size(sub.total_bytes)
-                  << " in " << ms << " ms, " << utils::logging::human_readable_size(bps) << "/s";
-        _submissions.erase(it);
+        LOG(INFO) << "Submission " << submission_id << " completed: " << utils::logging::human_readable_size(result.total_bytes)
+                  << " in " << result.elapsed_ms << " ms, " << utils::logging::human_readable_size(result.throughput_bps) << "/s";
         return true;
     }
 

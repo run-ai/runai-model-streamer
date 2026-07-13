@@ -24,6 +24,12 @@ struct Workload
 
     common::ResponseCode add_batch(Batch && batch);
 
+    // Fail all of this workload's batches with the given code, pushing an error response for each
+    // of their sub-ranges (whichever task of a sub-range finishes last pushes the single response,
+    // so this composes correctly with sub-ranges partly covered by other, dispatched workloads).
+    // Used to drain a workload that could not be dispatched (see Streamer::async_request).
+    void fail(common::ResponseCode code);
+
     size_t size() const;
 
     bool is_object_storage() const;

@@ -175,7 +175,6 @@ TEST(Batches, Failed_Reader)
 
     // reader is created later when the batch is executed, and that is when the error will occur
     EXPECT_EQ(ret, common::ResponseCode::Success);
-    responder->cancel();
 }
 
 TEST(Batches, Zero_Size_Request)

@@ -1,8 +1,6 @@
 
 #pragma once
 
-#include <chrono>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -18,19 +16,10 @@
 #include "streamer/impl/workload/workload.h"
 #include "streamer/impl/s3/s3.h"
 #include "streamer/impl/batches/batches.h"
+#include "streamer/impl/submissions/submissions_mgr.h"
 
 namespace runai::llm::streamer::impl
 {
-
-// Per-submission bookkeeping (one submission == one async_request call). Tracks completion so
-// the consumer can decide request_done and log per-submission throughput. Touched by the
-// submitter (insert) and the single consumer (decrement/erase), under _submissions_mutex.
-struct Submission
-{
-    unsigned remaining;   // sub-range responses not yet consumed
-    size_t total_bytes;   // sum of the submission's bytesizes (for throughput)
-    std::chrono::steady_clock::time_point submit_time;
-};
 
 // Streamer for reading large files concurrently
 
@@ -104,15 +93,18 @@ struct Streamer
     common::s3::S3ClientWrapper::Params handle_s3(unsigned file_index, const std::string & path, const common::s3::Credentials & credentials);
     void verify_requests(std::vector<std::string> & paths, std::vector<size_t> & file_offsets, std::vector<size_t> & bytesizes, std::vector<unsigned> & num_sizes, std::vector<void *> & dsts);
 
-    // submission registry (see Submission). All three take _submissions_mutex.
-    // mint a fresh submission id (rotating; skips 0 - reserved as the "none" value / Response
-    // default - and any id still live in the registry)
-    unsigned generate_submission_id();
-    // register an accepted submission's expected response count and throughput inputs
-    void register_submission(unsigned submission_id, unsigned expected, size_t total_bytes);
-    // account for one consumed response of submission_id; on the last one log per-submission
-    // throughput and forget the record. Returns true iff this was the submission's last response.
+    // Account for one consumed response of submission_id (delegates to _submissions): on the
+    // submission's last response, log per-submission throughput. Returns true iff it was the
+    // submission's last response (i.e. submission_done).
     bool consume_submission_response(unsigned submission_id);
+
+    // Drain workloads[from .. end] as UnknownError so the responder/registry reach zero and the
+    // consumer does not hang, when dispatch fails after increment(). `from` is the index of the
+    // workload whose push threw: workloads[0 .. from) were already moved into the pool and are
+    // NEVER referenced here (excluded by position); workloads[from] is intact because Workload's
+    // move is noexcept (see the static_assert in async_request), so push_back's strong guarantee
+    // means a throwing dispatch never moved it. Best-effort - under severe OOM a push may throw too.
+    void drain_undispatched(unsigned submission_id, std::vector<Workload> & workloads, size_t from);
 
  private:
     std::shared_ptr<const Config> _config;
@@ -129,10 +121,8 @@ struct Streamer
     std::once_flag _s3_stream_init_flag;   // fd limit + S3Stop (streaming only)
     std::once_flag _s3_cleanup_init_flag;  // S3Cleanup (list_files and streaming)
 
-    // submission registry, guarded by _submissions_mutex
-    std::mutex _submissions_mutex;
-    unsigned _next_submission_id = 1;   // 0 is reserved (Response default / "none")
-    std::map<unsigned, Submission> _submissions;
+    // per-submission bookkeeping (id allocation + completion + throughput); owns its own mutex
+    SubmissionsMgr _submissions;
 };
 
 }; // namespace runai::llm::streamer::impl

@@ -167,7 +167,7 @@ void Batches::handle_request(std::vector<Tasks> & v_tasks, unsigned request_inde
 
     // create tasks info
 
-    // map worker index to tasks info
+    // map batch index (index into this file's read-task/batch list) to its task info
     std::map<unsigned, Task::Info> infos;
 
     auto bytes_to_request = request_size;
@@ -177,8 +177,8 @@ void Batches::handle_request(std::vector<Tasks> & v_tasks, unsigned request_inde
     {
         auto to_read = _itr.consume(bytes_to_request);
         Task::Info info(task_offset, to_read, destination_offset);
-        auto workload_index = _itr.current_index();
-        infos.try_emplace(workload_index, std::move(info));
+        auto batch_index = _itr.current_index();
+        infos.try_emplace(batch_index, std::move(info));
         task_offset += to_read;
         bytes_to_request -= to_read;
         destination_offset += to_read;

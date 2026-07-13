@@ -54,6 +54,14 @@ bool Workload::is_object_storage() const
     return _is_object_storage;
 }
 
+void Workload::fail(common::ResponseCode code)
+{
+    for (auto & [file_index, batch] : _batches_by_file_index)
+    {
+        batch.handle_error(code);
+    }
+}
+
 common::ResponseCode Workload::verify_batch(const Batch & batch)
 {
     if (batch.is_object_storage() != is_object_storage())
