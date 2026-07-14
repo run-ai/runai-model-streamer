@@ -66,6 +66,25 @@ void Semaphore::wait()
     PASSERT(ret == 0) << "Could not decrement semaphore";
 }
 
+bool Semaphore::try_wait()
+{
+    // restart if interrupted by signal; non-blocking otherwise
+    int ret{};
+    while ((ret = sem_trywait(&_sem)) == -1 && errno == EINTR)
+    {
+        continue;
+    }
+
+    if (ret == 0)
+    {
+        return true;
+    }
+
+    // EAGAIN means the semaphore was already zero (nothing to acquire)
+    PASSERT(errno == EAGAIN) << "try wait on semaphore failed with errno " << errno;
+    return false;
+}
+
 bool Semaphore::wait_for(unsigned timeout_ms)
 {
     int ret{};

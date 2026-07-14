@@ -14,6 +14,9 @@ struct Semaphore
     void post();
     void wait();
 
+    // non-blocking decrement: returns true if the semaphore was acquired (was > 0), false otherwise
+    bool try_wait();
+
     // wait up to timeout_ms for the semaphore; returns true if acquired (decremented),
     // false on timeout. Uses an absolute CLOCK_REALTIME deadline (sem_timedwait); a
     // wall-clock jump can skew the wait (CLOCK_MONOTONIC via sem_clockwait needs glibc 2.30).

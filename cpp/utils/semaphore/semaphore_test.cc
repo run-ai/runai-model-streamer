@@ -35,6 +35,41 @@ TEST(Wait, Sanity)
     EXPECT_EQ(sem.value(), 0);
 }
 
+TEST(TryWait, EmptyReturnsFalse)
+{
+    auto sem = Semaphore(0);
+
+    EXPECT_FALSE(sem.try_wait());   // nothing to acquire
+    EXPECT_EQ(sem.value(), 0);      // and it did not go negative / block
+}
+
+TEST(TryWait, AcquiresAvailableThenFails)
+{
+    const auto number = random::number(1, 10);
+    auto sem = Semaphore(number);
+
+    // acquire every available token without blocking
+    for (unsigned i = 0; i < number; ++i)
+    {
+        EXPECT_TRUE(sem.try_wait());
+        EXPECT_EQ(sem.value(), number - i - 1);
+    }
+
+    // now empty -> further tries fail immediately
+    EXPECT_FALSE(sem.try_wait());
+    EXPECT_EQ(sem.value(), 0);
+}
+
+TEST(TryWait, PostThenTryWait)
+{
+    auto sem = Semaphore(0);
+
+    EXPECT_FALSE(sem.try_wait());
+    sem.post();
+    EXPECT_TRUE(sem.try_wait());    // the posted token is acquired
+    EXPECT_FALSE(sem.try_wait());   // and it is gone
+}
+
 TEST(Wait, Actually_Wait)
 {
     auto sem = Semaphore(0);

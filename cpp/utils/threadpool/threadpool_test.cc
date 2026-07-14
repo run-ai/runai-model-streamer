@@ -4,12 +4,101 @@
 
 #include <gtest/gtest.h>
 #include <atomic>
+#include <memory>
 
 #include "utils/logging/logging.h"
 #include "utils/random/random.h"
 
 namespace runai::llm::streamer::utils
 {
+
+TEST(Deque, TryPop)
+{
+    Deque<int> deque;
+    int out = 0;
+
+    // empty -> false, non-blocking
+    EXPECT_FALSE(deque.try_pop(out));
+
+    deque.push(42);
+    EXPECT_TRUE(deque.try_pop(out));
+    EXPECT_EQ(out, 42);
+    EXPECT_FALSE(deque.try_pop(out));   // drained again
+
+    deque.push(1);
+    deque.push(2);
+    deque.push(3);
+    EXPECT_TRUE(deque.try_pop(out)); EXPECT_EQ(out, 1);   // FIFO
+    EXPECT_TRUE(deque.try_pop(out)); EXPECT_EQ(out, 2);
+    EXPECT_TRUE(deque.try_pop(out)); EXPECT_EQ(out, 3);
+    EXPECT_FALSE(deque.try_pop(out));
+}
+
+TEST(Deque, TryPopAfterStopReturnsFalse)
+{
+    Deque<int> deque;
+    deque.push(7);
+    deque.stop(1);   // stopped: unresolved messages are dropped
+
+    int out = 0;
+    // stopped -> try_pop returns false (and does not consume the stop token needed by pop())
+    EXPECT_FALSE(deque.try_pop(out));
+    // a blocking pop() still observes the shutdown and returns false without blocking
+    EXPECT_FALSE(deque.pop(out));
+}
+
+namespace
+{
+
+// A minimal Worker with no capacity window: execute is synchronous and the worker is always idle. This
+// exercises the pool's per-worker routine itself (try_pop / blocking-pop dispatch and clean shutdown),
+// independent of the CapacityWorker window machinery (which is covered in capacity_worker_test).
+class SyncWorker : public Worker<unsigned>
+{
+ public:
+    explicit SyncWorker(std::atomic<unsigned> & executed) : _executed(executed) {}
+
+    void execute(unsigned && value, std::atomic<bool> &) override { _executed += value; }
+    void drain(std::atomic<bool> &) override {}   // nothing is ever in flight
+    bool idle() const override { return true; }
+
+ private:
+    std::atomic<unsigned> & _executed;
+};
+
+} // namespace
+
+TEST(PerWorker, DispatchesEveryRequest)
+{
+    std::atomic<unsigned> executed{0};
+
+    const unsigned num_workers = utils::random::number(2, 8);
+
+    unsigned total = 0;
+    {
+        ThreadPool<unsigned> pool(
+            [&]() -> std::unique_ptr<Worker<unsigned>>
+            {
+                return std::make_unique<SyncWorker>(executed);
+            },
+            num_workers);
+
+        const auto num_requests = utils::random::number(1000, 5000);
+        for (unsigned i = 0; i < num_requests; ++i)
+        {
+            unsigned value = utils::random::number(1, 100);
+            total += value;
+            pool.push(std::move(value));
+        }
+
+        for (int i = 0; i < 5000 && executed.load() < total; ++i)
+        {
+            ::usleep(1000);
+        }
+    }   // ~pool stops the deque and joins all workers cleanly
+
+    EXPECT_EQ(executed.load(), total);
+}
 
 TEST(Creation, Sanity)
 {
