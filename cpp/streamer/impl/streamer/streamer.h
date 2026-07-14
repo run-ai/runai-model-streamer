@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -17,6 +18,7 @@
 #include "streamer/impl/s3/s3.h"
 #include "streamer/impl/batches/batches.h"
 #include "streamer/impl/submissions/submissions_mgr.h"
+#include "streamer/impl/pools/backend_pools.h"
 
 namespace runai::llm::streamer::impl
 {
@@ -90,6 +92,12 @@ struct Streamer
  private:
     // Try to parse path as an object storage URI; returns nullptr for a filesystem path
     std::shared_ptr<common::s3::StorageUri> try_parse_uri(const std::string & path);
+
+    // Reject a submission that mixes object-storage plugins, and lock the streamer to a single
+    // object-storage plugin (first submission wins). Filesystem paths are ignored and coexist with
+    // the locked plugin. Returns UnsupportedBackendMix on a mixed submission or a plugin differing
+    // from the lock, else Success. See ObjectPluginMgr.
+    common::ResponseCode lock_object_plugin(const std::vector<std::string> & paths);
     common::s3::S3ClientWrapper::Params handle_s3(unsigned file_index, const std::string & path, const common::s3::Credentials & credentials);
     void verify_requests(std::vector<std::string> & paths, std::vector<size_t> & file_offsets, std::vector<size_t> & bytesizes, std::vector<unsigned> & num_sizes, std::vector<void *> & dsts);
 
@@ -109,7 +117,9 @@ struct Streamer
  private:
     std::shared_ptr<const Config> _config;
     std::unique_ptr<S3Cleanup> _s3;
-    utils::ThreadPool<Workload> _pool;
+    // Lazily-created worker pools, one per backend kind. Occupies the slot the single ThreadPool used
+    // to, so object-storage workers still join between _s3_stop (S3Stop) and _s3 (S3Cleanup) on teardown.
+    BackendPools _pools;
     std::unique_ptr<S3Stop> _s3_stop;
     std::unique_ptr<utils::FdLimitSetter> _fd_limit;
     std::shared_ptr<common::Responder> _responder;

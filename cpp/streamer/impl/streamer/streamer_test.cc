@@ -462,6 +462,32 @@ TEST(AsyncRequest, InvalidScheme)
     EXPECT_THROW(streamer.async_request(paths, file_offsets, bytesizes, dsts, num_sizes, internal_sizes, credentials), runai::llm::streamer::common::Exception);
 }
 
+TEST(AsyncRequest, MixedObjectPluginsRejected)
+{
+    const auto size = utils::random::number(100, 1000);
+    const auto chunk_size = utils::random::number<size_t>(1, 1024);
+    const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
+    Config config(utils::random::number(1, 20), utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
+
+    common::s3::Credentials credentials;
+    Streamer streamer(config);
+
+    std::vector<unsigned char> dst0(size);
+    std::vector<unsigned char> dst1(size);
+
+    // a single submission that mixes two object-storage plugins (s3 + gcs) is rejected up front,
+    // before any dispatch or plugin load
+    std::vector<std::string> paths = {"s3://bucket/a.txt", "gs://bucket/b.txt"};
+    std::vector<size_t> file_offsets = {0, 0};
+    std::vector<size_t> bytesizes = {size, size};
+    std::vector<void *> dsts = {dst0.data(), dst1.data()};
+    std::vector<unsigned> num_sizes = {1, 1};
+    std::vector<std::vector<size_t>> internal_sizes = { {static_cast<size_t>(size)}, {static_cast<size_t>(size)} };
+
+    EXPECT_EQ(streamer.async_request(paths, file_offsets, bytesizes, dsts, num_sizes, internal_sizes, credentials),
+              common::ResponseCode::UnsupportedBackendMix);
+}
+
 namespace
 {
 

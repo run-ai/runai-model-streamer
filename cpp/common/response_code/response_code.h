@@ -26,6 +26,7 @@ enum class ResponseCode : int
     AzureBlobNotSupported,
     FileTruncatedError,
     TimedOut,
+    UnsupportedBackendMix,
     __Max,
 };
 

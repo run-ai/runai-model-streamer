@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -27,10 +28,12 @@ Streamer::Streamer() : Streamer(Config())
 
 Streamer::Streamer(Config config) :
     _config(std::make_shared<Config>(config)),
-    _pool([&](Workload&& workload, std::atomic<bool> & stopped)
+    // Filesystem reads are synchronous (concurrency threads); object-storage reads are asynchronous
+    // (s3_concurrency clients + capacity windows). Pools are created lazily on first use of each kind.
+    _pools([](Workload&& workload, std::atomic<bool> & stopped)
         {
             workload.execute(stopped);
-        }, _config->max_concurrency()),
+        }, _config->concurrency, _config->s3_concurrency),
     // One PERSISTENT responder for the streamer's lifetime, shared by all submissions and
     // demuxed by submission_id. increment() grows its expected count per accepted submission.
     _responder(std::make_shared<common::Responder>(0, common::QueueMode::PERSISTENT))
@@ -87,7 +90,7 @@ common::ResponseCode Streamer::async_read(const std::string & path, size_t file_
 
         internal_sizes_vv.push_back(internal_sizes_v);
 
-        async_request(paths, file_offsets, bytesizes, dsts, num_sizes_v, internal_sizes_vv, credentials);
+        ret = async_request(paths, file_offsets, bytesizes, dsts, num_sizes_v, internal_sizes_vv, credentials);
     }
     catch(const common::Exception & e)
     {
@@ -159,6 +162,13 @@ common::ResponseCode Streamer::async_request(
 {
     // verify input
     verify_requests(paths, file_offsets, bytesizes, num_sizes, dsts);
+
+    // A streamer serves a single object-storage plugin; reject a submission that mixes object-storage
+    // plugins or uses one differing from the locked plugin. Nothing is committed yet, so returning is clean.
+    if (const auto ret = lock_object_plugin(paths); ret != common::ResponseCode::Success)
+    {
+        return ret;
+    }
 
     const auto total_sizes = std::accumulate(num_sizes.begin(), num_sizes.end(), 0u);
     const size_t total_bytes = std::accumulate(bytesizes.begin(), bytesizes.end(), static_cast<size_t>(0));
@@ -232,7 +242,11 @@ common::ResponseCode Streamer::async_request(
         {
             LOG(DEBUG) << "Submission " << submission_id << " sending workload to worker with batches " << workloads[next].size();
 
-            _pool.push(std::move(workloads[next]));
+            // route to the pool for this workload's backend kind (a workload is homogeneous)
+            const auto kind = workloads[next].is_object_storage()
+                ? BackendPools::Kind::ObjectStorage
+                : BackendPools::Kind::FileSystem;
+            _pools.push(kind, std::move(workloads[next]));
         }
     }
 
@@ -304,6 +318,41 @@ void Streamer::verify_requests(std::vector<std::string> & paths, std::vector<siz
             throw common::Exception(common::ResponseCode::InvalidParameterError);
         }
     }
+}
+
+common::ResponseCode Streamer::lock_object_plugin(const std::vector<std::string> & paths)
+{
+    // Find the object-storage plugin this submission uses (filesystem paths are ignored and coexist);
+    // reject a submission that itself mixes two object-storage plugins.
+    std::optional<BackendPools::Plugin> submission_plugin;
+    for (const auto & path : paths)
+    {
+        auto uri = try_parse_uri(path);
+        if (uri == nullptr)
+        {
+            continue;   // filesystem path
+        }
+
+        const auto plugin = uri->is_gcs()   ? BackendPools::Plugin::GCS
+                          : uri->is_azure() ? BackendPools::Plugin::Azure
+                          :                   BackendPools::Plugin::S3;
+
+        if (submission_plugin.has_value() && submission_plugin.value() != plugin)
+        {
+            LOG(ERROR) << "Submission mixes object storage plugins; rejecting";
+            return common::ResponseCode::UnsupportedBackendMix;
+        }
+        submission_plugin = plugin;
+    }
+
+    if (!submission_plugin.has_value())
+    {
+        return common::ResponseCode::Success;   // pure filesystem submission - nothing to lock
+    }
+
+    // Lock the object-storage pool to this plugin (first submission) or verify it matches; the lock
+    // lives in BackendPools, alongside the ObjectStorage pool it constrains
+    return _pools.lock_object_plugin(submission_plugin.value());
 }
 
 std::shared_ptr<common::s3::StorageUri> Streamer::try_parse_uri(const std::string & path)
