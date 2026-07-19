@@ -40,7 +40,7 @@ constexpr std::array<const char *, static_cast<size_t>(ResponseCode::__Max)> __m
     "Azure Blob not supported",
     "Object storage returned an unexpected number of bytes for the requested range (truncated or over-length response)",
     "Timed out waiting for a response",
-    "Streamer is locked to a single storage backend type; mixing storage backend types in one streamer or submission is not supported",
+    "Streamer is locked to a single object-storage backend (S3/GCS/Azure); mixing object-storage backends in one streamer or submission is not supported",
 };
 
 const char * description(int response_code)

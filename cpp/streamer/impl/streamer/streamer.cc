@@ -168,6 +168,13 @@ common::ResponseCode Streamer::async_request(
     const common::s3::Credentials & credentials,
     unsigned * out_submission_id)
 {
+    // Default the caller's id to 0 ("none"). It is overwritten with the real id the instant one is
+    // minted (below), so only a failure before that point (verify / plugin lock) reports no id.
+    if (out_submission_id != nullptr)
+    {
+        *out_submission_id = 0;
+    }
+
     // verify input
     verify_requests(paths, file_offsets, bytesizes, num_sizes, dsts);
 
@@ -181,13 +188,19 @@ common::ResponseCode Streamer::async_request(
     const auto total_sizes = std::accumulate(num_sizes.begin(), num_sizes.end(), 0u);
     const size_t total_bytes = std::accumulate(bytesizes.begin(), bytesizes.end(), static_cast<size_t>(0));
 
-    // Mint the submission id up front so batches can be stamped with it. The submission is only
-    // committed (registered + increment + dispatched) once fully built, so a build failure below
-    // just returns the error and leaks the id harmlessly - no registry entry, no increment, no
-    // workloads, and no shared cancel() that would disturb other submissions on the responder.
-    // out_submission_id is written only on the success path (below), so a failed request never
-    // hands back an id the caller could wait on.
+    // Mint the submission id up front so batches can be stamped with it, and hand it back to the
+    // caller immediately: the id is always reported once it exists, regardless of how the call
+    // ends. On success it identifies the submission; on a failure AFTER commit (a dispatch throw
+    // under memory pressure) it lets the caller drain this submission's already-accounted
+    // responses; on a pre-commit build failure it is informational (the caller sees the error and
+    // will not wait on it). The submission is committed (registered + increment + dispatched) only
+    // once fully built, so a build failure below just returns the error - no registry entry, no
+    // increment, no workloads, and no shared cancel() that would disturb other submissions.
     const unsigned submission_id = _submissions.generate();
+    if (out_submission_id != nullptr)
+    {
+        *out_submission_id = submission_id;
+    }
 
     // divide reading between workers
     Assigner assigner(paths, file_offsets, bytesizes, dsts, _config);
@@ -260,12 +273,6 @@ common::ResponseCode Streamer::async_request(
 
     drain_guard.cancel(); // all workloads dispatched
 
-    // committed: expose the id only now, so a failed request never returns an id to wait on
-    if (out_submission_id != nullptr)
-    {
-        *out_submission_id = submission_id;
-    }
-
     return common::ResponseCode::Success;
 }
 
@@ -304,6 +311,10 @@ bool Streamer::consume_submission_response(unsigned submission_id)
 
 void Streamer::verify_requests(std::vector<std::string> & paths, std::vector<size_t> & file_offsets, std::vector<size_t> & bytesizes, std::vector<unsigned> & num_sizes, std::vector<void *> & dsts)
 {
+    // Only dsts[0] is checked because only dsts[0] is ever used: for CPU reads the destination is a single
+    // contiguous buffer whose base is dsts[0], and every file/sub-range is written at an offset into it (see
+    // Assigner: "ASSUMES dsts[0] is base of one large buffer"). dsts[1..] are never dereferenced - callers
+    // may even pass a single-element dsts for a multi-file request - so there is no per-file null to check.
     if (dsts[0] == 0)
     {
         LOG(ERROR) << "Destination buffer is null";

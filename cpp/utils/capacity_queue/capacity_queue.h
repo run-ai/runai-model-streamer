@@ -32,12 +32,10 @@ class CapacityQueue
     {}
 
     // Add an item to be submitted later.
-    // cost     - the amount of capacity this item consumes while in flight.
-    // priority - reserved for later priority scheduling; ignored by the current
-    //            FIFO selection (0 = default).
-    void enqueue(T item, size_t cost, unsigned priority = 0)
+    // cost - the amount of capacity this item consumes while in flight.
+    void enqueue(T item, size_t cost)
     {
-        _pending.push_back(Entry{std::move(item), cost, priority});
+        _pending.push_back(Entry{std::move(item), cost});
     }
 
     // Return the next item to submit and reserve its cost against the capacity, or
@@ -108,7 +106,6 @@ class CapacityQueue
     {
         T item;
         size_t cost;
-        unsigned priority;
     };
 
     size_t _capacity;

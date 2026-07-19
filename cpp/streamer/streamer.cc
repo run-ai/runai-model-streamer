@@ -183,6 +183,13 @@ _RUNAI_EXTERN_C int runai_request_ex(
     unsigned stream_id
 )
 {
+    // default the id to 0 ("none") so every return path - including early failures and a throw
+    // during argument marshalling - leaves a defined value the caller can rely on
+    if (out_submission_id != nullptr)
+    {
+        *out_submission_id = 0;
+    }
+
     try
     {
         auto s = static_cast<impl::Streamer *>(streamer);

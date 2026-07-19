@@ -288,6 +288,13 @@ void ObjectStorageWorker::finalize(InflightMap::iterator wlit, common::ResponseC
 
 void ObjectStorageWorker::abort_all(common::ResponseCode code)
 {
+    // Fail and drop every in-flight workload - including any whose reads are still outstanding at the
+    // backend. Those reads are not cancelled: they can still finish and be delivered later as "late
+    // completions" - completion events whose handle points into a handle block we erase here. drain_batch
+    // recognises a late completion (locate() returns end()) and simply drops it, so abandoning the reads
+    // now is safe. abort_all only runs on a terminal client state (teardown, or the responder stopped /
+    // drained early), after which this worker serves no new submission, so a late completion can never
+    // reach an unrelated in-flight workload.
     for (auto it = _inflight.begin(); it != _inflight.end(); )
     {
         auto next = std::next(it);
@@ -336,32 +343,38 @@ void ObjectStorageWorker::drain_batch(std::atomic<bool> & stopped)
     }
 
     bool progressed = false;
+    bool responder_drained = responses.empty();   // Success but no events -> responder ran dry this round
     for (const auto & response : responses)
     {
         // Some plugins (azure/gcs) append an "empty" FinishedError event once the responder runs dry, to
         // signal there is nothing more to hand out this round. It is not a real completion - stop here.
         if (response.ret == common::ResponseCode::FinishedError)
         {
+            responder_drained = true;
             break;
         }
 
         auto [wlit, task_idx] = locate(response.handle);
         if (wlit == _inflight.end())
         {
-            // a handle outside every in-flight block: a stale/cancelled completion or a buggy backend.
-            // Guard here (ASSERT is stripped in release) to avoid mis-routing, and fail the worker's work.
-            LOG(ERROR) << "Received response with unknown handle " << response.handle;
-            abort_all(common::ResponseCode::UnknownError);
-            return;
+            // A late completion (see abort_all): a chunk whose workload was already erased by an abort_all
+            // while its read was still outstanding at the backend, now delivered - its handle falls in an
+            // erased block. Nothing is left to complete for it, so drop it and keep scanning. Never
+            // abort_all here: that would fail every OTHER in-flight submission over a stray event. (A
+            // corrupt / never-issued handle from a buggy plugin lands here too and is likewise dropped.)
+            LOG(DEBUG) << "Dropping late object storage completion with unknown handle " << response.handle;
+            continue;
         }
 
         complete_chunk(wlit, task_idx, response.ret);
         progressed = true;
     }
 
-    // Blocking async_response returned without a real completion while chunks are still in flight: the
-    // responder was stopped or drained early. Abort rather than spin re-reading the same sentinel.
-    if (!progressed && _queue != nullptr && !_queue->idle())
+    // The responder signalled it ran dry (empty round or end-of-round sentinel) while chunks are still in
+    // flight: it was stopped or drained early. Abort rather than spin re-reading the same sentinel. Gated
+    // on responder_drained, not merely !progressed, so a round that only dropped a late completion (the
+    // client is alive) never aborts an unrelated in-flight submission.
+    if (!progressed && responder_drained && _queue != nullptr && !_queue->idle())
     {
         abort_all(common::ResponseCode::FinishedError);
     }

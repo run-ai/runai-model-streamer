@@ -59,8 +59,11 @@ _RUNAI_EXTERN_C int runai_request(
 // Multi-request submit. Credentials/config are passed as a key-value dictionary
 // (param_keys / param_values / num_params), matching runai_list_files; recognised keys:
 // "key", "secret", "token", "region", "endpoint".
-//  out_submission_id : set (on Success) to the id identifying this submission; use it to demux
-//                      responses from runai_response_ex.
+//  out_submission_id : always set to this submission's id once one is assigned, and left 0 only
+//                      if the call fails before that (e.g. invalid parameters). On Success it
+//                      identifies the submission; use it to demux responses from
+//                      runai_response_ex. If the call fails after the submission was committed,
+//                      its responses are still delivered and can be drained by this id.
 //  stream_id         : reserved for future multi-stream support; must be 0 in this version.
 _RUNAI_EXTERN_C int runai_request_ex(
     void * streamer,

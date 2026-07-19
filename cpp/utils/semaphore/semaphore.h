@@ -18,8 +18,9 @@ struct Semaphore
     bool try_wait();
 
     // wait up to timeout_ms for the semaphore; returns true if acquired (decremented),
-    // false on timeout. Uses an absolute CLOCK_REALTIME deadline (sem_timedwait); a
-    // wall-clock jump can skew the wait (CLOCK_MONOTONIC via sem_clockwait needs glibc 2.30).
+    // false on timeout. Uses sem_clockwait(CLOCK_MONOTONIC) on glibc >= 2.30 (immune to
+    // wall-clock jumps); falls back to sem_timedwait(CLOCK_REALTIME) on older glibc, where
+    // an NTP or admin wall-clock jump can skew the wait duration.
     bool wait_for(unsigned timeout_ms);
 
     // get the semaphore value
