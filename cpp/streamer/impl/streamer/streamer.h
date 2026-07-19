@@ -94,10 +94,11 @@ struct Streamer
     std::shared_ptr<common::s3::StorageUri> try_parse_uri(const std::string & path);
 
     // Reject a submission that mixes object-storage plugins, and lock the streamer to a single
-    // object-storage plugin (first submission wins). Filesystem paths are ignored and coexist with
-    // the locked plugin. Returns UnsupportedBackendMix on a mixed submission or a plugin differing
-    // from the lock, else Success. See ObjectPluginMgr.
-    common::ResponseCode lock_object_plugin(const std::vector<std::string> & paths);
+    // object-storage plugin AND a single set of credentials (first object-storage submission wins).
+    // Filesystem paths are ignored and coexist with the lock. Returns UnsupportedBackendMix on a mixed
+    // submission or a plugin differing from the lock, UnsupportedCredentialMix on credentials differing
+    // from the lock, else Success. A pure-filesystem submission is not credential-checked.
+    common::ResponseCode lock_object_plugin(const std::vector<std::string> & paths, const common::s3::Credentials & credentials);
     common::s3::S3ClientWrapper::Params handle_s3(unsigned file_index, const std::string & path, const common::s3::Credentials & credentials);
     void verify_requests(std::vector<std::string> & paths, std::vector<size_t> & file_offsets, std::vector<size_t> & bytesizes, std::vector<unsigned> & num_sizes, std::vector<void *> & dsts);
 

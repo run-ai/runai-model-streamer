@@ -1,10 +1,12 @@
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <optional>
 
 #include "common/response_code/response_code.h"
+#include "common/s3_credentials/s3_credentials.h"
 #include "utils/threadpool/threadpool.h"
 #include "streamer/impl/workload/workload.h"
 
@@ -40,13 +42,19 @@ class BackendPools
     // then is a programming error (asserted). Thread-safe.
     void push(Kind kind, Workload && workload);
 
-    // Lock object storage to a single plugin AND create the ObjectStorage pool (once). The first call records
-    // the plugin and builds the pool; a later differing plugin returns UnsupportedBackendMix (and builds
-    // nothing). The lock enforces the single-plugin constraint (the s3_wrapper backend handle is a
-    // process-wide static); the ObjectStorageWorkers themselves are plugin-agnostic (they dispatch by URI).
-    // Creating the pool here - always called before dispatch - keeps it off the per-workload push path.
-    // Thread-safe.
-    common::ResponseCode lock_object_plugin(Plugin plugin);
+    // Lock object storage to a single plugin AND a single set of credentials, and create the ObjectStorage
+    // pool (once). The first object-storage submission records the plugin (and its credentials, if any) and
+    // builds the pool; a later submission with a different plugin returns UnsupportedBackendMix, and one with
+    // different (non-empty) credentials returns UnsupportedCredentialMix (both build nothing). Empty
+    // credentials mean "use the ambient/default provider chain" and are always compatible - they neither
+    // establish nor are checked against the credential lock. The plugin lock enforces the single-plugin
+    // constraint (the s3_wrapper backend handle is a process-wide static); the credential lock reflects that
+    // each ObjectStorageWorker builds its client once, from the first workload's credentials, and reuses it -
+    // so a submission with other credentials would otherwise run under the wrong identity (single-credential
+    // first cut; multi-credential drain-and-switch is a TODO). The ObjectStorageWorkers are plugin-agnostic
+    // (they dispatch by URI). Creating the pool here - always called before dispatch - keeps it off the
+    // per-workload push path. Thread-safe.
+    common::ResponseCode lock_object_plugin(Plugin plugin, const common::s3::Credentials & credentials);
 
     // For testing: number of pools created so far.
     unsigned pools_created() const;
@@ -60,12 +68,21 @@ class BackendPools
     std::once_flag _filesystem_once;
     std::unique_ptr<utils::ThreadPool<Workload>> _filesystem_pool;
 
-    std::once_flag _object_storage_once;
     std::unique_ptr<utils::ThreadPool<Workload>> _object_storage_pool;
 
-    // the single object-storage plugin the ObjectStorage pool serves (leaf mutex - guards concurrent submitters)
+    // The object-storage lock. The first object-storage submission records the plugin (and credentials, if
+    // any) and creates the pool, all under _plugin_mutex; a later submission only compares. _plugin and
+    // _credentials are written once (first submission) and guarded by _plugin_mutex thereafter. Leaf mutex -
+    // guards concurrent submitters.
     std::mutex _plugin_mutex;
     std::optional<Plugin> _plugin;
+    std::optional<common::s3::Credentials> _credentials;
+
+    // Lock-free fast-path gate: -1 until the lock is fully established (plugin recorded AND pool created),
+    // then the locked Plugin as int. Published with release AFTER the pool exists, so a fast-path acquire
+    // that observes it is guaranteed the pool is usable. Lets a repeated submission take the mutex only when
+    // it must - i.e. when the lock is not yet initialized, or the submission carries (non-empty) credentials.
+    std::atomic<int> _ready_plugin { -1 };
 };
 
 }; // namespace runai::llm::streamer::impl

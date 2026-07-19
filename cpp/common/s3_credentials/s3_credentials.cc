@@ -21,6 +21,29 @@ Credentials::Credentials(const char * access_key_id, const char * secret_access_
 Credentials::Credentials() : Credentials(nullptr, nullptr, nullptr, nullptr, nullptr)
 {}
 
+bool Credentials::operator==(const Credentials & other) const
+{
+    return access_key_id     == other.access_key_id
+        && secret_access_key == other.secret_access_key
+        && session_token     == other.session_token
+        && region            == other.region
+        && endpoint          == other.endpoint;
+}
+
+bool Credentials::operator!=(const Credentials & other) const
+{
+    return !(*this == other);
+}
+
+bool Credentials::empty() const
+{
+    return !access_key_id.has_value()
+        && !secret_access_key.has_value()
+        && !session_token.has_value()
+        && !region.has_value()
+        && !endpoint.has_value();
+}
+
 Credentials_C::Credentials_C(const Credentials & credentials) :
     access_key_id(credentials.access_key_id.has_value() ? credentials.access_key_id.value().c_str() : nullptr),
     secret_access_key(credentials.secret_access_key.has_value() ? credentials.secret_access_key.value().c_str() : nullptr),

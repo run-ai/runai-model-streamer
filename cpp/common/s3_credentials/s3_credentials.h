@@ -18,6 +18,15 @@ struct Credentials
 
     void to_object_client_config(std::vector<common::backend_api::ObjectConfigParam_t> & config) const;
 
+    // Value equality over all fields (an unset field only equals an unset field). Used to lock a
+    // streamer to a single set of object-storage credentials and reject a differing submission.
+    bool operator==(const Credentials & other) const;
+    bool operator!=(const Credentials & other) const;
+
+    // True when no field is set: no credentials were passed, so the ambient/default provider chain is
+    // used. Such a submission is always credential-compatible (it neither locks nor is checked).
+    bool empty() const;
+
     std::optional<std::string> access_key_id;
     std::optional<std::string> secret_access_key;
     std::optional<std::string> session_token;

@@ -178,9 +178,10 @@ common::ResponseCode Streamer::async_request(
     // verify input
     verify_requests(paths, file_offsets, bytesizes, num_sizes, dsts);
 
-    // A streamer serves a single object-storage plugin; reject a submission that mixes object-storage
-    // plugins or uses one differing from the locked plugin. Nothing is committed yet, so returning is clean.
-    if (const auto ret = lock_object_plugin(paths); ret != common::ResponseCode::Success)
+    // A streamer serves a single object-storage plugin and a single set of (explicit) credentials; reject a
+    // submission that mixes object-storage plugins, or differs from the locked plugin/credentials. Empty
+    // credentials are always accepted. Nothing is committed yet, so returning is clean.
+    if (const auto ret = lock_object_plugin(paths, credentials); ret != common::ResponseCode::Success)
     {
         return ret;
     }
@@ -339,7 +340,7 @@ void Streamer::verify_requests(std::vector<std::string> & paths, std::vector<siz
     }
 }
 
-common::ResponseCode Streamer::lock_object_plugin(const std::vector<std::string> & paths)
+common::ResponseCode Streamer::lock_object_plugin(const std::vector<std::string> & paths, const common::s3::Credentials & credentials)
 {
     // Find the object-storage plugin this submission uses (filesystem paths are ignored and coexist);
     // reject a submission that itself mixes two object-storage plugins.
@@ -369,9 +370,9 @@ common::ResponseCode Streamer::lock_object_plugin(const std::vector<std::string>
         return common::ResponseCode::Success;   // pure filesystem submission - nothing to lock
     }
 
-    // Lock the object-storage pool to this plugin (first submission) or verify it matches; the lock
-    // lives in BackendPools, alongside the ObjectStorage pool it constrains
-    return _pools.lock_object_plugin(submission_plugin.value());
+    // Lock the object-storage pool to this plugin + credentials (first submission) or verify they match;
+    // the lock lives in BackendPools, alongside the ObjectStorage pool it constrains
+    return _pools.lock_object_plugin(submission_plugin.value(), credentials);
 }
 
 std::shared_ptr<common::s3::StorageUri> Streamer::try_parse_uri(const std::string & path)
