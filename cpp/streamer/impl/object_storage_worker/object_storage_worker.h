@@ -1,0 +1,133 @@
+#pragma once
+
+#include <atomic>
+#include <cstddef>
+#include <map>
+#include <memory>
+#include <utility>
+#include <vector>
+
+#include "common/backend_api/response/response.h"
+#include "common/response_code/response_code.h"
+
+#include "streamer/impl/config/config.h"
+#include "streamer/impl/reader/reader.h"
+#include "streamer/impl/workload/workload.h"
+
+#include "utils/capacity_worker/capacity_worker.h"
+
+namespace runai::llm::streamer::impl
+{
+
+// A single chunk of a task's range, submitted as one ranged read. The owning task is not stored here:
+// it is recovered from the async handle via the worker's _inflight map (the same lookup the completion
+// path uses), keeping a single source of truth for the chunk -> task mapping.
+struct ObjectChunk
+{
+    common::backend_api::ObjectRequestId_t handle;   // unique async handle, inside the owning workload's block
+    size_t offset;                                   // absolute file offset
+    size_t bytesize;                                 // chunk length
+    char * buffer;                                   // destination
+};
+
+// ObjectStorageWorker - the per-thread worker driving the object-storage pool. It is a CapacityWorker,
+// so the base owns the in-flight window (a CapacityQueue of ObjectChunk) and runs the submit/drain
+// interleave; this class only fills the backend hooks. Because the base interleaves, ONE worker
+// can hold chunks from SEVERAL workloads in flight at once, refilling the window from whichever workload
+// has pending chunks - so a small/late submission is served without waiting for a large one to drain.
+//
+// It is plugin-agnostic (hence the name, not S3Worker): it drives a Reader over an S3ClientWrapper, which
+// dispatches to the s3/gcs/azure plugin by URI. The reader/client is built once, on the first workload,
+// and reused for every later workload on this thread (client reuse is keyed on credentials, not bucket,
+// so multi-bucket submissions share it; a credentials change is not yet handled - single-credential first
+// cut, TODO drain-and-switch).
+class ObjectStorageWorker : public utils::CapacityWorker<Workload, ObjectChunk>
+{
+ public:
+    ObjectStorageWorker() = default;
+
+ protected:
+    // First workload sizes the window: build the persistent reader/client from its params and return the
+    // plugin's in-flight window as a chunk count (max_inflight_bytes / chunk_bytesize; unbounded for gcs/azure).
+    // THROWS if the window cannot be sized - an empty workload (EmptyRequestError) or a client that cannot be
+    // built (the build code, recorded in _reader_error). The base catches it and calls discard() (below), so
+    // the workload is finalized and the window is retried on the next workload.
+    std::size_t capacity(const Workload & first) override;
+
+    // Called by the base when capacity() (or the queue allocation) threw: finalize this workload so the
+    // consumer still gets responses, with a code that reflects why it could not be admitted (empty ->
+    // EmptyRequestError, client build failure -> _reader_error, otherwise -> UnknownError).
+    void discard(Workload && workload) override;
+
+    // Split each task of the workload into ObjectChunks (enqueued into the window) and register per-task
+    // tracking so completions route back to the owning task/batch. Zero-size tasks complete immediately.
+    void enqueue(Workload && workload) override;
+
+    // Fire one chunk's async read (or short-circuit a chunk whose task has already failed).
+    void submit(const ObjectChunk & chunk) override;
+
+    // Process one batch of completions: route each to its task, free its window slot, and finalize a
+    // workload once its last task lands. On stop / a drained responder, fail every in-flight workload.
+    void drain_batch(std::atomic<bool> & stopped) override;
+
+ private:
+    // Per-task runtime state, indexed by local task index (assigned 0..N-1 in enqueue order). Touched only
+    // by this worker thread.
+    struct TaskState
+    {
+        Batch * batch;                                              // owning batch: handle_response + file_index
+        const Task * task;                                         // the task itself: handle_response arg
+        unsigned remaining_chunks = 0;                             // when 0, the task is fully read
+        common::ResponseCode error = common::ResponseCode::Success;   // first failing chunk's code
+    };
+
+    // Per-in-flight-workload state, owned here and kept alive until the workload's last task finalizes.
+    struct Inflight
+    {
+        Workload workload;                                         // owns the batches/responder/config
+        std::vector<size_t> chunk_task_idx;                        // handle - handle_base -> task index
+        std::vector<TaskState> tasks;                              // per task (only non-zero-size tasks)
+        std::map<unsigned, common::ResponseCode> error_by_file_index;   // first error per file (finalize)
+        size_t remaining_tasks = 0;                                // tasks not yet completed; 0 -> finalize
+    };
+
+    // In-flight workloads keyed by their handle block base. The blocks are contiguous and disjoint, so a
+    // completion handle routes to its workload via upper_bound (see locate); a map (not a list) so
+    // lookups/erase go by key - the number in flight on one worker can be large.
+    using InflightMap = std::map<common::backend_api::ObjectRequestId_t, Inflight>;
+
+    // Find the workload owning `handle` (the block whose [base, base+size) contains it) and the local task
+    // index of that chunk. Returns {end(), 0} if no block contains it (stale / out-of-range).
+    std::pair<InflightMap::iterator, size_t> locate(common::backend_api::ObjectRequestId_t handle);
+
+    // Account one completed chunk of a task (from the backend or a short-circuit): free the window slot,
+    // record the task's first error, report the task once its last chunk lands, and finalize the workload
+    // once its last task lands.
+    void complete_chunk(InflightMap::iterator wlit, size_t task_idx, common::ResponseCode ret);
+
+    // Push each batch's aggregate result: the whole-workload `code` if non-Success, else the batch's own
+    // per-file error (Success for files whose tasks all succeeded).
+    void report_workload(Inflight & wl, common::ResponseCode code);
+
+    // report_workload + erase from _inflight.
+    void finalize(InflightMap::iterator wlit, common::ResponseCode code);
+
+    // Fail every in-flight workload with `code` and zero the window, so the worker becomes idle and the
+    // pool can join. Used on teardown (stopped) and when the responder drains early.
+    void abort_all(common::ResponseCode code);
+
+    std::shared_ptr<const Config> _config;   // keeps the Config alive for the persistent reader's reference
+    std::shared_ptr<Reader> _reader;         // persistent, built by capacity() on the first non-empty workload
+    common::ResponseCode _reader_error = common::ResponseCode::Success;   // last client-build failure code (for discard)
+    size_t _chunk_bytesize = common::s3::S3ClientWrapper::default_chunk_bytesize;   // sane object-storage default until capacity() sets it
+    unsigned _max_responses = 1;
+
+    InflightMap _inflight;
+
+    // Unique async handles for chunks (the backend requires a unique handle per in-flight request).
+    // Process-wide so handles never collide across workers/clients; same role and name as the counter
+    // that used to live on Workload, now that tasks no longer carry async handles.
+    static std::atomic<common::backend_api::ObjectRequestId_t> _async_handle_counter;
+};
+
+}; // namespace runai::llm::streamer::impl

@@ -27,26 +27,33 @@ class BackendPools
     enum class Kind { FileSystem, ObjectStorage };
     enum class Plugin { S3, GCS, Azure };
     using Handler = utils::ThreadPool<Workload>::Handler;
+    using WorkerFactory = utils::ThreadPool<Workload>::WorkerFactory;
 
-    BackendPools(Handler handler, unsigned filesystem_size, unsigned object_storage_size);
+    // filesystem_handler: the stateless synchronous handler for the filesystem pool.
+    // object_storage_factory: builds a per-worker ObjectStorageWorker for the object-storage pool (async,
+    // each worker owns its in-flight window).
+    BackendPools(Handler filesystem_handler, WorkerFactory object_storage_factory, unsigned filesystem_size, unsigned object_storage_size);
 
     // Hand the workload to its kind's pool. The FileSystem pool is created lazily here on first use.
-    // The ObjectStorage pool is NOT created here - it is created by lock_object_plugin (its workers are
-    // plugin-specific), which async_request always calls before dispatching object-storage workloads;
-    // pushing an object-storage workload before then is a programming error (asserted). Thread-safe.
+    // The ObjectStorage pool is NOT created here - it is created by lock_object_plugin, which async_request
+    // always calls before dispatching object-storage workloads; pushing an object-storage workload before
+    // then is a programming error (asserted). Thread-safe.
     void push(Kind kind, Workload && workload);
 
-    // Lock object storage to a single plugin AND create the ObjectStorage pool for it (once). The first
-    // call records the plugin and builds the pool; a later differing plugin returns UnsupportedBackendMix
-    // (and builds nothing). Keeping pool creation here - the one place the plugin becomes known - keeps
-    // it off the per-workload push path and gives the pool its plugin for building workers. Thread-safe.
+    // Lock object storage to a single plugin AND create the ObjectStorage pool (once). The first call records
+    // the plugin and builds the pool; a later differing plugin returns UnsupportedBackendMix (and builds
+    // nothing). The lock enforces the single-plugin constraint (the s3_wrapper backend handle is a
+    // process-wide static); the ObjectStorageWorkers themselves are plugin-agnostic (they dispatch by URI).
+    // Creating the pool here - always called before dispatch - keeps it off the per-workload push path.
+    // Thread-safe.
     common::ResponseCode lock_object_plugin(Plugin plugin);
 
     // For testing: number of pools created so far.
     unsigned pools_created() const;
 
  private:
-    Handler _handler;
+    Handler _filesystem_handler;
+    WorkerFactory _object_storage_factory;
     unsigned _filesystem_size;
     unsigned _object_storage_size;
 

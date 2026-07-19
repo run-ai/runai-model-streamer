@@ -8,6 +8,76 @@ from runai_model_streamer.s3_utils.s3_utils import (
 
 SUCCESS_ERROR_CODE = 0
 FINISHED_ERROR_CODE = 1
+# common::ResponseCode::TimedOut (see cpp/common/response_code/response_code.h)
+TIMED_OUT_ERROR_CODE = 16
+
+
+def _marshal_read_request(
+    paths: List[str],
+    file_offsets: List[int],
+    bytesizes: List[int],
+    dsts: List[memoryview],
+    internal_sizes: List[List[int]],
+):
+    # Build the ctypes arrays shared by runai_request and runai_request_ex. Returns the arrays plus a
+    # `keepalive` tuple the caller must hold until the C call returns: c_internal_sizes stores raw pointers
+    # into the per-file size arrays, so those arrays must not be garbage collected before the call.
+    num_files = len(paths)
+    c_paths = (ctypes.c_char_p * num_files)(*[path.encode("utf-8") for path in paths])
+    c_file_offsets = (ctypes.c_uint64 * len(file_offsets))(*file_offsets)
+    c_bytesizes = (ctypes.c_uint64 * len(bytesizes))(*bytesizes)
+    dst_addrs = [
+        ctypes.cast(ctypes.c_void_p(ctypes.addressof(ctypes.c_char.from_buffer(dst))), ctypes.c_void_p)
+        for dst in dsts
+    ]
+    c_dsts = (ctypes.c_void_p * len(dst_addrs))(*dst_addrs)
+
+    # c_num_sizes: number of ranges for each file
+    num_ranges_per_file_list = [len(sublist) for sublist in internal_sizes]
+    c_num_sizes = (ctypes.c_uint32 * num_files)(*num_ranges_per_file_list)
+
+    # c_internal_sizes: array of pointers, one per file, each to that file's array of range sizes
+    _c_internal_sizes_data_arrays = [
+        (ctypes.c_uint64 * num_ranges_for_this_file)(*actual_sublist_data)
+        for num_ranges_for_this_file, actual_sublist_data in zip(num_ranges_per_file_list, internal_sizes)
+    ]
+    PtrToUint64ArrayType = ctypes.POINTER(ctypes.c_uint64)
+    c_internal_sizes = (PtrToUint64ArrayType * num_files)()
+    for i, individual_c_array_obj in enumerate(_c_internal_sizes_data_arrays):
+        c_internal_sizes[i] = ctypes.cast(individual_c_array_obj, PtrToUint64ArrayType)
+
+    keepalive = (_c_internal_sizes_data_arrays,)
+    return (
+        num_files,
+        c_paths,
+        c_file_offsets,
+        c_bytesizes,
+        c_dsts,
+        c_num_sizes,
+        c_internal_sizes,
+        keepalive,
+    )
+
+
+def _credentials_param_arrays(s3_credentials: Optional[S3Credentials]):
+    # Marshal S3Credentials into the (param_keys, param_values, num_params) key/value form used by the _ex
+    # and list_files APIs. Only set fields are included; recognised keys: key/secret/token/region/endpoint.
+    items = []
+    if s3_credentials is not None:
+        for key, value in (
+            ("key", s3_credentials.access_key_id),
+            ("secret", s3_credentials.secret_access_key),
+            ("token", s3_credentials.session_token),
+            ("region", s3_credentials.region_name),
+            ("endpoint", s3_credentials.endpoint),
+        ):
+            if value is not None:
+                items.append((key, value))
+    if not items:
+        return None, None, 0
+    keys_arr = (ctypes.c_char_p * len(items))(*[k.encode("utf-8") for k, _ in items])
+    values_arr = (ctypes.c_char_p * len(items))(*[v.encode("utf-8") for _, v in items])
+    return keys_arr, values_arr, len(items)
 
 def runai_start() -> t_streamer:
     streamer = t_streamer(0)
@@ -32,33 +102,17 @@ def runai_request(
     internal_sizes: List[List[int]],
     s3_credentials: Optional[S3Credentials] = None,
 ) -> None:
-    c_paths = (ctypes.c_char_p * len(paths))(*[path.encode("utf-8") for path in paths])
-    c_file_offsets = (ctypes.c_uint64 * len(file_offsets))(*file_offsets)
-    c_bytesizes = (ctypes.c_uint64 * len(bytesizes))(*bytesizes)
-    dst_addrs = [
-        ctypes.cast(ctypes.c_void_p(ctypes.addressof(ctypes.c_char.from_buffer(dst))), ctypes.c_void_p)
-        for dst in dsts
-    ]
-    c_dsts = (ctypes.c_void_p * len(dst_addrs))(*dst_addrs)
-    
-    num_files = len(paths)
+    (
+        num_files,
+        c_paths,
+        c_file_offsets,
+        c_bytesizes,
+        c_dsts,
+        c_num_sizes,
+        c_internal_sizes,
+        _keepalive,
+    ) = _marshal_read_request(paths, file_offsets, bytesizes, dsts, internal_sizes)
 
-    # c_num_sizes: An array where each element is the number of ranges for the corresponding file.
-    num_ranges_per_file_list = [len(sublist) for sublist in internal_sizes]
-    c_num_sizes = (ctypes.c_uint32 * num_files)(*num_ranges_per_file_list)
-
-    # c_internal_sizes: An array of pointers, where each pointer points to an array of actual range sizes.
-    _c_internal_sizes_data_arrays = [
-        (ctypes.c_uint64 * num_ranges_for_this_file)(*actual_sublist_data)
-        for num_ranges_for_this_file, actual_sublist_data in zip(num_ranges_per_file_list, internal_sizes)
-    ]
-
-    PtrToUint64ArrayType = ctypes.POINTER(ctypes.c_uint64)
-    c_internal_sizes = (PtrToUint64ArrayType * num_files)()
-
-    for i, individual_c_array_obj in enumerate(_c_internal_sizes_data_arrays):
-        c_internal_sizes[i] = ctypes.cast(individual_c_array_obj, PtrToUint64ArrayType)
-    
     error_code = dll.fn_runai_request(
         streamer,
         len(paths),
@@ -90,6 +144,89 @@ def runai_response(streamer: t_streamer) -> Optional[Tuple[int, int]]:
             f"Could not receive runai_response from libstreamer due to: {runai_response_str(error_code)}"
         )
     return file_index.value, range_index.value
+
+def runai_request_ex(
+    streamer: t_streamer,
+    paths: List[str],
+    file_offsets: List[int],
+    bytesizes: List[int],
+    dsts: List[memoryview],
+    internal_sizes: List[List[int]],
+    s3_credentials: Optional[S3Credentials] = None,
+    stream_id: int = 0,
+) -> int:
+    """Multi-request submit. Non-blocking: returns the assigned submission id; use it to demux the
+    responses from runai_response_ex. Many submissions may be in flight at once."""
+    (
+        num_files,
+        c_paths,
+        c_file_offsets,
+        c_bytesizes,
+        c_dsts,
+        c_num_sizes,
+        c_internal_sizes,
+        _keepalive,
+    ) = _marshal_read_request(paths, file_offsets, bytesizes, dsts, internal_sizes)
+
+    keys_arr, values_arr, num_params = _credentials_param_arrays(s3_credentials)
+
+    submission_id = ctypes.c_uint32()
+    error_code = dll.fn_runai_request_ex(
+        streamer,
+        ctypes.byref(submission_id),
+        num_files,
+        c_paths,
+        c_file_offsets,
+        c_bytesizes,
+        c_dsts,
+        c_num_sizes,
+        c_internal_sizes,
+        keys_arr,
+        values_arr,
+        num_params,
+        ctypes.c_uint(stream_id),
+    )
+    if error_code != SUCCESS_ERROR_CODE:
+        raise ValueError(
+            f"Could not send runai_request_ex to libstreamer due to: {runai_response_str(error_code)}"
+        )
+    return submission_id.value
+
+
+def runai_response_ex(
+    streamer: t_streamer,
+    timeout_ms: int = 0,
+    stream_id: int = 0,
+) -> Optional[Tuple[int, int, int, bool]]:
+    """Multi-request response. Returns (submission_id, file_index, index, submission_done) for the next
+    ready sub-range of any in-flight submission, where submission_done is True iff it was that submission's
+    last response. Returns None when the streamer is finished/torn down (FinishedError). Raises TimeoutError
+    if timeout_ms elapses first (timeout_ms=0 blocks indefinitely)."""
+    submission_id = ctypes.c_uint32()
+    file_index = ctypes.c_uint32()
+    range_index = ctypes.c_uint32()
+    submission_done = ctypes.c_int()
+    error_code = dll.fn_runai_response_ex(
+        streamer,
+        ctypes.byref(submission_id),
+        ctypes.byref(file_index),
+        ctypes.byref(range_index),
+        ctypes.byref(submission_done),
+        ctypes.c_uint(stream_id),
+        ctypes.c_uint(timeout_ms),
+    )
+    if error_code == FINISHED_ERROR_CODE:
+        return None
+    if error_code == TIMED_OUT_ERROR_CODE:
+        raise TimeoutError(
+            f"runai_response_ex timed out after {timeout_ms} ms"
+        )
+    if error_code != SUCCESS_ERROR_CODE:
+        raise ValueError(
+            f"Could not receive runai_response_ex from libstreamer due to: {runai_response_str(error_code)}"
+        )
+    return submission_id.value, file_index.value, range_index.value, bool(submission_done.value)
+
 
 def runai_response_str(response_code: int) -> str:
     return dll.fn_runai_response_str(response_code)

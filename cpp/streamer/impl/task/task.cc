@@ -43,7 +43,7 @@ char * Task::destination() const
 
 std::ostream & operator<<(std::ostream & os, const Task & task)
 {
-    os << "task to read " << task.info.bytesize << " bytes from file offset " << task.info.offset << " to " << task.info.end << " offset (relative to request start) " << task.info.relative_offset << " global id " << task.info.global_id;
+    os << "task to read " << task.info.bytesize << " bytes from file offset " << task.info.offset << " to " << task.info.end << " offset (relative to request start) " << task.info.relative_offset;
     return os;
 }
 

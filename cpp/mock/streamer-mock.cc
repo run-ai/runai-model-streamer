@@ -25,6 +25,11 @@ std::vector<State> __multi_state;
 unsigned __multi_file_count = 0;
 unsigned __current_multi_file = 0;
 
+// _ex (multi-request) bookkeeping: the mock serves one submission at a time, so a single id/counter suffices.
+unsigned __submission_id = 0;
+unsigned __ex_total = 0;   // total sub-range responses expected for the current submission
+unsigned __ex_given = 0;   // responses handed out so far
+
 
 int request(void * streamer, const char * path, size_t file_offset, size_t bytesize, char * dst, unsigned num_sizes, size_t * internal_sizes, State * state)
 {
@@ -136,6 +141,69 @@ extern "C" int runai_response(void * streamer, unsigned * file_index, unsigned *
 
     *file_index = __current_multi_file;
     return response(streamer, index, &state);
+}
+
+extern "C" int runai_request_ex(
+    void * streamer,
+    unsigned * out_submission_id,
+    unsigned num_files,
+    const char ** paths,
+    size_t * file_offsets,
+    size_t * bytesizes,
+    void ** dsts,
+    unsigned * num_sizes,
+    size_t ** internal_sizes,
+    const char ** param_keys,
+    const char ** param_values,
+    unsigned num_params,
+    unsigned stream_id
+)
+{
+    __multi_state.clear();
+    __current_multi_file = 0;
+    __multi_file_count = num_files;
+    __ex_total = 0;
+    __ex_given = 0;
+
+    int buffer_start = 0;
+    for (unsigned i = 0; i < num_files; ++i) {
+        State state;
+        request(streamer, paths[i], file_offsets[i], bytesizes[i], reinterpret_cast<char*>(dsts[0]) + buffer_start, num_sizes[i], internal_sizes[i], &state);
+        buffer_start = buffer_start + bytesizes[i];
+        __ex_total += num_sizes[i];
+        __multi_state.push_back(std::move(state));
+    }
+
+    __submission_id += 1;
+    if (out_submission_id != nullptr) {
+        *out_submission_id = __submission_id;
+    }
+    return 0;
+}
+
+extern "C" int runai_response_ex(
+    void * streamer,
+    unsigned * out_submission_id,
+    unsigned * file_index,
+    unsigned * index,
+    int * submission_done,
+    unsigned stream_id,
+    unsigned timeout_ms
+)
+{
+    int r = runai_response(streamer, file_index, index);
+    if (r != 0) {
+        return r;
+    }
+
+    if (out_submission_id != nullptr) {
+        *out_submission_id = __submission_id;
+    }
+    __ex_given += 1;
+    if (submission_done != nullptr) {
+        *submission_done = (__ex_given >= __ex_total) ? 1 : 0;
+    }
+    return 0;
 }
 
 extern "C" const char * runai_response_str(int response_code)

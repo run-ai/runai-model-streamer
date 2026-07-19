@@ -24,17 +24,19 @@ class CountingWorker : public CapacityWorker<unsigned, unsigned>
 {
  public:
     CountingWorker(std::size_t capacity, std::atomic<unsigned> & submitted, std::atomic<unsigned> & completed) :
-        CapacityWorker<unsigned, unsigned>(capacity),
+        _capacity(capacity),
         _submitted(submitted),
         _completed(completed)
     {}
 
  protected:
+    std::size_t capacity(const unsigned &) override { return _capacity; }
+
     void enqueue(unsigned && count) override
     {
         for (unsigned i = 0; i < count; ++i)
         {
-            _queue.enqueue(0u, 1);   // one chunk, cost 1
+            _queue->enqueue(0u, 1);   // one chunk, cost 1
         }
     }
 
@@ -45,14 +47,15 @@ class CountingWorker : public CapacityWorker<unsigned, unsigned>
 
     void drain_batch(std::atomic<bool> &) override
     {
-        if (_queue.inflight() > 0)   // a ready completion
+        if (_queue->inflight() > 0)   // a ready completion
         {
-            _queue.complete(1);
+            _queue->complete(1);
             _completed += 1;
         }
     }
 
  private:
+    std::size_t _capacity;
     std::atomic<unsigned> & _submitted;
     std::atomic<unsigned> & _completed;
 };
@@ -64,15 +67,17 @@ class StopAwareWorker : public CapacityWorker<unsigned, unsigned>
 {
  public:
     StopAwareWorker(std::size_t capacity, std::atomic<unsigned> & submitted, std::atomic<unsigned> & completed) :
-        CapacityWorker<unsigned, unsigned>(capacity),
+        _capacity(capacity),
         _submitted(submitted),
         _completed(completed)
     {}
 
  protected:
+    std::size_t capacity(const unsigned &) override { return _capacity; }
+
     void enqueue(unsigned && count) override
     {
-        for (unsigned i = 0; i < count; ++i) { _queue.enqueue(0u, 1); }
+        for (unsigned i = 0; i < count; ++i) { _queue->enqueue(0u, 1); }
     }
 
     void submit(const unsigned &) override { _submitted += 1; }
@@ -81,20 +86,21 @@ class StopAwareWorker : public CapacityWorker<unsigned, unsigned>
     {
         if (stopped)   // abort: fail every in-flight chunk at once, no waiting
         {
-            const auto n = _queue.inflight();
-            for (std::size_t i = 0; i < n; ++i) { _queue.complete(1); _completed += 1; }
+            const auto n = _queue->inflight();
+            for (std::size_t i = 0; i < n; ++i) { _queue->complete(1); _completed += 1; }
             return;
         }
 
         ::usleep(50);   // model async latency so in-flight persists until the pool is stopped
-        if (_queue.inflight() > 0)
+        if (_queue->inflight() > 0)
         {
-            _queue.complete(1);
+            _queue->complete(1);
             _completed += 1;
         }
     }
 
  private:
+    std::size_t _capacity;
     std::atomic<unsigned> & _submitted;
     std::atomic<unsigned> & _completed;
 };

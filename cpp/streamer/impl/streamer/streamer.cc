@@ -16,6 +16,7 @@
 #include "utils/scope_guard/scope_guard.h"
 
 #include "streamer/impl/workload/workload.h"
+#include "streamer/impl/object_storage_worker/object_storage_worker.h"
 #include "streamer/impl/assigner/assigner.h"
 #include "common/exception/exception.h"
 #include "common/storage_uri/storage_uri.h"
@@ -28,12 +29,19 @@ Streamer::Streamer() : Streamer(Config())
 
 Streamer::Streamer(Config config) :
     _config(std::make_shared<Config>(config)),
-    // Filesystem reads are synchronous (concurrency threads); object-storage reads are asynchronous
-    // (s3_concurrency clients + capacity windows). Pools are created lazily on first use of each kind.
-    _pools([](Workload&& workload, std::atomic<bool> & stopped)
+    // Filesystem reads are synchronous (concurrency threads, stateless handler); object-storage reads are
+    // asynchronous (s3_concurrency ObjectStorageWorkers, each owning a client + in-flight capacity window).
+    // Pools are created lazily on first use of each kind.
+    _pools(
+        [](Workload&& workload, std::atomic<bool> & stopped)
         {
             workload.execute(stopped);
-        }, _config->concurrency, _config->s3_concurrency),
+        },
+        []() -> std::unique_ptr<utils::Worker<Workload>>
+        {
+            return std::make_unique<ObjectStorageWorker>();
+        },
+        _config->concurrency, _config->s3_concurrency),
     // One PERSISTENT responder for the streamer's lifetime, shared by all submissions and
     // demuxed by submission_id. increment() grows its expected count per accepted submission.
     _responder(std::make_shared<common::Responder>(0, common::QueueMode::PERSISTENT))

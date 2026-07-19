@@ -112,7 +112,7 @@ struct Deque
 //
 // CapacityWorker<Request, Chunk> (in capacity_worker.h) is the reusable implementation of this interface
 // for async backends: it owns a CapacityQueue and implements execute/drain/idle as the submit+drain
-// interleave pattern, leaving concrete workers just three I/O hooks. Backends that don't need a window
+// interleave pattern, leaving concrete workers just the backend hooks. Backends that don't need a window
 // (filesystem) don't use Worker at all - they use ThreadPool's stateless Handler constructor instead.
 template <typename Request>
 struct Worker

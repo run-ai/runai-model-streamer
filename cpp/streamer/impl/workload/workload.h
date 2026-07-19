@@ -2,24 +2,24 @@
 #pragma once
 
 #include <atomic>
-#include <vector>
 #include <map>
-#include <memory>
-#include <set>
 #include "streamer/impl/batch/batch.h"
-#include "streamer/impl/reader/reader.h"
-#include "common/s3_wrapper/s3_wrapper.h"
 #include "common/response_code/response_code.h"
 
 namespace runai::llm::streamer::impl
 {
 
+// Workload - a validated container of batches (one per file) that share a backend kind. It is otherwise
+// stateless: filesystem workloads are read synchronously by execute(); object-storage workloads are handed
+// to the ObjectStorageWorker pool, which reads the batches via batches() and owns the async scheduling.
 struct Workload
 {
     Workload() = default;
     Workload(Workload &&) = default;
     Workload & operator=(Workload &&) = default;
 
+    // Read a filesystem workload synchronously. NOT for object storage (asserts): those are dispatched to
+    // the ObjectStorageWorker pool.
     void execute(std::atomic<bool> & stopped);
 
     common::ResponseCode add_batch(Batch && batch);
@@ -34,18 +34,18 @@ struct Workload
 
     bool is_object_storage() const;
 
+    // The batches, keyed by file index. Exposed (rather than befriending the worker) so ObjectStorageWorker
+    // can chunk the tasks and route completions; non-const because completion handling mutates the batches
+    // (handle_response / handle_error). add_batch stays the validated way to add one, and is always called
+    // (populating the workload) before batches() is read - the workload is fully built at dispatch time.
+    std::map<unsigned, Batch> & batches();
+    const std::map<unsigned, Batch> & batches() const;
+
  private:
     common::ResponseCode verify_batch(const Batch & batch);
-    void async_read(std::atomic<bool> & stopped);
-    void assign_global_ids();
- private:
+
     std::map<unsigned, Batch> _batches_by_file_index;
     bool _is_object_storage = false;
-    std::shared_ptr<Reader> _reader;
-    size_t _total_tasks = 0;
-    static std::atomic<common::backend_api::ObjectRequestId_t> _async_handle_counter;
-    common::backend_api::ObjectRequestId_t _global_id_base;
-    std::vector<const Task*> _tasks;
 };
 
 }; // namespace runai::llm::streamer::impl
