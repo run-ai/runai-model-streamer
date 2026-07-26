@@ -140,49 +140,66 @@ void ObjectStorageWorker::enqueue(Workload && workload)
     // enqueue only runs once the window is up (the base creates _queue only after capacity() succeeded), so
     // the reader is built and _chunk_bytesize is correct here - no retry needed.
 
-    // Reserve this workload's contiguous handle block and register it, keyed by the block base.
+    // Reserve this workload's contiguous handle block.
     const auto handle_base = _async_handle_counter.fetch_add(total_chunks);
-    auto [wlit, inserted] = _inflight.emplace(handle_base, Inflight{});
-    ASSERT(inserted) << "duplicate handle base " << handle_base;
 
-    Inflight & wl = wlit->second;
-    wl.workload = std::move(workload);
-    wl.chunk_task_idx.resize(total_chunks);
-
-    size_t next_chunk = 0;
-    for (auto & [file_index, batch] : wl.workload.batches())
+    // Registration and chunk-building allocate (the map node, chunk_task_idx, the tasks vector, the queue
+    // entries); under memory pressure any of these can throw. The workload's expected responses were already
+    // counted (responder increment + submissions add) before dispatch, so bailing out here without pushing
+    // them hangs the consumer forever. On a throw we finalize the workload as UnknownError instead - best
+    // effort (report_workload could itself fail under severe OOM).
+    try
     {
-        for (const auto & task : batch.tasks)
+        auto [wlit, inserted] = _inflight.emplace(handle_base, Inflight{});
+        ASSERT(inserted) << "duplicate handle base " << handle_base;
+
+        Inflight & wl = wlit->second;
+        wl.workload = std::move(workload);   // noexcept; the workload now lives in the _inflight entry
+        wl.chunk_task_idx.resize(total_chunks);
+
+        size_t next_chunk = 0;
+        for (auto & [file_index, batch] : wl.workload.batches())
         {
-            if (task.info.bytesize == 0)
+            for (const auto & task : batch.tasks)
             {
-                // zero-size task: no backend read, complete immediately (handle_response ignores the handle)
-                common::backend_api::Response resp(common::ResponseCode::Success);
-                batch.handle_response(resp, &task);
-                continue;
-            }
+                if (task.info.bytesize == 0)
+                {
+                    // zero-size task: no backend read, complete immediately (handle_response ignores the handle)
+                    common::backend_api::Response resp(common::ResponseCode::Success);
+                    batch.handle_response(resp, &task);
+                    continue;
+                }
 
-            const size_t task_idx = wl.tasks.size();
-            wl.tasks.push_back(TaskState{ &batch, &task, 0, common::ResponseCode::Success });
+                const size_t task_idx = wl.tasks.size();
+                wl.tasks.push_back(TaskState{ &batch, &task, 0, common::ResponseCode::Success });
 
-            size_t offset = task.info.offset;
-            size_t remaining = task.info.bytesize;
-            char * buffer = task.destination();
-            while (remaining > 0)
-            {
-                const size_t bs = std::min(remaining, _chunk_bytesize);   // last chunk is the remainder
-                wl.chunk_task_idx[next_chunk] = task_idx;
-                _queue->enqueue(ObjectChunk{ handle_base + next_chunk, offset, bs, buffer }, 1);   // cost 1
-                ++wl.tasks[task_idx].remaining_chunks;
-                ++next_chunk;
-                offset += bs;
-                buffer += bs;
-                remaining -= bs;
+                size_t offset = task.info.offset;
+                size_t remaining = task.info.bytesize;
+                char * buffer = task.destination();
+                while (remaining > 0)
+                {
+                    const size_t bs = std::min(remaining, _chunk_bytesize);   // last chunk is the remainder
+                    wl.chunk_task_idx[next_chunk] = task_idx;
+                    _queue->enqueue(ObjectChunk{ handle_base + next_chunk, offset, bs, buffer }, 1);   // cost 1
+                    ++wl.tasks[task_idx].remaining_chunks;
+                    ++next_chunk;
+                    offset += bs;
+                    buffer += bs;
+                    remaining -= bs;
+                }
             }
         }
-    }
 
-    wl.remaining_tasks = wl.tasks.size();   // total_chunks > 0 -> at least one non-zero-size task
+        wl.remaining_tasks = wl.tasks.size();   // total_chunks > 0 -> at least one non-zero-size task
+    }
+    catch (...)
+    {
+        // OOM mid-registration. The caller aborts on any UnknownError, so rather than reconstruct exact
+        // responses we fail this worker's in-flight workloads (this one included - the bulk allocations run
+        // after the move, so it is already in _inflight) and zero the window, clearing the half-built entry
+        // and any chunks enqueued before the throw (else a stale one later hits submit()'s unknown-handle ASSERT).
+        abort_all(common::ResponseCode::UnknownError);
+    }
 }
 
 std::pair<ObjectStorageWorker::InflightMap::iterator, size_t> ObjectStorageWorker::locate(common::backend_api::ObjectRequestId_t handle)
@@ -301,9 +318,14 @@ void ObjectStorageWorker::abort_all(common::ResponseCode code)
     // backend. Those reads are not cancelled: they can still finish and be delivered later as "late
     // completions" - completion events whose handle points into a handle block we erase here. drain_batch
     // recognises a late completion (locate() returns end()) and simply drops it, so abandoning the reads
-    // now is safe. abort_all only runs on a terminal client state (teardown, or the responder stopped /
-    // drained early), after which this worker serves no new submission, so a late completion can never
-    // reach an unrelated in-flight workload.
+    // now is safe. This holds even when the worker keeps running afterwards: most calls are on a terminal
+    // client state (teardown, or the responder stopped / drained early), but enqueue also calls abort_all
+    // mid-life on an allocation failure (OOM). Late completions stay safe either way because handle blocks
+    // are allocated from a monotonic counter and never reused: every erased block sits strictly below any
+    // future block, so a late completion from an erased block has a handle below every live block's base and
+    // always locates to end(). The cost of the mid-life call is that sibling in-flight workloads on this
+    // worker are failed too, and their still-outstanding reads may write to already-reported buffers - the
+    // OOM caller is expected to abort on UnknownError and tear the streamer down.
     for (auto it = _inflight.begin(); it != _inflight.end(); )
     {
         auto next = std::next(it);

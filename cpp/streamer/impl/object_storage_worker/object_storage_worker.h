@@ -66,6 +66,8 @@ class ObjectStorageWorker : public utils::CapacityWorker<Workload, ObjectChunk>
 
     // Split each task of the workload into ObjectChunks (enqueued into the window) and register per-task
     // tracking so completions route back to the owning task/batch. Zero-size tasks complete immediately.
+    // If an allocation here throws (OOM), the worker aborts its in-flight workloads as UnknownError rather
+    // than leaving them unfinalized - see the catch in the definition; OOM requires the caller to abort anyway.
     void enqueue(Workload && workload) override;
 
     // Fire one chunk's async read (or short-circuit a chunk whose task has already failed).
