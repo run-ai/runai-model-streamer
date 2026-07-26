@@ -11,7 +11,7 @@ from runai_model_streamer.s3_utils.s3_utils import S3Credentials
 
 def _list_files_stub(entries):
     """Returns a side_effect for mock runai_list_files that fires the callback with given (path, size) pairs."""
-    def stub(streamer, prefix, callback, is_recursive=True, allow_patterns=None, ignore_patterns=None, params=None):
+    def stub(streamer, prefix, callback, is_recursive=True, allow_patterns=None, ignore_patterns=None):
         for path, size in entries:
             callback(path, size)
     return stub
@@ -138,33 +138,43 @@ class TestListFilesS3(unittest.TestCase):
         FileStreamer().list_files(self.PREFIX, ignore_patterns=["*.json"])
         self.assertEqual(mock_rlf.call_args.kwargs["ignore_patterns"], ["*.json"])
 
-    @patch("runai_model_streamer.file_streamer.file_streamer.s3_credentials_module")
+    @patch("runai_model_streamer.file_streamer.file_streamer.runai_set_credentials")
     @patch("runai_model_streamer.file_streamer.file_streamer.runai_list_files")
-    def test_credentials_mapped_to_params(self, mock_rlf, mock_s3_mod):
-        mock_rlf.side_effect = _list_files_stub([])
-        creds = S3Credentials(
-            access_key_id="AKID",
-            secret_access_key="SECRET",
-            session_token="TOKEN",
-            region_name="us-east-1",
-            endpoint="https://s3.example.com",
-        )
-        mock_s3_mod.get_credentials.return_value = (MagicMock(), creds)
-        FileStreamer().list_files(self.PREFIX, credentials=creds)
-        params = mock_rlf.call_args.kwargs["params"]
-        self.assertEqual(params["key"], "AKID")
-        self.assertEqual(params["secret"], "SECRET")
-        self.assertEqual(params["token"], "TOKEN")
-        self.assertEqual(params["region"], "us-east-1")
-        self.assertEqual(params["endpoint"], "https://s3.example.com")
-
-    @patch("runai_model_streamer.file_streamer.file_streamer.s3_credentials_module", None)
-    @patch("runai_model_streamer.file_streamer.file_streamer.runai_list_files")
-    def test_no_params_when_no_credentials_module(self, mock_rlf):
+    def test_list_files_does_not_set_credentials(self, mock_rlf, mock_set_creds):
+        # list_files gets no credentials, so nothing is applied - it lists using the default provider chain
         mock_rlf.side_effect = _list_files_stub(self.ENTRIES)
         results = FileStreamer().list_files(self.PREFIX)
-        self.assertIsNone(mock_rlf.call_args.kwargs["params"])
+        mock_set_creds.assert_not_called()
         self.assertEqual(sorted(results), sorted(self.ENTRIES))
+
+    @patch("runai_model_streamer.file_streamer.file_streamer.runai_set_credentials")
+    @patch("runai_model_streamer.file_streamer.file_streamer.s3_credentials_module")
+    def test_handle_object_store_resolves_and_applies_credentials(self, mock_s3_mod, mock_set_creds):
+        # handle_object_store resolves credentials via the credentials module (the boto3-resolved values under
+        # RUNAI_STREAMER_NO_BOTO3_SESSION=0) and applies exactly those to the streamer, once
+        resolved = S3Credentials(
+            access_key_id="RESOLVED_AKID",
+            secret_access_key="RESOLVED_SECRET",
+            session_token="RESOLVED_TOKEN",
+            region_name="us-west-2",
+            endpoint="https://s3.example.com",
+        )
+        mock_s3_mod.get_credentials.return_value = (MagicMock(), resolved)
+
+        fs = FileStreamer()
+        sentinel_streamer = object()
+        fs.handle_object_store("s3://bucket/key", sentinel_streamer, S3Credentials(access_key_id="INPUT"))
+
+        mock_s3_mod.get_credentials.assert_called_once()
+        mock_set_creds.assert_called_once()
+        applied_streamer = mock_set_creds.call_args.args[0]
+        applied_creds = mock_set_creds.call_args.args[1]
+        self.assertIs(applied_streamer, sentinel_streamer)
+        self.assertEqual(applied_creds.access_key_id, "RESOLVED_AKID")
+        self.assertEqual(applied_creds.secret_access_key, "RESOLVED_SECRET")
+        self.assertEqual(applied_creds.session_token, "RESOLVED_TOKEN")
+        self.assertEqual(applied_creds.region_name, "us-west-2")
+        self.assertEqual(applied_creds.endpoint, "https://s3.example.com")
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +210,8 @@ class TestListFilesGCS(unittest.TestCase):
     def test_no_credentials_for_gcs(self, mock_rlf):
         mock_rlf.side_effect = _list_files_stub([])
         FileStreamer().list_files(self.PREFIX)
-        self.assertIsNone(mock_rlf.call_args.kwargs["params"])
+        # credentials are streamer-scoped now; list_files never passes a per-call params/credentials arg
+        self.assertNotIn("params", mock_rlf.call_args.kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -236,7 +247,8 @@ class TestListFilesAzure(unittest.TestCase):
     def test_no_credentials_for_azure(self, mock_rlf):
         mock_rlf.side_effect = _list_files_stub([])
         FileStreamer().list_files(self.PREFIX)
-        self.assertIsNone(mock_rlf.call_args.kwargs["params"])
+        # credentials are streamer-scoped now; list_files never passes a per-call params/credentials arg
+        self.assertNotIn("params", mock_rlf.call_args.kwargs)
 
 
 if __name__ == "__main__":

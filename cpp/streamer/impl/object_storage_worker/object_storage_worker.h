@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <functional>
 #include <map>
 #include <memory>
 #include <utility>
@@ -9,6 +10,7 @@
 
 #include "common/backend_api/response/response.h"
 #include "common/response_code/response_code.h"
+#include "common/s3_credentials/s3_credentials.h"
 
 #include "streamer/impl/config/config.h"
 #include "streamer/impl/reader/reader.h"
@@ -37,14 +39,17 @@ struct ObjectChunk
 // has pending chunks - so a small/late submission is served without waiting for a large one to drain.
 //
 // It is plugin-agnostic (hence the name, not S3Worker): it drives a Reader over an S3ClientWrapper, which
-// dispatches to the s3/gcs/azure plugin by URI. The reader/client is built once, on the first workload,
-// and reused for every later workload on this thread (client reuse is keyed on credentials, not bucket,
-// so multi-bucket submissions share it; a credentials change is not yet handled - single-credential first
-// cut, TODO drain-and-switch).
+// dispatches to the s3/gcs/azure plugin by URI. The reader/client is built once, on the first workload, from
+// the streamer's credentials (read via the credentials provider - see the constructor), and reused for every
+// later workload on this thread. Credentials are streamer-scoped and set once (a differing set is rejected at
+// the streamer), so one client serves every workload - and every bucket - under that single identity.
 class ObjectStorageWorker : public utils::CapacityWorker<Workload, ObjectChunk>
 {
  public:
-    ObjectStorageWorker() = default;
+    // credentials_provider supplies the streamer's object-storage credentials. It is invoked ONCE, when this
+    // worker builds its client (see capacity), so credentials are read only at client creation - never on the
+    // per-request path.
+    explicit ObjectStorageWorker(std::function<common::s3::Credentials()> credentials_provider);
 
  protected:
     // First workload sizes the window: build the persistent reader/client from its params and return the
@@ -116,6 +121,7 @@ class ObjectStorageWorker : public utils::CapacityWorker<Workload, ObjectChunk>
     // pool can join. Used on teardown (stopped) and when the responder drains early.
     void abort_all(common::ResponseCode code);
 
+    std::function<common::s3::Credentials()> _credentials_provider;   // streamer credentials, read once at client build
     std::shared_ptr<const Config> _config;   // keeps the Config alive for the persistent reader's reference
     std::shared_ptr<Reader> _reader;         // persistent, built by capacity() on the first non-empty workload
     common::ResponseCode _reader_error = common::ResponseCode::Success;   // last client-build failure code (for discard)

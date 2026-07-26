@@ -4,7 +4,6 @@ runai_cc_auto_library(
     name = "backend_pools",
     deps = [
         "//common/response_code",
-        "//common/s3_credentials",
         "//utils/logging",
         "//utils/threadpool",
         "//streamer/impl/workload",
@@ -16,6 +15,5 @@ runai_cc_test(
     srcs = ["backend_pools_test.cc"],
     deps = [
         ":backend_pools",
-        "//common/s3_credentials",
     ],
 )

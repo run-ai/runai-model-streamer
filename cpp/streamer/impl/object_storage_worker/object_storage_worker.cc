@@ -20,6 +20,10 @@ namespace runai::llm::streamer::impl
 // value, matching the drained-responder sentinel some plugins emit.
 std::atomic<common::backend_api::ObjectRequestId_t> ObjectStorageWorker::_async_handle_counter { 1 };
 
+ObjectStorageWorker::ObjectStorageWorker(std::function<common::s3::Credentials()> credentials_provider) :
+    _credentials_provider(std::move(credentials_provider))
+{}
+
 std::size_t ObjectStorageWorker::capacity(const Workload & first)
 {
     // An empty workload (no batches) carries no params to build a client from and nothing to read. The
@@ -46,7 +50,12 @@ std::size_t ObjectStorageWorker::capacity(const Workload & first)
 
         try
         {
-            auto client = std::make_shared<common::s3::S3ClientWrapper>(batch.object_storage_params);
+            // Credentials are streamer-scoped and read exactly once, here at client creation (never on the
+            // per-request path). The batch params carry only the URI; combine it with the credentials for the
+            // client config.
+            const auto credentials = _credentials_provider();
+            common::s3::S3ClientWrapper::Params client_params(batch.object_storage_params.uri, credentials, _chunk_bytesize);
+            auto client = std::make_shared<common::s3::S3ClientWrapper>(client_params);
             _reader = std::make_shared<S3>(client, *_config);
         }
         catch (const common::Exception & e)

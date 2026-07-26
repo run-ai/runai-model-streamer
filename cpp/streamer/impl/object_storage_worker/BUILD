@@ -7,6 +7,7 @@ runai_cc_auto_library(
         "//utils/env",
         "//utils/logging",
         "//common/s3_wrapper",
+        "//common/s3_credentials",
         "//common/range",
         "//common/exception",
         "//common/response_code",

@@ -147,7 +147,11 @@ class ObjectStorageWorkerTest : public ::testing::Test
     static utils::ThreadPool<Workload> make_pool(unsigned size)
     {
         return utils::ThreadPool<Workload>(
-            []() -> std::unique_ptr<utils::Worker<Workload>> { return std::make_unique<ObjectStorageWorker>(); },
+            []() -> std::unique_ptr<utils::Worker<Workload>>
+            {
+                // the s3 mock client ignores credentials, so the provider returns an empty set
+                return std::make_unique<ObjectStorageWorker>([]() { return common::s3::Credentials{}; });
+            },
             size);
     }
 

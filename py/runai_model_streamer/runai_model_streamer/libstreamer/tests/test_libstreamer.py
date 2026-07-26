@@ -5,6 +5,7 @@ import os
 import mmap
 from runai_model_streamer.libstreamer.libstreamer import (
     runai_start,
+    runai_set_credentials,
     runai_request,
     runai_response,
     runai_request_ex,
@@ -41,15 +42,16 @@ class TestBindings(unittest.TestCase):
             # Chunks of text sizes in file content
             items = [[10, 9], [11, 8]]
             if use_credentials:
+                # credentials are streamer-scoped now: set them once on the streamer (unused for this
+                # filesystem read, but exercises the set-credentials path)
                 credentials = S3Credentials(
                     access_key_id="your_access_key",
                     secret_access_key="your_secret_key",
                     session_token="your_session_token",
                     region_name="us-west-2",
                     endpoint="optional_endpoint")
-                runai_request(streamer, [file_path_1, file_path_2], [1, 1], [19, 19], [buffer], items, credentials)
-            else:
-                runai_request(streamer, [file_path_1, file_path_2], [1, 1], [19, 19], [buffer], items)
+                runai_set_credentials(streamer, credentials)
+            runai_request(streamer, [file_path_1, file_path_2], [1, 1], [19, 19], [buffer], items)
 
             # Read both file contents
             result_file, result = runai_response(streamer)

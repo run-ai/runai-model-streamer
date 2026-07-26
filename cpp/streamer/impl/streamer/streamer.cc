@@ -37,9 +37,12 @@ Streamer::Streamer(Config config) :
         {
             workload.execute(stopped);
         },
-        []() -> std::unique_ptr<utils::Worker<Workload>>
+        // each object-storage worker reads the streamer's credentials once, at client creation, via this
+        // provider. It captures the shared credentials state by value, so the state outlives the worker
+        // regardless of destruction order (it never captures `this`).
+        [state = _credentials_state]() -> std::unique_ptr<utils::Worker<Workload>>
         {
-            return std::make_unique<ObjectStorageWorker>();
+            return std::make_unique<ObjectStorageWorker>([state]() { return state->get(); });
         },
         _config->concurrency, _config->s3_concurrency),
     // One PERSISTENT responder for the streamer's lifetime, shared by all submissions and
@@ -61,11 +64,11 @@ Streamer::~Streamer()
     {}
 }
 
-common::ResponseCode Streamer::sync_read(const std::string & path, size_t file_offset, size_t bytesize, void * dst, const common::s3::Credentials & credentials)
+common::ResponseCode Streamer::sync_read(const std::string & path, size_t file_offset, size_t bytesize, void * dst)
 {
     LOG(SPAM) << "Requested to read " << bytesize << " bytes from " << path << " offset " << file_offset;
 
-    auto r = async_read(path, file_offset, bytesize, dst, 1, &bytesize, credentials);
+    auto r = async_read(path, file_offset, bytesize, dst, 1, &bytesize);
     if (r != common::ResponseCode::Success)
     {
         return r;
@@ -75,7 +78,7 @@ common::ResponseCode Streamer::sync_read(const std::string & path, size_t file_o
     return response().ret;
 }
 
-common::ResponseCode Streamer::async_read(const std::string & path, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes, const common::s3::Credentials & credentials)
+common::ResponseCode Streamer::async_read(const std::string & path, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes)
 {
     common::ResponseCode ret = common::ResponseCode::Success;
 
@@ -98,7 +101,7 @@ common::ResponseCode Streamer::async_read(const std::string & path, size_t file_
 
         internal_sizes_vv.push_back(internal_sizes_v);
 
-        ret = async_request(paths, file_offsets, bytesizes, dsts, num_sizes_v, internal_sizes_vv, credentials);
+        ret = async_request(paths, file_offsets, bytesizes, dsts, num_sizes_v, internal_sizes_vv);
     }
     catch(const common::Exception & e)
     {
@@ -107,6 +110,44 @@ common::ResponseCode Streamer::async_read(const std::string & path, size_t file_
     }
 
     return ret;
+}
+
+common::ResponseCode Streamer::CredentialsState::set(const common::s3::Credentials & credentials)
+{
+    const auto guard = std::unique_lock<std::mutex>(_mutex);
+
+    if (!_credentials.has_value())
+    {
+        _credentials = credentials;   // first set wins
+        return common::ResponseCode::Success;
+    }
+
+    // set-once: re-setting the same credentials is a no-op (concurrent submitters all set the same value);
+    // a different set is rejected - the client may already be built from the first set, so silently
+    // replacing them would be misleading.
+    if (_credentials.value() != credentials)
+    {
+        LOG(ERROR) << "Credentials were already set to a different value; create a new streamer to use different credentials";
+        return common::ResponseCode::CredentialsAlreadySet;
+    }
+
+    return common::ResponseCode::Success;
+}
+
+common::s3::Credentials Streamer::CredentialsState::get() const
+{
+    const auto guard = std::unique_lock<std::mutex>(_mutex);
+    return _credentials.value_or(common::s3::Credentials{});
+}
+
+common::ResponseCode Streamer::set_credentials(const common::s3::Credentials & credentials)
+{
+    return _credentials_state->set(credentials);
+}
+
+common::s3::Credentials Streamer::credentials() const
+{
+    return _credentials_state->get();
 }
 
 bool Streamer::busy() const
@@ -165,7 +206,6 @@ common::ResponseCode Streamer::async_request(
     std::vector<void *> & dsts,
     std::vector<unsigned> & num_sizes,
     std::vector<std::vector<size_t>> & internal_sizes,
-    const common::s3::Credentials & credentials,
     unsigned * out_submission_id)
 {
     // Default the caller's id to 0 ("none"). It is overwritten with the real id the instant one is
@@ -178,10 +218,10 @@ common::ResponseCode Streamer::async_request(
     // verify input
     verify_requests(paths, file_offsets, bytesizes, num_sizes, dsts);
 
-    // A streamer serves a single object-storage plugin and a single set of (explicit) credentials; reject a
-    // submission that mixes object-storage plugins, or differs from the locked plugin/credentials. Empty
-    // credentials are always accepted. Nothing is committed yet, so returning is clean.
-    if (const auto ret = lock_object_plugin(paths, credentials); ret != common::ResponseCode::Success)
+    // A streamer serves a single object-storage plugin; reject a submission that mixes object-storage plugins
+    // or differs from the locked plugin. Nothing is committed yet, so returning is clean. Credentials are
+    // streamer-scoped and read only at client creation (in the worker), so they are not touched here.
+    if (const auto ret = lock_object_plugin(paths); ret != common::ResponseCode::Success)
     {
         return ret;
     }
@@ -212,7 +252,7 @@ common::ResponseCode Streamer::async_request(
 
     for (size_t i = 0; i < paths.size(); ++i)
     {
-        auto params = handle_s3(i, paths[i], credentials);
+        auto params = handle_s3(i, paths[i]);
         LOG(DEBUG) << "Submission " << submission_id << " creating batches for file index " << i << " path: " <<  paths[i];
         Batches batches(submission_id, i, assigner.file_assignments(i), _config, _responder, paths[i], params, internal_sizes[i]);
         const auto num_batches = batches.size();
@@ -340,7 +380,7 @@ void Streamer::verify_requests(std::vector<std::string> & paths, std::vector<siz
     }
 }
 
-common::ResponseCode Streamer::lock_object_plugin(const std::vector<std::string> & paths, const common::s3::Credentials & credentials)
+common::ResponseCode Streamer::lock_object_plugin(const std::vector<std::string> & paths)
 {
     // Find the object-storage plugin this submission uses (filesystem paths are ignored and coexist);
     // reject a submission that itself mixes two object-storage plugins.
@@ -370,9 +410,9 @@ common::ResponseCode Streamer::lock_object_plugin(const std::vector<std::string>
         return common::ResponseCode::Success;   // pure filesystem submission - nothing to lock
     }
 
-    // Lock the object-storage pool to this plugin + credentials (first submission) or verify they match;
-    // the lock lives in BackendPools, alongside the ObjectStorage pool it constrains
-    return _pools.lock_object_plugin(submission_plugin.value(), credentials);
+    // Lock the object-storage pool to this plugin (first submission) or verify it matches; the lock lives in
+    // BackendPools, alongside the ObjectStorage pool it constrains
+    return _pools.lock_object_plugin(submission_plugin.value());
 }
 
 std::shared_ptr<common::s3::StorageUri> Streamer::try_parse_uri(const std::string & path)
@@ -388,7 +428,7 @@ std::shared_ptr<common::s3::StorageUri> Streamer::try_parse_uri(const std::strin
     return uri;
 }
 
-common::s3::S3ClientWrapper::Params Streamer::handle_s3(unsigned file_index, const std::string & path, const common::s3::Credentials & credentials)
+common::s3::S3ClientWrapper::Params Streamer::handle_s3(unsigned file_index, const std::string & path)
 {
     auto uri = try_parse_uri(path);
 
@@ -419,15 +459,16 @@ common::s3::S3ClientWrapper::Params Streamer::handle_s3(unsigned file_index, con
         std::call_once(_s3_cleanup_init_flag, [this]() { _s3 = std::make_unique<S3Cleanup>(); });
     }
 
-    return common::s3::S3ClientWrapper::Params(uri, credentials, _config->s3_block_bytesize);
+    // Batch params carry only the URI (used by the per-read path) - no credentials. Credentials are applied
+    // once, at client creation, from the streamer's credentials() (see ObjectStorageWorker::capacity).
+    return common::s3::S3ClientWrapper::Params(uri, _config->s3_block_bytesize);
 }
 
 std::vector<std::pair<std::string, size_t>> Streamer::list_files(
     const std::string & prefix,
     bool is_recursive,
     const std::vector<std::string> & allow_patterns,
-    const std::vector<std::string> & ignore_patterns,
-    const common::s3::Credentials & credentials)
+    const std::vector<std::string> & ignore_patterns)
 {
     // fnmatch(3) filtering, matching the behavior of Python fnmatch.fnmatch(path, pattern)
     auto keep = [&](const char * path) -> bool
@@ -460,7 +501,8 @@ std::vector<std::pair<std::string, size_t>> Streamer::list_files(
         // workers to unblock. Shares the S3Cleanup once_flag with handle_s3 so it is created once.
         std::call_once(_s3_cleanup_init_flag, [this]() { _s3 = std::make_unique<S3Cleanup>(); });
 
-        common::s3::S3ClientWrapper::Params params(uri, credentials, _config->s3_block_bytesize);
+        // listing builds a client, so read the streamer's credentials here (a client-creation point)
+        common::s3::S3ClientWrapper::Params params(uri, credentials(), _config->s3_block_bytesize);
         common::s3::S3ClientWrapper wrapper(params);
 
         common::backend_api::ObjectFileEntry_t * entries = nullptr;

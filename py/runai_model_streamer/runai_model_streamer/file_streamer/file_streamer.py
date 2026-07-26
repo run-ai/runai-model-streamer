@@ -3,6 +3,7 @@ from timeit import default_timer as timer
 from runai_model_streamer.libstreamer.libstreamer import (
     runai_start,
     runai_end,
+    runai_set_credentials,
     runai_request,
     runai_response,
     runai_list_files,
@@ -59,7 +60,7 @@ class FileStreamer:
         # can be used without entering the context manager
         self.streamer = None
         self.s3_session = None
-        self.s3_credentials = None
+        self.s3_credentials = None    # resolved credentials (from handle_object_store)
 
     def __enter__(self) -> "FileStreamer":
         self.streamer = runai_start()
@@ -80,16 +81,24 @@ class FileStreamer:
         if self.streamer:
             runai_end(self.streamer)
 
-    def handle_object_store(self,
-                            path : str,
-                            credentials : S3Credentials
-    ) -> str:
-        if s3_credentials_module:
-            # initialize session only one
-            if is_s3_path(path) and self.s3_session is None:
-                # check for s3 path and init sessions and credentials           
-                self.s3_session, self.s3_credentials = s3_credentials_module.get_credentials(credentials)
+    def handle_object_store(self, path: str, streamer, credentials: Optional[S3Credentials] = None) -> str:
+        # First object-storage path only: resolve the credentials and apply them to the streamer, once. boto3
+        # resolution is AWS-only, so it runs only for S3 paths (is_s3_path) - the backend type is only known
+        # from the path; the resolved credentials are then applied by the C++ layer to the plugin the URI
+        # selects. Nothing is applied when there is nothing to apply (no credentials -> the C++ default/ambient
+        # provider chain is used, and the streamer's set-once credentials stay free).
+        if s3_credentials_module and is_s3_path(path) and self.s3_session is None:
+            self.s3_session, self.s3_credentials = s3_credentials_module.get_credentials(credentials)
+            if streamer is not None and self._has_credentials():
+                runai_set_credentials(streamer, self.s3_credentials)
         return path
+
+    def _has_credentials(self) -> bool:
+        # True when the resolved credentials carry at least one value (else there is nothing to set)
+        c = self.s3_credentials
+        return c is not None and any(
+            v is not None for v in (c.access_key_id, c.secret_access_key, c.session_token, c.region_name, c.endpoint)
+        )
 
 
     def list_files(
@@ -98,32 +107,16 @@ class FileStreamer:
         is_recursive: bool = True,
         allow_patterns: Optional[List[str]] = None,
         ignore_patterns: Optional[List[str]] = None,
-        credentials: Optional[S3Credentials] = None,
     ) -> List[Tuple[str, int]]:
-        # Resolve credentials through the same path as streaming: this creates and
-        # retains the boto3 session (self.s3_session) and the resolved credentials
-        # (self.s3_credentials) for s3 paths
-        self.handle_object_store(prefix, credentials)
-
-        params: Optional[Dict[str, str]] = None
-        if self.s3_credentials is not None:
-            params = {}
-            if self.s3_credentials.access_key_id:
-                params["key"] = self.s3_credentials.access_key_id
-            if self.s3_credentials.secret_access_key:
-                params["secret"] = self.s3_credentials.secret_access_key
-            if self.s3_credentials.session_token:
-                params["token"] = self.s3_credentials.session_token
-            if self.s3_credentials.region_name:
-                params["region"] = self.s3_credentials.region_name
-            if self.s3_credentials.endpoint:
-                params["endpoint"] = self.s3_credentials.endpoint
-
         # Listing reuses the streamer (its object-storage clients / backend handle / credentials).
         # When called outside the context manager (self.streamer is None), start a temporary
         # streamer just for this call and end it afterwards.
         owns_streamer = self.streamer is None
         streamer = runai_start() if owns_streamer else self.streamer
+
+        # first object-storage path (the prefix): under RUNAI_STREAMER_NO_BOTO3_SESSION=0 this resolves S3
+        # credentials from the environment via boto3 and applies them once; else the C++ default chain is used
+        self.handle_object_store(prefix, streamer)
 
         results: List[Tuple[str, int]] = []
         try:
@@ -134,7 +127,6 @@ class FileStreamer:
                 is_recursive=is_recursive,
                 allow_patterns=allow_patterns,
                 ignore_patterns=ignore_patterns,
-                params=params,
             )
         finally:
             if owns_streamer:
@@ -154,13 +146,14 @@ class FileStreamer:
 
         for file_stream_request in file_stream_requests:
             self.total_size += sum(file_stream_request.chunks)
-            file_stream_request.path = self.handle_object_store(file_stream_request.path, credentials)
+            # first object-storage path resolves + applies the credentials to the streamer, once
+            file_stream_request.path = self.handle_object_store(file_stream_request.path, self.streamer, credentials)
 
         self.requests_iterator: FilesRequestsIteratorWithBuffer = FilesRequestsIteratorWithBuffer.with_memory_mode(file_stream_requests)
- 
+
         self.active_request = self.requests_iterator.next_request()
         if self.active_request is None:
-            return 
+            return
 
         runai_request(
             self.streamer,
@@ -169,7 +162,6 @@ class FileStreamer:
             [sum(file_request.chunks) for file_request in self.active_request.files],
             self.requests_iterator.file_buffers,
             [file_request.chunks for file_request in self.active_request.files],
-            self.s3_credentials,
         )
 
     def get_chunks(self) -> Iterator:
@@ -194,7 +186,6 @@ class FileStreamer:
                 [sum(file_request.chunks) for file_request in self.active_request.files],
                 self.requests_iterator.file_buffers,
                 [file_request.chunks for file_request in self.active_request.files],
-                self.s3_credentials,
             )
 
     # This function iterates over indexes of ready chunks.

@@ -52,6 +52,35 @@ class TestGetCredentialsUnsigned(unittest.TestCase):
         self.assertIsNotNone(session)
 
     @patch("runai_model_streamer_s3.credentials.credentials.boto3")
+    def test_no_boto3_session_disabled_returns_resolved_values(self, mock_boto3):
+        # RUNAI_STREAMER_NO_BOTO3_SESSION=0: the boto3 session's frozen credentials (from env/profile/IMDS/
+        # AssumeRole) are extracted into the returned S3Credentials, alongside region and the provided endpoint
+        from runai_model_streamer_s3.credentials.credentials import S3Credentials
+        frozen = MagicMock()
+        frozen.access_key = "RESOLVED_AKID"
+        frozen.secret_key = "RESOLVED_SECRET"
+        frozen.token = "RESOLVED_TOKEN"
+        resolved = MagicMock()
+        resolved.get_frozen_credentials.return_value = frozen
+        mock_session = MagicMock()
+        mock_session.get_credentials.return_value = resolved
+        mock_session.region_name = "us-west-2"
+        mock_boto3.Session.return_value = mock_session
+
+        env = _env_without_unsigned()
+        env[RUNAI_STREAMER_NO_BOTO3_SESSION_ENV_VAR] = "0"
+        provided = S3Credentials(endpoint="https://s3.example.com")
+        with patch.dict(os.environ, env, clear=True):
+            session, creds = get_credentials(provided)
+
+        self.assertIsNotNone(session)
+        self.assertEqual(creds.access_key_id, "RESOLVED_AKID")
+        self.assertEqual(creds.secret_access_key, "RESOLVED_SECRET")
+        self.assertEqual(creds.session_token, "RESOLVED_TOKEN")
+        self.assertEqual(creds.region_name, "us-west-2")
+        self.assertEqual(creds.endpoint, "https://s3.example.com")
+
+    @patch("runai_model_streamer_s3.credentials.credentials.boto3")
     def test_no_boto3_session_default_returns_no_session(self, mock_boto3):
         # Default: no boto3 session is created; the C++ layer self-authenticates
         with patch.dict(os.environ, _env_without_unsigned(), clear=True):

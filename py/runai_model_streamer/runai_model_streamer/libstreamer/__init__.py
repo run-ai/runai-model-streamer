@@ -20,9 +20,19 @@ class LibstreamerDLLWrapper:
         self.fn_runai_end = self.lib.runai_end
         self.fn_runai_end.argtypes = [t_streamer]
 
+        # Set the streamer's object-storage credentials as a key/value dict (canonical config-param keys).
+        self.fn_runai_set_credentials = self.lib.runai_set_credentials
+        self.fn_runai_set_credentials.argtypes = [
+            t_streamer,
+            ctypes.POINTER(ctypes.c_char_p),                 # param_keys
+            ctypes.POINTER(ctypes.c_char_p),                 # param_values
+            ctypes.c_uint,                                   # num_params
+        ]
+        self.fn_runai_set_credentials.restype = ctypes.c_int
+
         self.fn_runai_request = self.lib.runai_request
         self.fn_runai_request.argtypes = [
-            t_streamer, 
+            t_streamer,
             ctypes.c_uint32, # num_files
             ctypes.POINTER(ctypes.c_char_p), # paths
             ctypes.POINTER(ctypes.c_size_t), # file_offsets
@@ -30,16 +40,11 @@ class LibstreamerDLLWrapper:
             ctypes.POINTER(ctypes.c_void_p), # dsts
             ctypes.POINTER(ctypes.c_uint32), # num_sizes
             ctypes.POINTER(ctypes.POINTER(ctypes.c_size_t)), # internal_sizes
-            ctypes.c_char_p, # key
-            ctypes.c_char_p, # secret
-            ctypes.c_char_p, # token
-            ctypes.c_char_p, # region
-            ctypes.c_char_p, # endpoint
         ]
         self.fn_runai_request.restype = ctypes.c_int
 
-        # Multi-request submit: credentials are passed as a key/value dict (param_keys/param_values/
-        # num_params) like runai_list_files, and the assigned submission id is returned via out_submission_id.
+        # Multi-request submit: credentials are streamer-scoped (runai_set_credentials), not passed here; the
+        # assigned submission id is returned via out_submission_id.
         self.fn_runai_request_ex = self.lib.runai_request_ex
         self.fn_runai_request_ex.argtypes = [
             t_streamer,
@@ -51,9 +56,6 @@ class LibstreamerDLLWrapper:
             ctypes.POINTER(ctypes.c_void_p),                 # dsts
             ctypes.POINTER(ctypes.c_uint32),                 # num_sizes
             ctypes.POINTER(ctypes.POINTER(ctypes.c_size_t)), # internal_sizes
-            ctypes.POINTER(ctypes.c_char_p),                 # param_keys
-            ctypes.POINTER(ctypes.c_char_p),                 # param_values
-            ctypes.c_uint,                                   # num_params
             ctypes.c_uint,                                   # stream_id
         ]
         self.fn_runai_request_ex.restype = ctypes.c_int
@@ -99,9 +101,6 @@ class LibstreamerDLLWrapper:
             ctypes.c_uint,                           # num_ignore_patterns
             RunaiFileListCallback,                   # callback
             ctypes.c_void_p,                         # user_data
-            ctypes.POINTER(ctypes.c_char_p),         # param_keys
-            ctypes.POINTER(ctypes.c_char_p),         # param_values
-            ctypes.c_uint,                           # num_params
         ]
         self.fn_runai_list_files.restype = ctypes.c_int
 

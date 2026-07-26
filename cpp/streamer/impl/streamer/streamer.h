@@ -41,6 +41,13 @@ struct Streamer
     Streamer(Config config);
     ~Streamer();
 
+    // Set the streamer's object-storage credentials (a general key->value dictionary; see
+    // common::s3::Credentials). Set-once and thread-safe: the first call stores them; a later call with the
+    // SAME credentials returns Success; a later call with DIFFERENT credentials returns CredentialsAlreadySet
+    // (the streamer's client may already be built from the first set). Credentials are streamer-scoped, not
+    // per request - async_request/list_files use whatever was set here.
+    common::ResponseCode set_credentials(const common::s3::Credentials & credentials);
+
     common::ResponseCode async_request(
       std::vector<std::string> & paths,
       std::vector<size_t> & file_offsets,
@@ -48,7 +55,6 @@ struct Streamer
       std::vector<void *> & dsts,
       std::vector<unsigned> & num_sizes,
       std::vector<std::vector<size_t>> & internal_sizes,
-      const common::s3::Credentials & credentials,
       unsigned * out_submission_id = nullptr);
 
     // True while any submission still has unconsumed responses (the responder is not drained).
@@ -69,37 +75,44 @@ struct Streamer
     // last response (see consume_submission_response). The response carries the submission_id.
     common::Response response_ex(unsigned timeout_ms, bool & submission_done);
 
-    // For testing only:
+    // For testing only. Credentials are streamer-scoped: call set_credentials first (these use whatever
+    // was set there).
 
     // single synchronous read request from offset in file
     // returns common::ResponseCode::Success if successful or error code
-    common::ResponseCode sync_read(const std::string & path, size_t offset, size_t bytesize, void * dst, const common::s3::Credentials & credentials);
+    common::ResponseCode sync_read(const std::string & path, size_t offset, size_t bytesize, void * dst);
 
     // async request to read a range asynchronously as multiple chunks
     // returns common::ResponseCode::Success if successful or error code
-    common::ResponseCode async_read(const std::string & path, size_t offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes, const common::s3::Credentials & credentials);
+    common::ResponseCode async_read(const std::string & path, size_t offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes);
 
     // List files under prefix, which may be an object storage URI or a local filesystem path.
     // Applies fnmatch allow/ignore filtering (empty vectors mean no filter) and returns
-    // (full path, size) pairs. Throws common::Exception on error.
+    // (full path, size) pairs. Uses the streamer's credentials (set_credentials). Throws common::Exception
+    // on error.
     std::vector<std::pair<std::string, size_t>> list_files(
       const std::string & prefix,
       bool is_recursive,
       const std::vector<std::string> & allow_patterns,
-      const std::vector<std::string> & ignore_patterns,
-      const common::s3::Credentials & credentials);
+      const std::vector<std::string> & ignore_patterns);
 
  private:
     // Try to parse path as an object storage URI; returns nullptr for a filesystem path
     std::shared_ptr<common::s3::StorageUri> try_parse_uri(const std::string & path);
 
     // Reject a submission that mixes object-storage plugins, and lock the streamer to a single
-    // object-storage plugin AND a single set of credentials (first object-storage submission wins).
-    // Filesystem paths are ignored and coexist with the lock. Returns UnsupportedBackendMix on a mixed
-    // submission or a plugin differing from the lock, UnsupportedCredentialMix on credentials differing
-    // from the lock, else Success. A pure-filesystem submission is not credential-checked.
-    common::ResponseCode lock_object_plugin(const std::vector<std::string> & paths, const common::s3::Credentials & credentials);
-    common::s3::S3ClientWrapper::Params handle_s3(unsigned file_index, const std::string & path, const common::s3::Credentials & credentials);
+    // object-storage plugin (first object-storage submission wins). Filesystem paths are ignored and coexist
+    // with the lock. Returns UnsupportedBackendMix on a mixed submission or a plugin differing from the lock,
+    // else Success.
+    common::ResponseCode lock_object_plugin(const std::vector<std::string> & paths);
+    // Build the object-storage params for a batch. Credentials are NOT included here (they are read only at
+    // client creation, from credentials()); the batch params carry the URI, which is all the per-read path uses.
+    common::s3::S3ClientWrapper::Params handle_s3(unsigned file_index, const std::string & path);
+
+    // The streamer's credentials (empty Credentials if none set), read via _credentials_state (which locks
+    // its own mutex). Called only at client-creation points (the worker's first client build, and list_files)
+    // - never on the per-request path.
+    common::s3::Credentials credentials() const;
     void verify_requests(std::vector<std::string> & paths, std::vector<size_t> & file_offsets, std::vector<size_t> & bytesizes, std::vector<unsigned> & num_sizes, std::vector<void *> & dsts);
 
     // Account for one consumed response of submission_id (delegates to _submissions): on the
@@ -117,6 +130,27 @@ struct Streamer
 
  private:
     std::shared_ptr<const Config> _config;
+
+    // Streamer-scoped object-storage credentials with their own (encapsulated) mutex. Set-once: the first
+    // set wins; setting the same value again succeeds; a different value is rejected (CredentialsAlreadySet).
+    // Held via shared_ptr so the object-storage workers' credentials provider (which reads them at
+    // client-creation time) keeps the state alive regardless of Streamer/worker destruction order. Declared
+    // BEFORE _pools so it exists when the pool factory captures it.
+    class CredentialsState
+    {
+     public:
+        // Store the credentials (first call), or verify they match a previously-stored set. Returns Success
+        // if stored or unchanged; CredentialsAlreadySet if a different value was already set.
+        common::ResponseCode set(const common::s3::Credentials & credentials);
+        // The stored credentials (empty Credentials if none set yet).
+        common::s3::Credentials get() const;
+
+     private:
+        mutable std::mutex _mutex;
+        std::optional<common::s3::Credentials> _credentials;
+    };
+    std::shared_ptr<CredentialsState> _credentials_state = std::make_shared<CredentialsState>();
+
     std::unique_ptr<S3Cleanup> _s3;
     // Lazily-created worker pools, one per backend kind. Occupies the slot the single ThreadPool used
     // to, so object-storage workers still join between _s3_stop (S3Stop) and _s3 (S3Cleanup) on teardown.

@@ -103,12 +103,7 @@ extern "C" int runai_request(
     size_t * bytesizes,
     void ** dsts,
     unsigned * num_sizes,
-    size_t ** internal_sizes,
-    const char * key,
-    const char * secret,
-    const char * token,
-    const char * region,
-    const char * endpoint
+    size_t ** internal_sizes
 )
 {
     __multi_state.clear();
@@ -143,6 +138,15 @@ extern "C" int runai_response(void * streamer, unsigned * file_index, unsigned *
     return response(streamer, index, &state);
 }
 
+extern "C" int runai_set_credentials(
+    void * streamer,
+    const char ** param_keys,
+    const char ** param_values,
+    unsigned num_params)
+{
+    return 0;
+}
+
 extern "C" int runai_request_ex(
     void * streamer,
     unsigned * out_submission_id,
@@ -153,9 +157,6 @@ extern "C" int runai_request_ex(
     void ** dsts,
     unsigned * num_sizes,
     size_t ** internal_sizes,
-    const char ** param_keys,
-    const char ** param_values,
-    unsigned num_params,
     unsigned stream_id
 )
 {
@@ -220,10 +221,7 @@ extern "C" int runai_list_files(
     const char ** ignore_patterns,
     unsigned      num_ignore_patterns,
     void (*callback)(const char*, size_t, void*),
-    void *        user_data,
-    const char ** param_keys,
-    const char ** param_values,
-    unsigned      num_params)
+    void *        user_data)
 {
     namespace fs = std::filesystem;
 

@@ -39,7 +39,7 @@ struct StreamerTest : ::testing::Test
         internal_sizes.push_back(sizes.data());
         std::vector<unsigned> num_sizes;
         num_sizes.push_back(1);
-        return runai::llm::streamer::runai_request(streamer, 1, &path, &offset, &size, &dst, num_sizes.data(), internal_sizes.data(), nullptr, nullptr, nullptr, nullptr, nullptr);
+        return runai::llm::streamer::runai_request(streamer, 1, &path, &offset, &size, &dst, num_sizes.data(), internal_sizes.data());
     }
 
     int runai_read_file(void * streamer, const char * path, size_t offset, size_t size, void * dst)
@@ -50,7 +50,7 @@ struct StreamerTest : ::testing::Test
         internal_sizes.push_back(sizes.data());
         std::vector<unsigned> num_sizes;
         num_sizes.push_back(1);
-        auto res = runai::llm::streamer::runai_request(streamer, 1, &path, &offset, &size, &dst, num_sizes.data(), internal_sizes.data(), nullptr, nullptr, nullptr, nullptr, nullptr);
+        auto res = runai::llm::streamer::runai_request(streamer, 1, &path, &offset, &size, &dst, num_sizes.data(), internal_sizes.data());
         if (res != static_cast<int>(runai::llm::streamer::common::ResponseCode::Success))
         {
             return res;
@@ -369,7 +369,7 @@ TEST_F(StreamerTest, Multiple_Files)
     auto res = runai_start(&streamer);
     EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
 
-    EXPECT_EQ(runai_request(streamer, num_files, file_paths.data(), file_offsets.data(), sizes.data(), dsts.data(), num_ranges.data(), internal_sizes.data(), nullptr, nullptr, nullptr, nullptr, nullptr), static_cast<int>(common::ResponseCode::Success));
+    EXPECT_EQ(runai_request(streamer, num_files, file_paths.data(), file_offsets.data(), sizes.data(), dsts.data(), num_ranges.data(), internal_sizes.data()), static_cast<int>(common::ResponseCode::Success));
 
     // wait for all the responses to arrive
     unsigned r;
@@ -435,7 +435,7 @@ TEST(AsyncEx, ConcurrentSubmissionsDemux)
     unsigned numA = 2;
     unsigned idA = 0;
     void * dstA_ptr = dstA.data();
-    ASSERT_EQ(runai_request_ex(streamer, &idA, 1, &path, &offset, &bytesize, &dstA_ptr, &numA, &subA_ptr, nullptr, nullptr, 0, 0),
+    ASSERT_EQ(runai_request_ex(streamer, &idA, 1, &path, &offset, &bytesize, &dstA_ptr, &numA, &subA_ptr, 0),
               static_cast<int>(common::ResponseCode::Success));
 
     // Submission B: 1 sub-range into dstB
@@ -445,7 +445,7 @@ TEST(AsyncEx, ConcurrentSubmissionsDemux)
     unsigned numB = 1;
     unsigned idB = 0;
     void * dstB_ptr = dstB.data();
-    ASSERT_EQ(runai_request_ex(streamer, &idB, 1, &path, &offset, &bytesize, &dstB_ptr, &numB, &subB_ptr, nullptr, nullptr, 0, 0),
+    ASSERT_EQ(runai_request_ex(streamer, &idB, 1, &path, &offset, &bytesize, &dstB_ptr, &numB, &subB_ptr, 0),
               static_cast<int>(common::ResponseCode::Success));
 
     EXPECT_NE(idA, 0u);
@@ -509,7 +509,7 @@ TEST(AsyncEx, PerSubmissionErrorIsolation)
     unsigned numA = 1;
     unsigned idA = 0;
     void * dstA_ptr = dstA.data();
-    ASSERT_EQ(runai_request_ex(streamer, &idA, 1, &path, &offset, &bytesizeA, &dstA_ptr, &numA, &subA_ptr, nullptr, nullptr, 0, 0),
+    ASSERT_EQ(runai_request_ex(streamer, &idA, 1, &path, &offset, &bytesizeA, &dstA_ptr, &numA, &subA_ptr, 0),
               static_cast<int>(common::ResponseCode::Success));
 
     // Submission B: read past EOF -> EofError
@@ -521,7 +521,7 @@ TEST(AsyncEx, PerSubmissionErrorIsolation)
     unsigned numB = 1;
     unsigned idB = 0;
     void * dstB_ptr = dstB.data();
-    ASSERT_EQ(runai_request_ex(streamer, &idB, 1, &path, &offset, &bytesizeB, &dstB_ptr, &numB, &subB_ptr, nullptr, nullptr, 0, 0),
+    ASSERT_EQ(runai_request_ex(streamer, &idB, 1, &path, &offset, &bytesizeB, &dstB_ptr, &numB, &subB_ptr, 0),
               static_cast<int>(common::ResponseCode::Success));
 
     EXPECT_NE(idA, idB);
@@ -584,7 +584,7 @@ TEST(AsyncEx, MultipleSubmitterThreads)
                 size_t * sub_ptr = sub.data();
                 unsigned num = 1;
                 void * dst = dsts[t].data();
-                submit_ret[t] = runai_request_ex(streamer, &ids[t], 1, &path, &offset, &bytesize, &dst, &num, &sub_ptr, nullptr, nullptr, 0, 0);
+                submit_ret[t] = runai_request_ex(streamer, &ids[t], 1, &path, &offset, &bytesize, &dst, &num, &sub_ptr, 0);
             });
         }
     }
@@ -649,11 +649,11 @@ TEST(Async, LegacyBusyGate)
     void * dstB_ptr = dstB.data();
 
     // first legacy request accepted
-    EXPECT_EQ(runai_request(streamer, 1, &path, &offset, &bytesize, &dstA_ptr, &num, &sub_ptr, nullptr, nullptr, nullptr, nullptr, nullptr),
+    EXPECT_EQ(runai_request(streamer, 1, &path, &offset, &bytesize, &dstA_ptr, &num, &sub_ptr),
               static_cast<int>(common::ResponseCode::Success));
 
     // second legacy request before draining -> BusyError
-    EXPECT_EQ(runai_request(streamer, 1, &path, &offset, &bytesize, &dstB_ptr, &num, &sub_ptr, nullptr, nullptr, nullptr, nullptr, nullptr),
+    EXPECT_EQ(runai_request(streamer, 1, &path, &offset, &bytesize, &dstB_ptr, &num, &sub_ptr),
               static_cast<int>(common::ResponseCode::BusyError));
 
     // drain the first request
@@ -662,7 +662,7 @@ TEST(Async, LegacyBusyGate)
     EXPECT_EQ(runai_response(streamer, &fi, &idx), static_cast<int>(common::ResponseCode::FinishedError));
 
     // after draining, a new legacy request is accepted again
-    EXPECT_EQ(runai_request(streamer, 1, &path, &offset, &bytesize, &dstB_ptr, &num, &sub_ptr, nullptr, nullptr, nullptr, nullptr, nullptr),
+    EXPECT_EQ(runai_request(streamer, 1, &path, &offset, &bytesize, &dstB_ptr, &num, &sub_ptr),
               static_cast<int>(common::ResponseCode::Success));
     EXPECT_EQ(runai_response(streamer, &fi, &idx), static_cast<int>(common::ResponseCode::Success));
     EXPECT_EQ(runai_response(streamer, &fi, &idx), static_cast<int>(common::ResponseCode::FinishedError));

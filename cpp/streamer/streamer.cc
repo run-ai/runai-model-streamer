@@ -77,33 +77,14 @@ _RUNAI_EXTERN_C void runai_end(void * streamer)
 namespace
 {
 
-// Build a Credentials from a key-value dictionary (recognised keys: key/secret/token/region/
-// endpoint). Shared by runai_request_ex and runai_list_files.
-common::s3::Credentials credentials_from_params(const char ** param_keys, const char ** param_values, unsigned num_params)
-{
-    const char *key = nullptr, *secret = nullptr, *token = nullptr, *region = nullptr, *endpoint = nullptr;
-    for (unsigned i = 0; i < num_params; ++i)
-    {
-        if (!param_keys || !param_keys[i]) continue;
-        const std::string k(param_keys[i]);
-        const char * v = param_values ? param_values[i] : nullptr;
-        if      (k == "key")      key      = v;
-        else if (k == "secret")   secret   = v;
-        else if (k == "token")    token    = v;
-        else if (k == "region")   region   = v;
-        else if (k == "endpoint") endpoint = v;
-    }
-    return common::s3::Credentials(key, secret, token, region, endpoint);
-}
-
-// Marshal the C request arrays and submit. out_submission_id is forwarded (nullptr for the
-// legacy entry point). Shared by runai_request and runai_request_ex - one implementation.
+// Marshal the C request arrays and submit. out_submission_id is forwarded (nullptr for the legacy entry
+// point). Shared by runai_request and runai_request_ex - one implementation. Credentials are NOT passed here:
+// they are streamer-scoped, set once via runai_set_credentials.
 int submit_request(impl::Streamer * s,
                    unsigned * out_submission_id,
                    unsigned num_files,
                    const char ** paths, size_t * file_offsets, size_t * bytesizes,
-                   void ** dsts, unsigned * num_sizes, size_t ** internal_sizes,
-                   const common::s3::Credentials & credentials)
+                   void ** dsts, unsigned * num_sizes, size_t ** internal_sizes)
 {
     std::vector<std::string> paths_v(paths, paths + num_files);
     std::vector<size_t> file_offsets_v(file_offsets, file_offsets + num_files);
@@ -118,10 +99,36 @@ int submit_request(impl::Streamer * s,
         internal_sizes_vv[i] = std::vector<size_t>(internal_sizes_v[i], internal_sizes_v[i] + num_sizes_v[i]);
     }
 
-    return static_cast<int>(s->async_request(paths_v, file_offsets_v, bytesizes_v, dsts_v, num_sizes_v, internal_sizes_vv, credentials, out_submission_id));
+    return static_cast<int>(s->async_request(paths_v, file_offsets_v, bytesizes_v, dsts_v, num_sizes_v, internal_sizes_vv, out_submission_id));
 }
 
 } // namespace
+
+// Set the streamer's object-storage credentials as a general key/value dictionary (canonical config-param
+// keys; see common::s3::Credentials). Set-once and thread-safe: the same credentials may be set repeatedly
+// (Success); a different set after the first returns CredentialsAlreadySet. Credentials are streamer-scoped -
+// the read/list entry points use whatever was set here.
+_RUNAI_EXTERN_C int runai_set_credentials(
+    void * streamer,
+    const char ** param_keys,
+    const char ** param_values,
+    unsigned num_params)
+{
+    try
+    {
+        auto s = static_cast<impl::Streamer *>(streamer);
+        if (s == nullptr)
+        {
+            return static_cast<int>(common::ResponseCode::InvalidParameterError);
+        }
+
+        return static_cast<int>(s->set_credentials(common::s3::Credentials(param_keys, param_values, num_params)));
+    }
+    catch(...)
+    {
+    }
+    return static_cast<int>(common::ResponseCode::UnknownError);
+}
 
 _RUNAI_EXTERN_C int runai_request(
     void * streamer,
@@ -131,12 +138,7 @@ _RUNAI_EXTERN_C int runai_request(
     size_t * bytesizes,
     void ** dsts,
     unsigned * num_sizes,
-    size_t ** internal_sizes,
-    const char * key,
-    const char * secret,
-    const char * token,
-    const char * region,
-    const char * endpoint
+    size_t ** internal_sizes
 )
 {
     try
@@ -156,10 +158,8 @@ _RUNAI_EXTERN_C int runai_request(
             return static_cast<int>(common::ResponseCode::BusyError);
         }
 
-        common::s3::Credentials credentials(key, secret, token, region, endpoint);
-
-        // legacy entry point: no submission id exposed, default stream
-        return submit_request(s, nullptr, num_files, paths, file_offsets, bytesizes, dsts, num_sizes, internal_sizes, credentials);
+        // credentials are streamer-scoped (runai_set_credentials), not per request
+        return submit_request(s, nullptr, num_files, paths, file_offsets, bytesizes, dsts, num_sizes, internal_sizes);
     }
     catch(...)
     {
@@ -177,9 +177,6 @@ _RUNAI_EXTERN_C int runai_request_ex(
     void ** dsts,
     unsigned * num_sizes,
     size_t ** internal_sizes,
-    const char ** param_keys,
-    const char ** param_values,
-    unsigned num_params,
     unsigned stream_id
 )
 {
@@ -198,9 +195,8 @@ _RUNAI_EXTERN_C int runai_request_ex(
             return static_cast<int>(common::ResponseCode::InvalidParameterError);
         }
 
-        const auto credentials = credentials_from_params(param_keys, param_values, num_params);
-
-        return submit_request(s, out_submission_id, num_files, paths, file_offsets, bytesizes, dsts, num_sizes, internal_sizes, credentials);
+        // credentials are streamer-scoped (runai_set_credentials), not per request
+        return submit_request(s, out_submission_id, num_files, paths, file_offsets, bytesizes, dsts, num_sizes, internal_sizes);
     }
     catch(...)
     {
@@ -293,24 +289,20 @@ _RUNAI_EXTERN_C int runai_list_files(
     const char **         ignore_patterns,
     unsigned              num_ignore_patterns,
     RunaiFileListCallback callback,
-    void *                user_data,
-    const char **         param_keys,
-    const char **         param_values,
-    unsigned              num_params)
+    void *                user_data)
 {
     try
     {
         if (!streamer || !prefix || !callback)
             return static_cast<int>(common::ResponseCode::InvalidParameterError);
 
-        const auto credentials = credentials_from_params(param_keys, param_values, num_params);
-
         std::vector<std::string> allow, ignore;
         for (unsigned i = 0; allow_patterns && i < num_allow_patterns; ++i) allow.emplace_back(allow_patterns[i]);
         for (unsigned i = 0; ignore_patterns && i < num_ignore_patterns; ++i) ignore.emplace_back(ignore_patterns[i]);
 
         auto * s = static_cast<impl::Streamer *>(streamer);
-        const auto files = s->list_files(prefix, is_recursive != 0, allow, ignore, credentials);
+        // credentials are streamer-scoped (runai_set_credentials), applied when the listing client is built
+        const auto files = s->list_files(prefix, is_recursive != 0, allow, ignore);
         for (const auto & entry : files)
         {
             callback(entry.first.c_str(), entry.second, user_data);

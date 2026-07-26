@@ -24,6 +24,9 @@ namespace runai::llm::streamer::common::s3
 std::set<common::backend_api::ObjectClientHandle_t> __mock_clients;
 std::map<common::backend_api::ObjectClientHandle_t /* client */, std::set<common::backend_api::ObjectRequestId_t /* request id */>> __mock_client_requests;
 std::set<common::backend_api::ObjectClientHandle_t> __mock_unused;
+// config (credentials + endpoint) received by the last obj_create_client; endpoint_url is stored under the
+// key "endpoint_url". Lets tests assert credentials arrive from runai_set_credentials all the way here.
+std::map<std::string, std::string> __mock_last_client_config;
 unsigned __mock_response_time_ms = 0;
 std::mutex __mutex;
 std::atomic<bool> __stopped(false);
@@ -169,6 +172,26 @@ common::backend_api::ResponseCode_t obj_create_client(
     common::backend_api::ObjectClientHandle_t* out_client_handle)
 {
     const auto guard = std::unique_lock<std::mutex>(__mutex);
+
+    // capture the credentials/config this client is created with, so tests can verify they arrived from
+    // runai_set_credentials through the C++ layer to the plugin. Copy the strings (the config array is the
+    // caller's temporary).
+    __mock_last_client_config.clear();
+    if (client_initial_config != nullptr)
+    {
+        if (client_initial_config->endpoint_url != nullptr)
+        {
+            __mock_last_client_config["endpoint_url"] = client_initial_config->endpoint_url;
+        }
+        for (unsigned i = 0; i < client_initial_config->num_initial_params; ++i)
+        {
+            const auto & param = client_initial_config->initial_params[i];
+            if (param.key != nullptr)
+            {
+                __mock_last_client_config[param.key] = (param.value != nullptr) ? param.value : "";
+            }
+        }
+    }
 
     do
     {
@@ -450,6 +473,17 @@ void obj_free_file_list(common::backend_api::ObjectFileEntry_t* entries, unsigne
     delete[] entries;
 }
 
+const char* runai_mock_s3_last_client_config_value(const char* key)
+{
+    const auto guard = std::unique_lock<std::mutex>(__mutex);
+    if (key == nullptr)
+    {
+        return nullptr;
+    }
+    auto it = __mock_last_client_config.find(key);
+    return (it != __mock_last_client_config.end()) ? it->second.c_str() : nullptr;
+}
+
 void runai_mock_s3_cleanup()
 {
     runai_mock_s3_set_response_time_ms(0);
@@ -464,6 +498,7 @@ void runai_mock_s3_cleanup()
     __mock_failing_path.clear();
     __mock_failing_requests.clear();
     __mock_files.clear();
+    __mock_last_client_config.clear();
     __mock_list_files_response = common::ResponseCode::Success;
     __mock_last_list_files_is_recursive = -1;
 }

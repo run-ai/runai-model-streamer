@@ -35,7 +35,6 @@ struct StreamerTest : ::testing::Test
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr)),
-        credentials_c(credentials),
         num_files(utils::random::number(1, 10)),
         s3_paths(num_files),
         file_names(num_files),
@@ -91,7 +90,18 @@ struct StreamerTest : ::testing::Test
     utils::temp::Env _block_bytesize;
     std::string s3_path;
     common::s3::Credentials credentials;
-    common::s3::Credentials_C credentials_c;
+
+    // Apply `credentials` to the streamer (credentials are streamer-scoped, set once via runai_set_credentials).
+    static void apply_credentials(void * streamer, const common::s3::Credentials & credentials)
+    {
+        std::vector<const char *> keys, values;
+        for (const auto & entry : credentials.params())
+        {
+            keys.push_back(entry.first.c_str());
+            values.push_back(entry.second.c_str());
+        }
+        runai_set_credentials(streamer, keys.data(), values.data(), static_cast<unsigned>(keys.size()));
+    }
 
     unsigned num_files;
     std::vector<std::string> s3_paths;
@@ -124,6 +134,7 @@ TEST_F(StreamerTest, Async_Read)
 
     if (use_credentials)
     {
+        apply_credentials(streamer, credentials);
         res = runai_request(streamer,
                         num_files,
                         file_names.data(),
@@ -131,12 +142,7 @@ TEST_F(StreamerTest, Async_Read)
                         sizes.data(),
                         dsts.data(),
                         num_ranges.data(),
-                        internal_sizes.data(),
-                        credentials_c.access_key_id,
-                        credentials_c.secret_access_key,
-                        credentials_c.session_token,
-                        credentials_c.region,
-                        credentials_c.endpoint);
+                        internal_sizes.data());
     }
     else
     {
@@ -147,12 +153,7 @@ TEST_F(StreamerTest, Async_Read)
                         sizes.data(),
                         dsts.data(),
                         num_ranges.data(),
-                        internal_sizes.data(),
-                        nullptr,
-                        nullptr,
-                        nullptr,
-                        nullptr,
-                        nullptr);
+                        internal_sizes.data());
     }
 
     EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
@@ -174,6 +175,69 @@ TEST_F(StreamerTest, Async_Read)
         EXPECT_EQ(expected_response[file_index].count(r), 1);
         expected_response[file_index].erase(r);
     }
+    runai_end(streamer);
+    mock_cleanup();
+    EXPECT_EQ(verify_mock(), 0);
+}
+
+// End-to-end: credentials set via runai_set_credentials must reach the plugin's obj_create_client as the
+// client config (credentials -> initial_params, endpoint -> endpoint_url). The s3 mock records the config
+// of the last created client so we can assert the exact values arrived.
+TEST_F(StreamerTest, Credentials_Reach_Plugin)
+{
+    utils::Dylib dylib("libstreamers3.so");
+    auto mock_cleanup = dylib.dlsym<void(*)()>("runai_mock_s3_cleanup");
+    auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
+    auto last_config = dylib.dlsym<const char*(*)(const char*)>("runai_mock_s3_last_client_config_value");
+
+    // known, fully-populated credentials so we can assert each value arrives at the plugin
+    const common::s3::Credentials known("AKIAEXAMPLE", "secret-123", "token-456", "us-west-2", "https://s3.example.com");
+
+    void * streamer;
+    EXPECT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
+
+    apply_credentials(streamer, known);
+
+    auto res = runai_request(streamer,
+                    num_files,
+                    file_names.data(),
+                    file_offsets.data(),
+                    sizes.data(),
+                    dsts.data(),
+                    num_ranges.data(),
+                    internal_sizes.data());
+    EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
+
+    // drain all responses so the client is built (obj_create_client called) before we assert
+    for (unsigned i = 0; i < num_expected_responses; ++i)
+    {
+        unsigned r = utils::random::number();
+        unsigned file_index = utils::random::number();
+        auto response_code = runai_response(streamer, &file_index, &r);
+        EXPECT_EQ(response_code, static_cast<int>(common::ResponseCode::Success));
+        if (response_code != static_cast<int>(common::ResponseCode::Success))
+        {
+            break;
+        }
+    }
+
+    // every credential applied via runai_set_credentials reached obj_create_client's client config; endpoint
+    // is carried as endpoint_url, the other fields as initial_params under their canonical keys
+    auto expect_config = [&](const char * key, const char * value)
+    {
+        const char * got = last_config(key);
+        EXPECT_NE(got, nullptr) << "missing client config parameter " << key;
+        if (got != nullptr)
+        {
+            EXPECT_STREQ(got, value);
+        }
+    };
+    expect_config("access_key_id", "AKIAEXAMPLE");
+    expect_config("secret_access_key", "secret-123");
+    expect_config("session_token", "token-456");
+    expect_config("region", "us-west-2");
+    expect_config("endpoint_url", "https://s3.example.com");
+
     runai_end(streamer);
     mock_cleanup();
     EXPECT_EQ(verify_mock(), 0);
@@ -203,12 +267,7 @@ TEST_F(StreamerTest, Async_Read_Bounded_By_Window)
                     sizes.data(),
                     dsts.data(),
                     num_ranges.data(),
-                    internal_sizes.data(),
-                    nullptr,
-                    nullptr,
-                    nullptr,
-                    nullptr,
-                    nullptr);
+                    internal_sizes.data());
     EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
 
     // every sub-request still completes successfully under the bounded window
@@ -266,12 +325,7 @@ TEST_F(StreamerTest, Async_Read_Per_File_Error_Isolation)
                     sizes.data(),
                     dsts.data(),
                     num_ranges.data(),
-                    internal_sizes.data(),
-                    nullptr,
-                    nullptr,
-                    nullptr,
-                    nullptr,
-                    nullptr);
+                    internal_sizes.data());
     EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
 
     unsigned failed = 0;
@@ -337,12 +391,7 @@ TEST_F(StreamerTest, Async_Read_Batched_Completions)
                     sizes.data(),
                     dsts.data(),
                     num_ranges.data(),
-                    internal_sizes.data(),
-                    nullptr,
-                    nullptr,
-                    nullptr,
-                    nullptr,
-                    nullptr);
+                    internal_sizes.data());
     EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
 
     // every sub-request still completes successfully when completions are drained in batches
@@ -395,12 +444,7 @@ TEST_F(StreamerTest, Async_Read_Tolerates_Finished_Sentinel)
                     sizes.data(),
                     dsts.data(),
                     num_ranges.data(),
-                    internal_sizes.data(),
-                    nullptr,
-                    nullptr,
-                    nullptr,
-                    nullptr,
-                    nullptr);
+                    internal_sizes.data());
     EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
 
     // every sub-request still completes successfully despite the interleaved sentinel events
@@ -448,6 +492,7 @@ TEST_F(StreamerTest, Increase_Insufficient_Fd_Limit)
 
         if (use_credentials)
         {
+            apply_credentials(streamer, credentials);
             res = runai_request(streamer,
                             num_files,
                             file_names.data(),
@@ -455,12 +500,7 @@ TEST_F(StreamerTest, Increase_Insufficient_Fd_Limit)
                             sizes.data(),
                             dsts.data(),
                             num_ranges.data(),
-                            internal_sizes.data(),
-                            credentials_c.access_key_id,
-                            credentials_c.secret_access_key,
-                            credentials_c.session_token,
-                            credentials_c.region,
-                            credentials_c.endpoint);
+                            internal_sizes.data());
         }
         else
         {
@@ -471,12 +511,7 @@ TEST_F(StreamerTest, Increase_Insufficient_Fd_Limit)
                             sizes.data(),
                             dsts.data(),
                             num_ranges.data(),
-                            internal_sizes.data(),
-                            nullptr,
-                            nullptr,
-                            nullptr,
-                            nullptr,
-                            nullptr);
+                            internal_sizes.data());
         }
         EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
 
@@ -508,6 +543,7 @@ TEST_F(StreamerTest, Stop_Before_Async_Read)
 
         if (use_credentials)
         {
+            apply_credentials(streamer, credentials);
             res = runai_request(streamer,
                             num_files,
                             file_names.data(),
@@ -515,12 +551,7 @@ TEST_F(StreamerTest, Stop_Before_Async_Read)
                             sizes.data(),
                             dsts.data(),
                             num_ranges.data(),
-                            internal_sizes.data(),
-                            credentials_c.access_key_id,
-                            credentials_c.secret_access_key,
-                            credentials_c.session_token,
-                            credentials_c.region,
-                            credentials_c.endpoint);
+                            internal_sizes.data());
         }
         else
         {
@@ -531,12 +562,7 @@ TEST_F(StreamerTest, Stop_Before_Async_Read)
                             sizes.data(),
                             dsts.data(),
                             num_ranges.data(),
-                            internal_sizes.data(),
-                            nullptr,
-                            nullptr,
-                            nullptr,
-                            nullptr,
-                            nullptr);
+                            internal_sizes.data());
         }
 
         // request was not sent to the S3 server
@@ -572,6 +598,7 @@ TEST_F(StreamerTest, End_During_Async_Read)
 
         if (use_credentials)
         {
+            apply_credentials(streamer, credentials);
             res = runai_request(streamer,
                             num_files,
                             file_names.data(),
@@ -579,12 +606,7 @@ TEST_F(StreamerTest, End_During_Async_Read)
                             sizes.data(),
                             dsts.data(),
                             num_ranges.data(),
-                            internal_sizes.data(),
-                            credentials_c.access_key_id,
-                            credentials_c.secret_access_key,
-                            credentials_c.session_token,
-                            credentials_c.region,
-                            credentials_c.endpoint);
+                            internal_sizes.data());
         }
         else
         {
@@ -595,12 +617,7 @@ TEST_F(StreamerTest, End_During_Async_Read)
                             sizes.data(),
                             dsts.data(),
                             num_ranges.data(),
-                            internal_sizes.data(),
-                            nullptr,
-                            nullptr,
-                            nullptr,
-                            nullptr,
-                            nullptr);
+                            internal_sizes.data());
         }
 
         ::usleep(utils::random::number(300));
@@ -630,12 +647,7 @@ TEST_F(StreamerTest, Multiple_Files)
                              sizes.data(),
                              dsts.data(),
                              num_ranges.data(),
-                             internal_sizes.data(),
-                             credentials_c.access_key_id,
-                             credentials_c.secret_access_key,
-                             credentials_c.session_token,
-                             credentials_c.region,
-                             credentials_c.endpoint);
+                             internal_sizes.data());
 
     EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
 
@@ -682,12 +694,7 @@ TEST_F(StreamerTest, Multiple_Files_Error)
                              sizes.data(),
                              dsts.data(),
                              num_ranges.data(),
-                             internal_sizes.data(),
-                             credentials_c.access_key_id,
-                             credentials_c.secret_access_key,
-                             credentials_c.session_token,
-                             credentials_c.region,
-                             credentials_c.endpoint);
+                             internal_sizes.data());
 
     EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
 
@@ -748,7 +755,7 @@ TEST_F(StreamerTest, ListFiles_S3_ReturnsEntriesAndCleansUp)
     ListFilesResult result;
     void * streamer = nullptr;
     ASSERT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
-    auto res = runai_list_files(streamer, "s3://bucket/models/", 1, nullptr, 0, nullptr, 0, list_files_collect, &result, nullptr, nullptr, 0);
+    auto res = runai_list_files(streamer, "s3://bucket/models/", 1, nullptr, 0, nullptr, 0, list_files_collect, &result);
 
     EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
     ASSERT_EQ(result.files.size(), 2u);
@@ -781,7 +788,7 @@ TEST_F(StreamerTest, ListFiles_S3_AppliesPatternFilters)
     ListFilesResult result;
     void * streamer = nullptr;
     ASSERT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
-    auto res = runai_list_files(streamer, "s3://bucket/m/", 1, allow.data(), allow.size(), nullptr, 0, list_files_collect, &result, nullptr, nullptr, 0);
+    auto res = runai_list_files(streamer, "s3://bucket/m/", 1, allow.data(), allow.size(), nullptr, 0, list_files_collect, &result);
     runai_end(streamer);
 
     EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
@@ -803,10 +810,10 @@ TEST_F(StreamerTest, ListFiles_S3_ForwardsIsRecursive)
     void * streamer = nullptr;
     ASSERT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
 
-    runai_list_files(streamer, "s3://bucket/x/", 0, nullptr, 0, nullptr, 0, list_files_collect, &result, nullptr, nullptr, 0);
+    runai_list_files(streamer, "s3://bucket/x/", 0, nullptr, 0, nullptr, 0, list_files_collect, &result);
     EXPECT_EQ(last_is_recursive(), 0);
 
-    runai_list_files(streamer, "s3://bucket/x/", 1, nullptr, 0, nullptr, 0, list_files_collect, &result, nullptr, nullptr, 0);
+    runai_list_files(streamer, "s3://bucket/x/", 1, nullptr, 0, nullptr, 0, list_files_collect, &result);
     EXPECT_EQ(last_is_recursive(), 1);
 
     runai_end(streamer);
@@ -826,7 +833,7 @@ TEST_F(StreamerTest, ListFiles_S3_ErrorPropagates)
     ListFilesResult result;
     void * streamer = nullptr;
     ASSERT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
-    auto res = runai_list_files(streamer, "s3://bucket/x/", 1, nullptr, 0, nullptr, 0, list_files_collect, &result, nullptr, nullptr, 0);
+    auto res = runai_list_files(streamer, "s3://bucket/x/", 1, nullptr, 0, nullptr, 0, list_files_collect, &result);
     runai_end(streamer);
 
     EXPECT_EQ(res, static_cast<int>(common::ResponseCode::FileAccessError));

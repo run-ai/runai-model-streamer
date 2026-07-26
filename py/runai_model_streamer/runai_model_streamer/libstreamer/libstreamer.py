@@ -60,14 +60,14 @@ def _marshal_read_request(
 
 
 def _credentials_param_arrays(s3_credentials: Optional[S3Credentials]):
-    # Marshal S3Credentials into the (param_keys, param_values, num_params) key/value form used by the _ex
-    # and list_files APIs. Only set fields are included; recognised keys: key/secret/token/region/endpoint.
+    # Marshal S3Credentials into the (param_keys, param_values, num_params) key/value form used by
+    # runai_set_credentials. Only set fields are included; keys are the plugin's canonical config-param names.
     items = []
     if s3_credentials is not None:
         for key, value in (
-            ("key", s3_credentials.access_key_id),
-            ("secret", s3_credentials.secret_access_key),
-            ("token", s3_credentials.session_token),
+            ("access_key_id", s3_credentials.access_key_id),
+            ("secret_access_key", s3_credentials.secret_access_key),
+            ("session_token", s3_credentials.session_token),
             ("region", s3_credentials.region_name),
             ("endpoint", s3_credentials.endpoint),
         ):
@@ -78,6 +78,20 @@ def _credentials_param_arrays(s3_credentials: Optional[S3Credentials]):
     keys_arr = (ctypes.c_char_p * len(items))(*[k.encode("utf-8") for k, _ in items])
     values_arr = (ctypes.c_char_p * len(items))(*[v.encode("utf-8") for _, v in items])
     return keys_arr, values_arr, len(items)
+
+
+def runai_set_credentials(
+    streamer: t_streamer,
+    s3_credentials: Optional[S3Credentials] = None,
+) -> None:
+    """Set the streamer's object-storage credentials (set-once, streamer-scoped). Safe to call again with the
+    same credentials; a different set after the first raises."""
+    keys_arr, values_arr, num_params = _credentials_param_arrays(s3_credentials)
+    error_code = dll.fn_runai_set_credentials(streamer, keys_arr, values_arr, num_params)
+    if error_code != SUCCESS_ERROR_CODE:
+        raise ValueError(
+            f"Could not set credentials in libstreamer due to: {runai_response_str(error_code)}"
+        )
 
 def runai_start() -> t_streamer:
     streamer = t_streamer(0)
@@ -100,7 +114,6 @@ def runai_request(
     bytesizes: List[int],
     dsts: List[memoryview],
     internal_sizes: List[List[int]],
-    s3_credentials: Optional[S3Credentials] = None,
 ) -> None:
     (
         num_files,
@@ -113,20 +126,16 @@ def runai_request(
         _keepalive,
     ) = _marshal_read_request(paths, file_offsets, bytesizes, dsts, internal_sizes)
 
+    # Credentials are streamer-scoped (runai_set_credentials), not passed per request.
     error_code = dll.fn_runai_request(
         streamer,
         len(paths),
         c_paths,
         c_file_offsets,
         c_bytesizes,
-        c_dsts, 
+        c_dsts,
         c_num_sizes,
         c_internal_sizes,
-        ctypes.c_char_p(s3_credentials.access_key_id.encode("utf-8")) if s3_credentials is not None and s3_credentials.access_key_id is not None else None,
-        ctypes.c_char_p(s3_credentials.secret_access_key.encode("utf-8")) if s3_credentials is not None and s3_credentials.secret_access_key is not None else None,
-        ctypes.c_char_p(s3_credentials.session_token.encode("utf-8")) if s3_credentials is not None and s3_credentials.session_token is not None else None,
-        ctypes.c_char_p(s3_credentials.region_name.encode("utf-8")) if s3_credentials is not None and s3_credentials.region_name is not None else None,
-        ctypes.c_char_p(s3_credentials.endpoint.encode("utf-8")) if s3_credentials is not None and s3_credentials.endpoint is not None else None,   
     )
     if error_code != SUCCESS_ERROR_CODE:
         raise ValueError(
@@ -152,11 +161,11 @@ def runai_request_ex(
     bytesizes: List[int],
     dsts: List[memoryview],
     internal_sizes: List[List[int]],
-    s3_credentials: Optional[S3Credentials] = None,
     stream_id: int = 0,
 ) -> int:
     """Multi-request submit. Non-blocking: returns the assigned submission id; use it to demux the
-    responses from runai_response_ex. Many submissions may be in flight at once."""
+    responses from runai_response_ex. Credentials are streamer-scoped (runai_set_credentials), not passed
+    here. Many submissions may be in flight at once."""
     (
         num_files,
         c_paths,
@@ -167,8 +176,6 @@ def runai_request_ex(
         c_internal_sizes,
         _keepalive,
     ) = _marshal_read_request(paths, file_offsets, bytesizes, dsts, internal_sizes)
-
-    keys_arr, values_arr, num_params = _credentials_param_arrays(s3_credentials)
 
     submission_id = ctypes.c_uint32()
     error_code = dll.fn_runai_request_ex(
@@ -181,9 +188,6 @@ def runai_request_ex(
         c_dsts,
         c_num_sizes,
         c_internal_sizes,
-        keys_arr,
-        values_arr,
-        num_params,
         ctypes.c_uint(stream_id),
     )
     if error_code != SUCCESS_ERROR_CODE:
@@ -239,8 +243,8 @@ def runai_list_files(
     is_recursive: bool = True,
     allow_patterns: Optional[List[str]] = None,
     ignore_patterns: Optional[List[str]] = None,
-    params: Optional[Dict[str, str]] = None,
 ) -> None:
+    # Credentials are streamer-scoped (runai_set_credentials); not passed here.
     # Exceptions raised inside a ctypes callback do not propagate through the C
     # call (they are routed to sys.unraisablehook). Capture the first one and
     # re-raise it after runai_list_files returns so callers can detect failures.
@@ -266,15 +270,6 @@ def runai_list_files(
     allow_arr, num_allow = make_pattern_array(allow_patterns)
     ignore_arr, num_ignore = make_pattern_array(ignore_patterns)
 
-    param_items = list((params or {}).items())
-    if param_items:
-        keys_arr   = (ctypes.c_char_p * len(param_items))(*[k.encode("utf-8") for k, _ in param_items])
-        values_arr = (ctypes.c_char_p * len(param_items))(*[v.encode("utf-8") for _, v in param_items])
-        num_params = len(param_items)
-    else:
-        keys_arr = values_arr = None
-        num_params = 0
-
     error_code = dll.fn_runai_list_files(
         streamer,
         prefix.encode("utf-8"),
@@ -282,7 +277,6 @@ def runai_list_files(
         allow_arr, num_allow,
         ignore_arr, num_ignore,
         _cb, None,
-        keys_arr, values_arr, num_params,
     )
     # a callback failure is the root cause, so surface it before the error code
     if callback_error:

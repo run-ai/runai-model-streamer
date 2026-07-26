@@ -27,7 +27,7 @@ enum class ResponseCode : int
     FileTruncatedError,
     TimedOut,
     UnsupportedBackendMix,
-    UnsupportedCredentialMix,
+    CredentialsAlreadySet,
     __Max,
 };
 

@@ -82,6 +82,8 @@ extern "C" size_t runai_mock_s3_max_events_per_wait();
 extern "C" void runai_mock_s3_set_append_finished_sentinel(bool enabled);
 extern "C" void runai_s3_mock_set_backend_shutdown_policy(common::backend_api::ObjectShutdownPolicy_t policy);
 extern "C" int runai_mock_s3_clients();
+// value of a config parameter (credential / endpoint_url) received by the last obj_create_client, or nullptr
+extern "C" const char* runai_mock_s3_last_client_config_value(const char* key);
 extern "C" void runai_mock_s3_cleanup();
 extern "C" bool runai_mock_s3_is_shutdown();
 

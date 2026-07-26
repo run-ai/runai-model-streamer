@@ -20,10 +20,10 @@ S3ClientWrapper::Params::Params(std::shared_ptr<StorageUri> uri, const Credentia
     uri(uri),
     credentials(credentials)
 {
-    if (credentials.endpoint.has_value()) // endpoint passed as parameter by user application (in credentials)
+    if (auto ep = credentials.endpoint(); ep.has_value()) // endpoint passed as parameter by user application (in credentials)
     {
-        _endpoint = credentials.endpoint.value();
-        LOG(DEBUG) <<"Using credentials endpoint " << credentials.endpoint.value();
+        _endpoint = ep.value();
+        LOG(DEBUG) <<"Using credentials endpoint " << ep.value();
     }
     else
     {
