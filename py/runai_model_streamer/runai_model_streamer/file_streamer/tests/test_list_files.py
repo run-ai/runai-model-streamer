@@ -176,6 +176,42 @@ class TestListFilesS3(unittest.TestCase):
         self.assertEqual(applied_creds.region_name, "us-west-2")
         self.assertEqual(applied_creds.endpoint, "https://s3.example.com")
 
+    @patch("runai_model_streamer.file_streamer.file_streamer.runai_set_credentials")
+    @patch("runai_model_streamer.file_streamer.file_streamer.s3_credentials_module")
+    def test_credentials_applied_to_each_distinct_streamer(self, mock_s3_mod, mock_set_creds):
+        # Resolution happens once, but application happens once PER C++ handle: a second temporary streamer
+        # (as an out-of-context list_files creates) must still get its own runai_set_credentials, even though
+        # the resolution flag (s3_session) is already set from the first handle.
+        resolved = S3Credentials(access_key_id="AKID", secret_access_key="SECRET")
+        mock_s3_mod.get_credentials.return_value = (MagicMock(), resolved)
+
+        fs = FileStreamer()
+        streamer_1 = object()
+        streamer_2 = object()
+        fs.handle_object_store("s3://bucket/a", streamer_1, None)
+        fs.handle_object_store("s3://bucket/b", streamer_2, None)
+
+        # resolved only once (s3_session cached), but applied to both distinct handles
+        mock_s3_mod.get_credentials.assert_called_once()
+        self.assertEqual(mock_set_creds.call_count, 2)
+        applied_streamers = [call.args[0] for call in mock_set_creds.call_args_list]
+        self.assertEqual(applied_streamers, [streamer_1, streamer_2])
+
+    @patch("runai_model_streamer.file_streamer.file_streamer.runai_set_credentials")
+    @patch("runai_model_streamer.file_streamer.file_streamer.s3_credentials_module")
+    def test_credentials_applied_once_per_streamer(self, mock_s3_mod, mock_set_creds):
+        # Repeated calls with the SAME handle (e.g. the per-file loop in stream_files) apply credentials only
+        # once, not once per file.
+        resolved = S3Credentials(access_key_id="AKID", secret_access_key="SECRET")
+        mock_s3_mod.get_credentials.return_value = (MagicMock(), resolved)
+
+        fs = FileStreamer()
+        streamer = object()
+        fs.handle_object_store("s3://bucket/a", streamer, None)
+        fs.handle_object_store("s3://bucket/b", streamer, None)
+
+        mock_set_creds.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # GCS

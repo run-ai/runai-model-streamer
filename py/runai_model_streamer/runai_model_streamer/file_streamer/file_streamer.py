@@ -61,6 +61,7 @@ class FileStreamer:
         self.streamer = None
         self.s3_session = None
         self.s3_credentials = None    # resolved credentials (from handle_object_store)
+        self._credentialed_streamer = None   # the C++ handle we already applied credentials to
 
     def __enter__(self) -> "FileStreamer":
         self.streamer = runai_start()
@@ -69,6 +70,7 @@ class FileStreamer:
         self.device_str = None
         self.s3_session = None
         self.s3_credentials = None
+        self._credentialed_streamer = None
         return self
 
     def __exit__(self, exc_type: any, exc_value: any, traceback: any) -> None:
@@ -82,15 +84,20 @@ class FileStreamer:
             runai_end(self.streamer)
 
     def handle_object_store(self, path: str, streamer, credentials: Optional[S3Credentials] = None) -> str:
-        # First object-storage path only: resolve the credentials and apply them to the streamer, once. boto3
-        # resolution is AWS-only, so it runs only for S3 paths (is_s3_path) - the backend type is only known
-        # from the path; the resolved credentials are then applied by the C++ layer to the plugin the URI
-        # selects. Nothing is applied when there is nothing to apply (no credentials -> the C++ default/ambient
-        # provider chain is used, and the streamer's set-once credentials stay free).
-        if s3_credentials_module and is_s3_path(path) and self.s3_session is None:
-            self.s3_session, self.s3_credentials = s3_credentials_module.get_credentials(credentials)
-            if streamer is not None and self._has_credentials():
+        # Two independent concerns, deliberately gated separately so they can't desync:
+        #   1. Resolve the credentials ONCE (self.s3_session is None). boto3 resolution is AWS-only, so it runs
+        #      only for S3 paths (is_s3_path) - the backend type is only known from the path.
+        #   2. Apply them ONCE PER C++ handle (streamer is not self._credentialed_streamer). Credentials are
+        #      streamer-scoped state in the C++ layer, so a new handle (e.g. a temporary streamer created by an
+        #      out-of-context list_files) needs its own set - the resolution flag must NOT suppress that.
+        # Nothing is applied when there is nothing to apply (no credentials -> the C++ default/ambient provider
+        # chain is used, and the streamer's set-once credentials stay free).
+        if s3_credentials_module and is_s3_path(path):
+            if self.s3_session is None:
+                self.s3_session, self.s3_credentials = s3_credentials_module.get_credentials(credentials)
+            if streamer is not None and self._has_credentials() and streamer is not self._credentialed_streamer:
                 runai_set_credentials(streamer, self.s3_credentials)
+                self._credentialed_streamer = streamer
         return path
 
     def _has_credentials(self) -> bool:
