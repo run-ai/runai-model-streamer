@@ -58,13 +58,17 @@ common::ResponseCode BackendPools::lock_object_plugin(Plugin plugin)
 
     if (!_plugin.has_value())
     {
-        // First object-storage submission: record the plugin and create the pool, then publish readiness.
-        // _ready_plugin is stored AFTER the pool exists (release), so a fast-path acquire that observes it can
-        // dispatch without re-checking the pool. The s3_wrapper backend handle is a process-wide static, hence
-        // the single-plugin lock.
-        _plugin = plugin;
+        // First object-storage submission: create the pool, THEN commit the lock. Order matters for exception
+        // safety - the ThreadPool ctor spawns worker threads and can throw (e.g. thread creation fails under a
+        // process/fd/thread ulimit, not only OOM). Building it first means a throw leaves _plugin unset and
+        // _ready_plugin at -1 with the pool still null, so the NEXT submission retries this branch cleanly -
+        // instead of finding the plugin "locked" with a null pool, which would ASSERT on _pools.push.
         // per-worker pool: each thread owns an ObjectStorageWorker (from the factory) with its own in-flight window
         _object_storage_pool = std::make_unique<utils::ThreadPool<Workload>>(_object_storage_factory, _object_storage_size);
+        // Commit the lock only now that the pool exists. _ready_plugin is stored last (release), so a fast-path
+        // acquire that observes it is guaranteed the pool is built and safe to dispatch to. The s3_wrapper
+        // backend handle is a process-wide static, hence the single-plugin lock.
+        _plugin = plugin;
         _ready_plugin.store(static_cast<int>(plugin), std::memory_order_release);
         return common::ResponseCode::Success;
     }
