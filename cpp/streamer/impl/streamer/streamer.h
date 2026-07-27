@@ -26,8 +26,8 @@ namespace runai::llm::streamer::impl
 // Streamer for reading large files concurrently
 
 // The user-facing responder is PERSISTENT and lives for the streamer's lifetime; many
-// submissions share it, demuxed by submission_id. The legacy response() keeps the historical
-// finish-on-drain behavior by checking _responder->finished() at the streamer level.
+// submissions share it, demuxed by submission_id. response(timeout, done) is the single consumer: it
+// blocks / times out (no finish-on-drain) and reports completion per submission via submission_done.
 
 // Synchronous read -  read a range of a file to a given buffer of host memory
 // Asynchronous read - read a range of a file to a given buffer of host memory in two stages:
@@ -57,23 +57,12 @@ struct Streamer
       std::vector<std::vector<size_t>> & internal_sizes,
       unsigned * out_submission_id = nullptr);
 
-    // True while any submission still has unconsumed responses (the responder is not drained).
-    // Used by the legacy single-request C API (runai_request) to reject an overlapping request
-    // with BusyError - a safety net against a caller reusing buffers before draining. The
-    // multi-request _ex path does not consult this.
-    bool busy() const;
-
-    // return when there is a ready chunk
-    // returns common::ResponseCode::FinishedError if no responses are expected
-    // returns common::ResponseCode error if failed
-    common::Response response();
-
-    // Multi-request consumer over the persistent responder. Unlike response() it does NOT
-    // finish on drain: it blocks up to timeout_ms (0 = indefinitely) and returns TimedOut on
-    // expiry; FinishedError only on teardown (stop). On a real response it consumes the owning
-    // submission's registry record and sets submission_done to true iff it was that submission's
-    // last response (see consume_submission_response). The response carries the submission_id.
-    common::Response response_ex(unsigned timeout_ms, bool & submission_done);
+    // Consume the next ready sub-range response over the persistent responder. Blocks up to timeout_ms
+    // (0 = indefinitely) and returns TimedOut on expiry; FinishedError only on teardown (stop) - there is no
+    // finish-on-drain. On a real response it consumes the owning submission's registry record and sets
+    // submission_done to true iff it was that submission's last response (see consume_submission_response).
+    // The response carries the submission_id.
+    common::Response response(unsigned timeout_ms, bool & submission_done);
 
     // For testing only. Credentials are streamer-scoped: call set_credentials first (these use whatever
     // was set there).

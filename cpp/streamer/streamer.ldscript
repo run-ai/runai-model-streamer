@@ -4,9 +4,7 @@
         runai_end;
         runai_set_credentials;
         runai_request;
-        runai_request_ex;
         runai_response;
-        runai_response_ex;
         runai_response_str;
         runai_list_files;
     local: *;

@@ -1,5 +1,7 @@
 #include "streamer/impl/streamer/streamer.h"
 
+#include <unistd.h>
+
 #include <gtest/gtest.h>
 #include <atomic>
 #include <string>
@@ -12,24 +14,94 @@
 #include "utils/logging/logging.h"
 #include "utils/random/random.h"
 #include "utils/fd/fd.h"
+#include "utils/thread/thread.h"
 #include "utils/temp/file/file.h"
 
 namespace runai::llm::streamer::impl
 {
 
+namespace
+{
+
+// Read the next response off the persistent responder (blocking), with its submission_done flag. There is no
+// finish-on-drain in the multi-request API: a submission is complete when its last response carries submission_done ==
+// true (the equivalent of the old FinishedError-on-drain).
+struct Received
+{
+    common::Response response;
+    bool submission_done = false;
+};
+
+Received recv(Streamer & streamer)
+{
+    // common::Response has no default constructor, so build it first and aggregate-init Received (no
+    // default-construct-then-assign).
+    bool submission_done = false;
+    auto response = streamer.response(0, submission_done);
+    return Received{ response, submission_done };
+}
+
+// short wait used to assert a fresh/empty responder delivers nothing (it times out rather than blocking)
+constexpr unsigned EMPTY_WAIT_MS = 50;
+
+} // namespace
+
 TEST(Creation, Default)
 {
     Config config;
     Streamer streamer(config);
-    auto r = streamer.response();
-    EXPECT_EQ(r.ret, common::ResponseCode::FinishedError);
+    // fresh streamer, no request: the persistent responder has nothing, so a timed wait times out (it does
+    // NOT report FinishedError - that is teardown-only in the multi-request API)
+    bool submission_done = false;
+    auto r = streamer.response(EMPTY_WAIT_MS, submission_done);
+    EXPECT_EQ(r.ret, common::ResponseCode::TimedOut);
+    EXPECT_FALSE(submission_done);
 }
 
 TEST(Creation, Sanity)
 {
     Streamer streamer;
-    auto r = streamer.response();
-    EXPECT_EQ(r.ret, common::ResponseCode::FinishedError);
+    bool submission_done = false;
+    auto r = streamer.response(EMPTY_WAIT_MS, submission_done);
+    EXPECT_EQ(r.ret, common::ResponseCode::TimedOut);
+    EXPECT_FALSE(submission_done);
+}
+
+TEST(Async, ResponseBlocksUntilResponseArrives)
+{
+    // response(0) on a streamer with no ready response BLOCKS until one arrives (persistent responder, no
+    // finish-on-drain). A background consumer waits; the main thread submits a read; the consumer receives it.
+    auto size = utils::random::number(100, 1000);
+    const auto data = utils::random::buffer(size);
+    utils::temp::File file(data);
+
+    const auto chunk_size = utils::random::number<size_t>(1, 1024);
+    const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
+    Config config(utils::random::number(1, 20), utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
+    Streamer streamer(config);
+
+    std::vector<unsigned char> dst(size);
+    std::vector<size_t> sizes = { size };
+
+    std::atomic<bool> got_response{false};
+    common::ResponseCode ret = common::ResponseCode::UnknownError;
+    utils::Thread consumer([&]()
+    {
+        bool submission_done = false;
+        auto r = streamer.response(0, submission_done);   // blocks until the read below completes
+        ret = r.ret;
+        got_response = true;
+    });
+
+    // let the consumer reach the blocking wait, then confirm it is still blocked (nothing submitted yet)
+    ::usleep(50 * 1000);
+    EXPECT_FALSE(got_response.load());
+
+    EXPECT_EQ(streamer.async_read(file.path, 0, size, dst.data(), 1, sizes.data()), common::ResponseCode::Success);
+
+    consumer.join();
+    EXPECT_TRUE(got_response.load());
+    EXPECT_EQ(ret, common::ResponseCode::Success);
 }
 
 TEST(Sync, Sanity)
@@ -155,11 +227,10 @@ TEST(Async, Sanity)
     std::vector<size_t> sizes;
     sizes.push_back(size);
     EXPECT_EQ(streamer.async_read(file.path, 0, size, dst.data(), 1, sizes.data()), common::ResponseCode::Success);
-    auto r = streamer.response();
-    EXPECT_EQ(r.ret, common::ResponseCode::Success);
-    EXPECT_EQ(r.index, 0);
-    r = streamer.response();
-    EXPECT_EQ(r.ret, common::ResponseCode::FinishedError);
+    auto received = recv(streamer);
+    EXPECT_EQ(received.response.ret, common::ResponseCode::Success);
+    EXPECT_EQ(received.response.index, 0);
+    EXPECT_TRUE(received.submission_done);   // single-range submission: this is its last response
 
     for (size_t i = 0; i < size; ++i)
     {
@@ -202,18 +273,19 @@ TEST(Async, Requests)
         expected_responses.insert(i);
     }
 
+    unsigned done_count = 0;
     for (unsigned i = 0; i < num_chunks; ++i)
     {
-        const auto r = streamer.response();
-        EXPECT_EQ(r.ret, common::ResponseCode::Success);
-        LOG(SPAM) << "received response of request " << r.index;
-        EXPECT_EQ(expected_responses.count(r.index), 1);
-        expected_responses.erase(r.index);
+        const auto received = recv(streamer);
+        EXPECT_EQ(received.response.ret, common::ResponseCode::Success);
+        LOG(SPAM) << "received response of request " << received.response.index;
+        EXPECT_EQ(expected_responses.count(received.response.index), 1);
+        expected_responses.erase(received.response.index);
+        if (received.submission_done) ++done_count;
     }
 
     EXPECT_TRUE(expected_responses.empty());
-    auto r = streamer.response();
-    EXPECT_EQ(r.ret, common::ResponseCode::FinishedError);
+    EXPECT_EQ(done_count, 1u);   // submission_done fires exactly once, on the submission's last response
 
     for (size_t i = 0; i < size; ++i)
     {
@@ -243,11 +315,14 @@ TEST(Async, File_Not_Found_Error)
     std::vector<char> dst(size);
     EXPECT_EQ(streamer.async_read(utils::random::string(), 0, size, dst.data(), num_chunks, chunks.data()), common::ResponseCode::Success);
 
+    unsigned done_count = 0;
     for (unsigned i = 0; i < num_chunks; ++i)
     {
-        const auto r = streamer.response();
-        EXPECT_EQ(r.ret, common::ResponseCode::FileAccessError);
+        const auto received = recv(streamer);
+        EXPECT_EQ(received.response.ret, common::ResponseCode::FileAccessError);
+        if (received.submission_done) ++done_count;
     }
+    EXPECT_EQ(done_count, 1u);   // the failed submission still completes: submission_done on its last response
 }
 
 TEST(Async, End_Of_File_Error)
@@ -282,23 +357,23 @@ TEST(Async, End_Of_File_Error)
     // wait for all the requests to finish
 
     unsigned count_successful = 0;
+    unsigned done_count = 0;
     for (unsigned i = 0; i < num_chunks; ++i)
     {
-        const auto r = streamer.response();
-        LOG(SPAM) << "received response of request " << r.index << " : " << r.ret;
-        if (r.ret == common::ResponseCode::Success)
+        const auto received = recv(streamer);
+        LOG(SPAM) << "received response of request " << received.response.index << " : " << received.response.ret;
+        if (received.response.ret == common::ResponseCode::Success)
         {
             ++count_successful;
         }
         else
         {
-            EXPECT_EQ(r.ret, common::ResponseCode::EofError);
+            EXPECT_EQ(received.response.ret, common::ResponseCode::EofError);
         }
+        if (received.submission_done) ++done_count;
     }
     EXPECT_LT(count_successful, num_chunks);
-
-    auto r = streamer.response();
-    EXPECT_EQ(r.ret, common::ResponseCode::FinishedError);
+    EXPECT_EQ(done_count, 1u);   // submission completes once its last sub-range lands
 }
 
 TEST(Async, Zero_Requests_Error)
@@ -321,11 +396,7 @@ TEST(Async, Zero_Requests_Error)
     std::vector<char> dst(size);
     // sending zero instead of num_chunks
     EXPECT_EQ(streamer.async_read(utils::random::string(), 0, size, dst.data(), 0, chunks.data()), common::ResponseCode::InvalidParameterError);
-
-    // wait for all the requests to finish
-
-    auto r = streamer.response();
-    EXPECT_EQ(r.ret, common::ResponseCode::FinishedError);
+    // the failed request created no submission, so there is nothing to receive
 }
 
 TEST(Async, Zero_Bytes_To_Read_Error)
@@ -360,17 +431,15 @@ TEST(Async, Zero_Bytes_To_Read_Error)
             EXPECT_EQ(result, common::ResponseCode::EmptyRequestError);
         }
 
-        // wait for all the requests to finish
-
-        auto r = streamer.response();
-        EXPECT_EQ(r.ret, common::ResponseCode::FinishedError);
+        // the failed request created no submission, so there is nothing to receive
     }
 }
 
 TEST(Async, ConcurrentRequests)
 {
     // Multiple submissions are now accepted concurrently (no BusyError). Each is demuxed on the
-    // shared persistent responder and both are delivered, then FinishedError once drained.
+    // shared persistent responder and both are delivered, each completing (submission_done) on its
+    // single response.
     auto size = utils::random::number(100, 1000);
     const auto data = utils::random::buffer(size);
     utils::temp::File file(data);
@@ -394,10 +463,16 @@ TEST(Async, ConcurrentRequests)
     EXPECT_EQ(streamer.async_read(file.path, 0, size, dst1.data(), 1, sizes.data()), common::ResponseCode::Success);
     EXPECT_EQ(streamer.async_read(file.path, 0, size, dst2.data(), 1, sizes.data()), common::ResponseCode::Success);
 
-    // both submissions' responses are delivered, then FinishedError once nothing is outstanding
-    EXPECT_EQ(streamer.response().ret, common::ResponseCode::Success);
-    EXPECT_EQ(streamer.response().ret, common::ResponseCode::Success);
-    EXPECT_EQ(streamer.response().ret, common::ResponseCode::FinishedError);
+    // both submissions are delivered; each is single-range, so each response is its submission's last
+    std::set<unsigned> completed;
+    for (int i = 0; i < 2; ++i)
+    {
+        const auto received = recv(streamer);
+        EXPECT_EQ(received.response.ret, common::ResponseCode::Success);
+        EXPECT_TRUE(received.submission_done);
+        completed.insert(received.response.submission_id);
+    }
+    EXPECT_EQ(completed.size(), 2u);   // two distinct submissions, each ended
 
     for (size_t i = 0; i < size; ++i)
     {

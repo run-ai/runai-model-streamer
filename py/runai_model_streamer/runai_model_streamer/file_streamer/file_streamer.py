@@ -1,11 +1,13 @@
 from typing import Dict, List, Iterator, Optional, Tuple
 from timeit import default_timer as timer
 from runai_model_streamer.libstreamer.libstreamer import (
+    SUCCESS_ERROR_CODE,
     runai_start,
     runai_end,
     runai_set_credentials,
     runai_request,
     runai_response,
+    runai_response_str,
     runai_list_files,
 )
 from runai_model_streamer.file_streamer.requests_iterator import (
@@ -62,6 +64,7 @@ class FileStreamer:
         self.s3_session = None
         self.s3_credentials = None    # resolved credentials (from handle_object_store)
         self._credentialed_streamer = None   # the C++ handle we already applied credentials to
+        self.submission_id = None     # id of the submission currently being drained (runai_request)
 
     def __enter__(self) -> "FileStreamer":
         self.streamer = runai_start()
@@ -162,7 +165,7 @@ class FileStreamer:
         if self.active_request is None:
             return
 
-        runai_request(
+        self.submission_id = runai_request(
             self.streamer,
             [file_request.path for file_request in self.active_request.files],
             [file_request.offset for file_request in self.active_request.files],
@@ -186,7 +189,7 @@ class FileStreamer:
             if self.active_request is None:
                 break
 
-            runai_request(
+            self.submission_id = runai_request(
                 self.streamer,
                 [file_request.path for file_request in self.active_request.files],
                 [file_request.offset for file_request in self.active_request.files],
@@ -199,11 +202,20 @@ class FileStreamer:
     # The indexes are relative to the last request that sent
     # And need to be translated to global index in the chunks list
     def request_ready_chunks(self) -> Iterator:
+        # Only one submission is in flight at a time (get_chunks fully drains the active request before
+        # submitting the next), so every response here belongs to self.submission_id and the count loop is
+        # exact. runai_response blocks indefinitely (timeout 0) and returns None only on teardown.
         for i in range(sum(len(file_request.chunks) for file_request in self.active_request.files)):
-            file_relative_index, chunk_relative_index = runai_response(self.streamer)
-            if chunk_relative_index == None:
+            response = runai_response(self.streamer)
+            if response is None:
                 return
-            
+            ret, _submission_id, file_relative_index, chunk_relative_index, _submission_done = response
+            # single-submission streaming: any per-sub-range error fails the whole stream (fail-fast)
+            if ret != SUCCESS_ERROR_CODE:
+                raise ValueError(
+                    f"Could not receive response from libstreamer due to: {runai_response_str(ret)}"
+                )
+
             file_path, chunk_index, chunk_buffer = self.requests_iterator.get_global_file_and_chunk(file_relative_index, chunk_relative_index)
             # create one dimensional tensor from the chunk buffer
             # we return a tensor of shape (1, chunk_buffer.size)

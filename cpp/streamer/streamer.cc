@@ -77,8 +77,7 @@ _RUNAI_EXTERN_C void runai_end(void * streamer)
 namespace
 {
 
-// Marshal the C request arrays and submit. out_submission_id is forwarded (nullptr for the legacy entry
-// point). Shared by runai_request and runai_request_ex - one implementation. Credentials are NOT passed here:
+// Marshal the C request arrays and submit, forwarding out_submission_id. Credentials are NOT passed here:
 // they are streamer-scoped, set once via runai_set_credentials.
 int submit_request(impl::Streamer * s,
                    unsigned * out_submission_id,
@@ -132,43 +131,6 @@ _RUNAI_EXTERN_C int runai_set_credentials(
 
 _RUNAI_EXTERN_C int runai_request(
     void * streamer,
-    unsigned num_files,
-    const char ** paths,
-    size_t * file_offsets,
-    size_t * bytesizes,
-    void ** dsts,
-    unsigned * num_sizes,
-    size_t ** internal_sizes
-)
-{
-    try
-    {
-        auto s = static_cast<impl::Streamer *>(streamer);
-        if (s == nullptr)
-        {
-            return static_cast<int>(common::ResponseCode::InvalidParameterError);
-        }
-
-        // Legacy single-request safety net: reject an overlapping request (a caller that reuses
-        // its buffers before draining the previous request would otherwise silently corrupt them).
-        // The multi-request runai_request_ex intentionally allows concurrency and skips this.
-        if (s->busy())
-        {
-            LOG(ERROR) << "Previous request is still running";
-            return static_cast<int>(common::ResponseCode::BusyError);
-        }
-
-        // credentials are streamer-scoped (runai_set_credentials), not per request
-        return submit_request(s, nullptr, num_files, paths, file_offsets, bytesizes, dsts, num_sizes, internal_sizes);
-    }
-    catch(...)
-    {
-    }
-    return static_cast<int>(common::ResponseCode::UnknownError);
-}
-
-_RUNAI_EXTERN_C int runai_request_ex(
-    void * streamer,
     unsigned * out_submission_id,
     unsigned num_files,
     const char ** paths,
@@ -176,8 +138,7 @@ _RUNAI_EXTERN_C int runai_request_ex(
     size_t * bytesizes,
     void ** dsts,
     unsigned * num_sizes,
-    size_t ** internal_sizes,
-    unsigned stream_id
+    size_t ** internal_sizes
 )
 {
     // default the id to 0 ("none") so every return path - including early failures and a throw
@@ -190,7 +151,7 @@ _RUNAI_EXTERN_C int runai_request_ex(
     try
     {
         auto s = static_cast<impl::Streamer *>(streamer);
-        if (s == nullptr || stream_id != 0) // stream_id is reserved; only 0 is valid in this version
+        if (s == nullptr)
         {
             return static_cast<int>(common::ResponseCode::InvalidParameterError);
         }
@@ -204,54 +165,24 @@ _RUNAI_EXTERN_C int runai_request_ex(
     return static_cast<int>(common::ResponseCode::UnknownError);
 }
 
-// receive response for each sub request when ready
-//
-// streamer : streamer object
-// file_index : index of the file that the response belongs to
-// index : index of the sub request that the response belongs to
-// return Success if response is valid
-
-_RUNAI_EXTERN_C int runai_response(void * streamer, unsigned * file_index /* return parameter */, unsigned * index /* return parameter */)
-{
-    try
-    {
-        if (streamer == nullptr || index == nullptr)
-        {
-            return static_cast<int>(common::ResponseCode::InvalidParameterError);
-        }
-
-        auto * s = static_cast<impl::Streamer *>(streamer);
-        auto r = s->response();
-
-        *index = r.index;
-        *file_index = r.file_index;
-        return static_cast<int>(r.ret);
-    }
-    catch(...)
-    {
-    }
-    return static_cast<int>(common::ResponseCode::UnknownError);
-}
-
-_RUNAI_EXTERN_C int runai_response_ex(
+_RUNAI_EXTERN_C int runai_response(
     void * streamer,
     unsigned * out_submission_id,
     unsigned * file_index,
     unsigned * index,
     int * submission_done,
-    unsigned stream_id,
     unsigned timeout_ms)
 {
     try
     {
-        if (streamer == nullptr || file_index == nullptr || index == nullptr || stream_id != 0)
+        if (streamer == nullptr || file_index == nullptr || index == nullptr)
         {
             return static_cast<int>(common::ResponseCode::InvalidParameterError);
         }
 
         auto * s = static_cast<impl::Streamer *>(streamer);
         bool done = false;
-        auto r = s->response_ex(timeout_ms, done);
+        auto r = s->response(timeout_ms, done);
 
         *index = r.index;
         *file_index = r.file_index;

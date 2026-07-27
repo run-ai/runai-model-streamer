@@ -22,6 +22,26 @@ namespace runai::llm::streamer
 namespace
 {
 
+// Test adapters over the multi-request C API. These single-submission tests drain by a known count, so
+// submit() discards the returned submission id and next_response() waits for the next sub-range. A generous
+// finite timeout (not 0) is used so that, if a cancellation/timing test ever produces fewer responses than
+// expected, the test fails visibly instead of blocking forever (the multi-request API has no finish-on-drain).
+constexpr unsigned RESPONSE_TIMEOUT_MS = 60000;
+
+inline int submit(void * streamer, unsigned num_files, const char ** paths, size_t * file_offsets,
+                  size_t * bytesizes, void ** dsts, unsigned * num_sizes, size_t ** internal_sizes)
+{
+    unsigned submission_id = 0;
+    return runai_request(streamer, &submission_id, num_files, paths, file_offsets, bytesizes, dsts, num_sizes, internal_sizes);
+}
+
+inline int next_response(void * streamer, unsigned * file_index, unsigned * index)
+{
+    unsigned submission_id = 0;
+    int submission_done = 0;
+    return runai_response(streamer, &submission_id, file_index, index, &submission_done, RESPONSE_TIMEOUT_MS);
+}
+
 struct StreamerTest : ::testing::Test
 {
     StreamerTest() :
@@ -135,7 +155,7 @@ TEST_F(StreamerTest, Async_Read)
     if (use_credentials)
     {
         apply_credentials(streamer, credentials);
-        res = runai_request(streamer,
+        res = submit(streamer,
                         num_files,
                         file_names.data(),
                         file_offsets.data(),
@@ -146,7 +166,7 @@ TEST_F(StreamerTest, Async_Read)
     }
     else
     {
-        res = runai_request(streamer,
+        res = submit(streamer,
                         num_files,
                         file_names.data(),
                         file_offsets.data(),
@@ -165,7 +185,7 @@ TEST_F(StreamerTest, Async_Read)
     {
         r = utils::random::number();
         file_index = utils::random::number();
-        auto response_code = runai_response(streamer, &file_index, &r);
+        auto response_code = next_response(streamer, &file_index, &r);
         EXPECT_EQ(response_code, static_cast<int>(common::ResponseCode::Success));
         if (response_code != static_cast<int>(common::ResponseCode::Success))
         {
@@ -198,7 +218,7 @@ TEST_F(StreamerTest, Credentials_Reach_Plugin)
 
     apply_credentials(streamer, known);
 
-    auto res = runai_request(streamer,
+    auto res = submit(streamer,
                     num_files,
                     file_names.data(),
                     file_offsets.data(),
@@ -213,7 +233,7 @@ TEST_F(StreamerTest, Credentials_Reach_Plugin)
     {
         unsigned r = utils::random::number();
         unsigned file_index = utils::random::number();
-        auto response_code = runai_response(streamer, &file_index, &r);
+        auto response_code = next_response(streamer, &file_index, &r);
         EXPECT_EQ(response_code, static_cast<int>(common::ResponseCode::Success));
         if (response_code != static_cast<int>(common::ResponseCode::Success))
         {
@@ -260,7 +280,7 @@ TEST_F(StreamerTest, Async_Read_Bounded_By_Window)
     void * streamer;
     ASSERT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
 
-    auto res = runai_request(streamer,
+    auto res = submit(streamer,
                     num_files,
                     file_names.data(),
                     file_offsets.data(),
@@ -277,7 +297,7 @@ TEST_F(StreamerTest, Async_Read_Bounded_By_Window)
     {
         r = utils::random::number();
         file_index = utils::random::number();
-        auto response_code = runai_response(streamer, &file_index, &r);
+        auto response_code = next_response(streamer, &file_index, &r);
         EXPECT_EQ(response_code, static_cast<int>(common::ResponseCode::Success));
         if (response_code != static_cast<int>(common::ResponseCode::Success))
         {
@@ -318,7 +338,7 @@ TEST_F(StreamerTest, Async_Read_Per_File_Error_Isolation)
     void * streamer;
     ASSERT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
 
-    auto res = runai_request(streamer,
+    auto res = submit(streamer,
                     num_files,
                     file_names.data(),
                     file_offsets.data(),
@@ -334,7 +354,7 @@ TEST_F(StreamerTest, Async_Read_Per_File_Error_Isolation)
     {
         unsigned r = utils::random::number();
         unsigned file_index = utils::random::number();
-        auto response_code = runai_response(streamer, &file_index, &r);
+        auto response_code = next_response(streamer, &file_index, &r);
         ASSERT_LT(file_index, num_files);
 
         if (file_index == failing_file)
@@ -384,7 +404,7 @@ TEST_F(StreamerTest, Async_Read_Batched_Completions)
     void * streamer;
     ASSERT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
 
-    auto res = runai_request(streamer,
+    auto res = submit(streamer,
                     num_files,
                     file_names.data(),
                     file_offsets.data(),
@@ -399,7 +419,7 @@ TEST_F(StreamerTest, Async_Read_Batched_Completions)
     {
         unsigned r = utils::random::number();
         unsigned file_index = utils::random::number();
-        auto response_code = runai_response(streamer, &file_index, &r);
+        auto response_code = next_response(streamer, &file_index, &r);
         EXPECT_EQ(response_code, static_cast<int>(common::ResponseCode::Success));
         if (response_code != static_cast<int>(common::ResponseCode::Success))
         {
@@ -437,7 +457,7 @@ TEST_F(StreamerTest, Async_Read_Tolerates_Finished_Sentinel)
     void * streamer;
     ASSERT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
 
-    auto res = runai_request(streamer,
+    auto res = submit(streamer,
                     num_files,
                     file_names.data(),
                     file_offsets.data(),
@@ -452,7 +472,7 @@ TEST_F(StreamerTest, Async_Read_Tolerates_Finished_Sentinel)
     {
         unsigned r = utils::random::number();
         unsigned file_index = utils::random::number();
-        auto response_code = runai_response(streamer, &file_index, &r);
+        auto response_code = next_response(streamer, &file_index, &r);
         EXPECT_EQ(response_code, static_cast<int>(common::ResponseCode::Success));
         if (response_code != static_cast<int>(common::ResponseCode::Success))
         {
@@ -493,7 +513,7 @@ TEST_F(StreamerTest, Increase_Insufficient_Fd_Limit)
         if (use_credentials)
         {
             apply_credentials(streamer, credentials);
-            res = runai_request(streamer,
+            res = submit(streamer,
                             num_files,
                             file_names.data(),
                             file_offsets.data(),
@@ -504,7 +524,7 @@ TEST_F(StreamerTest, Increase_Insufficient_Fd_Limit)
         }
         else
         {
-            res = runai_request(streamer,
+            res = submit(streamer,
                             num_files,
                             file_names.data(),
                             file_offsets.data(),
@@ -544,7 +564,7 @@ TEST_F(StreamerTest, Stop_Before_Async_Read)
         if (use_credentials)
         {
             apply_credentials(streamer, credentials);
-            res = runai_request(streamer,
+            res = submit(streamer,
                             num_files,
                             file_names.data(),
                             file_offsets.data(),
@@ -555,7 +575,7 @@ TEST_F(StreamerTest, Stop_Before_Async_Read)
         }
         else
         {
-            res = runai_request(streamer,
+            res = submit(streamer,
                             num_files,
                             file_names.data(),
                             file_offsets.data(),
@@ -568,7 +588,7 @@ TEST_F(StreamerTest, Stop_Before_Async_Read)
         // request was not sent to the S3 server
         unsigned r;
         unsigned file_index;
-        EXPECT_EQ(runai_response(streamer, &file_index, &r), static_cast<int>(common::ResponseCode::FinishedError));
+        EXPECT_EQ(next_response(streamer, &file_index, &r), static_cast<int>(common::ResponseCode::FinishedError));
 
         LOG(INFO) << "******************************* Ending streamer";
         runai_end(streamer);
@@ -599,7 +619,7 @@ TEST_F(StreamerTest, End_During_Async_Read)
         if (use_credentials)
         {
             apply_credentials(streamer, credentials);
-            res = runai_request(streamer,
+            res = submit(streamer,
                             num_files,
                             file_names.data(),
                             file_offsets.data(),
@@ -610,7 +630,7 @@ TEST_F(StreamerTest, End_During_Async_Read)
         }
         else
         {
-            res = runai_request(streamer,
+            res = submit(streamer,
                             num_files,
                             file_names.data(),
                             file_offsets.data(),
@@ -640,7 +660,7 @@ TEST_F(StreamerTest, Multiple_Files)
     void * streamer;
     EXPECT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
 
-    auto res = runai_request(streamer,
+    auto res = submit(streamer,
                              num_files,
                              file_names.data(),
                              file_offsets.data(),
@@ -658,7 +678,7 @@ TEST_F(StreamerTest, Multiple_Files)
     {
         r = utils::random::number();
         file_index = utils::random::number();
-        auto response_code = runai_response(streamer, &file_index, &r);
+        auto response_code = next_response(streamer, &file_index, &r);
         EXPECT_EQ(response_code, static_cast<int>(common::ResponseCode::Success));
         if (response_code != static_cast<int>(common::ResponseCode::Success))
         {
@@ -687,7 +707,7 @@ TEST_F(StreamerTest, Multiple_Files_Error)
     EXPECT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
 
 
-    auto res = runai_request(streamer,
+    auto res = submit(streamer,
                              num_files,
                              file_names.data(),
                              file_offsets.data(),
@@ -705,7 +725,7 @@ TEST_F(StreamerTest, Multiple_Files_Error)
     {
         r = utils::random::number();
         file_index = utils::random::number();
-        const auto response_code = runai_response(streamer, &file_index, &r);
+        const auto response_code = next_response(streamer, &file_index, &r);
         EXPECT_EQ(response_code, static_cast<int>(error_code));
         EXPECT_LT(file_index, num_files);
         EXPECT_EQ(expected_response[file_index].count(r), 1);
@@ -715,9 +735,6 @@ TEST_F(StreamerTest, Multiple_Files_Error)
         }
         expected_response[file_index].erase(r);
     }
-
-    const auto response_code = runai_response(streamer, &file_index, &r);
-    EXPECT_EQ(response_code, static_cast<int>(common::ResponseCode::FinishedError));
 
     runai_end(streamer);
     EXPECT_EQ(verify_mock(), 0);

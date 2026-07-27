@@ -30,23 +30,10 @@ class LibstreamerDLLWrapper:
         ]
         self.fn_runai_set_credentials.restype = ctypes.c_int
 
-        self.fn_runai_request = self.lib.runai_request
-        self.fn_runai_request.argtypes = [
-            t_streamer,
-            ctypes.c_uint32, # num_files
-            ctypes.POINTER(ctypes.c_char_p), # paths
-            ctypes.POINTER(ctypes.c_size_t), # file_offsets
-            ctypes.POINTER(ctypes.c_size_t), # bytesizes
-            ctypes.POINTER(ctypes.c_void_p), # dsts
-            ctypes.POINTER(ctypes.c_uint32), # num_sizes
-            ctypes.POINTER(ctypes.POINTER(ctypes.c_size_t)), # internal_sizes
-        ]
-        self.fn_runai_request.restype = ctypes.c_int
-
         # Multi-request submit: credentials are streamer-scoped (runai_set_credentials), not passed here; the
         # assigned submission id is returned via out_submission_id.
-        self.fn_runai_request_ex = self.lib.runai_request_ex
-        self.fn_runai_request_ex.argtypes = [
+        self.fn_runai_request = self.lib.runai_request
+        self.fn_runai_request.argtypes = [
             t_streamer,
             ctypes.POINTER(ctypes.c_uint32),                 # out_submission_id
             ctypes.c_uint32,                                 # num_files
@@ -56,27 +43,21 @@ class LibstreamerDLLWrapper:
             ctypes.POINTER(ctypes.c_void_p),                 # dsts
             ctypes.POINTER(ctypes.c_uint32),                 # num_sizes
             ctypes.POINTER(ctypes.POINTER(ctypes.c_size_t)), # internal_sizes
-            ctypes.c_uint,                                   # stream_id
         ]
-        self.fn_runai_request_ex.restype = ctypes.c_int
-
-        self.fn_runai_response = self.lib.runai_response
-        self.fn_runai_response.argtypes = [t_streamer, ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_uint32)]
-        self.fn_runai_response.restype = ctypes.c_int
+        self.fn_runai_request.restype = ctypes.c_int
 
         # Multi-request response: also reports the owning submission id, whether that submission is now
         # complete (submission_done), and takes a timeout (0 = block indefinitely).
-        self.fn_runai_response_ex = self.lib.runai_response_ex
-        self.fn_runai_response_ex.argtypes = [
+        self.fn_runai_response = self.lib.runai_response
+        self.fn_runai_response.argtypes = [
             t_streamer,
             ctypes.POINTER(ctypes.c_uint32),                 # out_submission_id
             ctypes.POINTER(ctypes.c_uint32),                 # file_index
             ctypes.POINTER(ctypes.c_uint32),                 # index
             ctypes.POINTER(ctypes.c_int),                    # submission_done
-            ctypes.c_uint,                                   # stream_id
             ctypes.c_uint,                                   # timeout_ms
         ]
-        self.fn_runai_response_ex.restype = ctypes.c_int
+        self.fn_runai_response.restype = ctypes.c_int
 
         self.fn_runai_response_str = self.lib.runai_response_str
         self.fn_runai_response_str.argtypes = [ctypes.c_int]

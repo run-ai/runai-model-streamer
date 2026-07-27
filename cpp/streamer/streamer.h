@@ -28,31 +28,6 @@ _RUNAI_EXTERN_C int runai_start(void ** streamer /* return parameter */);
 
 _RUNAI_EXTERN_C void runai_end(void * streamer);
 
-// send asynchronous read request to read multiple files
-//
-// num_files : number of files to read
-// paths : list of files paths
-// file_offsets : offset for each file path, from which to start reading
-// bytesizes : size of each destination buffer
-// dsts : destination buffers
-//        for reading to CPU memory, dsts[0] only is used as a single buffer to contain all the files in the order specified by paths
-// num_sizes : number of sub requests for each file
-// internal_sizes : a list containing the size of each sub request, where the first sub request starts at the given file offset and each sub request starts at the end of the previous one
-// return Success if request is valid
-
-// Legacy single-request submit. Credentials are streamer-scoped (runai_set_credentials), not passed here.
-// (This entry point is being removed; prefer runai_request_ex.)
-_RUNAI_EXTERN_C int runai_request(
-    void * streamer,
-    unsigned num_files,
-    const char ** paths,
-    size_t * file_offsets,
-    size_t * bytesizes,
-    void ** dsts,
-    unsigned * num_sizes,
-    size_t ** internal_sizes
-);
-
 // Set the streamer's object-storage credentials as a general key/value dictionary (param_keys /
 // param_values / num_params). Keys are the plugin's canonical config-parameter names (e.g.
 // "access_key_id", "secret_access_key", "session_token", "region", "endpoint"); arbitrary keys are
@@ -66,14 +41,24 @@ _RUNAI_EXTERN_C int runai_set_credentials(
     unsigned num_params
 );
 
-// Multi-request submit. Credentials are NOT passed here - set them once via runai_set_credentials.
+// Multi-request submit: read multiple files concurrently.
+//
+// num_files : number of files to read
+// paths : list of files paths
+// file_offsets : offset for each file path, from which to start reading
+// bytesizes : size of each destination buffer
+// dsts : destination buffers; for reading to CPU memory, dsts[0] only is used as a single buffer to contain
+//        all the files in the order specified by paths
+// num_sizes : number of sub requests for each file
+// internal_sizes : a list containing the size of each sub request, where the first sub request starts at the
+//                  given file offset and each subsequent sub request starts at the end of the previous one
+// Credentials are NOT passed here - set them once via runai_set_credentials.
 //  out_submission_id : always set to this submission's id once one is assigned, and left 0 only
 //                      if the call fails before that (e.g. invalid parameters). On Success it
 //                      identifies the submission; use it to demux responses from
-//                      runai_response_ex. If the call fails after the submission was committed,
+//                      runai_response. If the call fails after the submission was committed,
 //                      its responses are still delivered and can be drained by this id.
-//  stream_id         : reserved for future multi-stream support; must be 0 in this version.
-_RUNAI_EXTERN_C int runai_request_ex(
+_RUNAI_EXTERN_C int runai_request(
     void * streamer,
     unsigned * out_submission_id /* return parameter */,
     unsigned num_files,
@@ -82,27 +67,22 @@ _RUNAI_EXTERN_C int runai_request_ex(
     size_t * bytesizes,
     void ** dsts,
     unsigned * num_sizes,
-    size_t ** internal_sizes,
-    unsigned stream_id
+    size_t ** internal_sizes
 );
-
-_RUNAI_EXTERN_C int runai_response(void * streamer, unsigned * file_index /* return parameter */, unsigned * index /* return parameter */);
 
 // Multi-request response. Returns the next ready sub-range from any in-flight submission.
 //  out_submission_id : set to the owning submission's id (which submission this response is for).
 //  file_index, index : the file and sub-range within that submission.
 //  submission_done   : set to 1 iff this was the submission's last response (it is now complete).
-//  stream_id         : reserved; must be 0.
 //  timeout_ms        : max time to wait for a response; 0 blocks indefinitely.
 // ret is the truthful per-sub-range code (Success or a specific error), TimedOut on timeout, or
 // FinishedError on teardown.
-_RUNAI_EXTERN_C int runai_response_ex(
+_RUNAI_EXTERN_C int runai_response(
     void * streamer,
     unsigned * out_submission_id /* return parameter */,
     unsigned * file_index /* return parameter */,
     unsigned * index /* return parameter */,
     int * submission_done /* return parameter */,
-    unsigned stream_id,
     unsigned timeout_ms
 );
 

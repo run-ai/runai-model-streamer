@@ -12,53 +12,6 @@ FINISHED_ERROR_CODE = 1
 TIMED_OUT_ERROR_CODE = 16
 
 
-def _marshal_read_request(
-    paths: List[str],
-    file_offsets: List[int],
-    bytesizes: List[int],
-    dsts: List[memoryview],
-    internal_sizes: List[List[int]],
-):
-    # Build the ctypes arrays shared by runai_request and runai_request_ex. Returns the arrays plus a
-    # `keepalive` tuple the caller must hold until the C call returns: c_internal_sizes stores raw pointers
-    # into the per-file size arrays, so those arrays must not be garbage collected before the call.
-    num_files = len(paths)
-    c_paths = (ctypes.c_char_p * num_files)(*[path.encode("utf-8") for path in paths])
-    c_file_offsets = (ctypes.c_uint64 * len(file_offsets))(*file_offsets)
-    c_bytesizes = (ctypes.c_uint64 * len(bytesizes))(*bytesizes)
-    dst_addrs = [
-        ctypes.cast(ctypes.c_void_p(ctypes.addressof(ctypes.c_char.from_buffer(dst))), ctypes.c_void_p)
-        for dst in dsts
-    ]
-    c_dsts = (ctypes.c_void_p * len(dst_addrs))(*dst_addrs)
-
-    # c_num_sizes: number of ranges for each file
-    num_ranges_per_file_list = [len(sublist) for sublist in internal_sizes]
-    c_num_sizes = (ctypes.c_uint32 * num_files)(*num_ranges_per_file_list)
-
-    # c_internal_sizes: array of pointers, one per file, each to that file's array of range sizes
-    _c_internal_sizes_data_arrays = [
-        (ctypes.c_uint64 * num_ranges_for_this_file)(*actual_sublist_data)
-        for num_ranges_for_this_file, actual_sublist_data in zip(num_ranges_per_file_list, internal_sizes)
-    ]
-    PtrToUint64ArrayType = ctypes.POINTER(ctypes.c_uint64)
-    c_internal_sizes = (PtrToUint64ArrayType * num_files)()
-    for i, individual_c_array_obj in enumerate(_c_internal_sizes_data_arrays):
-        c_internal_sizes[i] = ctypes.cast(individual_c_array_obj, PtrToUint64ArrayType)
-
-    keepalive = (_c_internal_sizes_data_arrays,)
-    return (
-        num_files,
-        c_paths,
-        c_file_offsets,
-        c_bytesizes,
-        c_dsts,
-        c_num_sizes,
-        c_internal_sizes,
-        keepalive,
-    )
-
-
 def _credentials_param_arrays(s3_credentials: Optional[S3Credentials]):
     # Marshal S3Credentials into the (param_keys, param_values, num_params) key/value form used by
     # runai_set_credentials. Only set fields are included; keys are the plugin's canonical config-param names.
@@ -114,22 +67,41 @@ def runai_request(
     bytesizes: List[int],
     dsts: List[memoryview],
     internal_sizes: List[List[int]],
-) -> None:
-    (
-        num_files,
-        c_paths,
-        c_file_offsets,
-        c_bytesizes,
-        c_dsts,
-        c_num_sizes,
-        c_internal_sizes,
-        _keepalive,
-    ) = _marshal_read_request(paths, file_offsets, bytesizes, dsts, internal_sizes)
+) -> int:
+    """Multi-request submit. Non-blocking: returns the assigned submission id; use it to demux the
+    responses from runai_response. Credentials are streamer-scoped (runai_set_credentials), not passed
+    here. Many submissions may be in flight at once."""
+    num_files = len(paths)
+    c_paths = (ctypes.c_char_p * num_files)(*[path.encode("utf-8") for path in paths])
+    c_file_offsets = (ctypes.c_uint64 * len(file_offsets))(*file_offsets)
+    c_bytesizes = (ctypes.c_uint64 * len(bytesizes))(*bytesizes)
+    dst_addrs = [
+        ctypes.cast(ctypes.c_void_p(ctypes.addressof(ctypes.c_char.from_buffer(dst))), ctypes.c_void_p)
+        for dst in dsts
+    ]
+    c_dsts = (ctypes.c_void_p * len(dst_addrs))(*dst_addrs)
 
-    # Credentials are streamer-scoped (runai_set_credentials), not passed per request.
+    # c_num_sizes: number of ranges for each file
+    num_ranges_per_file_list = [len(sublist) for sublist in internal_sizes]
+    c_num_sizes = (ctypes.c_uint32 * num_files)(*num_ranges_per_file_list)
+
+    # c_internal_sizes: array of pointers, one per file, each to that file's array of range sizes. The backing
+    # arrays are held in the local `internal_sizes_arrays` so they outlive the C call - c_internal_sizes stores
+    # raw pointers into them, so they must not be garbage collected before fn_runai_request returns.
+    internal_sizes_arrays = [
+        (ctypes.c_uint64 * num_ranges_for_this_file)(*actual_sublist_data)
+        for num_ranges_for_this_file, actual_sublist_data in zip(num_ranges_per_file_list, internal_sizes)
+    ]
+    PtrToUint64ArrayType = ctypes.POINTER(ctypes.c_uint64)
+    c_internal_sizes = (PtrToUint64ArrayType * num_files)()
+    for i, individual_c_array_obj in enumerate(internal_sizes_arrays):
+        c_internal_sizes[i] = ctypes.cast(individual_c_array_obj, PtrToUint64ArrayType)
+
+    submission_id = ctypes.c_uint32()
     error_code = dll.fn_runai_request(
         streamer,
-        len(paths),
+        ctypes.byref(submission_id),
+        num_files,
         c_paths,
         c_file_offsets,
         c_bytesizes,
@@ -141,95 +113,46 @@ def runai_request(
         raise ValueError(
             f"Could not send runai_request to libstreamer due to: {runai_response_str(error_code)}"
         )
-
-def runai_response(streamer: t_streamer) -> Optional[Tuple[int, int]]:
-    file_index = ctypes.c_uint32()
-    range_index = ctypes.c_uint32()
-    error_code = dll.fn_runai_response(streamer, ctypes.byref(file_index), ctypes.byref(range_index))
-    if error_code == FINISHED_ERROR_CODE:
-        return None
-    if error_code != SUCCESS_ERROR_CODE:
-        raise ValueError(
-            f"Could not receive runai_response from libstreamer due to: {runai_response_str(error_code)}"
-        )
-    return file_index.value, range_index.value
-
-def runai_request_ex(
-    streamer: t_streamer,
-    paths: List[str],
-    file_offsets: List[int],
-    bytesizes: List[int],
-    dsts: List[memoryview],
-    internal_sizes: List[List[int]],
-    stream_id: int = 0,
-) -> int:
-    """Multi-request submit. Non-blocking: returns the assigned submission id; use it to demux the
-    responses from runai_response_ex. Credentials are streamer-scoped (runai_set_credentials), not passed
-    here. Many submissions may be in flight at once."""
-    (
-        num_files,
-        c_paths,
-        c_file_offsets,
-        c_bytesizes,
-        c_dsts,
-        c_num_sizes,
-        c_internal_sizes,
-        _keepalive,
-    ) = _marshal_read_request(paths, file_offsets, bytesizes, dsts, internal_sizes)
-
-    submission_id = ctypes.c_uint32()
-    error_code = dll.fn_runai_request_ex(
-        streamer,
-        ctypes.byref(submission_id),
-        num_files,
-        c_paths,
-        c_file_offsets,
-        c_bytesizes,
-        c_dsts,
-        c_num_sizes,
-        c_internal_sizes,
-        ctypes.c_uint(stream_id),
-    )
-    if error_code != SUCCESS_ERROR_CODE:
-        raise ValueError(
-            f"Could not send runai_request_ex to libstreamer due to: {runai_response_str(error_code)}"
-        )
     return submission_id.value
 
 
-def runai_response_ex(
+def runai_response(
     streamer: t_streamer,
     timeout_ms: int = 0,
-    stream_id: int = 0,
-) -> Optional[Tuple[int, int, int, bool]]:
-    """Multi-request response. Returns (submission_id, file_index, index, submission_done) for the next
-    ready sub-range of any in-flight submission, where submission_done is True iff it was that submission's
-    last response. Returns None when the streamer is finished/torn down (FinishedError). Raises TimeoutError
-    if timeout_ms elapses first (timeout_ms=0 blocks indefinitely)."""
+) -> Optional[Tuple[int, int, int, int, bool]]:
+    """Multi-request response. Returns (response_code, submission_id, file_index, index, submission_done) for
+    the next ready sub-range of any in-flight submission. response_code is that sub-range's own result -
+    Success (0) or a specific per-sub-range error - and the other fields are valid in BOTH cases, so a
+    multi-submission caller can attribute an error to its submission and still learn submission_done (whether
+    that submission is now complete). A per-sub-range error is NOT raised here: the caller decides what to do
+    with it (e.g. abort only on UnknownError, or fail just the affected submission and keep draining others).
+    Returns None on teardown (FinishedError). Raises TimeoutError if timeout_ms elapses first (0 blocks
+    indefinitely)."""
     submission_id = ctypes.c_uint32()
     file_index = ctypes.c_uint32()
     range_index = ctypes.c_uint32()
     submission_done = ctypes.c_int()
-    error_code = dll.fn_runai_response_ex(
+    error_code = dll.fn_runai_response(
         streamer,
         ctypes.byref(submission_id),
         ctypes.byref(file_index),
         ctypes.byref(range_index),
         ctypes.byref(submission_done),
-        ctypes.c_uint(stream_id),
         ctypes.c_uint(timeout_ms),
     )
     if error_code == FINISHED_ERROR_CODE:
         return None
     if error_code == TIMED_OUT_ERROR_CODE:
         raise TimeoutError(
-            f"runai_response_ex timed out after {timeout_ms} ms"
+            f"runai_response timed out after {timeout_ms} ms"
         )
-    if error_code != SUCCESS_ERROR_CODE:
-        raise ValueError(
-            f"Could not receive runai_response_ex from libstreamer due to: {runai_response_str(error_code)}"
-        )
-    return submission_id.value, file_index.value, range_index.value, bool(submission_done.value)
+    return (
+        error_code,
+        submission_id.value,
+        file_index.value,
+        range_index.value,
+        bool(submission_done.value),
+    )
 
 
 def runai_response_str(response_code: int) -> str:

@@ -74,8 +74,9 @@ common::ResponseCode Streamer::sync_read(const std::string & path, size_t file_o
         return r;
     }
 
-    // route through response() so the submission's registry record is consumed/forgotten
-    return response().ret;
+    // consume the single response (blocking); consuming it also forgets the submission's registry record
+    bool submission_done = false;
+    return response(0, submission_done).ret;
 }
 
 common::ResponseCode Streamer::async_read(const std::string & path, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes)
@@ -150,40 +151,7 @@ common::s3::Credentials Streamer::credentials() const
     return _credentials_state->get();
 }
 
-bool Streamer::busy() const
-{
-    // not drained: some submission still has responses in flight or waiting to be consumed
-    return _responder != nullptr && !_responder->finished();
-}
-
-common::Response Streamer::response()
-{
-    if (_responder == nullptr)
-    {
-        return common::Response(common::ResponseCode::FinishedError);
-    }
-
-    // Legacy finish-on-drain, kept at the streamer level: the persistent responder never
-    // self-finishes, so when nothing is outstanding (all pushed and popped) we report the
-    // historical FinishedError rather than blocking for a future submission.
-    if (_responder->finished())
-    {
-        return common::Response(common::ResponseCode::FinishedError);
-    }
-
-    auto r = _responder->pop();
-
-    // account for the consumed response (per-submission throughput + reclamation). The legacy
-    // path ignores whether this was the submission's last response; runai_response_ex uses it.
-    if (r.ret != common::ResponseCode::FinishedError && r.ret != common::ResponseCode::TimedOut)
-    {
-        consume_submission_response(r.submission_id);
-    }
-
-    return r;
-}
-
-common::Response Streamer::response_ex(unsigned timeout_ms, bool & submission_done)
+common::Response Streamer::response(unsigned timeout_ms, bool & submission_done)
 {
     submission_done = false;
 
