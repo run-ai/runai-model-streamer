@@ -77,14 +77,21 @@ class FileStreamer:
         return self
 
     def __exit__(self, exc_type: any, exc_value: any, traceback: any) -> None:
-        size = self.total_size
-        elapsed_time = timer() - self.start_time
-        throughput = size / elapsed_time
-        logger.info(
-            f"[RunAI Streamer] Overall time to stream {humanize.naturalsize(size, binary=True)} of all files to {self.device_str}: {round(elapsed_time, 2)}s, {humanize.naturalsize(throughput, binary=True)}/s"
-        )
-        if self.streamer:
-            runai_end(self.streamer)
+        try:
+            size = self.total_size
+            elapsed_time = timer() - self.start_time
+            throughput = size / elapsed_time
+            logger.info(
+                f"[RunAI Streamer] Overall time to stream {humanize.naturalsize(size, binary=True)} of all files to {self.device_str}: {round(elapsed_time, 2)}s, {humanize.naturalsize(throughput, binary=True)}/s"
+            )
+        finally:
+            # End AND clear the handle: list_files() now reuses self.streamer when set, so a call after the
+            # context must not pass the freed C++ pointer to runai_list_files (a dangling handle -> crash/UAF).
+            # Clearing makes post-context listing start a fresh temporary streamer (the owns_streamer path).
+            if self.streamer:
+                runai_end(self.streamer)
+                self.streamer = None
+                self._credentialed_streamer = None
 
     def handle_object_store(self, path: str, streamer, credentials: Optional[S3Credentials] = None) -> str:
         # Two independent concerns, deliberately gated separately so they can't desync:
