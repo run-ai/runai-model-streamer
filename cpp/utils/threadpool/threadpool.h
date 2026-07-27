@@ -177,9 +177,12 @@ struct ThreadPool
 
     ~ThreadPool()
     {
-         // stop the deque and notify all worker threads
-        _deque.stop(_threads.size());
+        // Set the abort flag BEFORE stopping the deque: a worker that enters drain_batch() then observes
+        // `stopped` and takes the fast abort_all path instead of a full backend completion wait. Then stop the
+        // deque to wake any thread parked in the blocking pop() so it can exit. (Threads are joined by
+        // utils::Thread's destructor when _threads is destroyed, after this body.)
         stopped = true;
+        _deque.stop(_threads.size());
     }
 
     void push(Request && request)
