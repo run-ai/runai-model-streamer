@@ -5,6 +5,9 @@ import glob
 import os
 import fcntl
 import shutil
+import logging
+import humanize
+from timeit import default_timer as timer
 from typing import List
 
 from runai_model_streamer.file_streamer import FileChunks
@@ -25,6 +28,8 @@ from runai_model_streamer.s3_utils.s3_utils import (
     azure_glob,
     azure_pull_files,
 )
+
+logger = logging.getLogger(__name__)
 
 SAFETENSORS_PATTERN = "*.safetensors"
 
@@ -196,13 +201,32 @@ class SafetensorsStreamer:
     def __init__(self) -> None:
         self.file_streamer = DistributedStreamer()
         self.files_to_tensors_metadata = {}
+        self.total_size = 0
+        self.device_str = None
+        self.start_time = None
 
     def __enter__(self) -> SafetensorsStreamer:
         self.file_streamer.__enter__()
+        # Start the clock at context entry so the throughput covers the whole session (metadata prep +
+        # streaming), matching where the measurement used to begin.
+        self.start_time = timer()
         return self
 
     def __exit__(self, exc_type: any, exc_value: any, traceback: any) -> None:
         return self.file_streamer.__exit__(exc_type, exc_value, traceback)
+
+    def _log_throughput(self) -> None:
+        # The session-level throughput: one SafetensorsStreamer session may drive several FileStreamer
+        # requests (memory-limited chunking today, concurrent submissions with the ring buffer), so the
+        # overall figure belongs here, not in FileStreamer. Emitted from get_tensors() completion (active
+        # consumption) rather than __exit__, which under the vllm generator loader can run at interpreter
+        # shutdown after the logging handlers are torn down (record silently dropped).
+        size = self.total_size
+        elapsed_time = timer() - self.start_time
+        throughput = size / elapsed_time if elapsed_time > 0 else 0
+        logger.info(
+            f"[RunAI Streamer] Overall time to stream {humanize.naturalsize(size, binary=True)} of all files to {self.device_str}: {round(elapsed_time, 2)}s, {humanize.naturalsize(throughput, binary=True)}/s"
+        )
 
     def stream_file(
             self,
@@ -222,6 +246,8 @@ class SafetensorsStreamer:
             is_distributed: bool = False, 
         ) -> None:
         self.files_to_tensors_metadata = {}
+        self.total_size = 0
+        self.device_str = device
 
         file_stream_requests: List[FileChunks] = []
 
@@ -232,6 +258,7 @@ class SafetensorsStreamer:
             (file_offset, tensors_metadata, tensor_sizes) = safetensors_metadatas[i]
             path = paths[i]
             self.files_to_tensors_metadata[i] = tensors_metadata
+            self.total_size += sum(tensor_sizes)
             file_stream_requests.append(FileChunks(i, path, file_offset, tensor_sizes))
 
         self.file_streamer.stream_files(
@@ -247,3 +274,7 @@ class SafetensorsStreamer:
             yield tensor_metadata.name, safetensors_pytorch.create_torch_tensor(
                 buffer, tensor_metadata
             )
+
+        # All tensors delivered (the underlying get_chunks() is exhausted). Log the session throughput here,
+        # during active consumption while the logging system is still alive.
+        self._log_throughput()

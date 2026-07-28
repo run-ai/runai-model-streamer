@@ -1,5 +1,4 @@
 from typing import Dict, List, Iterator, Optional, Tuple
-from timeit import default_timer as timer
 from runai_model_streamer.libstreamer.libstreamer import (
     SUCCESS_ERROR_CODE,
     runai_start,
@@ -22,8 +21,6 @@ from runai_model_streamer.s3_utils.s3_utils import (
     is_azure_path,
     get_s3_credentials_module,
 )
-
-import humanize
 
 import torch
 
@@ -68,8 +65,6 @@ class FileStreamer:
 
     def __enter__(self) -> "FileStreamer":
         self.streamer = runai_start()
-        self.start_time = timer()
-        self.total_size = 0
         self.device_str = None
         self.s3_session = None
         self.s3_credentials = None
@@ -77,21 +72,18 @@ class FileStreamer:
         return self
 
     def __exit__(self, exc_type: any, exc_value: any, traceback: any) -> None:
-        try:
-            size = self.total_size
-            elapsed_time = timer() - self.start_time
-            throughput = size / elapsed_time
-            logger.info(
-                f"[RunAI Streamer] Overall time to stream {humanize.naturalsize(size, binary=True)} of all files to {self.device_str}: {round(elapsed_time, 2)}s, {humanize.naturalsize(throughput, binary=True)}/s"
-            )
-        finally:
-            # End AND clear the handle: list_files() now reuses self.streamer when set, so a call after the
-            # context must not pass the freed C++ pointer to runai_list_files (a dangling handle -> crash/UAF).
-            # Clearing makes post-context listing start a fresh temporary streamer (the owns_streamer path).
-            if self.streamer:
-                runai_end(self.streamer)
-                self.streamer = None
-                self._credentialed_streamer = None
+        # Overall throughput is logged by SafetensorsStreamer (the user-facing session), not here: one session
+        # spans multiple FileStreamer requests (already so under a memory limit, and more so with the ring
+        # buffer's concurrent submissions), so it is not a property of any single request. __exit__ only does
+        # the C++ handle cleanup.
+        #
+        # End AND clear the handle: list_files() now reuses self.streamer when set, so a call after the
+        # context must not pass the freed C++ pointer to runai_list_files (a dangling handle -> crash/UAF).
+        # Clearing makes post-context listing start a fresh temporary streamer (the owns_streamer path).
+        if self.streamer:
+            runai_end(self.streamer)
+            self.streamer = None
+            self._credentialed_streamer = None
 
     def handle_object_store(self, path: str, streamer, credentials: Optional[S3Credentials] = None) -> str:
         # Two independent concerns, deliberately gated separately so they can't desync:
@@ -162,7 +154,6 @@ class FileStreamer:
         self.device_str = device
 
         for file_stream_request in file_stream_requests:
-            self.total_size += sum(file_stream_request.chunks)
             # first object-storage path resolves + applies the credentials to the streamer, once
             file_stream_request.path = self.handle_object_store(file_stream_request.path, self.streamer, credentials)
 
@@ -191,7 +182,7 @@ class FileStreamer:
         
         while True:
             yield from self.request_ready_chunks()
-            
+
             self.active_request = self.requests_iterator.next_request()
             if self.active_request is None:
                 break
