@@ -333,16 +333,14 @@ void ObjectStorageWorker::abort_all(common::ResponseCode code)
         it = next;
     }
 
-    // zero the window so idle() becomes true and the pool can join: move any pending chunk into flight,
-    // then release every in-flight slot (all costs are 1).
+    // Zero the window so idle() becomes true and the pool can join. clear() drops every pending chunk and
+    // releases all in-flight credit in one step - the workloads those chunks belonged to were already failed
+    // and erased above, so their tracking is gone. A try_take()/complete() drain could not do this: try_take()
+    // stops at the full-window boundary, so a workload with chunks >> capacity would leave the remainder in
+    // _pending (idle() never true from a single call, and the outer loop would re-pump spurious submit()s).
     if (_queue != nullptr)
     {
-        while (_queue->try_take()) {}
-        const auto n = _queue->inflight();
-        for (size_t i = 0; i < n; ++i)
-        {
-            _queue->complete(1);
-        }
+        _queue->clear();
     }
 }
 

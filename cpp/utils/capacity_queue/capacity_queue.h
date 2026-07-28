@@ -74,6 +74,16 @@ class CapacityQueue
         _inflight = (_inflight >= cost) ? _inflight - cost : 0;
     }
 
+    // Drop every pending item and release all reserved credit, leaving the queue idle()
+    // in one step. For aborting a window whose pending set may exceed the capacity, where
+    // draining via try_take()/complete() would stop at the full-window boundary. The
+    // owner must abandon any tracking tied to the dropped items - their costs are gone.
+    void clear()
+    {
+        _pending.clear();
+        _inflight = 0;
+    }
+
     // no items left to submit (some may still be in flight)
     bool empty() const
     {
