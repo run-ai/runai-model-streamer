@@ -207,9 +207,6 @@ class SafetensorsStreamer:
 
     def __enter__(self) -> SafetensorsStreamer:
         self.file_streamer.__enter__()
-        # Start the clock at context entry so the throughput covers the whole session (metadata prep +
-        # streaming), matching where the measurement used to begin.
-        self.start_time = timer()
         return self
 
     def __exit__(self, exc_type: any, exc_value: any, traceback: any) -> None:
@@ -221,6 +218,10 @@ class SafetensorsStreamer:
         # overall figure belongs here, not in FileStreamer. Emitted from get_tensors() completion (active
         # consumption) rather than __exit__, which under the vllm generator loader can run at interpreter
         # shutdown after the logging handlers are torn down (record silently dropped).
+        if self.start_time is None:
+            # stream_files() never ran, so there is nothing to report. A throughput log must never raise
+            # (it would break get_tensors()), so bail out instead of computing timer() - None.
+            return
         size = self.total_size
         elapsed_time = timer() - self.start_time
         throughput = size / elapsed_time if elapsed_time > 0 else 0
@@ -250,6 +251,10 @@ class SafetensorsStreamer:
         self.device_str = device
 
         file_stream_requests: List[FileChunks] = []
+
+        # Start the throughput clock here, right before the first submission: prepare_request issues the
+        # metadata reads (the first submissions), so the measurement spans first submission -> last response.
+        self.start_time = timer()
 
         # metadata is created on cpu and each process reads it individually
         safetensors_metadatas = safetensors_pytorch.prepare_request(self.file_streamer, paths, s3_credentials)
