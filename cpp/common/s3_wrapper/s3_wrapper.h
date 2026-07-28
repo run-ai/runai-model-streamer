@@ -79,6 +79,26 @@ struct S3ClientWrapper
          std::string _endpoint;
       };
 
+      // Plugin C-ABI entry points. Resolved once (see resolve_api), because dlsym takes the process-wide
+      // dynamic-linker lock: resolving per call would serialize every worker on the hot read/response path.
+      // The pointers live and die with the owning BackendHandle's dylib_ptr, so a teardown+recreate that
+      // swaps to a different plugin re-resolves against the correct library (no stale/dangling pointer).
+      struct Api
+      {
+         common::ResponseCode (*open_backend)(common::backend_api::ObjectBackendHandle_t*) = nullptr;
+         common::ResponseCode (*close_backend)(common::backend_api::ObjectBackendHandle_t) = nullptr;
+         common::ResponseCode (*create_client)(common::backend_api::ObjectBackendHandle_t, const common::backend_api::ObjectClientConfig_t*, common::backend_api::ObjectClientHandle_t*) = nullptr;
+         common::backend_api::ResponseCode_t (*remove_client)(common::backend_api::ObjectClientHandle_t) = nullptr;
+         common::backend_api::ResponseCode_t (*remove_all_clients)() = nullptr;
+         common::backend_api::ResponseCode_t (*cancel_all_reads)() = nullptr;
+         common::ResponseCode (*request_read)(common::backend_api::ObjectClientHandle_t, const char*, common::backend_api::ObjectRange_t, char*, common::backend_api::ObjectRequestId_t) = nullptr;
+         common::ResponseCode (*wait_for_completions)(common::backend_api::ObjectClientHandle_t, common::backend_api::ObjectCompletionEvent_t*, unsigned int, unsigned int*, common::backend_api::ObjectWaitMode_t) = nullptr;
+         common::backend_api::ResponseCode_t (*list_files)(common::backend_api::ObjectClientHandle_t, const char*, int, common::backend_api::ObjectFileEntry_t**, unsigned*) = nullptr;
+         void (*free_file_list)(common::backend_api::ObjectFileEntry_t*, unsigned) = nullptr;
+         common::backend_api::ObjectShutdownPolicy_t (*get_backend_shutdown_policy)() = nullptr;
+         common::backend_api::ResponseCode_t (*get_backend_config)(common::backend_api::ObjectBackendHandle_t, const char*, char*, unsigned int*) = nullptr;
+      };
+
       struct BackendHandle
       {
          BackendHandle(const Params & params);
@@ -93,7 +113,15 @@ struct S3ClientWrapper
 
          std::shared_ptr<utils::Dylib> dylib_ptr;
 
+         // Entry points into dylib_ptr, resolved once by the constructor and used for the handle's lifetime.
+         Api api;
+
        private:
+         // Resolve every entry point from dylib_ptr into `api`. All are required: a missing one throws and
+         // fails backend open (fail fast, before any client or read), so this doubles as a full-API
+         // conformance check on the plugin. Called by the constructor, before obj_open_backend.
+         void resolve_api();
+
          common::backend_api::ObjectBackendHandle_t _backend_handle;
       };
 
