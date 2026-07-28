@@ -123,12 +123,12 @@ class FileStreamer:
         owns_streamer = self.streamer is None
         streamer = runai_start() if owns_streamer else self.streamer
 
-        # first object-storage path (the prefix): under RUNAI_STREAMER_NO_BOTO3_SESSION=0 this resolves S3
-        # credentials from the environment via boto3 and applies them once; else the C++ default chain is used
-        self.handle_object_store(prefix, streamer)
-
         results: List[Tuple[str, int]] = []
         try:
+            # first object-storage path (the prefix): under RUNAI_STREAMER_NO_BOTO3_SESSION=0 this resolves S3
+            # credentials from the environment via boto3 and applies them once; else the C++ default chain is
+            # used. Inside the try so a temp streamer is still ended if credential resolution/apply throws.
+            self.handle_object_store(prefix, streamer)
             runai_list_files(
                 streamer,
                 prefix,

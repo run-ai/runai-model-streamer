@@ -32,6 +32,9 @@ class CountingWorker : public CapacityWorker<unsigned, unsigned>
  protected:
     std::size_t capacity(const unsigned &) override { return _capacity; }
 
+    // capacity() above cannot throw, so discard() is never reached - an empty body satisfies the contract.
+    void discard(unsigned && /*count*/) override {}
+
     void enqueue(unsigned && count) override
     {
         for (unsigned i = 0; i < count; ++i)
@@ -74,6 +77,9 @@ class StopAwareWorker : public CapacityWorker<unsigned, unsigned>
 
  protected:
     std::size_t capacity(const unsigned &) override { return _capacity; }
+
+    // capacity() above cannot throw, so discard() is never reached - an empty body satisfies the contract.
+    void discard(unsigned && /*count*/) override {}
 
     void enqueue(unsigned && count) override
     {

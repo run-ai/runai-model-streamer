@@ -91,9 +91,12 @@ class CapacityWorker : public Worker<Request>
 
     // Resolve a request that could not be admitted because the window failed to come up (capacity() or the
     // queue allocation threw). The worker must finalize it - push its responses - so the consumer never hangs.
-    // Default no-op: only workers whose capacity() can throw need to override it. NOT called once the window
-    // is up (admitted requests go through enqueue()).
-    virtual void discard(Request && /*request*/) {}
+    // NOT called once the window is up (admitted requests go through enqueue()).
+    //
+    // Pure virtual by design: a worker whose capacity() cannot throw still implements it (as an empty body),
+    // but must do so consciously. A silent no-op default would be a trap - a subclass whose capacity() throws
+    // yet forgets to override it would drop the request and hang the consumer, with no compile-time signal.
+    virtual void discard(Request && request) = 0;
 
     // Split `request` into chunks, _queue->enqueue(...) each, and register it as in flight with whatever
     // per-request/per-task tracking drain_batch needs to route completions to it and finalize it.
