@@ -239,6 +239,7 @@ class SafetensorsStreamer:
             credentials=s3_credentials,
             device=device,
             is_distributed=is_distributed,
+            enable_cache=True,
         )
 
     def get_tensors(self) -> Iterator[torch.tensor]:
