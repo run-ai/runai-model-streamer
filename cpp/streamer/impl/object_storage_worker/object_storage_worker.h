@@ -132,10 +132,14 @@ class ObjectStorageWorker : public utils::CapacityWorker<Workload, ObjectChunk>
 
     InflightMap _inflight;
 
-    // Unique async handles for chunks (the backend requires a unique handle per in-flight request).
-    // Process-wide so handles never collide across workers/clients; same role and name as the counter
-    // that used to live on Workload, now that tasks no longer carry async handles.
-    static std::atomic<common::backend_api::ObjectRequestId_t> _async_handle_counter;
+    // Next async chunk handle. The backend requires a unique handle per in-flight request on a client, and
+    // each worker has its own client - so a completion only ever returns to the worker that submitted it and
+    // is looked up in that worker's _inflight. Handles therefore only need to be unique per client, not
+    // process-global: this is a per-worker member (single-owner worker state, like _inflight, so non-atomic).
+    // Starts at 1 so a chunk handle is never 0, keeping 0 free as an unmistakable "not a real completion"
+    // sentinel (some plugins emit it on a drained responder).
+    // NOTE: if a client is ever shared across workers, this must become process-global-unique again.
+    common::backend_api::ObjectRequestId_t _async_handle_counter = 1;
 };
 
 }; // namespace runai::llm::streamer::impl

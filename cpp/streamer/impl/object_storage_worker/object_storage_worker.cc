@@ -16,10 +16,6 @@
 namespace runai::llm::streamer::impl
 {
 
-// Start at 1 so a chunk handle is never 0; keeps handle 0 free as an unmistakable "not a real completion"
-// value, matching the drained-responder sentinel some plugins emit.
-std::atomic<common::backend_api::ObjectRequestId_t> ObjectStorageWorker::_async_handle_counter { 1 };
-
 ObjectStorageWorker::ObjectStorageWorker(std::function<common::s3::Credentials()> credentials_provider) :
     _credentials_provider(std::move(credentials_provider))
 {}
@@ -141,7 +137,8 @@ void ObjectStorageWorker::enqueue(Workload && workload)
     // the reader is built and _chunk_bytesize is correct here - no retry needed.
 
     // Reserve this workload's contiguous handle block.
-    const auto handle_base = _async_handle_counter.fetch_add(total_chunks);
+    const auto handle_base = _async_handle_counter;
+    _async_handle_counter += total_chunks;
 
     // Registration and chunk-building allocate (the map node, chunk_task_idx, the tasks vector, the queue
     // entries); under memory pressure any of these can throw. The workload's expected responses were already
