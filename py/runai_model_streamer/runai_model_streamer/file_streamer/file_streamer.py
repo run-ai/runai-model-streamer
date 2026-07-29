@@ -210,12 +210,14 @@ class FileStreamer:
             ret, submission_id, file_relative_index, chunk_relative_index, _submission_done = response
             # Single-submission invariant: FileStreamer drains one submission fully before starting the next,
             # so every response must belong to self.submission_id. This catches a stale response from a prior
-            # (e.g. failed) submission being misattributed to this one and returning wrong data.
+            # (e.g. failed) submission being misattributed to this one and returning wrong data. Use if/raise
+            # (not assert) so this data-integrity check is not stripped under `python -O`.
             # REMOVE THIS for the ring buffer: FileStreamer will then manage CONCURRENT submissions and
-            # request_ready_chunks must demux responses by submission_id instead of asserting a single one.
-            assert submission_id == self.submission_id, (
-                f"response for submission {submission_id} but expected {self.submission_id}"
-            )
+            # request_ready_chunks must demux responses by submission_id instead of enforcing a single one.
+            if submission_id != self.submission_id:
+                raise ValueError(
+                    f"response for submission {submission_id} but expected {self.submission_id}"
+                )
             # single-submission streaming: any per-sub-range error fails the whole stream (fail-fast)
             if ret != SUCCESS_ERROR_CODE:
                 raise ValueError(
