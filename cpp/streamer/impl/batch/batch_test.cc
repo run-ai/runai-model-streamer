@@ -52,7 +52,7 @@ TEST(Batch, Finished_Until)
     // create batch
     const auto config = std::make_shared<Config>();
 
-    Batch batch(utils::random::number(), utils::random::number(), path, params, std::move(tasks), responder, config);
+    Batch batch(utils::random::number(), utils::random::number(), utils::random::number(), path, params, std::move(tasks), responder, config);
 
     // execute part of the tasks
 
@@ -123,7 +123,7 @@ TEST(Read, Sanity)
         tasks.push_back(std::move(task));
     }
 
-    Batch batch(utils::random::number(), utils::random::number(), path, params, std::move(tasks), responder, config);
+    Batch batch(utils::random::number(), utils::random::number(), utils::random::number(), path, params, std::move(tasks), responder, config);
 
     std::atomic<bool> stopped(false);
     EXPECT_NO_THROW(batch.execute(stopped));
@@ -182,7 +182,7 @@ TEST(Read, Error)
         tasks.push_back(std::move(task));
     }
 
-    Batch batch(utils::random::number(), utils::random::number(), path, params, std::move(tasks), responder, config);
+    Batch batch(utils::random::number(), utils::random::number(), utils::random::number(), path, params, std::move(tasks), responder, config);
 
     std::atomic<bool> stopped(false);
     EXPECT_NO_THROW(batch.execute(stopped));
@@ -232,7 +232,7 @@ TEST(Read, Already_Stopped)
         tasks.push_back(std::move(task));
     }
 
-    Batch batch(utils::random::number(), utils::random::number(), path, params, std::move(tasks), responder, config);
+    Batch batch(utils::random::number(), utils::random::number(), utils::random::number(), path, params, std::move(tasks), responder, config);
 
     std::atomic<bool> stopped(true);
     EXPECT_NO_THROW(batch.execute(stopped));
@@ -295,7 +295,7 @@ TEST(Read, Stopped_During_Read)
         offset += chunks[i];
     }
 
-    Batch batch(utils::random::number(), utils::random::number(), path, params, std::move(tasks), responder, config);
+    Batch batch(utils::random::number(), utils::random::number(), utils::random::number(), path, params, std::move(tasks), responder, config);
 
     std::atomic<bool> stopped(false);
 
@@ -352,133 +352,6 @@ TEST(Read, Stopped_During_Read)
             // verify unread data
             EXPECT_TRUE(mismatch);
         }
-    }
-}
-
-TEST(Read, Stopped_During_Async_Read)
-{
-    // mock S3
-    utils::Dylib dylib("libstreamers3.so");
-    auto mock_response_time = dylib.dlsym<void(*)(unsigned)>("runai_mock_s3_set_response_time_ms");
-    auto mock_cleanup = dylib.dlsym<void(*)()>("runai_mock_s3_cleanup");
-    unsigned delay_ms = 1000;
-    mock_response_time(delay_ms);
-    auto guard = utils::ScopeGuard([&mock_cleanup](){
-        mock_cleanup();
-    });
-
-    unsigned num_requests = utils::random::number(1, 10);
-
-    // File range to read
-    const auto start = utils::random::number<size_t>(0, 1024);
-    const auto size = utils::random::number<size_t>(512 * 1024, 1024 * 1024);
-    EXPECT_LT(num_requests, size);
-
-    const auto data = utils::random::buffer(start + size);
-    std::string path("s3://" + utils::random::string() + "/" + utils::random::string());
-
-    std::shared_ptr<common::s3::StorageUri> uri;
-    EXPECT_NO_THROW(uri = std::make_shared<common::s3::StorageUri>(path));
-
-    common::s3::Credentials credentials(
-        (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
-        (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
-        (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
-        (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
-        (utils::random::boolean() ? utils::random::string().c_str() : nullptr));
-
-    common::s3::S3ClientWrapper::Params params(uri, credentials, utils::random::number<size_t>());
-
-    // divide range into chunks - a chunk per request
-
-    const auto chunks = utils::random::chunks(size, num_requests);
-
-    auto responder = std::make_shared<common::Responder>(num_requests);
-
-    const auto chunk_bytesize = utils::random::number<size_t>(1, size);
-    const auto config = std::make_shared<Config>(utils::random::number(1, 4), chunk_bytesize, utils::random::number<size_t>(1, chunk_bytesize), false /* do not force minimum chunk size */);
-
-    std::vector<char> dst(size);
-    auto dst_ptr = dst.data();
-
-    // create task for each request
-    Tasks tasks;
-    std::vector<std::shared_ptr<Request>> requests(num_requests);
-    std::vector<size_t> offsets;
-    auto offset = start;
-    auto request_offset = dst_ptr;
-    for (unsigned i = 0; i < num_requests; ++i)
-    {
-        requests[i] = std::make_shared<Request>(offset, utils::random::number(), i, 1, chunks[i], request_offset);
-        EXPECT_EQ(requests[i]->bytesize, chunks[i]);
-        EXPECT_EQ(requests[i]->offset, offset);
-        request_offset += chunks[i];
-
-        // task offset is relative to the beginning of the request offset
-        auto task = Task(requests[i], offset, chunks[i], 0);
-        tasks.push_back(std::move(task));
-
-        offsets.push_back(offset);
-        offset += chunks[i];
-    }
-
-    Batch batch(utils::random::number(), utils::random::number(), path, params, std::move(tasks), responder, config);
-
-    std::atomic<bool> stopped(false);
-
-    Workload workload;
-    workload.add_batch(std::move(batch));
-
-    auto thread = utils::Thread([&]()
-    {
-        EXPECT_NO_THROW(workload.execute(stopped));
-    });
-
-    ::usleep(utils::random::number(300));
-
-    common::s3::S3ClientWrapper::stop();
-    stopped = true;
-
-    // collect responses
-    const auto start_time = std::chrono::steady_clock::now();
-    std::vector<common::Response> responses;
-    std::set<unsigned> responded_requests;
-    for (unsigned i = 0; i < num_requests; ++i)
-    {
-        auto r = responder->pop();
-        responded_requests.insert(r.index);
-        responses.push_back(r);
-    }
-
-    const auto end_time = std::chrono::steady_clock::now();
-    const auto duration  = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
-
-    if (num_requests > 1)
-    {
-        // verify that not all the requests were executed
-        EXPECT_LT(duration.count(), num_requests * delay_ms);
-    }
-
-    EXPECT_EQ(responded_requests.size(), num_requests);
-
-    auto r = responder->pop();
-    EXPECT_EQ(r.ret, common::ResponseCode::FinishedError);
-
-    unsigned count_terminated = 0;
-    for (const auto & r : responses)
-    {
-        EXPECT_LT(r.index, num_requests);
-
-        if (r.ret != common::ResponseCode::Success)
-        {
-            EXPECT_EQ(r.ret, common::ResponseCode::FinishedError);
-            ++count_terminated;
-        }
-    }
-
-    if (num_requests > 1)
-    {
-        EXPECT_GT(count_terminated, 0);
     }
 }
 

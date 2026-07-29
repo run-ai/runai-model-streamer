@@ -24,6 +24,9 @@ namespace runai::llm::streamer::common::s3
 std::set<common::backend_api::ObjectClientHandle_t> __mock_clients;
 std::map<common::backend_api::ObjectClientHandle_t /* client */, std::set<common::backend_api::ObjectRequestId_t /* request id */>> __mock_client_requests;
 std::set<common::backend_api::ObjectClientHandle_t> __mock_unused;
+// config (credentials + endpoint) received by the last obj_create_client; endpoint_url is stored under the
+// key "endpoint_url". Lets tests assert credentials arrive from runai_set_credentials all the way here.
+std::map<std::string, std::string> __mock_last_client_config;
 unsigned __mock_response_time_ms = 0;
 std::mutex __mutex;
 std::atomic<bool> __stopped(false);
@@ -36,8 +39,11 @@ std::atomic<size_t> __mock_max_concurrent{0};
 // requests whose path matched __mock_failing_path at submission time; their completion
 // events are reported with FileAccessError instead of the global response code, for
 // per-file error-isolation tests. __mock_failing_path is a substring match; empty = none.
+// Keyed by (client, request_id): request ids (chunk handles) are only unique per client
+// (each worker owns a client and a per-worker handle counter), so a flat request-id set would
+// cross-attribute the mark when two clients reuse the same handle number.
 std::string __mock_failing_path;
-std::set<common::backend_api::ObjectRequestId_t> __mock_failing_requests;
+std::set<std::pair<common::backend_api::ObjectClientHandle_t, common::backend_api::ObjectRequestId_t>> __mock_failing_requests;
 // peak number of completion events returned by a single obj_wait_for_completions call,
 // for batch (max_responses > 1) tests
 std::atomic<size_t> __mock_max_events_per_wait{0};
@@ -170,6 +176,26 @@ common::backend_api::ResponseCode_t obj_create_client(
 {
     const auto guard = std::unique_lock<std::mutex>(__mutex);
 
+    // capture the credentials/config this client is created with, so tests can verify they arrived from
+    // runai_set_credentials through the C++ layer to the plugin. Copy the strings (the config array is the
+    // caller's temporary).
+    __mock_last_client_config.clear();
+    if (client_initial_config != nullptr)
+    {
+        if (client_initial_config->endpoint_url != nullptr)
+        {
+            __mock_last_client_config["endpoint_url"] = client_initial_config->endpoint_url;
+        }
+        for (unsigned i = 0; i < client_initial_config->num_initial_params; ++i)
+        {
+            const auto & param = client_initial_config->initial_params[i];
+            if (param.key != nullptr)
+            {
+                __mock_last_client_config[param.key] = (param.value != nullptr) ? param.value : "";
+            }
+        }
+    }
+
     do
     {
         *out_client_handle = reinterpret_cast<common::backend_api::ObjectClientHandle_t>(utils::random::number());
@@ -251,7 +277,7 @@ common::backend_api::ResponseCode_t obj_request_read(
     // mark this request to fail at completion if its path matches the configured failing path
     if (!__mock_failing_path.empty() && path != nullptr && std::string(path).find(__mock_failing_path) != std::string::npos)
     {
-        __mock_failing_requests.insert(request_id);
+        __mock_failing_requests.insert({client_handle, request_id});
     }
 
     // track peak per-client in-flight (submitted-but-not-completed) for window tests
@@ -320,7 +346,7 @@ common::backend_api::ResponseCode_t obj_wait_for_completions(common::backend_api
     for (auto it = client_requests.begin(); it != client_requests.end() && *out_num_events_retrieved < max_events_to_retrieve; )
     {
         // a request marked via runai_mock_s3_set_failing_path fails; others get the global code
-        auto code = (__mock_failing_requests.erase(*it) != 0) ? common::ResponseCode::FileAccessError : r;
+        auto code = (__mock_failing_requests.erase({client_handle, *it}) != 0) ? common::ResponseCode::FileAccessError : r;
         event_buffer[*out_num_events_retrieved].request_id = *it;
         event_buffer[*out_num_events_retrieved].response_code = code;
         it = client_requests.erase(it);
@@ -450,6 +476,28 @@ void obj_free_file_list(common::backend_api::ObjectFileEntry_t* entries, unsigne
     delete[] entries;
 }
 
+const char* runai_mock_s3_last_client_config_value(const char* key)
+{
+    // Return a pointer into thread-local storage, not into __mock_last_client_config: the map is
+    // only stable while __mutex is held, so a raw pointer into it would dangle once the lock is
+    // released (a later obj_create_client / cleanup could rehash or clear it). The copy is made
+    // under the lock and stays valid until this thread's next call.
+    thread_local std::string value;
+
+    const auto guard = std::unique_lock<std::mutex>(__mutex);
+    if (key == nullptr)
+    {
+        return nullptr;
+    }
+    auto it = __mock_last_client_config.find(key);
+    if (it == __mock_last_client_config.end())
+    {
+        return nullptr;
+    }
+    value = it->second;
+    return value.c_str();
+}
+
 void runai_mock_s3_cleanup()
 {
     runai_mock_s3_set_response_time_ms(0);
@@ -464,6 +512,7 @@ void runai_mock_s3_cleanup()
     __mock_failing_path.clear();
     __mock_failing_requests.clear();
     __mock_files.clear();
+    __mock_last_client_config.clear();
     __mock_list_files_response = common::ResponseCode::Success;
     __mock_last_list_files_is_recursive = -1;
 }

@@ -32,12 +32,10 @@ class CapacityQueue
     {}
 
     // Add an item to be submitted later.
-    // cost     - the amount of capacity this item consumes while in flight.
-    // priority - reserved for later priority scheduling; ignored by the current
-    //            FIFO selection (0 = default).
-    void enqueue(T item, size_t cost, unsigned priority = 0)
+    // cost - the amount of capacity this item consumes while in flight.
+    void enqueue(T item, size_t cost)
     {
-        _pending.push_back(Entry{std::move(item), cost, priority});
+        _pending.push_back(Entry{std::move(item), cost});
     }
 
     // Return the next item to submit and reserve its cost against the capacity, or
@@ -76,6 +74,16 @@ class CapacityQueue
         _inflight = (_inflight >= cost) ? _inflight - cost : 0;
     }
 
+    // Drop every pending item and release all reserved credit, leaving the queue idle()
+    // in one step. For aborting a window whose pending set may exceed the capacity, where
+    // draining via try_take()/complete() would stop at the full-window boundary. The
+    // owner must abandon any tracking tied to the dropped items - their costs are gone.
+    void clear()
+    {
+        _pending.clear();
+        _inflight = 0;
+    }
+
     // no items left to submit (some may still be in flight)
     bool empty() const
     {
@@ -108,7 +116,6 @@ class CapacityQueue
     {
         T item;
         size_t cost;
-        unsigned priority;
     };
 
     size_t _capacity;

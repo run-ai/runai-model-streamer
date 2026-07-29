@@ -25,8 +25,6 @@ struct Task
         size_t end;
         // relative offset from the beginning of the request (e.g. zero for the request's first task)
         size_t relative_offset;
-
-        mutable common::backend_api::ObjectRequestId_t global_id;
     };
 
     Task(std::shared_ptr<Request> request, Info && info);

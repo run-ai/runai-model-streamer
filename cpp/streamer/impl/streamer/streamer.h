@@ -2,6 +2,8 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -15,16 +17,17 @@
 #include "streamer/impl/workload/workload.h"
 #include "streamer/impl/s3/s3.h"
 #include "streamer/impl/batches/batches.h"
+#include "streamer/impl/submissions/submissions_mgr.h"
+#include "streamer/impl/pools/backend_pools.h"
 
 namespace runai::llm::streamer::impl
 {
 
-// Streamer for reading large files concurrently, one file at a time
+// Streamer for reading large files concurrently
 
-// Important Note:
-// ==============
-// The streamer can handle a single read request at a time
-// The client must wait for the current request to end, before sending the next request
+// The user-facing responder is PERSISTENT and lives for the streamer's lifetime; many
+// submissions share it, demuxed by submission_id. response(timeout, done) is the single consumer: it
+// blocks / times out (no finish-on-drain) and reports completion per submission via submission_done.
 
 // Synchronous read -  read a range of a file to a given buffer of host memory
 // Asynchronous read - read a range of a file to a given buffer of host memory in two stages:
@@ -38,6 +41,13 @@ struct Streamer
     Streamer(Config config);
     ~Streamer();
 
+    // Set the streamer's object-storage credentials (a general key->value dictionary; see
+    // common::s3::Credentials). Set-once and thread-safe: the first call stores them; a later call with the
+    // SAME credentials returns Success; a later call with DIFFERENT credentials returns CredentialsAlreadySet
+    // (the streamer's client may already be built from the first set). Credentials are streamer-scoped, not
+    // per request - async_request/list_files use whatever was set here.
+    common::ResponseCode set_credentials(const common::s3::Credentials & credentials);
+
     common::ResponseCode async_request(
       std::vector<std::string> & paths,
       std::vector<size_t> & file_offsets,
@@ -45,46 +55,108 @@ struct Streamer
       std::vector<void *> & dsts,
       std::vector<unsigned> & num_sizes,
       std::vector<std::vector<size_t>> & internal_sizes,
-      const common::s3::Credentials & credentials);
+      SubmissionId * out_submission_id = nullptr);
 
-    // return when there is a ready chunk
-    // returns common::ResponseCode::FinishedError if no responses are expected
-    // returns common::ResponseCode error if failed
-    common::Response response();
+    // Consume the next ready sub-range response over the persistent responder. Blocks up to timeout_ms
+    // (0 = indefinitely) and returns TimedOut on expiry; FinishedError only on teardown (stop) - there is no
+    // finish-on-drain. On a real response it consumes the owning submission's registry record and sets
+    // submission_done to true iff it was that submission's last response (see consume_submission_response).
+    // The response carries the submission_id.
+    common::Response response(unsigned timeout_ms, bool & submission_done);
 
-    // For testing only:
+    // For testing only. Credentials are streamer-scoped: call set_credentials first (these use whatever
+    // was set there).
 
     // single synchronous read request from offset in file
     // returns common::ResponseCode::Success if successful or error code
-    common::ResponseCode sync_read(const std::string & path, size_t offset, size_t bytesize, void * dst, const common::s3::Credentials & credentials);
+    common::ResponseCode sync_read(const std::string & path, size_t offset, size_t bytesize, void * dst);
 
     // async request to read a range asynchronously as multiple chunks
     // returns common::ResponseCode::Success if successful or error code
-    common::ResponseCode async_read(const std::string & path, size_t offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes, const common::s3::Credentials & credentials);
+    common::ResponseCode async_read(const std::string & path, size_t offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes);
 
     // List files under prefix, which may be an object storage URI or a local filesystem path.
     // Applies fnmatch allow/ignore filtering (empty vectors mean no filter) and returns
-    // (full path, size) pairs. Throws common::Exception on error.
+    // (full path, size) pairs. Uses the streamer's credentials (set_credentials). Throws common::Exception
+    // on error.
     std::vector<std::pair<std::string, size_t>> list_files(
       const std::string & prefix,
       bool is_recursive,
       const std::vector<std::string> & allow_patterns,
-      const std::vector<std::string> & ignore_patterns,
-      const common::s3::Credentials & credentials);
+      const std::vector<std::string> & ignore_patterns);
 
  private:
     // Try to parse path as an object storage URI; returns nullptr for a filesystem path
     std::shared_ptr<common::s3::StorageUri> try_parse_uri(const std::string & path);
-    common::s3::S3ClientWrapper::Params handle_s3(unsigned file_index, const std::string & path, const common::s3::Credentials & credentials);
+
+    // Reject a submission that mixes object-storage plugins, and lock the streamer to a single
+    // object-storage plugin (first object-storage submission wins). Filesystem paths are ignored and coexist
+    // with the lock. Returns UnsupportedBackendMix on a mixed submission or a plugin differing from the lock,
+    // else Success.
+    common::ResponseCode lock_object_plugin(const std::vector<std::string> & paths);
+    // Build the object-storage params for a batch. Credentials are NOT included here (they are read only at
+    // client creation, from credentials()); the batch params carry the URI, which is all the per-read path uses.
+    common::s3::S3ClientWrapper::Params handle_s3(unsigned file_index, const std::string & path);
+
+    // The streamer's credentials (empty Credentials if none set), read via _credentials_state (which locks
+    // its own mutex). Called only at client-creation points (the worker's first client build, and list_files)
+    // - never on the per-request path.
+    common::s3::Credentials credentials() const;
     void verify_requests(std::vector<std::string> & paths, std::vector<size_t> & file_offsets, std::vector<size_t> & bytesizes, std::vector<unsigned> & num_sizes, std::vector<void *> & dsts);
+
+    // Account for one consumed response of submission_id (delegates to _submissions): on the
+    // submission's last response, log per-submission throughput. Returns true iff it was the
+    // submission's last response (i.e. submission_done).
+    bool consume_submission_response(SubmissionId submission_id);
+
+    // Drain workloads[from .. end] as UnknownError so the responder/registry reach zero and the
+    // consumer does not hang, when dispatch fails after increment(). `from` is the index of the
+    // workload whose push threw: workloads[0 .. from) were already moved into the pool and are
+    // NEVER referenced here (excluded by position); workloads[from] is intact because Workload's
+    // move is noexcept (see the static_assert in async_request), so push_back's strong guarantee
+    // means a throwing dispatch never moved it. Best-effort - under severe OOM a push may throw too.
+    void drain_undispatched(SubmissionId submission_id, std::vector<Workload> & workloads, size_t from);
 
  private:
     std::shared_ptr<const Config> _config;
+
+    // Streamer-scoped object-storage credentials with their own (encapsulated) mutex. Set-once: the first
+    // set wins; setting the same value again succeeds; a different value is rejected (CredentialsAlreadySet).
+    // Held via shared_ptr so the object-storage workers' credentials provider (which reads them at
+    // client-creation time) keeps the state alive regardless of Streamer/worker destruction order. Declared
+    // BEFORE _pools so it exists when the pool factory captures it.
+    class CredentialsState
+    {
+     public:
+        // Store the credentials (first call), or verify they match a previously-stored set. Returns Success
+        // if stored or unchanged; CredentialsAlreadySet if a different value was already set.
+        common::ResponseCode set(const common::s3::Credentials & credentials);
+        // The stored credentials (empty Credentials if none set yet).
+        common::s3::Credentials get() const;
+
+     private:
+        mutable std::mutex _mutex;
+        std::optional<common::s3::Credentials> _credentials;
+    };
+    std::shared_ptr<CredentialsState> _credentials_state = std::make_shared<CredentialsState>();
+
     std::unique_ptr<S3Cleanup> _s3;
-    utils::ThreadPool<Workload> _pool;
+    // Lazily-created worker pools, one per backend kind. Occupies the slot the single ThreadPool used
+    // to, so object-storage workers still join between _s3_stop (S3Stop) and _s3 (S3Cleanup) on teardown.
+    BackendPools _pools;
     std::unique_ptr<S3Stop> _s3_stop;
     std::unique_ptr<utils::FdLimitSetter> _fd_limit;
     std::shared_ptr<common::Responder> _responder;
+
+    // Lazy S3 init, each part exactly once in the streamer's lifetime and only for s3 paths.
+    // Split because _s3 is shared by list_files and streaming, while fd limit / stop are
+    // streaming-only. std::call_once is thread-safe for concurrent submitters and retries if the
+    // callable throws (InsufficientFdLimit), so the error resurfaces on the next s3 submission.
+    std::once_flag _s3_stream_init_flag;   // fd limit + S3Stop (streaming only)
+    std::once_flag _s3_cleanup_init_flag;  // S3Cleanup (list_files and streaming)
+
+    // per-submission bookkeeping (id allocation + completion + throughput); owns its own mutex
+    SubmissionsMgr _submissions;
 };
 
 }; // namespace runai::llm::streamer::impl

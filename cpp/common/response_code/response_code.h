@@ -25,6 +25,9 @@ enum class ResponseCode : int
     GCSNotSupported,
     AzureBlobNotSupported,
     FileTruncatedError,
+    TimedOut,
+    UnsupportedBackendMix,
+    CredentialsAlreadySet,
     __Max,
 };
 

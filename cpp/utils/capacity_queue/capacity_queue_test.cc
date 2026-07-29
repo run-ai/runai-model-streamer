@@ -152,4 +152,39 @@ TEST(CapacityQueue, CompletionDrivenDrainNeverExceedsCapacity)
     EXPECT_TRUE(q.idle());
 }
 
+TEST(CapacityQueue, ClearDropsPendingAndInflightInOneStep)
+{
+    // pending far exceeds the window, and some items are in flight: a try_take()/complete() drain would stop
+    // at the full-window boundary, but clear() empties both in one step and leaves the queue idle().
+    constexpr size_t capacity = 10;
+    CapacityQueue<int> q(capacity);
+    for (int i = 0; i < 100; ++i)   // 100 chunks, cost 1 -> pending >> capacity
+    {
+        q.enqueue(i, 1);
+    }
+
+    for (int i = 0; i < static_cast<int>(capacity); ++i)   // fill the window
+    {
+        ASSERT_TRUE(q.try_take().has_value());
+    }
+    ASSERT_FALSE(q.try_take().has_value());   // full: try_take() blocks with items still pending
+    EXPECT_EQ(q.inflight(), capacity);
+    EXPECT_EQ(q.pending(), 90U);
+
+    q.clear();
+
+    EXPECT_TRUE(q.idle());
+    EXPECT_TRUE(q.empty());
+    EXPECT_EQ(q.pending(), 0U);
+    EXPECT_EQ(q.inflight(), 0U);
+    EXPECT_FALSE(q.try_take().has_value());
+
+    // usable after clear(): still bounded by the same capacity
+    q.enqueue(7, 1);
+    auto v = q.try_take();
+    ASSERT_TRUE(v.has_value());
+    EXPECT_EQ(*v, 7);
+    EXPECT_EQ(q.capacity(), capacity);
+}
+
 } // namespace runai::llm::streamer::utils

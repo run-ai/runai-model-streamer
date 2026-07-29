@@ -2,10 +2,14 @@ import unittest
 import tempfile
 import shutil
 import os
+import sys
+import glob
 import random
 import string
+import subprocess
+import resource
 from safetensors.torch import safe_open
-from tests.safetensors.generator import create_random_safetensors
+from tests.safetensors.generator import create_random_safetensors, create_sized_safetensors
 from tests.safetensors.comparison import tensor_maps_are_equal
 from runai_model_streamer.safetensors_streamer.safetensors_streamer import (
     SafetensorsStreamer,
@@ -25,6 +29,54 @@ def create_random_files(dir):
     with open(file_path, "w") as file:
         file.write(random_letters(15))
     return file_path
+
+# Runs in a subprocess so a crash during mid-stream teardown surfaces as a signal exit
+# (and a core dump) instead of taking down the test runner. Each process: (1) kills a
+# streamer mid-stream at a randomized moment with reads still outstanding, then (2) creates
+# a NEW streamer in the SAME process and streams the whole file, checking every tensor
+# against the reference -- proving the killed streamer did not invalidate the next one (the
+# reused, process-global object-storage client still serves correct data). Exits non-zero on
+# any mismatch. The URL, reference file path, and credentials/endpoint come from the
+# environment (inherited from the parent), exactly like the in-process tests.
+_TEARDOWN_CHILD_PROGRAM = """
+import os, random, time
+import torch
+from safetensors.torch import safe_open
+from runai_model_streamer.safetensors_streamer.safetensors_streamer import SafetensorsStreamer
+
+url = os.environ["TEARDOWN_TEST_URL"]
+expected_file = os.environ["TEARDOWN_EXPECTED_FILE"]
+
+# 1. Kill a streamer mid-stream at a randomized moment, reads still outstanding.
+with SafetensorsStreamer() as run_sf:
+    run_sf.stream_file(url, None, "cpu")
+    if random.random() < 0.5:
+        # Wait until the first tensor is delivered, then leave the rest in flight.
+        for _name, _tensor in run_sf.get_tensors():
+            break
+    else:
+        # Exit after a very short delay, often before any response arrives.
+        time.sleep(random.uniform(0, 0.01))
+
+# 2. A NEW streamer in the SAME process must still stream the whole file correctly.
+got = {}
+with SafetensorsStreamer() as run_sf:
+    run_sf.stream_file(url, None, "cpu")
+    for name, tensor in run_sf.get_tensors():
+        got[name] = tensor
+
+expected = {}
+with safe_open(expected_file, framework="pt", device="cpu") as f:
+    for name in f.keys():
+        expected[name] = f.get_tensor(name)
+
+if set(got) != set(expected):
+    raise SystemExit("reused streamer tensor names differ: %s vs %s" % (sorted(got), sorted(expected)))
+for name in expected:
+    if not torch.equal(got[name], expected[name]):
+        raise SystemExit("reused streamer returned wrong data for tensor %s after a mid-stream kill" % name)
+"""
+
 
 def compatibility_test_cases(backend_class, scheme, bucket_name):
     class TestObjectStorageCompatibility(unittest.TestCase):
@@ -54,6 +106,105 @@ def compatibility_test_cases(backend_class, scheme, bucket_name):
             if not equal:
                 self.fail(f"Tensor mismatch: {message}")
         
+        def test_teardown_while_streaming(self):
+            """
+            Kill the streamer (context-manager __exit__ -> runai_end) while object-storage
+            reads are still in flight, without draining all tensors, and assert the process
+            does not crash (no core dump). This exercises the persistent-responder teardown
+            (stop() with outstanding responses) plus the S3 client lifecycle.
+
+            Each teardown runs in a fresh subprocess: an in-process segfault/abort during
+            runai_end would kill the test runner itself, so isolation is what makes a crash
+            observable -- as a negative return code (killed by a signal, i.e. the condition
+            that drops a core). A crash and a clean error are reported distinctly. Core dumps
+            are enabled in the child so a crash also drops a core we detect on disk as a
+            supplementary signal (skipped when the kernel pipes cores elsewhere).
+
+            An unlimited memory limit dispatches the whole file in a single wave, so all
+            chunks are outstanding in the capacity queue / object-storage client at once.
+            Several fresh processes randomize the teardown moment to cover both "after a
+            response was consumed" and "before any response arrived". After each kill the
+            child creates a NEW streamer in the SAME process and streams the whole file,
+            checking every tensor's data against the reference -- so a killed streamer must
+            not invalidate the next one that reuses the process-global object-storage client.
+            Distinct per-tensor payloads make that data check catch wrong offsets and
+            cross-tensor swaps. A final fresh-process stream then confirms the backend is
+            healthy across process boundaries too.
+            """
+            file_path = create_sized_safetensors(self.temp_dir)
+            self.server.upload_file(self.bucket_name, "", file_path)
+            url = f"{self.scheme}://{self.bucket_name}/{os.path.basename(file_path)}"
+
+            run_cwd = tempfile.mkdtemp()
+            try:
+                env = dict(
+                    os.environ,
+                    RUNAI_STREAMER_MEMORY_LIMIT="-1",
+                    TEARDOWN_TEST_URL=url,
+                    TEARDOWN_EXPECTED_FILE=file_path,
+                )
+                # The child runs with cwd=run_cwd, so any RELATIVE entry in LD_LIBRARY_PATH
+                # (e.g. the azure harness's "../cpp/bazel-bin/azure") would stop resolving and
+                # the child would load the wrong object-storage plugin. Resolve entries against
+                # the parent's cwd so the child loads the same libs the parent test does.
+                ld_library_path = os.environ.get("LD_LIBRARY_PATH")
+                if ld_library_path:
+                    env["LD_LIBRARY_PATH"] = os.pathsep.join(
+                        os.path.abspath(p) if p else p
+                        for p in ld_library_path.split(os.pathsep)
+                    )
+                for i in range(5):
+                    proc = subprocess.run(
+                        [sys.executable, "-c", _TEARDOWN_CHILD_PROGRAM],
+                        cwd=run_cwd,
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
+                        # Enable core dumps in the child so a crash actually drops a core.
+                        preexec_fn=lambda: resource.setrlimit(
+                            resource.RLIMIT_CORE,
+                            (resource.RLIM_INFINITY, resource.RLIM_INFINITY),
+                        ),
+                    )
+                    # A crash during teardown == killed by a signal == negative return code
+                    # (the condition that produces a core). This is the primary assertion.
+                    self.assertGreaterEqual(
+                        proc.returncode,
+                        0,
+                        f"streamer CRASHED during mid-stream teardown (iteration {i}): "
+                        f"killed by signal {-proc.returncode}.\nstderr:\n{proc.stderr}",
+                    )
+                    cores = glob.glob(os.path.join(run_cwd, "core*"))
+                    self.assertEqual(
+                        cores, [], f"core dump(s) produced during mid-stream teardown: {cores}"
+                    )
+                    # A clean non-zero exit means the stream itself errored (not a crash).
+                    self.assertEqual(
+                        proc.returncode,
+                        0,
+                        f"streamer errored during mid-stream teardown (iteration {i}, "
+                        f"return code {proc.returncode}).\nstderr:\n{proc.stderr}",
+                    )
+            finally:
+                shutil.rmtree(run_cwd, ignore_errors=True)
+
+            # The library and backend must remain healthy: a fresh full stream succeeds.
+            our = {}
+            with SafetensorsStreamer() as run_sf:
+                run_sf.stream_file(url, None, "cpu")
+                for name, tensor in run_sf.get_tensors():
+                    our[name] = tensor
+
+            their = {}
+            with safe_open(file_path, framework="pt", device="cpu") as f:
+                for name in f.keys():
+                    their[name] = f.get_tensor(name)
+
+            equal, message = tensor_maps_are_equal(our, their)
+            if not equal:
+                self.fail(f"Tensor mismatch after mid-stream teardown: {message}")
+
         def test_safetensors_truncated_file_body(self):
             """
             Tests the scenario where the header is valid, but the file ends unexpectedly 

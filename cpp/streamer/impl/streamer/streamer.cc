@@ -6,7 +6,9 @@
 #include <filesystem>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -14,6 +16,7 @@
 #include "utils/scope_guard/scope_guard.h"
 
 #include "streamer/impl/workload/workload.h"
+#include "streamer/impl/object_storage_worker/object_storage_worker.h"
 #include "streamer/impl/assigner/assigner.h"
 #include "common/exception/exception.h"
 #include "common/storage_uri/storage_uri.h"
@@ -26,10 +29,25 @@ Streamer::Streamer() : Streamer(Config())
 
 Streamer::Streamer(Config config) :
     _config(std::make_shared<Config>(config)),
-    _pool([&](Workload&& workload, std::atomic<bool> & stopped)
+    // Filesystem reads are synchronous (concurrency threads, stateless handler); object-storage reads are
+    // asynchronous (s3_concurrency ObjectStorageWorkers, each owning a client + in-flight capacity window).
+    // Pools are created lazily on first use of each kind.
+    _pools(
+        [](Workload&& workload, std::atomic<bool> & stopped)
         {
             workload.execute(stopped);
-        }, _config->max_concurrency())
+        },
+        // each object-storage worker reads the streamer's credentials once, at client creation, via this
+        // provider. It captures the shared credentials state by value, so the state outlives the worker
+        // regardless of destruction order (it never captures `this`).
+        [state = _credentials_state]() -> std::unique_ptr<utils::Worker<Workload>>
+        {
+            return std::make_unique<ObjectStorageWorker>([state]() { return state->get(); });
+        },
+        _config->concurrency, _config->s3_concurrency),
+    // One PERSISTENT responder for the streamer's lifetime, shared by all submissions and
+    // demuxed by submission_id. increment() grows its expected count per accepted submission.
+    _responder(std::make_shared<common::Responder>(0, common::QueueMode::PERSISTENT))
 {
     LOG(DEBUG) << config;
 }
@@ -39,25 +57,29 @@ Streamer::~Streamer()
     try
     {
         LOG(DEBUG) << "Streamer shutting down";
+        // unblock any consumer parked in response()/pop() on the persistent responder
+        _responder->stop();
     }
     catch(...)
     {}
 }
 
-common::ResponseCode Streamer::sync_read(const std::string & path, size_t file_offset, size_t bytesize, void * dst, const common::s3::Credentials & credentials)
+common::ResponseCode Streamer::sync_read(const std::string & path, size_t file_offset, size_t bytesize, void * dst)
 {
     LOG(SPAM) << "Requested to read " << bytesize << " bytes from " << path << " offset " << file_offset;
 
-    auto r = async_read(path, file_offset, bytesize, dst, 1, &bytesize, credentials);
+    auto r = async_read(path, file_offset, bytesize, dst, 1, &bytesize);
     if (r != common::ResponseCode::Success)
     {
         return r;
     }
 
-    return _responder->pop().ret;
+    // consume the single response (blocking); consuming it also forgets the submission's registry record
+    bool submission_done = false;
+    return response(0, submission_done).ret;
 }
 
-common::ResponseCode Streamer::async_read(const std::string & path, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes, const common::s3::Credentials & credentials)
+common::ResponseCode Streamer::async_read(const std::string & path, size_t file_offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes)
 {
     common::ResponseCode ret = common::ResponseCode::Success;
 
@@ -80,7 +102,7 @@ common::ResponseCode Streamer::async_read(const std::string & path, size_t file_
 
         internal_sizes_vv.push_back(internal_sizes_v);
 
-        async_request(paths, file_offsets, bytesizes, dsts, num_sizes_v, internal_sizes_vv, credentials);
+        ret = async_request(paths, file_offsets, bytesizes, dsts, num_sizes_v, internal_sizes_vv);
     }
     catch(const common::Exception & e)
     {
@@ -91,14 +113,58 @@ common::ResponseCode Streamer::async_read(const std::string & path, size_t file_
     return ret;
 }
 
-common::Response Streamer::response()
+common::ResponseCode Streamer::CredentialsState::set(const common::s3::Credentials & credentials)
 {
-    if (_responder == nullptr)
+    const auto guard = std::unique_lock<std::mutex>(_mutex);
+
+    if (!_credentials.has_value())
     {
-        return common::Response(common::ResponseCode::FinishedError);
+        _credentials = credentials;   // first set wins
+        return common::ResponseCode::Success;
     }
 
-    return _responder->pop();
+    // set-once: re-setting the same credentials is a no-op (concurrent submitters all set the same value);
+    // a different set is rejected - the client may already be built from the first set, so silently
+    // replacing them would be misleading.
+    if (_credentials.value() != credentials)
+    {
+        LOG(ERROR) << "Credentials were already set to a different value; create a new streamer to use different credentials";
+        return common::ResponseCode::CredentialsAlreadySet;
+    }
+
+    return common::ResponseCode::Success;
+}
+
+common::s3::Credentials Streamer::CredentialsState::get() const
+{
+    const auto guard = std::unique_lock<std::mutex>(_mutex);
+    return _credentials.value_or(common::s3::Credentials{});
+}
+
+common::ResponseCode Streamer::set_credentials(const common::s3::Credentials & credentials)
+{
+    return _credentials_state->set(credentials);
+}
+
+common::s3::Credentials Streamer::credentials() const
+{
+    return _credentials_state->get();
+}
+
+common::Response Streamer::response(unsigned timeout_ms, bool & submission_done)
+{
+    submission_done = false;
+
+    // Persistent + timed pop: a drained-but-open responder is not terminal (it blocks / times
+    // out); FinishedError comes only from teardown. Completion is per-submission, tracked below.
+    auto r = _responder->pop(timeout_ms);
+
+    if (r.ret != common::ResponseCode::FinishedError && r.ret != common::ResponseCode::TimedOut)
+    {
+        submission_done = consume_submission_response(r.submission_id);
+    }
+
+    return r;
 }
 
 common::ResponseCode Streamer::async_request(
@@ -108,25 +174,42 @@ common::ResponseCode Streamer::async_request(
     std::vector<void *> & dsts,
     std::vector<unsigned> & num_sizes,
     std::vector<std::vector<size_t>> & internal_sizes,
-    const common::s3::Credentials & credentials)
+    SubmissionId * out_submission_id)
 {
+    // Default the caller's id to 0 ("none"). It is overwritten with the real id the instant one is
+    // minted (below), so only a failure before that point (verify / plugin lock) reports no id.
+    if (out_submission_id != nullptr)
+    {
+        *out_submission_id = 0;
+    }
+
     // verify input
     verify_requests(paths, file_offsets, bytesizes, num_sizes, dsts);
 
-    auto total_sizes =  std::accumulate(num_sizes.begin(), num_sizes.end(), 0u);
-
-    if (_responder && !_responder->finished())
+    // A streamer serves a single object-storage plugin; reject a submission that mixes object-storage plugins
+    // or differs from the locked plugin. Nothing is committed yet, so returning is clean. Credentials are
+    // streamer-scoped and read only at client creation (in the worker), so they are not touched here.
+    if (const auto ret = lock_object_plugin(paths); ret != common::ResponseCode::Success)
     {
-        LOG(ERROR) << "Previous request is still running";
-        throw common::Exception(common::ResponseCode::BusyError);
+        return ret;
     }
 
-    // expecting for total of num_sizes responses
-    _responder = std::make_shared<common::Responder>(total_sizes);
+    const auto total_sizes = std::accumulate(num_sizes.begin(), num_sizes.end(), 0u);
+    const size_t total_bytes = std::accumulate(bytesizes.begin(), bytesizes.end(), static_cast<size_t>(0));
 
-    // cancel responder in case of an error - cancelled response will not delay sending the next request
-    utils::ScopeGuard __responder_release([&](){_responder->cancel();});
-
+    // Mint the submission id up front so batches can be stamped with it, and hand it back to the
+    // caller immediately: the id is always reported once it exists, regardless of how the call
+    // ends. On success it identifies the submission; on a failure AFTER commit (a dispatch throw
+    // under memory pressure) it lets the caller drain this submission's already-accounted
+    // responses; on a pre-commit build failure it is informational (the caller sees the error and
+    // will not wait on it). The submission is committed (registered + increment + dispatched) only
+    // once fully built, so a build failure below just returns the error - no registry entry, no
+    // increment, no workloads, and no shared cancel() that would disturb other submissions.
+    const SubmissionId submission_id = _submissions.generate();
+    if (out_submission_id != nullptr)
+    {
+        *out_submission_id = submission_id;
+    }
 
     // divide reading between workers
     Assigner assigner(paths, file_offsets, bytesizes, dsts, _config);
@@ -137,9 +220,9 @@ common::ResponseCode Streamer::async_request(
 
     for (size_t i = 0; i < paths.size(); ++i)
     {
-        auto params = handle_s3(i, paths[i], credentials);
-        LOG(DEBUG) << "Creating batches for file index " << i << " path: " <<  paths[i];
-        Batches batches(i, assigner.file_assignments(i), _config, _responder, paths[i], params, internal_sizes[i]);
+        auto params = handle_s3(i, paths[i]);
+        LOG(DEBUG) << "Submission " << submission_id << " creating batches for file index " << i << " path: " <<  paths[i];
+        Batches batches(submission_id, i, assigner.file_assignments(i), _config, _responder, paths[i], params, internal_sizes[i]);
         const auto num_batches = batches.size();
         LOG(DEBUG) << "Created " << num_batches << " batches for file index " << i;
         for (size_t j = 0; j < num_batches; ++j)
@@ -151,38 +234,96 @@ common::ResponseCode Streamer::async_request(
                 continue;
             }
 
-            const auto worker_index = batch.worker_index;
+            const auto workload_index = batch.workload_index;
 
-            LOG(DEBUG) << "Batch: file index " << batch.file_index << " with " << batch.tasks.size() << " tasks for worker " << worker_index << " total bytes " << batch.total_bytes();
+            LOG(DEBUG) << "Submission " << submission_id << " Batch: file index " << batch.file_index << " with " << batch.tasks.size() << " tasks for workload " << workload_index << " total bytes " << batch.total_bytes();
 
-            const auto & result = workloads[worker_index].add_batch(std::move(batch));
-            LOG(DEBUG) << "Added batch to worker " << worker_index << " with result " << result;
+            const auto & result = workloads[workload_index].add_batch(std::move(batch));
+            LOG(DEBUG) << "Submission " << submission_id << " added batch to workload " << workload_index << " with result " << result;
             if (result != common::ResponseCode::Success)
             {
-                LOG(ERROR) << "Failed to add batch to worker " << worker_index << " error: " << result;
-                return result;
+                LOG(ERROR) << "Submission " << submission_id << " failed to add batch to workload " << workload_index << " error: " << result;
+                return result; // nothing committed yet
             }
         }
     }
 
-    // send batches to threadpool
-    for (auto & workload : workloads)
-    {
-        if (workload.size() > 0)
-        {
-            LOG(DEBUG) << "sending workload to worker with batches " << workload.size();
+    // Commit the submission: register it, grow the persistent responder's expected count, then
+    // dispatch. increment() must happen before any workload runs so _running covers the responses.
+    _submissions.add(submission_id, total_sizes, total_bytes);
+    _responder->increment(total_sizes);
 
-            _pool.push(std::move(workload));
+    // The drain guard relies on push_back's strong guarantee for the workload whose push throws,
+    // which holds only because Workload's move is noexcept (so the throw is the node allocation,
+    // before the move). Enforce it so a future throwing-move member fails the build here.
+    static_assert(std::is_nothrow_move_constructible<Workload>::value,
+                  "Workload move must be noexcept for the async_request dispatch drain to be safe");
+
+    // If dispatch throws (e.g. bad_alloc) after increment(), drain the not-yet-dispatched
+    // workloads (index >= next) as UnknownError on unwind, so every sub-range still completes and
+    // the responder/registry reach zero - the consumer gets a clean failure instead of hanging.
+    // The exception then propagates and the caller maps it to UnknownError.
+    size_t next = 0;
+    utils::ScopeGuard drain_guard([&]() { drain_undispatched(submission_id, workloads, next); });
+
+    for (; next < workloads.size(); ++next) // ++next runs after the body, so a throwing push leaves next at it
+    {
+        if (workloads[next].size() > 0)
+        {
+            LOG(DEBUG) << "Submission " << submission_id << " sending workload to worker with batches " << workloads[next].size();
+
+            // route to the pool for this workload's backend kind (a workload is homogeneous)
+            const auto kind = workloads[next].is_object_storage()
+                ? BackendPools::Kind::ObjectStorage
+                : BackendPools::Kind::FileSystem;
+            _pools.push(kind, std::move(workloads[next]));
         }
     }
 
-    __responder_release.cancel();
+    drain_guard.cancel(); // all workloads dispatched
 
     return common::ResponseCode::Success;
 }
 
+void Streamer::drain_undispatched(SubmissionId submission_id, std::vector<Workload> & workloads, size_t from)
+{
+    LOG(ERROR) << "Submission " << submission_id << " failed to dispatch; draining undispatched workloads as errors";
+
+    // Only workloads[from .. end] - the failed one and the un-attempted ones. workloads[0 .. from)
+    // were already moved into the pool and are intentionally not referenced.
+    for (size_t i = from; i < workloads.size(); ++i)
+    {
+        if (workloads[i].size() > 0)
+        {
+            try { workloads[i].fail(common::ResponseCode::UnknownError); }
+            catch (...) {} // best-effort under severe OOM
+        }
+    }
+}
+
+bool Streamer::consume_submission_response(SubmissionId submission_id)
+{
+    // SubmissionsMgr owns the registry + its mutex (a strict leaf); logging happens here, outside
+    // that lock. Consuming a response for an unknown submission is an accounting bug and ASSERTs
+    // inside consume() rather than returning.
+    const auto result = _submissions.consume(submission_id);
+
+    if (result.outcome == SubmissionsMgr::Result::Outcome::Completed)
+    {
+        LOG(INFO) << "Submission " << submission_id << " completed: " << utils::logging::human_readable_size(result.total_bytes)
+                  << " in " << result.elapsed_ms << " ms, " << utils::logging::human_readable_size(result.throughput_bps) << "/s";
+        return true;
+    }
+
+    return false;
+}
+
 void Streamer::verify_requests(std::vector<std::string> & paths, std::vector<size_t> & file_offsets, std::vector<size_t> & bytesizes, std::vector<unsigned> & num_sizes, std::vector<void *> & dsts)
 {
+    // Only dsts[0] is checked because only dsts[0] is ever used: for CPU reads the destination is a single
+    // contiguous buffer whose base is dsts[0], and every file/sub-range is written at an offset into it (see
+    // Assigner: "ASSUMES dsts[0] is base of one large buffer"). dsts[1..] are never dereferenced - callers
+    // may even pass a single-element dsts for a multi-file request - so there is no per-file null to check.
     if (dsts[0] == 0)
     {
         LOG(ERROR) << "Destination buffer is null";
@@ -207,6 +348,41 @@ void Streamer::verify_requests(std::vector<std::string> & paths, std::vector<siz
     }
 }
 
+common::ResponseCode Streamer::lock_object_plugin(const std::vector<std::string> & paths)
+{
+    // Find the object-storage plugin this submission uses (filesystem paths are ignored and coexist);
+    // reject a submission that itself mixes two object-storage plugins.
+    std::optional<BackendPools::Plugin> submission_plugin;
+    for (const auto & path : paths)
+    {
+        auto uri = try_parse_uri(path);
+        if (uri == nullptr)
+        {
+            continue;   // filesystem path
+        }
+
+        const auto plugin = uri->is_gcs()   ? BackendPools::Plugin::GCS
+                          : uri->is_azure() ? BackendPools::Plugin::Azure
+                          :                   BackendPools::Plugin::S3;
+
+        if (submission_plugin.has_value() && submission_plugin.value() != plugin)
+        {
+            LOG(ERROR) << "Submission mixes object storage plugins; rejecting";
+            return common::ResponseCode::UnsupportedBackendMix;
+        }
+        submission_plugin = plugin;
+    }
+
+    if (!submission_plugin.has_value())
+    {
+        return common::ResponseCode::Success;   // pure filesystem submission - nothing to lock
+    }
+
+    // Lock the object-storage pool to this plugin (first submission) or verify it matches; the lock lives in
+    // BackendPools, alongside the ObjectStorage pool it constrains
+    return _pools.lock_object_plugin(submission_plugin.value());
+}
+
 std::shared_ptr<common::s3::StorageUri> Streamer::try_parse_uri(const std::string & path)
 {
     std::shared_ptr<common::s3::StorageUri> uri;
@@ -220,39 +396,47 @@ std::shared_ptr<common::s3::StorageUri> Streamer::try_parse_uri(const std::strin
     return uri;
 }
 
-common::s3::S3ClientWrapper::Params Streamer::handle_s3(unsigned file_index, const std::string & path, const common::s3::Credentials & credentials)
+common::s3::S3ClientWrapper::Params Streamer::handle_s3(unsigned file_index, const std::string & path)
 {
     auto uri = try_parse_uri(path);
 
-    if (uri != nullptr && _s3 == nullptr)
+    if (uri != nullptr)
     {
-        // adjust fd limit acording to concurrency
-        auto fd_limit = utils::get_cur_file_descriptors();
-        LOG(DEBUG) << "Process file descriptors limit is " << fd_limit << " and concurrency level is " << _config->s3_concurrency;
-        const auto desired_fd_limit = _config->s3_concurrency * 64;
-        if (fd_limit < desired_fd_limit)
+        // streaming-only setup (fd limit + stop), once. If the fd-limit raise throws
+        // (InsufficientFdLimit) the flag stays unset, so a later submission retries.
+        std::call_once(_s3_stream_init_flag, [this]()
         {
-            if (desired_fd_limit > utils::get_max_file_descriptors())
+            // adjust fd limit acording to concurrency
+            auto fd_limit = utils::get_cur_file_descriptors();
+            LOG(DEBUG) << "Process file descriptors limit is " << fd_limit << " and concurrency level is " << _config->s3_concurrency;
+            const auto desired_fd_limit = _config->s3_concurrency * 64;
+            if (fd_limit < desired_fd_limit)
             {
-                LOG(ERROR) << "Insufficient file descriptors limit " << fd_limit << " for concurrency level " << _config->s3_concurrency << " ; increase fd limit to " << desired_fd_limit << " or higher, depending on your application fd usage";
-                throw common::Exception(common::ResponseCode::InsufficientFdLimit);
+                if (desired_fd_limit > utils::get_max_file_descriptors())
+                {
+                    LOG(ERROR) << "Insufficient file descriptors limit " << fd_limit << " for concurrency level " << _config->s3_concurrency << " ; increase fd limit to " << desired_fd_limit << " or higher, depending on your application fd usage";
+                    throw common::Exception(common::ResponseCode::InsufficientFdLimit);
+                }
+                LOG(INFO) << "Increasing fd soft limit to " << desired_fd_limit << " for concurrency level " << _config->s3_concurrency;
+                _fd_limit = std::make_unique<utils::FdLimitSetter>(desired_fd_limit);
             }
-            LOG(INFO) << "Increasing fd soft limit to " << desired_fd_limit << " for concurrency level " << _config->s3_concurrency;
-            _fd_limit = std::make_unique<utils::FdLimitSetter>(desired_fd_limit);
-        }
-        _s3_stop = std::make_unique<S3Stop>();
-        _s3 = std::make_unique<S3Cleanup>();
+            _s3_stop = std::make_unique<S3Stop>();
+        });
+
+        // S3Cleanup: shared by list_files and streaming, created once
+        std::call_once(_s3_cleanup_init_flag, [this]() { _s3 = std::make_unique<S3Cleanup>(); });
     }
 
-    return common::s3::S3ClientWrapper::Params(uri, credentials, _config->s3_block_bytesize);
+    // Batch params carry only the URI (used by the per-read path) - no credentials. Credentials are applied
+    // once, at client creation, from the streamer's credentials() (see ObjectStorageWorker::capacity).
+    return common::s3::S3ClientWrapper::Params(uri, _config->s3_block_bytesize);
 }
 
 std::vector<std::pair<std::string, size_t>> Streamer::list_files(
     const std::string & prefix,
     bool is_recursive,
     const std::vector<std::string> & allow_patterns,
-    const std::vector<std::string> & ignore_patterns,
-    const common::s3::Credentials & credentials)
+    const std::vector<std::string> & ignore_patterns)
 {
     // fnmatch(3) filtering, matching the behavior of Python fnmatch.fnmatch(path, pattern)
     auto keep = [&](const char * path) -> bool
@@ -279,16 +463,14 @@ std::vector<std::pair<std::string, size_t>> Streamer::list_files(
 
     if (uri != nullptr)
     {
-        // Any code path that uses the S3 plugin must release its clients and the
-        // backend handle when the streamer shuts down (~Streamer). stop() and the
-        // fd limit are streaming-only: listing is a single synchronous call with no
-        // in-flight async reads and no threadpool workers to unblock.
-        if (_s3 == nullptr)
-        {
-            _s3 = std::make_unique<S3Cleanup>();
-        }
+        // Any code path that uses the S3 plugin must release its clients and the backend handle
+        // when the streamer shuts down (~Streamer). stop() and the fd limit are streaming-only:
+        // listing is a single synchronous call with no in-flight async reads and no threadpool
+        // workers to unblock. Shares the S3Cleanup once_flag with handle_s3 so it is created once.
+        std::call_once(_s3_cleanup_init_flag, [this]() { _s3 = std::make_unique<S3Cleanup>(); });
 
-        common::s3::S3ClientWrapper::Params params(uri, credentials, _config->s3_block_bytesize);
+        // listing builds a client, so read the streamer's credentials here (a client-creation point)
+        common::s3::S3ClientWrapper::Params params(uri, credentials(), _config->s3_block_bytesize);
         common::s3::S3ClientWrapper wrapper(params);
 
         common::backend_api::ObjectFileEntry_t * entries = nullptr;

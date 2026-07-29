@@ -7,6 +7,7 @@
         runai_mock_s3_set_failing_path;
         runai_mock_s3_max_events_per_wait;
         runai_mock_s3_set_append_finished_sentinel;
+        runai_mock_s3_last_client_config_value;
         runai_mock_s3_cleanup;
         runai_s3_mock_set_backend_shutdown_policy;
         runai_mock_s3_is_shutdown;

@@ -28,12 +28,16 @@ class TestBindings(unittest.TestCase):
         }
         with FileStreamer() as fs:
             fs.stream_files([FileChunks(file_id, file_path, 1, request_sizes)])
+            seen = set()
             for res_file_id, id, dst in fs.get_chunks():
+                seen.add(id)
                 self.assertEqual(res_file_id, file_id)
                 self.assertEqual(
                     dst.numpy().tobytes().decode("utf-8"),
                     id_to_results[id]["expected_text"],
                 )
+            # every range produced exactly one response (full drain, incl. the zero-size range)
+            self.assertEqual(seen, set(id_to_results))
 
     @patch("runai_model_streamer.file_streamer.requests_iterator._get_memory_mode")
     def test_min_memory_cap(self, mock_get_memory_mode):
@@ -52,12 +56,16 @@ class TestBindings(unittest.TestCase):
         }
         with FileStreamer() as fs:
             fs.stream_files([FileChunks(file_id, file_path, 1, request_sizes)])
+            seen = set()
             for res_file_id, id, dst in fs.get_chunks():
+                seen.add(id)
                 self.assertEqual(res_file_id, file_id)
                 self.assertEqual(
                     dst.numpy().tobytes().decode("utf-8"),
                     id_to_results[id]["expected_text"],
                 )
+            # every range produced exactly one response (full drain)
+            self.assertEqual(seen, set(id_to_results))
 
     @patch("os.getenv")
     @patch("runai_model_streamer.file_streamer.requests_iterator._get_memory_mode")
@@ -85,12 +93,30 @@ class TestBindings(unittest.TestCase):
         }
         with FileStreamer() as fs:
             fs.stream_files([FileChunks(file_id, file_path, 1, request_sizes)])
+            seen = set()
             for res_file_id, id, dst, in fs.get_chunks():
+                seen.add(id)
                 self.assertEqual(res_file_id, file_id)
                 self.assertEqual(
                     dst.numpy().tobytes().decode("utf-8"),
                     id_to_results[id]["expected_text"],
                 )
+            # every range produced exactly one response (full drain across multiple buffer requests)
+            self.assertEqual(seen, set(id_to_results))
+
+    def test_get_chunks_raises_on_read_error(self):
+        # FileStreamer is single-submission and fail-fast: a per-sub-range error from the streamer must raise
+        # out of get_chunks (the low-level binding no longer raises, so FileStreamer itself enforces this).
+        # Requesting more bytes than the file holds makes the read fall short -> a per-sub-range error.
+        file_id = 17
+        file_path = os.path.join(self.temp_dir, "small.txt")
+        with open(file_path, "w") as file:
+            file.write("short")   # 5 bytes
+
+        with FileStreamer() as fs:
+            fs.stream_files([FileChunks(file_id, file_path, 0, [20])])   # one 20-byte range from a 5-byte file
+            with self.assertRaises(ValueError):
+                list(fs.get_chunks())
 
     def tearDown(self):
         shutil.rmtree(self.temp_dir)

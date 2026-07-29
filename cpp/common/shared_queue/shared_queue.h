@@ -30,6 +30,20 @@ namespace runai::llm::streamer::common
 
 // Designed for multi producers that push responses and a single consumer that is waiting for responses
 
+// Who owns the "finished" decision for this queue:
+//  - FINISH_ON_DRAIN: the queue owns it. pop() returns FinishedError once drained
+//    (_running == 0 && empty). Used by the backend responders, whose _running/increment
+//    track outstanding reads. This is the default and preserves the original behavior.
+//  - PERSISTENT: the caller owns it. A drained queue is NOT terminal - pop() blocks (or
+//    times out) waiting for future submissions; FinishedError is returned only on stop()
+//    (teardown). Used by the user-facing multi-request responder, whose completion is tracked
+//    outside the queue (the streamer's per-submission registry).
+enum class QueueMode
+{
+    FINISH_ON_DRAIN,
+    PERSISTENT,
+};
+
 template <typename ResponseType>
 struct SharedQueue
 {
@@ -38,18 +52,22 @@ struct SharedQueue
     static_assert(std::is_constructible<ResponseType, common::ResponseCode>::value,
                   "ResponseType must be constructible from common::ResponseCode for error states.");
 
-    SharedQueue(unsigned running);
+    SharedQueue(unsigned running, QueueMode mode = QueueMode::FINISH_ON_DRAIN);
 
     ~SharedQueue();
 
     void increment(unsigned running);
 
-    ResponseType pop();
+    // Blocking + timed pop.
+    //  - returns the next response when one is available;
+    //  - returns TimedOut if timeout_ms elapses first (timeout_ms == 0 blocks indefinitely);
+    //  - returns FinishedError on stop(), and (FINISH_ON_DRAIN only) when drained.
+    // See QueueMode for how the mode affects the drained state.
+    ResponseType pop(unsigned timeout_ms = 0);
 
     void push(ResponseType && response);
     void push(ResponseType && response, size_t bytesize);
 
-    void cancel();
     void stop();
 
     bool finished() const;
@@ -60,6 +78,9 @@ struct SharedQueue
     common::ResponseCode valid() const;
 
  private:
+    // whether the queue owns the "finished" decision (see QueueMode)
+    const QueueMode _mode;
+
     // expected number of responses
     unsigned _running;
 
@@ -72,7 +93,6 @@ struct SharedQueue
     // mutex to make the queue thread safe
     mutable std::mutex _mutex;
 
-    bool _canceled = false;
     std::atomic<bool> _stopped;
 
     std::atomic<size_t> _total_bytesize;
@@ -87,7 +107,8 @@ struct SharedQueue
 // --- Implementation ---
 
 template <typename ResponseType>
-SharedQueue<ResponseType>::SharedQueue(unsigned running) :
+SharedQueue<ResponseType>::SharedQueue(unsigned running, QueueMode mode) :
+    _mode(mode),
     _running(running),
     _ready(0), // Semaphore initialized to 0
     _stopped(false),
@@ -113,18 +134,36 @@ void SharedQueue<ResponseType>::increment(unsigned running)
 }
 
 template <typename ResponseType>
-ResponseType SharedQueue<ResponseType>::pop()
+ResponseType SharedQueue<ResponseType>::pop(unsigned timeout_ms)
 {
-    if (_stopped.load(std::memory_order_acquire) || finished()) // Use acquire for atomic read
+    // stop() is terminal in both modes.
+    if (_stopped.load(std::memory_order_acquire)) // Use acquire for atomic read
     {
-        LOG(DEBUG) << (_stopped.load(std::memory_order_relaxed) ? "responder stopped" : "responder does not expect any more responses") << " (Type: " << typeid(ResponseType).name() << ")";
+        LOG(DEBUG) << "responder stopped (Type: " << typeid(ResponseType).name() << ")";
         return ResponseType(common::ResponseCode::FinishedError);
     }
 
-    _ready.wait(); // Wait for a response to be pushed
+    // FINISH_ON_DRAIN owns "finished": a drained queue is terminal at entry.
+    // PERSISTENT does not - it blocks / times out below, leaving completion to the caller.
+    if (_mode == QueueMode::FINISH_ON_DRAIN && finished())
+    {
+        LOG(DEBUG) << "responder does not expect any more responses (Type: " << typeid(ResponseType).name() << ")";
+        return ResponseType(common::ResponseCode::FinishedError);
+    }
+
+    if (timeout_ms == 0)
+    {
+        _ready.wait(); // block indefinitely until a post (push or stop)
+    }
+    else if (!_ready.wait_for(timeout_ms))
+    {
+        return ResponseType(common::ResponseCode::TimedOut);
+    }
 
     const auto guard = std::unique_lock<std::mutex>(_mutex);
 
+    // stop() is the only non-push post; if it woke us, report FinishedError. Otherwise a push-post
+    // always has a matching item (single consumer), so the queue is non-empty below.
     if (_stopped.load(std::memory_order_relaxed))
     {
         LOG(DEBUG) << "responder stopped while waiting or after acquiring lock (Type: " << typeid(ResponseType).name() << ")";
@@ -164,13 +203,10 @@ void SharedQueue<ResponseType>::push(ResponseType && response)
             --_running;
             posted_to_semaphore = true;
 
-            if (_running == 0 && _successful && _total_bytesize.load(std::memory_order_relaxed) > 100 * 1024 * 1024)
-            {
-                const auto throughput = bytes_per_second(); // bytes_per_second uses _mutex internally if needed
-                // Consider if std::cout is appropriate here or if it should be logged.
-                // This might also be better placed outside the lock if bytes_per_second is slow.
-                LOG(INFO) << "Read throughput is " << utils::logging::human_readable_size(throughput) << " per second " << std::endl;
-            }
+            // Throughput logging moved out of the queue (G4): on a PERSISTENT responder
+            // _running hits 0 between every submission and _start_time/_total_bytesize are
+            // cumulative, so a queue-level throughput number is meaningless. Per-submission
+            // throughput is logged by the streamer on request_done instead.
         }
         else
         {
@@ -196,33 +232,9 @@ template <typename ResponseType>
 bool SharedQueue<ResponseType>::finished() const
 {
     const auto guard = std::unique_lock<std::mutex>(_mutex);
-    // A responder is finished if it was canceled,
-    // OR if all expected responses have been accounted for (_running == 0)
+    // A responder is finished when all expected responses have been accounted for (_running == 0)
     // AND there are no more responses waiting in the queue to be popped.
-    return (_canceled || (_running == 0 && _responses.empty()));
-}
-
-template <typename ResponseType>
-void SharedQueue<ResponseType>::cancel()
-{
-    bool needs_post = false;
-    {
-        const auto guard = std::unique_lock<std::mutex>(_mutex);
-        if (!_canceled && !_stopped.load(std::memory_order_relaxed)) {
-             _canceled = true;
-             // If there are threads potentially blocked in pop() waiting on _ready,
-             // and finished() will now return true, we might need to signal them
-             // to wake up and re-check the finished() condition.
-             if (_running > 0 || !_responses.empty()) { // If pop() could be waiting
-                 needs_post = true;
-             }
-        }
-        LOG(DEBUG) << "Responder canceled. Current running: " << _running << ", Responses in queue: " << _responses.size() << " (Type: " << typeid(ResponseType).name() << ")";
-    }
-    if (needs_post)
-    {
-        _ready.post();
-    }
+    return (_running == 0 && _responses.empty());
 }
 
 template <typename ResponseType>

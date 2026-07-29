@@ -13,6 +13,7 @@
 
 #include "utils/logging/logging.h"
 #include "utils/random/random.h"
+#include "utils/thread/thread.h"
 #include "utils/fd/fd.h"
 #include "utils/temp/env/env.h"
 #include "utils/temp/file/file.h"
@@ -22,6 +23,24 @@ namespace runai::llm::streamer
 
 namespace
 {
+
+// Test adapters over the multi-request C API. These single-submission tests don't need the submission id or
+// streams and drain by a known count, so submit() discards the id and next_response() blocks (timeout 0) for
+// the next sub-range. There is no finish-on-drain: a submission's last response carries submission_done, so
+// the tests never call next_response() past the expected count (that would block).
+inline int submit(void * streamer, unsigned num_files, const char ** paths, size_t * file_offsets,
+                  size_t * bytesizes, void ** dsts, unsigned * num_sizes, size_t ** internal_sizes)
+{
+    SubmissionId submission_id = 0;
+    return runai_request(streamer, &submission_id, num_files, paths, file_offsets, bytesizes, dsts, num_sizes, internal_sizes);
+}
+
+inline int next_response(void * streamer, unsigned * file_index, unsigned * index)
+{
+    SubmissionId submission_id = 0;
+    int submission_done = 0;
+    return runai_response(streamer, &submission_id, file_index, index, &submission_done, 0);
+}
 
 struct StreamerTest : ::testing::Test
 {
@@ -38,7 +57,7 @@ struct StreamerTest : ::testing::Test
         internal_sizes.push_back(sizes.data());
         std::vector<unsigned> num_sizes;
         num_sizes.push_back(1);
-        return runai::llm::streamer::runai_request(streamer, 1, &path, &offset, &size, &dst, num_sizes.data(), internal_sizes.data(), nullptr, nullptr, nullptr, nullptr, nullptr);
+        return submit(streamer, 1, &path, &offset, &size, &dst, num_sizes.data(), internal_sizes.data());
     }
 
     int runai_read_file(void * streamer, const char * path, size_t offset, size_t size, void * dst)
@@ -49,7 +68,7 @@ struct StreamerTest : ::testing::Test
         internal_sizes.push_back(sizes.data());
         std::vector<unsigned> num_sizes;
         num_sizes.push_back(1);
-        auto res = runai::llm::streamer::runai_request(streamer, 1, &path, &offset, &size, &dst, num_sizes.data(), internal_sizes.data(), nullptr, nullptr, nullptr, nullptr, nullptr);
+        auto res = submit(streamer, 1, &path, &offset, &size, &dst, num_sizes.data(), internal_sizes.data());
         if (res != static_cast<int>(runai::llm::streamer::common::ResponseCode::Success))
         {
             return res;
@@ -57,7 +76,7 @@ struct StreamerTest : ::testing::Test
 
         unsigned file_index;
         unsigned index;
-        return runai_response(streamer, &file_index, &index);
+        return next_response(streamer, &file_index, &index);
     }
 
  protected:
@@ -155,10 +174,9 @@ TEST_F(StreamerTest, Async)
     EXPECT_EQ(runai_request_file(streamer, file.path.c_str(), 0, size, dst.data()), static_cast<int>(common::ResponseCode::Success));
     unsigned r = utils::random::number();
     unsigned rfile = utils::random::number();
-    EXPECT_EQ(runai_response(streamer, &rfile, &r), static_cast<int>(common::ResponseCode::Success));
+    EXPECT_EQ(next_response(streamer, &rfile, &r), static_cast<int>(common::ResponseCode::Success));
     EXPECT_EQ(r, 0);
     EXPECT_EQ(rfile, 0);
-    EXPECT_EQ(runai_response(streamer, &rfile, &r), static_cast<int>(common::ResponseCode::FinishedError));
 
     for (size_t i = 0; i < size; ++i)
     {
@@ -196,10 +214,9 @@ TEST_F(StreamerTest, Error)
     unsigned value = utils::random::number();
     unsigned r = value;
     unsigned file_index = utils::random::number();
-    EXPECT_EQ(runai_response(streamer, &file_index, &r), static_cast<int>(common::ResponseCode::EofError));
+    EXPECT_EQ(next_response(streamer, &file_index, &r), static_cast<int>(common::ResponseCode::EofError));
     EXPECT_EQ(r, 0);
     EXPECT_EQ(file_index, 0);
-    EXPECT_EQ(runai_response(streamer, &file_index, &r), static_cast<int>(common::ResponseCode::FinishedError));
 
     runai_end(streamer);
 }
@@ -246,7 +263,7 @@ TEST_F(StreamerTest, S3_Library_Not_Found)
     sizes.push_back(size);
     EXPECT_EQ(runai_request_file(streamer, s3_path.c_str(), 0, size, dst.data()), static_cast<int>(common::ResponseCode::Success));
     unsigned r = utils::random::number();
-    EXPECT_EQ(runai_response(streamer, &r, &r), static_cast<int>(common::ResponseCode::S3NotSupported));
+    EXPECT_EQ(next_response(streamer, &r, &r), static_cast<int>(common::ResponseCode::S3NotSupported));
 
     runai_end(streamer);
 }
@@ -266,7 +283,7 @@ TEST_F(StreamerTest, GCS_Library_Not_Found)
     sizes.push_back(size);
     EXPECT_EQ(runai_request_file(streamer, s3_path.c_str(), 0, size, dst.data()), static_cast<int>(common::ResponseCode::Success));
     unsigned r = utils::random::number();
-    EXPECT_EQ(runai_response(streamer, &r, &r), static_cast<int>(common::ResponseCode::GCSNotSupported));
+    EXPECT_EQ(next_response(streamer, &r, &r), static_cast<int>(common::ResponseCode::GCSNotSupported));
 
     runai_end(streamer);
 }
@@ -368,7 +385,7 @@ TEST_F(StreamerTest, Multiple_Files)
     auto res = runai_start(&streamer);
     EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
 
-    EXPECT_EQ(runai_request(streamer, num_files, file_paths.data(), file_offsets.data(), sizes.data(), dsts.data(), num_ranges.data(), internal_sizes.data(), nullptr, nullptr, nullptr, nullptr, nullptr), static_cast<int>(common::ResponseCode::Success));
+    EXPECT_EQ(submit(streamer, num_files, file_paths.data(), file_offsets.data(), sizes.data(), dsts.data(), num_ranges.data(), internal_sizes.data()), static_cast<int>(common::ResponseCode::Success));
 
     // wait for all the responses to arrive
     unsigned r;
@@ -377,13 +394,11 @@ TEST_F(StreamerTest, Multiple_Files)
     {
         r = utils::random::number();
         file_index = utils::random::number();
-        EXPECT_EQ(runai_response(streamer, &file_index, &r), static_cast<int>(common::ResponseCode::Success));
+        EXPECT_EQ(next_response(streamer, &file_index, &r), static_cast<int>(common::ResponseCode::Success));
         EXPECT_LT(file_index, num_files);
         EXPECT_EQ(expected_response[file_index].count(r), 1);
         expected_response[file_index].erase(r);
     }
-
-    EXPECT_EQ(runai_response(streamer, &file_index, &r), static_cast<int>(common::ResponseCode::FinishedError));
 
     // verify
     size_t offset = 0;
@@ -402,6 +417,228 @@ TEST_F(StreamerTest, Multiple_Files)
             }
         }
         offset += sizes[file_index];
+    }
+
+    runai_end(streamer);
+}
+
+TEST(AsyncEx, ConcurrentSubmissionsDemux)
+{
+    // Two concurrent submissions on the persistent responder, demuxed by submission_id.
+    // Submission A has 2 sub-ranges, B has 1; submission_done fires exactly once per submission
+    // (on its last sub-range). After draining, a timed response times out (persistent, not
+    // FinishedError).
+    const auto size = utils::random::number(100, 1000);
+    const auto data = utils::random::buffer(size);
+    utils::temp::File file(data);
+    const auto expected = utils::Fd::read(file.path);
+    ASSERT_EQ(expected.size(), size);
+
+    void * streamer = nullptr;
+    ASSERT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
+
+    const char * path = file.path.c_str();
+    size_t offset = 0;
+    size_t bytesize = size;
+
+    // Submission A: 2 sub-ranges into dstA
+    std::vector<unsigned char> dstA(size);
+    const size_t s1 = size / 2;
+    std::vector<size_t> subA = { s1, size - s1 };
+    size_t * subA_ptr = subA.data();
+    unsigned numA = 2;
+    SubmissionId idA = 0;
+    void * dstA_ptr = dstA.data();
+    ASSERT_EQ(runai_request(streamer, &idA, 1, &path, &offset, &bytesize, &dstA_ptr, &numA, &subA_ptr),
+              static_cast<int>(common::ResponseCode::Success));
+
+    // Submission B: 1 sub-range into dstB
+    std::vector<unsigned char> dstB(size);
+    std::vector<size_t> subB = { size };
+    size_t * subB_ptr = subB.data();
+    unsigned numB = 1;
+    SubmissionId idB = 0;
+    void * dstB_ptr = dstB.data();
+    ASSERT_EQ(runai_request(streamer, &idB, 1, &path, &offset, &bytesize, &dstB_ptr, &numB, &subB_ptr),
+              static_cast<int>(common::ResponseCode::Success));
+
+    EXPECT_NE(idA, 0u);
+    EXPECT_NE(idB, 0u);
+    EXPECT_NE(idA, idB);
+
+    // Drain 3 responses (2 for A, 1 for B), in any order, demuxed by submission_id
+    std::map<SubmissionId, unsigned> got;         // submission_id -> responses seen
+    std::map<SubmissionId, unsigned> done_count;   // submission_id -> submission_done seen
+    for (int i = 0; i < 3; ++i)
+    {
+        SubmissionId sid = 0;
+        unsigned fi = 0, idx = 0;
+        int done = 0;
+        int ret = runai_response(streamer, &sid, &fi, &idx, &done, 5000);
+        ASSERT_EQ(ret, static_cast<int>(common::ResponseCode::Success));
+        got[sid]++;
+        if (done) done_count[sid]++;
+    }
+
+    EXPECT_EQ(got[idA], 2u);
+    EXPECT_EQ(got[idB], 1u);
+    EXPECT_EQ(done_count[idA], 1u);   // submission_done exactly once, on the last sub-range
+    EXPECT_EQ(done_count[idB], 1u);
+
+    // Persistent: after draining, a timed response times out (does NOT return FinishedError)
+    SubmissionId sid = 0;
+    unsigned fi = 0, idx = 0;
+    int done = 0;
+    EXPECT_EQ(runai_response(streamer, &sid, &fi, &idx, &done, 50),
+              static_cast<int>(common::ResponseCode::TimedOut));
+
+    for (size_t i = 0; i < size; ++i)
+    {
+        EXPECT_EQ(dstA[i], expected[i]);
+        EXPECT_EQ(dstB[i], expected[i]);
+    }
+
+    runai_end(streamer);
+}
+
+TEST(AsyncEx, PerSubmissionErrorIsolation)
+{
+    // Two concurrent submissions: one valid, one reading past EOF. The failure is tagged to its
+    // own submission_id and does not affect the other, which completes successfully.
+    const auto data_size = utils::random::number(100, 500);
+    const auto data = utils::random::buffer(data_size);
+    utils::temp::File file(data);
+    const auto expected = utils::Fd::read(file.path);
+    ASSERT_EQ(expected.size(), data_size);
+
+    void * streamer = nullptr;
+    ASSERT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
+
+    const char * path = file.path.c_str();
+    size_t offset = 0;
+
+    // Submission A: valid full read
+    std::vector<unsigned char> dstA(data_size);
+    size_t bytesizeA = data_size;
+    std::vector<size_t> subA = { data_size };
+    size_t * subA_ptr = subA.data();
+    unsigned numA = 1;
+    SubmissionId idA = 0;
+    void * dstA_ptr = dstA.data();
+    ASSERT_EQ(runai_request(streamer, &idA, 1, &path, &offset, &bytesizeA, &dstA_ptr, &numA, &subA_ptr),
+              static_cast<int>(common::ResponseCode::Success));
+
+    // Submission B: read past EOF -> EofError
+    const size_t over = data_size + utils::random::number(1, 100);
+    std::vector<unsigned char> dstB(over);
+    size_t bytesizeB = over;
+    std::vector<size_t> subB = { over };
+    size_t * subB_ptr = subB.data();
+    unsigned numB = 1;
+    SubmissionId idB = 0;
+    void * dstB_ptr = dstB.data();
+    ASSERT_EQ(runai_request(streamer, &idB, 1, &path, &offset, &bytesizeB, &dstB_ptr, &numB, &subB_ptr),
+              static_cast<int>(common::ResponseCode::Success));
+
+    EXPECT_NE(idA, idB);
+
+    // drain both responses; demux by submission_id
+    std::map<SubmissionId, int> ret_by_sub;
+    std::map<SubmissionId, int> done_by_sub;
+    for (int i = 0; i < 2; ++i)
+    {
+        SubmissionId sid = 0;
+        unsigned fi = 0, idx = 0;
+        int done = 0;
+        int ret = runai_response(streamer, &sid, &fi, &idx, &done, 5000);
+        ret_by_sub[sid] = ret;
+        done_by_sub[sid] += done;
+    }
+
+    EXPECT_EQ(ret_by_sub[idA], static_cast<int>(common::ResponseCode::Success));
+    EXPECT_EQ(ret_by_sub[idB], static_cast<int>(common::ResponseCode::EofError));
+    EXPECT_EQ(done_by_sub[idA], 1);   // each submission is completed exactly once
+    EXPECT_EQ(done_by_sub[idB], 1);
+
+    // A's data is intact despite B failing
+    for (size_t i = 0; i < data_size; ++i)
+    {
+        EXPECT_EQ(dstA[i], expected[i]);
+    }
+
+    runai_end(streamer);
+}
+
+TEST(AsyncEx, MultipleSubmitterThreads)
+{
+    // Concurrent submitters exercise the submission-id allocator + registry mutex; a single
+    // consumer drains all, verifying distinct ids, per-submission completion, and data.
+    const auto size = utils::random::number(100, 500);
+    const auto data = utils::random::buffer(size);
+    utils::temp::File file(data);
+    const auto expected = utils::Fd::read(file.path);
+    ASSERT_EQ(expected.size(), size);
+
+    void * streamer = nullptr;
+    ASSERT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
+
+    const unsigned N = utils::random::number(4, 12);
+    std::vector<std::vector<unsigned char>> dsts(N, std::vector<unsigned char>(size));
+    std::vector<SubmissionId> ids(N, 0);
+    std::vector<int> submit_ret(N, -1);
+
+    // N concurrent submitters (joined on scope exit)
+    {
+        std::vector<utils::Thread> submitters;
+        for (unsigned t = 0; t < N; ++t)
+        {
+            submitters.emplace_back([&, t]()
+            {
+                const char * path = file.path.c_str();
+                size_t offset = 0;
+                size_t bytesize = size;
+                std::vector<size_t> sub = { size };
+                size_t * sub_ptr = sub.data();
+                unsigned num = 1;
+                void * dst = dsts[t].data();
+                submit_ret[t] = runai_request(streamer, &ids[t], 1, &path, &offset, &bytesize, &dst, &num, &sub_ptr);
+            });
+        }
+    }
+
+    // all accepted, ids distinct and non-zero
+    std::set<SubmissionId> unique_ids;
+    for (unsigned t = 0; t < N; ++t)
+    {
+        EXPECT_EQ(submit_ret[t], static_cast<int>(common::ResponseCode::Success));
+        EXPECT_NE(ids[t], 0u);
+        unique_ids.insert(ids[t]);
+    }
+    EXPECT_EQ(unique_ids.size(), N);
+
+    // single consumer drains all N responses (one sub-range each)
+    std::map<SubmissionId, int> done_by_sub;
+    for (unsigned i = 0; i < N; ++i)
+    {
+        SubmissionId sid = 0;
+        unsigned fi = 0, idx = 0;
+        int done = 0;
+        int ret = runai_response(streamer, &sid, &fi, &idx, &done, 5000);
+        EXPECT_EQ(ret, static_cast<int>(common::ResponseCode::Success));
+        done_by_sub[sid] += done;
+    }
+    for (auto id : unique_ids)
+    {
+        EXPECT_EQ(done_by_sub[id], 1);
+    }
+
+    // all buffers received the data
+    for (unsigned t = 0; t < N; ++t)
+    {
+        for (size_t i = 0; i < size; ++i)
+        {
+            EXPECT_EQ(dsts[t][i], expected[i]);
+        }
     }
 
     runai_end(streamer);

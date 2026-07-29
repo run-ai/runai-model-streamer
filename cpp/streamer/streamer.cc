@@ -74,21 +74,44 @@ _RUNAI_EXTERN_C void runai_end(void * streamer)
 // internal_sizes : a list containing the size of each sub request, where the first sub request starts at the given file offset and each sub request starts at the end of the previous one
 // return Success if request is valid
 
-_RUNAI_EXTERN_C int runai_request(
+namespace
+{
+
+// Marshal the C request arrays and submit, forwarding out_submission_id. Credentials are NOT passed here:
+// they are streamer-scoped, set once via runai_set_credentials.
+int submit_request(impl::Streamer * s,
+                   SubmissionId * out_submission_id,
+                   unsigned num_files,
+                   const char ** paths, size_t * file_offsets, size_t * bytesizes,
+                   void ** dsts, unsigned * num_sizes, size_t ** internal_sizes)
+{
+    std::vector<std::string> paths_v(paths, paths + num_files);
+    std::vector<size_t> file_offsets_v(file_offsets, file_offsets + num_files);
+    std::vector<size_t> bytesizes_v(bytesizes, bytesizes + num_files);
+    std::vector<void *> dsts_v(dsts, dsts + num_files);
+    std::vector<unsigned> num_sizes_v(num_sizes, num_sizes + num_files);
+    std::vector<size_t *> internal_sizes_v(internal_sizes, internal_sizes + num_files);
+
+    std::vector<std::vector<size_t>> internal_sizes_vv(num_files);
+    for (unsigned i = 0; i < num_files; ++i)
+    {
+        internal_sizes_vv[i] = std::vector<size_t>(internal_sizes_v[i], internal_sizes_v[i] + num_sizes_v[i]);
+    }
+
+    return static_cast<int>(s->async_request(paths_v, file_offsets_v, bytesizes_v, dsts_v, num_sizes_v, internal_sizes_vv, out_submission_id));
+}
+
+} // namespace
+
+// Set the streamer's object-storage credentials as a general key/value dictionary (canonical config-param
+// keys; see common::s3::Credentials). Set-once and thread-safe: the same credentials may be set repeatedly
+// (Success); a different set after the first returns CredentialsAlreadySet. Credentials are streamer-scoped -
+// the read/list entry points use whatever was set here.
+_RUNAI_EXTERN_C int runai_set_credentials(
     void * streamer,
-    unsigned num_files,
-    const char ** paths,
-    size_t * file_offsets,
-    size_t * bytesizes,
-    void ** dsts,
-    unsigned * num_sizes,
-    size_t ** internal_sizes,
-    const char * key,
-    const char * secret,
-    const char * token,
-    const char * region,
-    const char * endpoint
-)
+    const char ** param_keys,
+    const char ** param_values,
+    unsigned num_params)
 {
     try
     {
@@ -98,22 +121,7 @@ _RUNAI_EXTERN_C int runai_request(
             return static_cast<int>(common::ResponseCode::InvalidParameterError);
         }
 
-        common::s3::Credentials credentials(key, secret, token, region, endpoint);
-
-        std::vector<std::string> paths_v(paths, paths + num_files);
-        std::vector<size_t> file_offsets_v(file_offsets, file_offsets + num_files);
-        std::vector<size_t> bytesizes_v(bytesizes, bytesizes + num_files);
-        std::vector<void *> dsts_v(dsts, dsts + num_files);
-        std::vector<unsigned> num_sizes_v(num_sizes, num_sizes + num_files);
-        std::vector<size_t *> internal_sizes_v(internal_sizes, internal_sizes + num_files);
-
-        std::vector<std::vector<size_t>> internal_sizes_vv(num_files);
-        for (unsigned i = 0; i < num_files; ++i)
-        {
-            internal_sizes_vv[i] = std::vector<size_t>(internal_sizes_v[i], internal_sizes_v[i] + num_sizes_v[i]);
-        }
-
-        return static_cast<int>(s->async_request(paths_v, file_offsets_v, bytesizes_v, dsts_v, num_sizes_v, internal_sizes_vv, credentials));
+        return static_cast<int>(s->set_credentials(common::s3::Credentials(param_keys, param_values, num_params)));
     }
     catch(...)
     {
@@ -121,27 +129,65 @@ _RUNAI_EXTERN_C int runai_request(
     return static_cast<int>(common::ResponseCode::UnknownError);
 }
 
-// receive response for each sub request when ready
-//
-// streamer : streamer object
-// file_index : index of the file that the response belongs to
-// index : index of the sub request that the response belongs to
-// return Success if response is valid
+_RUNAI_EXTERN_C int runai_request(
+    void * streamer,
+    SubmissionId * out_submission_id,
+    unsigned num_files,
+    const char ** paths,
+    size_t * file_offsets,
+    size_t * bytesizes,
+    void ** dsts,
+    unsigned * num_sizes,
+    size_t ** internal_sizes
+)
+{
+    // default the id to 0 ("none") so every return path - including early failures and a throw
+    // during argument marshalling - leaves a defined value the caller can rely on
+    if (out_submission_id != nullptr)
+    {
+        *out_submission_id = 0;
+    }
 
-_RUNAI_EXTERN_C int runai_response(void * streamer, unsigned * file_index /* return parameter */, unsigned * index /* return parameter */)
+    try
+    {
+        auto s = static_cast<impl::Streamer *>(streamer);
+        if (s == nullptr)
+        {
+            return static_cast<int>(common::ResponseCode::InvalidParameterError);
+        }
+
+        // credentials are streamer-scoped (runai_set_credentials), not per request
+        return submit_request(s, out_submission_id, num_files, paths, file_offsets, bytesizes, dsts, num_sizes, internal_sizes);
+    }
+    catch(...)
+    {
+    }
+    return static_cast<int>(common::ResponseCode::UnknownError);
+}
+
+_RUNAI_EXTERN_C int runai_response(
+    void * streamer,
+    SubmissionId * out_submission_id,
+    unsigned * file_index,
+    unsigned * index,
+    int * submission_done,
+    unsigned timeout_ms)
 {
     try
     {
-        if (streamer == nullptr || index == nullptr)
+        if (streamer == nullptr || file_index == nullptr || index == nullptr)
         {
             return static_cast<int>(common::ResponseCode::InvalidParameterError);
         }
 
         auto * s = static_cast<impl::Streamer *>(streamer);
-        auto r = s->response();
+        bool done = false;
+        auto r = s->response(timeout_ms, done);
 
         *index = r.index;
         *file_index = r.file_index;
+        if (out_submission_id != nullptr) *out_submission_id = r.submission_id;
+        if (submission_done != nullptr) *submission_done = done ? 1 : 0;
         return static_cast<int>(r.ret);
     }
     catch(...)
@@ -166,6 +212,7 @@ _RUNAI_EXTERN_C const char * runai_response_str(int response_code)
 }
 
 _RUNAI_EXTERN_C int runai_list_files(
+    void *                streamer,
     const char *          prefix,
     int                   is_recursive,
     const char **         allow_patterns,
@@ -173,37 +220,20 @@ _RUNAI_EXTERN_C int runai_list_files(
     const char **         ignore_patterns,
     unsigned              num_ignore_patterns,
     RunaiFileListCallback callback,
-    void *                user_data,
-    const char **         param_keys,
-    const char **         param_values,
-    unsigned              num_params)
+    void *                user_data)
 {
     try
     {
-        if (!prefix || !callback)
+        if (!streamer || !prefix || !callback)
             return static_cast<int>(common::ResponseCode::InvalidParameterError);
-
-        const char *key = nullptr, *secret = nullptr, *token = nullptr,
-                   *region = nullptr, *endpoint = nullptr;
-        for (unsigned i = 0; i < num_params; ++i)
-        {
-            if (!param_keys || !param_keys[i]) continue;
-            const std::string k(param_keys[i]);
-            const char* v = param_values ? param_values[i] : nullptr;
-            if      (k == "key")      key      = v;
-            else if (k == "secret")   secret   = v;
-            else if (k == "token")    token    = v;
-            else if (k == "region")   region   = v;
-            else if (k == "endpoint") endpoint = v;
-        }
-        common::s3::Credentials credentials(key, secret, token, region, endpoint);
 
         std::vector<std::string> allow, ignore;
         for (unsigned i = 0; allow_patterns && i < num_allow_patterns; ++i) allow.emplace_back(allow_patterns[i]);
         for (unsigned i = 0; ignore_patterns && i < num_ignore_patterns; ++i) ignore.emplace_back(ignore_patterns[i]);
 
-        impl::Streamer streamer;
-        const auto files = streamer.list_files(prefix, is_recursive != 0, allow, ignore, credentials);
+        auto * s = static_cast<impl::Streamer *>(streamer);
+        // credentials are streamer-scoped (runai_set_credentials), applied when the listing client is built
+        const auto files = s->list_files(prefix, is_recursive != 0, allow, ignore);
         for (const auto & entry : files)
         {
             callback(entry.first.c_str(), entry.second, user_data);

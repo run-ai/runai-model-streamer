@@ -74,7 +74,7 @@ TEST(Batches, Sanity)
             auto total_chunks_size = std::accumulate(chunks.begin(), chunks.end(), 0u);
             EXPECT_EQ(total_chunks_size, bytesizes[file_idx]);
 
-            Batches batches(utils::random::number(), assigner.file_assignments(file_idx), config, responder, file[file_idx].path, s3_params, chunks);
+            Batches batches(utils::random::number(), utils::random::number(), assigner.file_assignments(file_idx), config, responder, file[file_idx].path, s3_params, chunks);
 
             // execute tasks
             for (unsigned i = 0; i < batches.size(); ++i)
@@ -166,7 +166,7 @@ TEST(Batches, Failed_Reader)
         EXPECT_GT(assigner.file_assignments(0).size(), 0);
         EXPECT_LE(assigner.file_assignments(0).size(), config->concurrency);
 
-        Batches batches(utils::random::number(), assigner.file_assignments(0), config, responder, file_path, s3_params, chunks);
+        Batches batches(utils::random::number(), utils::random::number(), assigner.file_assignments(0), config, responder, file_path, s3_params, chunks);
     }
     catch(const common::Exception & e)
     {
@@ -175,7 +175,6 @@ TEST(Batches, Failed_Reader)
 
     // reader is created later when the batch is executed, and that is when the error will occur
     EXPECT_EQ(ret, common::ResponseCode::Success);
-    responder->cancel();
 }
 
 TEST(Batches, Zero_Size_Request)
@@ -240,7 +239,7 @@ TEST(Batches, Zero_Size_Request)
         EXPECT_GT(assigner.file_assignments(0).size(), 0);
         EXPECT_LE(assigner.file_assignments(0).size(), config->concurrency);
 
-        Batches batches(utils::random::number(), assigner.file_assignments(0), config, responder, file.path, s3_params, chunks);
+        Batches batches(utils::random::number(), utils::random::number(), assigner.file_assignments(0), config, responder, file.path, s3_params, chunks);
 
         // execute tasks
         for (unsigned i = 0; i < batches.size(); ++i)

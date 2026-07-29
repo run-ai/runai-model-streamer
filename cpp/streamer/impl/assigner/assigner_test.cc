@@ -83,8 +83,8 @@ TEST_F(AssignerTest, Valid_Inputs)
             std::set<unsigned> worker_indices;
             for (const auto & task : tasks)
             {
-                EXPECT_EQ(worker_indices.count(task.worker_index), 0);
-                worker_indices.insert(task.worker_index);
+                EXPECT_EQ(worker_indices.count(task.workload_index), 0);
+                worker_indices.insert(task.workload_index);
                 total += task.size;
             }
             EXPECT_EQ(total, sizes[i]);
@@ -99,8 +99,8 @@ TEST_F(AssignerTest, Valid_Inputs)
             const auto & tasks = assigner.file_assignments(i);
             for (const auto & task : tasks)
             {
-                LOG(SPAM) << "file " << i << " file size: " << sizes[i] << " task.worker_index: " << task.worker_index << " task.size: " << task.size;
-                worker_indices.insert(task.worker_index);
+                LOG(SPAM) << "file " << i << " file size: " << sizes[i] << " task.workload_index: " << task.workload_index << " task.size: " << task.size;
+                worker_indices.insert(task.workload_index);
             }
         }
 
@@ -171,8 +171,8 @@ TEST_F(AssignerTest, Zero_Size_Files)
         std::set<unsigned> worker_indices;
         for (const auto & task : tasks)
         {
-            EXPECT_EQ(worker_indices.count(task.worker_index), 0);
-            worker_indices.insert(task.worker_index);
+            EXPECT_EQ(worker_indices.count(task.workload_index), 0);
+            worker_indices.insert(task.workload_index);
             total += task.size;
         }
         EXPECT_EQ(total, sizes[i]);
@@ -187,8 +187,8 @@ TEST_F(AssignerTest, Zero_Size_Files)
         const auto & tasks = assigner.file_assignments(i);
         for (const auto & task : tasks)
         {
-            LOG(SPAM) << "file " << i << " file size: " << sizes[i] << " task.worker_index: " << task.worker_index << " task.size: " << task.size;
-            worker_indices.insert(task.worker_index);
+            LOG(SPAM) << "file " << i << " file size: " << sizes[i] << " task.workload_index: " << task.workload_index << " task.size: " << task.size;
+            worker_indices.insert(task.workload_index);
         }
     }
 
@@ -239,8 +239,8 @@ TEST_F(AssignerTest, Only_Zero_Size_Files)
         std::set<unsigned> worker_indices;
         for (const auto & task : tasks)
         {
-            EXPECT_EQ(worker_indices.count(task.worker_index), 0);
-            worker_indices.insert(task.worker_index);
+            EXPECT_EQ(worker_indices.count(task.workload_index), 0);
+            worker_indices.insert(task.workload_index);
             total += task.size;
         }
         EXPECT_EQ(total, sizes[i]);
@@ -255,8 +255,8 @@ TEST_F(AssignerTest, Only_Zero_Size_Files)
         const auto & tasks = assigner.file_assignments(i);
         for (const auto & task : tasks)
         {
-            LOG(SPAM) << "file " << i << " file size: " << sizes[i] << " task.worker_index: " << task.worker_index << " task.size: " << task.size;
-            worker_indices.insert(task.worker_index);
+            LOG(SPAM) << "file " << i << " file size: " << sizes[i] << " task.workload_index: " << task.workload_index << " task.size: " << task.size;
+            worker_indices.insert(task.workload_index);
         }
     }
 
