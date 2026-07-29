@@ -97,7 +97,7 @@ def runai_request(
     for i, individual_c_array_obj in enumerate(internal_sizes_arrays):
         c_internal_sizes[i] = ctypes.cast(individual_c_array_obj, PtrToUint64ArrayType)
 
-    submission_id = ctypes.c_uint32()
+    submission_id = ctypes.c_uint64()
     error_code = dll.fn_runai_request(
         streamer,
         ctypes.byref(submission_id),
@@ -128,7 +128,7 @@ def runai_response(
     with it (e.g. abort only on UnknownError, or fail just the affected submission and keep draining others).
     Returns None on teardown (FinishedError). Raises TimeoutError if timeout_ms elapses first (0 blocks
     indefinitely)."""
-    submission_id = ctypes.c_uint32()
+    submission_id = ctypes.c_uint64()
     file_index = ctypes.c_uint32()
     range_index = ctypes.c_uint32()
     submission_done = ctypes.c_int()

@@ -31,13 +31,13 @@ constexpr unsigned RESPONSE_TIMEOUT_MS = 60000;
 inline int submit(void * streamer, unsigned num_files, const char ** paths, size_t * file_offsets,
                   size_t * bytesizes, void ** dsts, unsigned * num_sizes, size_t ** internal_sizes)
 {
-    unsigned submission_id = 0;
+    SubmissionId submission_id = 0;
     return runai_request(streamer, &submission_id, num_files, paths, file_offsets, bytesizes, dsts, num_sizes, internal_sizes);
 }
 
 inline int next_response(void * streamer, unsigned * file_index, unsigned * index)
 {
-    unsigned submission_id = 0;
+    SubmissionId submission_id = 0;
     int submission_done = 0;
     return runai_response(streamer, &submission_id, file_index, index, &submission_done, RESPONSE_TIMEOUT_MS);
 }

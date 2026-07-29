@@ -80,7 +80,7 @@ namespace
 // Marshal the C request arrays and submit, forwarding out_submission_id. Credentials are NOT passed here:
 // they are streamer-scoped, set once via runai_set_credentials.
 int submit_request(impl::Streamer * s,
-                   unsigned * out_submission_id,
+                   SubmissionId * out_submission_id,
                    unsigned num_files,
                    const char ** paths, size_t * file_offsets, size_t * bytesizes,
                    void ** dsts, unsigned * num_sizes, size_t ** internal_sizes)
@@ -131,7 +131,7 @@ _RUNAI_EXTERN_C int runai_set_credentials(
 
 _RUNAI_EXTERN_C int runai_request(
     void * streamer,
-    unsigned * out_submission_id,
+    SubmissionId * out_submission_id,
     unsigned num_files,
     const char ** paths,
     size_t * file_offsets,
@@ -167,7 +167,7 @@ _RUNAI_EXTERN_C int runai_request(
 
 _RUNAI_EXTERN_C int runai_response(
     void * streamer,
-    unsigned * out_submission_id,
+    SubmissionId * out_submission_id,
     unsigned * file_index,
     unsigned * index,
     int * submission_done,

@@ -174,7 +174,7 @@ common::ResponseCode Streamer::async_request(
     std::vector<void *> & dsts,
     std::vector<unsigned> & num_sizes,
     std::vector<std::vector<size_t>> & internal_sizes,
-    unsigned * out_submission_id)
+    SubmissionId * out_submission_id)
 {
     // Default the caller's id to 0 ("none"). It is overwritten with the real id the instant one is
     // minted (below), so only a failure before that point (verify / plugin lock) reports no id.
@@ -205,7 +205,7 @@ common::ResponseCode Streamer::async_request(
     // will not wait on it). The submission is committed (registered + increment + dispatched) only
     // once fully built, so a build failure below just returns the error - no registry entry, no
     // increment, no workloads, and no shared cancel() that would disturb other submissions.
-    const unsigned submission_id = _submissions.generate();
+    const SubmissionId submission_id = _submissions.generate();
     if (out_submission_id != nullptr)
     {
         *out_submission_id = submission_id;
@@ -285,7 +285,7 @@ common::ResponseCode Streamer::async_request(
     return common::ResponseCode::Success;
 }
 
-void Streamer::drain_undispatched(unsigned submission_id, std::vector<Workload> & workloads, size_t from)
+void Streamer::drain_undispatched(SubmissionId submission_id, std::vector<Workload> & workloads, size_t from)
 {
     LOG(ERROR) << "Submission " << submission_id << " failed to dispatch; draining undispatched workloads as errors";
 
@@ -301,7 +301,7 @@ void Streamer::drain_undispatched(unsigned submission_id, std::vector<Workload> 
     }
 }
 
-bool Streamer::consume_submission_response(unsigned submission_id)
+bool Streamer::consume_submission_response(SubmissionId submission_id)
 {
     // SubmissionsMgr owns the registry + its mutex (a strict leaf); logging happens here, outside
     // that lock. Consuming a response for an unknown submission is an accounting bug and ASSERTs

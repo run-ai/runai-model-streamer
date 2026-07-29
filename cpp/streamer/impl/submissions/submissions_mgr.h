@@ -6,6 +6,8 @@
 #include <map>
 #include <mutex>
 
+#include "common/submission/submission_id.h"
+
 namespace runai::llm::streamer::impl
 {
 
@@ -46,13 +48,13 @@ class SubmissionsMgr
 
     // Mint a fresh submission id: rotating counter, skipping 0 (reserved as the "none" value /
     // Response default) and any id still live in the registry (only relevant after a 2^32 wrap).
-    unsigned generate();
+    SubmissionId generate();
 
     // Register an accepted submission expecting `expected` responses totalling `total_bytes`.
-    void add(unsigned submission_id, unsigned expected, size_t total_bytes);
+    void add(SubmissionId submission_id, unsigned expected, size_t total_bytes);
 
     // Account for one consumed response of submission_id (see Result).
-    Result consume(unsigned submission_id);
+    Result consume(SubmissionId submission_id);
 
     // Number of live (registered, not yet completed) submissions.
     size_t size() const;
@@ -69,8 +71,8 @@ class SubmissionsMgr
 
     Clock _now;
     mutable std::mutex _mutex;
-    unsigned _next_id = 1;   // 0 is reserved
-    std::map<unsigned, Submission> _submissions;
+    SubmissionId _next_id = 1;   // 0 is reserved
+    std::map<SubmissionId, Submission> _submissions;
 };
 
 } // namespace runai::llm::streamer::impl

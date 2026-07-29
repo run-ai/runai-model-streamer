@@ -16,22 +16,22 @@ SubmissionsMgr::SubmissionsMgr(Clock now) :
     _now(std::move(now))
 {}
 
-unsigned SubmissionsMgr::generate()
+SubmissionId SubmissionsMgr::generate()
 {
     const auto guard = std::unique_lock<std::mutex>(_mutex);
 
-    unsigned id;
+    SubmissionId id;
     do
     {
         id = _next_id++;              // unsigned wrap is well-defined
         if (id == 0) id = _next_id++; // 0 is reserved (Response default / "none")
     }
-    while (_submissions.count(id) != 0);   // after a 2^32 wrap, skip a still-live id
+    while (_submissions.count(id) != 0);   // after a 2^64 wrap, skip a still-live id
 
     return id;
 }
 
-void SubmissionsMgr::add(unsigned submission_id, unsigned expected, size_t total_bytes)
+void SubmissionsMgr::add(SubmissionId submission_id, unsigned expected, size_t total_bytes)
 {
     const auto guard = std::unique_lock<std::mutex>(_mutex);
     // emplace (not operator[]=) so a colliding id surfaces instead of silently clobbering a live
@@ -40,7 +40,7 @@ void SubmissionsMgr::add(unsigned submission_id, unsigned expected, size_t total
     ASSERT(inserted) << "Submission id " << submission_id << " already registered";
 }
 
-SubmissionsMgr::Result SubmissionsMgr::consume(unsigned submission_id)
+SubmissionsMgr::Result SubmissionsMgr::consume(SubmissionId submission_id)
 {
     Result result;
 

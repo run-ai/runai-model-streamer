@@ -55,7 +55,7 @@ struct Streamer
       std::vector<void *> & dsts,
       std::vector<unsigned> & num_sizes,
       std::vector<std::vector<size_t>> & internal_sizes,
-      unsigned * out_submission_id = nullptr);
+      SubmissionId * out_submission_id = nullptr);
 
     // Consume the next ready sub-range response over the persistent responder. Blocks up to timeout_ms
     // (0 = indefinitely) and returns TimedOut on expiry; FinishedError only on teardown (stop) - there is no
@@ -107,7 +107,7 @@ struct Streamer
     // Account for one consumed response of submission_id (delegates to _submissions): on the
     // submission's last response, log per-submission throughput. Returns true iff it was the
     // submission's last response (i.e. submission_done).
-    bool consume_submission_response(unsigned submission_id);
+    bool consume_submission_response(SubmissionId submission_id);
 
     // Drain workloads[from .. end] as UnknownError so the responder/registry reach zero and the
     // consumer does not hang, when dispatch fails after increment(). `from` is the index of the
@@ -115,7 +115,7 @@ struct Streamer
     // NEVER referenced here (excluded by position); workloads[from] is intact because Workload's
     // move is noexcept (see the static_assert in async_request), so push_back's strong guarantee
     // means a throwing dispatch never moved it. Best-effort - under severe OOM a push may throw too.
-    void drain_undispatched(unsigned submission_id, std::vector<Workload> & workloads, size_t from);
+    void drain_undispatched(SubmissionId submission_id, std::vector<Workload> & workloads, size_t from);
 
  private:
     std::shared_ptr<const Config> _config;

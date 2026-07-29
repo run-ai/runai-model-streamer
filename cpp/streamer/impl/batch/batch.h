@@ -6,6 +6,7 @@
 #include <vector>
 #include <ostream>
 
+#include "common/submission/submission_id.h"
 #include "common/responder/responder.h"
 #include "common/storage_uri/storage_uri.h"
 #include "common/s3_wrapper/s3_wrapper.h"
@@ -50,7 +51,7 @@ struct Batch
   Batch(Batch &&) = default;
   Batch & operator=(Batch &&) = default;
 
-  Batch(unsigned submission_id,
+  Batch(SubmissionId submission_id,
         unsigned workload_index,
         unsigned file_index,
         const std::string & path,
@@ -81,7 +82,7 @@ struct Batch
   bool is_object_storage() const;
 
   // id of the owning submission (one runai_request call); stamped on every response
-  unsigned submission_id = 0;
+  SubmissionId submission_id = 0;
 
   unsigned workload_index;
 

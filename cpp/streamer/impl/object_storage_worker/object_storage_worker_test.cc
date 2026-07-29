@@ -34,7 +34,7 @@ namespace
 // test can wait on the responder and assert per-file, per-request completion.
 struct Submission
 {
-    Submission(unsigned submission_id, unsigned num_files, std::shared_ptr<Config> config, std::shared_ptr<common::Responder> responder) :
+    Submission(SubmissionId submission_id, unsigned num_files, std::shared_ptr<Config> config, std::shared_ptr<common::Responder> responder) :
         submission_id(submission_id),
         config(config),
         responder(responder),
@@ -92,7 +92,7 @@ struct Submission
         return std::accumulate(num_chunks.begin(), num_chunks.end(), 0u);
     }
 
-    unsigned submission_id;
+    SubmissionId submission_id;
     std::shared_ptr<Config> config;
     std::shared_ptr<common::Responder> responder;
     std::vector<std::string> paths;
@@ -281,7 +281,7 @@ TEST_F(ObjectStorageWorkerTest, Concurrent_Submissions)
     const unsigned num_submissions = utils::random::number(2, 5);
     std::vector<std::unique_ptr<Submission>> submissions;
     std::vector<std::vector<Workload>> workloads(num_submissions);
-    std::map<std::pair<unsigned, unsigned>, std::set<int>> outstanding;   // (submission_id, file_index) -> indices
+    std::map<std::pair<SubmissionId, unsigned>, std::set<int>> outstanding;   // (submission_id, file_index) -> indices
     unsigned total = 0;
     for (unsigned s = 0; s < num_submissions; ++s)
     {

@@ -31,13 +31,13 @@ namespace
 inline int submit(void * streamer, unsigned num_files, const char ** paths, size_t * file_offsets,
                   size_t * bytesizes, void ** dsts, unsigned * num_sizes, size_t ** internal_sizes)
 {
-    unsigned submission_id = 0;
+    SubmissionId submission_id = 0;
     return runai_request(streamer, &submission_id, num_files, paths, file_offsets, bytesizes, dsts, num_sizes, internal_sizes);
 }
 
 inline int next_response(void * streamer, unsigned * file_index, unsigned * index)
 {
-    unsigned submission_id = 0;
+    SubmissionId submission_id = 0;
     int submission_done = 0;
     return runai_response(streamer, &submission_id, file_index, index, &submission_done, 0);
 }
@@ -447,7 +447,7 @@ TEST(AsyncEx, ConcurrentSubmissionsDemux)
     std::vector<size_t> subA = { s1, size - s1 };
     size_t * subA_ptr = subA.data();
     unsigned numA = 2;
-    unsigned idA = 0;
+    SubmissionId idA = 0;
     void * dstA_ptr = dstA.data();
     ASSERT_EQ(runai_request(streamer, &idA, 1, &path, &offset, &bytesize, &dstA_ptr, &numA, &subA_ptr),
               static_cast<int>(common::ResponseCode::Success));
@@ -457,7 +457,7 @@ TEST(AsyncEx, ConcurrentSubmissionsDemux)
     std::vector<size_t> subB = { size };
     size_t * subB_ptr = subB.data();
     unsigned numB = 1;
-    unsigned idB = 0;
+    SubmissionId idB = 0;
     void * dstB_ptr = dstB.data();
     ASSERT_EQ(runai_request(streamer, &idB, 1, &path, &offset, &bytesize, &dstB_ptr, &numB, &subB_ptr),
               static_cast<int>(common::ResponseCode::Success));
@@ -467,11 +467,12 @@ TEST(AsyncEx, ConcurrentSubmissionsDemux)
     EXPECT_NE(idA, idB);
 
     // Drain 3 responses (2 for A, 1 for B), in any order, demuxed by submission_id
-    std::map<unsigned, unsigned> got;         // submission_id -> responses seen
-    std::map<unsigned, unsigned> done_count;   // submission_id -> submission_done seen
+    std::map<SubmissionId, unsigned> got;         // submission_id -> responses seen
+    std::map<SubmissionId, unsigned> done_count;   // submission_id -> submission_done seen
     for (int i = 0; i < 3; ++i)
     {
-        unsigned sid = 0, fi = 0, idx = 0;
+        SubmissionId sid = 0;
+        unsigned fi = 0, idx = 0;
         int done = 0;
         int ret = runai_response(streamer, &sid, &fi, &idx, &done, 5000);
         ASSERT_EQ(ret, static_cast<int>(common::ResponseCode::Success));
@@ -485,7 +486,8 @@ TEST(AsyncEx, ConcurrentSubmissionsDemux)
     EXPECT_EQ(done_count[idB], 1u);
 
     // Persistent: after draining, a timed response times out (does NOT return FinishedError)
-    unsigned sid = 0, fi = 0, idx = 0;
+    SubmissionId sid = 0;
+    unsigned fi = 0, idx = 0;
     int done = 0;
     EXPECT_EQ(runai_response(streamer, &sid, &fi, &idx, &done, 50),
               static_cast<int>(common::ResponseCode::TimedOut));
@@ -521,7 +523,7 @@ TEST(AsyncEx, PerSubmissionErrorIsolation)
     std::vector<size_t> subA = { data_size };
     size_t * subA_ptr = subA.data();
     unsigned numA = 1;
-    unsigned idA = 0;
+    SubmissionId idA = 0;
     void * dstA_ptr = dstA.data();
     ASSERT_EQ(runai_request(streamer, &idA, 1, &path, &offset, &bytesizeA, &dstA_ptr, &numA, &subA_ptr),
               static_cast<int>(common::ResponseCode::Success));
@@ -533,7 +535,7 @@ TEST(AsyncEx, PerSubmissionErrorIsolation)
     std::vector<size_t> subB = { over };
     size_t * subB_ptr = subB.data();
     unsigned numB = 1;
-    unsigned idB = 0;
+    SubmissionId idB = 0;
     void * dstB_ptr = dstB.data();
     ASSERT_EQ(runai_request(streamer, &idB, 1, &path, &offset, &bytesizeB, &dstB_ptr, &numB, &subB_ptr),
               static_cast<int>(common::ResponseCode::Success));
@@ -541,11 +543,12 @@ TEST(AsyncEx, PerSubmissionErrorIsolation)
     EXPECT_NE(idA, idB);
 
     // drain both responses; demux by submission_id
-    std::map<unsigned, int> ret_by_sub;
-    std::map<unsigned, int> done_by_sub;
+    std::map<SubmissionId, int> ret_by_sub;
+    std::map<SubmissionId, int> done_by_sub;
     for (int i = 0; i < 2; ++i)
     {
-        unsigned sid = 0, fi = 0, idx = 0;
+        SubmissionId sid = 0;
+        unsigned fi = 0, idx = 0;
         int done = 0;
         int ret = runai_response(streamer, &sid, &fi, &idx, &done, 5000);
         ret_by_sub[sid] = ret;
@@ -581,7 +584,7 @@ TEST(AsyncEx, MultipleSubmitterThreads)
 
     const unsigned N = utils::random::number(4, 12);
     std::vector<std::vector<unsigned char>> dsts(N, std::vector<unsigned char>(size));
-    std::vector<unsigned> ids(N, 0);
+    std::vector<SubmissionId> ids(N, 0);
     std::vector<int> submit_ret(N, -1);
 
     // N concurrent submitters (joined on scope exit)
@@ -604,7 +607,7 @@ TEST(AsyncEx, MultipleSubmitterThreads)
     }
 
     // all accepted, ids distinct and non-zero
-    std::set<unsigned> unique_ids;
+    std::set<SubmissionId> unique_ids;
     for (unsigned t = 0; t < N; ++t)
     {
         EXPECT_EQ(submit_ret[t], static_cast<int>(common::ResponseCode::Success));
@@ -614,10 +617,11 @@ TEST(AsyncEx, MultipleSubmitterThreads)
     EXPECT_EQ(unique_ids.size(), N);
 
     // single consumer drains all N responses (one sub-range each)
-    std::map<unsigned, int> done_by_sub;
+    std::map<SubmissionId, int> done_by_sub;
     for (unsigned i = 0; i < N; ++i)
     {
-        unsigned sid = 0, fi = 0, idx = 0;
+        SubmissionId sid = 0;
+        unsigned fi = 0, idx = 0;
         int done = 0;
         int ret = runai_response(streamer, &sid, &fi, &idx, &done, 5000);
         EXPECT_EQ(ret, static_cast<int>(common::ResponseCode::Success));

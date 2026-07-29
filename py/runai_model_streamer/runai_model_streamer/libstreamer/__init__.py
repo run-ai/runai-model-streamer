@@ -35,7 +35,7 @@ class LibstreamerDLLWrapper:
         self.fn_runai_request = self.lib.runai_request
         self.fn_runai_request.argtypes = [
             t_streamer,
-            ctypes.POINTER(ctypes.c_uint32),                 # out_submission_id
+            ctypes.POINTER(ctypes.c_uint64),                 # out_submission_id
             ctypes.c_uint32,                                 # num_files
             ctypes.POINTER(ctypes.c_char_p),                 # paths
             ctypes.POINTER(ctypes.c_size_t),                 # file_offsets
@@ -51,7 +51,7 @@ class LibstreamerDLLWrapper:
         self.fn_runai_response = self.lib.runai_response
         self.fn_runai_response.argtypes = [
             t_streamer,
-            ctypes.POINTER(ctypes.c_uint32),                 # out_submission_id
+            ctypes.POINTER(ctypes.c_uint64),                 # out_submission_id
             ctypes.POINTER(ctypes.c_uint32),                 # file_index
             ctypes.POINTER(ctypes.c_uint32),                 # index
             ctypes.POINTER(ctypes.c_int),                    # submission_done

@@ -7,6 +7,7 @@
 #include <vector>
 #include "utils/fd/fd.h"
 #include "utils/logging/logging.h"
+#include "common/submission/submission_id.h"
 
 
 namespace runai::llm::streamer
@@ -26,7 +27,7 @@ unsigned __multi_file_count = 0;
 unsigned __current_multi_file = 0;
 
 // multi-request bookkeeping: the mock serves one submission at a time, so a single id/counter suffices.
-unsigned __submission_id = 0;
+SubmissionId __submission_id = 0;
 unsigned __response_total = 0;   // total sub-range responses expected for the current submission
 unsigned __response_given = 0;   // responses handed out so far
 
@@ -130,7 +131,7 @@ extern "C" int runai_set_credentials(
 
 extern "C" int runai_request(
     void * streamer,
-    unsigned * out_submission_id,
+    SubmissionId * out_submission_id,
     unsigned num_files,
     const char ** paths,
     size_t * file_offsets,
@@ -164,7 +165,7 @@ extern "C" int runai_request(
 
 extern "C" int runai_response(
     void * streamer,
-    unsigned * out_submission_id,
+    SubmissionId * out_submission_id,
     unsigned * file_index,
     unsigned * index,
     int * submission_done,

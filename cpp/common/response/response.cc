@@ -4,7 +4,7 @@
 namespace runai::llm::streamer::common
 {
 
-Response::Response(unsigned submission_id, unsigned file_index, unsigned index, common::ResponseCode ret) :
+Response::Response(SubmissionId submission_id, unsigned file_index, unsigned index, common::ResponseCode ret) :
     submission_id(submission_id),
     file_index(file_index),
     index(index),

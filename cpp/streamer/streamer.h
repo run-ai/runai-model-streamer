@@ -2,6 +2,8 @@
 
 #include <stddef.h>
 
+#include "common/submission/submission_id.h"
+
 namespace runai::llm::streamer
 {
 
@@ -60,7 +62,7 @@ _RUNAI_EXTERN_C int runai_set_credentials(
 //                      its responses are still delivered and can be drained by this id.
 _RUNAI_EXTERN_C int runai_request(
     void * streamer,
-    unsigned * out_submission_id /* return parameter */,
+    SubmissionId * out_submission_id /* return parameter */,
     unsigned num_files,
     const char ** paths,
     size_t * file_offsets,
@@ -79,7 +81,7 @@ _RUNAI_EXTERN_C int runai_request(
 // FinishedError on teardown.
 _RUNAI_EXTERN_C int runai_response(
     void * streamer,
-    unsigned * out_submission_id /* return parameter */,
+    SubmissionId * out_submission_id /* return parameter */,
     unsigned * file_index /* return parameter */,
     unsigned * index /* return parameter */,
     int * submission_done /* return parameter */,

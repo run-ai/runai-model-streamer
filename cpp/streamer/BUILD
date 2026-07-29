@@ -5,7 +5,7 @@ runai_portable_so(
     srcs = ["streamer.h",
             "streamer.cc",
     ],
-    deps = ["//streamer/impl"],
+    deps = ["//streamer/impl", "//common/submission"],
     ldscript = ":streamer.ldscript",
     defines = ["_RUNAI_STREAMER_SO"],
     linkopts = ["-lpthread", "-Wl,-rpath,$$ORIGIN"]
@@ -13,7 +13,7 @@ runai_portable_so(
 
 runai_cc_auto_library(
     name = "streamer",
-    deps = ["//streamer/impl"],
+    deps = ["//streamer/impl", "//common/submission"],
 )
 
 runai_cc_test(

@@ -82,7 +82,7 @@ size_t Batches::BatchItr::consume(size_t bytesize)
     return to_read;
 }
 
-Batches::Batches(unsigned submission_id,
+Batches::Batches(SubmissionId submission_id,
                  unsigned file_index,
                  const std::vector<FileReadTask> & file_read_tasks,
                  std::shared_ptr<const Config> config,
