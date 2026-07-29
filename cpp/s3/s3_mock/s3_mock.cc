@@ -478,13 +478,24 @@ void obj_free_file_list(common::backend_api::ObjectFileEntry_t* entries, unsigne
 
 const char* runai_mock_s3_last_client_config_value(const char* key)
 {
+    // Return a pointer into thread-local storage, not into __mock_last_client_config: the map is
+    // only stable while __mutex is held, so a raw pointer into it would dangle once the lock is
+    // released (a later obj_create_client / cleanup could rehash or clear it). The copy is made
+    // under the lock and stays valid until this thread's next call.
+    thread_local std::string value;
+
     const auto guard = std::unique_lock<std::mutex>(__mutex);
     if (key == nullptr)
     {
         return nullptr;
     }
     auto it = __mock_last_client_config.find(key);
-    return (it != __mock_last_client_config.end()) ? it->second.c_str() : nullptr;
+    if (it == __mock_last_client_config.end())
+    {
+        return nullptr;
+    }
+    value = it->second;
+    return value.c_str();
 }
 
 void runai_mock_s3_cleanup()
