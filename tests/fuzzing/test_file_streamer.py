@@ -29,11 +29,19 @@ def random_chunks():
 
 
 def random_memory_mode(chunks):
-    memory_mode = random.choice([-1])
-    os.environ[RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME] = str(memory_mode)
+    # -1 unlimited (a single request holds everything), 0 largest-chunk (a request holds one range),
+    # anything else is a byte limit. Only the latter two exercise the multi-request packing loop, the
+    # per-file range bookkeeping across requests, and buffer reuse.
+    #
+    # chunks can legitimately be empty: a file whose generated chunk list has a single entry contributes
+    # only an initial_offset and no ranges at all, so max()/sum() would have nothing to work with.
+    memory_mode = random.choice([-1, 0, 1]) if chunks else -1
     if memory_mode == 1:
+        # never below the largest range, or no request could hold it and packing would stall
         memory_limit = random.randint(max(chunks), sum(chunks))
-        os.environ[RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME] = str(memory_limit)
+    else:
+        memory_limit = memory_mode
+    os.environ[RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME] = str(memory_limit)
 
 def random_file_chunks(i, dir):
     file_content, chunk_sizes = random_chunks()
@@ -78,6 +86,7 @@ class TestFuzzing(unittest.TestCase):
 
         random_memory_mode([size for file_chunks in files_chunks for size in file_chunks.sizes])
 
+        received = set()
         with FileStreamer() as fs:
             fs.stream_files(files_chunks)
             for file, id, dst in fs.get_chunks():
@@ -91,6 +100,16 @@ class TestFuzzing(unittest.TestCase):
                     dst.numpy().tobytes(),
                     expected_id_to_results[id]["expected_content"],
                 )
+                received.add((file, id))
+
+        # Checking the content of whatever arrived is not enough: a request that silently ends the
+        # stream early (issue #157) delivers only correct chunks and would pass. Assert the exact set.
+        expected = {
+            (file_id, range_index)
+            for file_id, results in expected_file_to_id_to_results.items()
+            for range_index in results
+        }
+        self.assertEqual(received, expected)
 
     def tearDown(self):
         os.environ.pop(RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME, None)
