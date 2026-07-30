@@ -108,8 +108,10 @@ void Batch::read(const Config & config, std::atomic<bool> & stopped)
     }
 
     auto file_offset = range.start;
-    // For CPU buffer we assume that all the requests are written to a single continous buffer
-    char * buffer = tasks[0].destination();;
+    // A batch covers one ContiguousTransfer, whose ranges are adjacent in both the file and the
+    // destination, so the whole batch writes into one contiguous buffer starting at the first task's
+    // destination. Both cursors advance in lockstep below.
+    char * buffer = tasks[0].destination();
 
     size_t num_chunks = range.size / config.fs_block_bytesize;
 
@@ -133,6 +135,16 @@ void Batch::read(const Config & config, std::atomic<bool> & stopped)
         num_chunks++;
         i = 1;
         _reader->read(range.end - file_offset, buffer);
+        finished_until(range.end, common::ResponseCode::Success);
+    }
+
+    // An empty batch range (range.start == range.end) enters neither branch above, so without this its
+    // tasks would never be notified and the submission would wait for responses that never come. That
+    // is reachable whenever a transfer carries only zero sized ranges - which the streamer accepts and
+    // must still answer, one response per range whatever its size.
+    // finished_until only ever advances _unfinished, so this is a no-op in every other case.
+    if (!stopped)
+    {
         finished_until(range.end, common::ResponseCode::Success);
     }
 

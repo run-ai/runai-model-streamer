@@ -42,6 +42,8 @@ struct Submission
         expected(num_files)
     {
         const std::string bucket = "test-bucket";
+        std::vector<std::vector<size_t>> chunks(num_files);
+
         for (unsigned i = 0; i < num_files; ++i)
         {
             const auto size = utils::random::number(1000, 100000);
@@ -51,29 +53,50 @@ struct Submission
             total_bytes += size;
 
             paths.push_back("s3://" + bucket + "/" + utils::random::string());
-            file_offsets.push_back(0);
-            bytesizes.push_back(size);
+
+            // the ranges must exist before the Assigner is built - it coalesces them
+            chunks[i] = utils::random::chunks(size, num_chunks[i]);
+            EXPECT_EQ(chunks[i].size(), num_chunks[i]);
         }
+
         buffer.resize(total_bytes);
-        dsts.push_back(buffer.data());
+
+        // each file's ranges tile it contiguously, and the files are packed consecutively into the one
+        // buffer, so every file coalesces to exactly one transfer
+        request.resize(num_files);
+        char * dst = buffer.data();
+        for (unsigned i = 0; i < num_files; ++i)
+        {
+            request[i].path = paths[i];
+            request[i].ranges.reserve(chunks[i].size());
+
+            size_t offset = 0;
+            for (const auto size : chunks[i])
+            {
+                request[i].ranges.push_back(ReadRange{ offset, size, dst });
+                offset += size;
+                dst += size;
+            }
+        }
     }
 
-    // build the workloads (one Assigner over all files, Batches per file) ready to push to the pool
+    // build the workloads (one Assigner over the request, Batches per contiguous transfer) ready to push
+    // to the pool
     std::vector<Workload> build()
     {
-        Assigner assigner(paths, file_offsets, bytesizes, dsts, config);
+        Assigner assigner(request, config);
         std::vector<Workload> workloads(assigner.num_workloads());
 
         const common::s3::Credentials credentials;
-        for (unsigned file_idx = 0; file_idx < paths.size(); ++file_idx)
+        for (const auto & transfer : assigner.transfers())
         {
-            auto chunks = utils::random::chunks(bytesizes[file_idx], num_chunks[file_idx]);
-            EXPECT_EQ(chunks.size(), num_chunks[file_idx]);
+            const auto file_idx = transfer.file_index;
 
             auto uri = std::make_shared<common::s3::StorageUri>(paths[file_idx]);
             common::s3::S3ClientWrapper::Params params(uri, credentials, config->s3_block_bytesize);
 
-            Batches batches(submission_id, file_idx, assigner.file_assignments(file_idx), config, responder, paths[file_idx], params, chunks);
+            Batches batches(submission_id, file_idx, transfer.tasks, config, responder, paths[file_idx], params,
+                            transfer.range_sizes, transfer.first_range_index);
             for (size_t j = 0; j < batches.size(); ++j)
             {
                 workloads[batches[j].workload_index].add_batch(std::move(batches[j]));
@@ -96,9 +119,7 @@ struct Submission
     std::shared_ptr<Config> config;
     std::shared_ptr<common::Responder> responder;
     std::vector<std::string> paths;
-    std::vector<size_t> file_offsets;
-    std::vector<size_t> bytesizes;
-    std::vector<void*> dsts;
+    std::vector<FileRanges> request;
     std::vector<char> buffer;
     size_t total_bytes = 0;
     std::vector<unsigned> num_chunks;

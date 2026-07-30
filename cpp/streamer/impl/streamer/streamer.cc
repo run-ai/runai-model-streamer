@@ -85,24 +85,23 @@ common::ResponseCode Streamer::async_read(const std::string & path, size_t file_
 
     try
     {
-        std::vector<std::string> paths;
-        std::vector<size_t> file_offsets;
-        std::vector<size_t> bytesizes;
-        std::vector<void *> dsts;
-        std::vector<unsigned> num_sizes_v;
-        std::vector<std::vector<size_t>> internal_sizes_vv;
+        // This convenience wrapper keeps the classic contiguous semantics: the sub ranges tile
+        // [file_offset, file_offset + bytesize) in order, and are written consecutively from dst.
+        // The general API can express any layout; here the offsets and destinations are accumulated.
+        std::vector<FileRanges> request(1);
+        request[0].path = path;
+        request[0].ranges.reserve(num_sizes);
 
-        paths.push_back(path);
-        file_offsets.push_back(file_offset);
-        bytesizes.push_back(bytesize);
-        dsts.push_back(dst);
-        num_sizes_v.push_back(num_sizes);
+        size_t offset = file_offset;
+        char * destination = static_cast<char *>(dst);
+        for (unsigned i = 0; i < num_sizes; ++i)
+        {
+            request[0].ranges.push_back(ReadRange{ offset, internal_sizes[i], destination });
+            offset += internal_sizes[i];
+            destination += internal_sizes[i];
+        }
 
-        std::vector<size_t> internal_sizes_v(internal_sizes, internal_sizes + num_sizes);
-
-        internal_sizes_vv.push_back(internal_sizes_v);
-
-        ret = async_request(paths, file_offsets, bytesizes, dsts, num_sizes_v, internal_sizes_vv);
+        ret = async_request(request);
     }
     catch(const common::Exception & e)
     {
@@ -168,12 +167,7 @@ common::Response Streamer::response(unsigned timeout_ms, bool & submission_done)
 }
 
 common::ResponseCode Streamer::async_request(
-    std::vector<std::string> & paths,
-    std::vector<size_t> & file_offsets,
-    std::vector<size_t> & bytesizes,
-    std::vector<void *> & dsts,
-    std::vector<unsigned> & num_sizes,
-    std::vector<std::vector<size_t>> & internal_sizes,
+    std::vector<FileRanges> & request,
     SubmissionId * out_submission_id)
 {
     // Default the caller's id to 0 ("none"). It is overwritten with the real id the instant one is
@@ -184,18 +178,28 @@ common::ResponseCode Streamer::async_request(
     }
 
     // verify input
-    verify_requests(paths, file_offsets, bytesizes, num_sizes, dsts);
+    verify_requests(request);
 
     // A streamer serves a single object-storage plugin; reject a submission that mixes object-storage plugins
     // or differs from the locked plugin. Nothing is committed yet, so returning is clean. Credentials are
     // streamer-scoped and read only at client creation (in the worker), so they are not touched here.
-    if (const auto ret = lock_object_plugin(paths); ret != common::ResponseCode::Success)
+    if (const auto ret = lock_object_plugin(request); ret != common::ResponseCode::Success)
     {
         return ret;
     }
 
-    const auto total_sizes = std::accumulate(num_sizes.begin(), num_sizes.end(), 0u);
-    const size_t total_bytes = std::accumulate(bytesizes.begin(), bytesizes.end(), static_cast<size_t>(0));
+    // One response is issued per range whatever its size - a zero-sized range is completed immediately
+    // below rather than reaching storage - so total_sizes counts every range.
+    unsigned total_sizes = 0;
+    size_t total_bytes = 0;
+    for (const auto & file : request)
+    {
+        total_sizes += file.ranges.size();
+        for (const auto & range : file.ranges)
+        {
+            total_bytes += range.size;
+        }
+    }
 
     // Mint the submission id up front so batches can be stamped with it, and hand it back to the
     // caller immediately: the id is always reported once it exists, regardless of how the call
@@ -211,20 +215,51 @@ common::ResponseCode Streamer::async_request(
         *out_submission_id = submission_id;
     }
 
+    // A submission with no ranges at all owes no responses, so it is deliberately NOT registered:
+    // completion is driven by consuming responses, and _submissions.add() with an expected count of
+    // zero would insert an entry that consume() can never erase. Returning Success with the minted id
+    // leaves nothing behind. (A submission whose ranges are all ZERO SIZED is different - it does owe
+    // one response per range, and goes through the normal path below.)
+    if (total_sizes == 0)
+    {
+        LOG(DEBUG) << "Submission " << submission_id << " contains no ranges; nothing to read";
+        return common::ResponseCode::Success;
+    }
+
     // divide reading between workers
-    Assigner assigner(paths, file_offsets, bytesizes, dsts, _config);
+    Assigner assigner(request, _config);
 
     std::vector<Workload> workloads(assigner.num_workloads());
 
-    // Create batches for each file
+    // Create batches for each contiguous transfer. Batches is built per transfer rather than per file:
+    // within a transfer the ranges tile one contiguous span of both file and destination, which is the
+    // assumption Batch is built on. A file whose ranges are not all adjacent yields several transfers.
 
-    for (size_t i = 0; i < paths.size(); ++i)
+    unsigned params_file_index = 0;
+    bool has_params = false;
+    common::s3::S3ClientWrapper::Params params;
+
+    for (const auto & transfer : assigner.transfers())
     {
-        auto params = handle_s3(i, paths[i]);
-        LOG(DEBUG) << "Submission " << submission_id << " creating batches for file index " << i << " path: " <<  paths[i];
-        Batches batches(submission_id, i, assigner.file_assignments(i), _config, _responder, paths[i], params, internal_sizes[i]);
+        const auto & path = request[transfer.file_index].path;
+
+        // Transfers are produced grouped by file, so the params are rebuilt only when the file changes;
+        // handle_s3 parses the URI, which would otherwise be repeated for every transfer of a file.
+        if (!has_params || transfer.file_index != params_file_index)
+        {
+            params = handle_s3(transfer.file_index, path);
+            params_file_index = transfer.file_index;
+            has_params = true;
+        }
+
+        LOG(DEBUG) << "Submission " << submission_id << " creating batches for file index " << transfer.file_index
+                   << " path: " << path << " offset " << transfer.offset << " size " << transfer.size
+                   << " ranges " << transfer.range_sizes.size() << " from index " << transfer.first_range_index;
+
+        Batches batches(submission_id, transfer.file_index, transfer.tasks, _config, _responder, path, params,
+                        transfer.range_sizes, transfer.first_range_index);
         const auto num_batches = batches.size();
-        LOG(DEBUG) << "Created " << num_batches << " batches for file index " << i;
+        LOG(DEBUG) << "Created " << num_batches << " batches for file index " << transfer.file_index;
         for (size_t j = 0; j < num_batches; ++j)
         {
             auto & batch = batches[j];
@@ -318,44 +353,43 @@ bool Streamer::consume_submission_response(SubmissionId submission_id)
     return false;
 }
 
-void Streamer::verify_requests(std::vector<std::string> & paths, std::vector<size_t> & file_offsets, std::vector<size_t> & bytesizes, std::vector<unsigned> & num_sizes, std::vector<void *> & dsts)
+// Every destination is now caller-supplied and really dereferenced, so unlike the previous API - where only
+// dsts[0] was ever used, and so only it could be checked - every range's destination is validated here.
+//
+// Deliberately NOT rejected:
+//   - a file with no ranges: it contributes no responses and never reaches storage
+//   - a range of size zero: it is completed as Success immediately (see async_request), so the caller
+//     still receives exactly one response per range
+//
+// Overlapping destinations are NOT verified: laying out the destination buffer is the caller's
+// responsibility. Such a check is possible here if it is ever wanted - sort the ranges by destination and
+// compare each against its neighbour, O(n log n) per submission.
+void Streamer::verify_requests(std::vector<FileRanges> & request)
 {
-    // Only dsts[0] is checked because only dsts[0] is ever used: for CPU reads the destination is a single
-    // contiguous buffer whose base is dsts[0], and every file/sub-range is written at an offset into it (see
-    // Assigner: "ASSUMES dsts[0] is base of one large buffer"). dsts[1..] are never dereferenced - callers
-    // may even pass a single-element dsts for a multi-file request - so there is no per-file null to check.
-    if (dsts[0] == 0)
+    for (const auto & file : request)
     {
-        LOG(ERROR) << "Destination buffer is null";
-        throw common::Exception(common::ResponseCode::InvalidParameterError);
-    }
+        LOG(SPAM) << "Requested to read asynchronously " << file.ranges.size() << " ranges from " << file.path;
 
-    for (size_t i = 0; i < paths.size(); ++i)
-    {
-        LOG(SPAM) << "Requested to read asynchronously " << bytesizes[i] << " bytes from " << paths[i] << " offset " << file_offsets[i] << " in " << num_sizes[i] << " chunks";
-
-        if (bytesizes[i] == 0 && num_sizes[i] == 0)
+        for (const auto & range : file.ranges)
         {
-            LOG(ERROR) << "Empty request - no response will be sent";
-            throw common::Exception(common::ResponseCode::EmptyRequestError);
-        }
-
-        if (num_sizes[i] == 0 || bytesizes[i] == 0)
-        {
-            LOG(ERROR) << "Total bytes to read is " << bytesizes[i] << " but number of sub requests is " << num_sizes[i];
-            throw common::Exception(common::ResponseCode::InvalidParameterError);
+            // a zero-sized range writes nothing, so a null destination is harmless there
+            if (range.size > 0 && range.dst == nullptr)
+            {
+                LOG(ERROR) << "Destination buffer is null for " << file.path << " offset " << range.offset;
+                throw common::Exception(common::ResponseCode::InvalidParameterError);
+            }
         }
     }
 }
 
-common::ResponseCode Streamer::lock_object_plugin(const std::vector<std::string> & paths)
+common::ResponseCode Streamer::lock_object_plugin(const std::vector<FileRanges> & request)
 {
     // Find the object-storage plugin this submission uses (filesystem paths are ignored and coexist);
     // reject a submission that itself mixes two object-storage plugins.
     std::optional<BackendPools::Plugin> submission_plugin;
-    for (const auto & path : paths)
+    for (const auto & file : request)
     {
-        auto uri = try_parse_uri(path);
+        auto uri = try_parse_uri(file.path);
         if (uri == nullptr)
         {
             continue;   // filesystem path

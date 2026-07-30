@@ -134,11 +134,10 @@ extern "C" int runai_request(
     SubmissionId * out_submission_id,
     unsigned num_files,
     const char ** paths,
-    size_t * file_offsets,
-    size_t * bytesizes,
-    void ** dsts,
-    unsigned * num_sizes,
-    size_t ** internal_sizes
+    unsigned * num_ranges,
+    size_t * range_offsets,
+    size_t * range_sizes,
+    void ** range_dsts
 )
 {
     __multi_state.clear();
@@ -147,13 +146,33 @@ extern "C" int runai_request(
     __response_total = 0;
     __response_given = 0;
 
-    int buffer_start = 0;
+    // The range arrays are flat and grouped by file in the order of paths; base walks that grouping.
+    //
+    // The mock reads each file as ONE contiguous span, starting at its first range's offset and
+    // destination. That matches every caller today - a file's ranges are laid out consecutively in both
+    // the file and the destination - but a genuinely scattered request would need a seek per range here.
+    size_t base = 0;
     for (unsigned i = 0; i < num_files; ++i) {
+        const unsigned n = num_ranges[i];
+
+        size_t bytesize = 0;
+        for (unsigned j = 0; j < n; ++j) {
+            bytesize += range_sizes[base + j];
+        }
+
         State state;
-        request(streamer, paths[i], file_offsets[i], bytesizes[i], reinterpret_cast<char*>(dsts[0]) + buffer_start, num_sizes[i], internal_sizes[i], &state);
-        buffer_start = buffer_start + bytesizes[i];
-        __response_total += num_sizes[i];
+        request(streamer,
+                paths[i],
+                n > 0 ? range_offsets[base] : 0,
+                bytesize,
+                n > 0 ? reinterpret_cast<char*>(range_dsts[base]) : nullptr,
+                n,
+                range_sizes + base,
+                &state);
+
+        __response_total += n;
         __multi_state.push_back(std::move(state));
+        base += n;
     }
 
     __submission_id += 1;

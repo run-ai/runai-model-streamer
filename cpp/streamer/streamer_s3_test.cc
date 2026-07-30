@@ -28,11 +28,39 @@ namespace
 // expected, the test fails visibly instead of blocking forever (the multi-request API has no finish-on-drain).
 constexpr unsigned RESPONSE_TIMEOUT_MS = 60000;
 
+// Keeps the classic per-file argument shape so the tests below are unchanged, and adapts it to the range
+// API: each file's sub ranges tile [file_offsets[i], file_offsets[i] + bytesizes[i]) in order, and every
+// file is written consecutively into the single buffer at dsts[0] - the layout the previous API implied.
 inline int submit(void * streamer, unsigned num_files, const char ** paths, size_t * file_offsets,
                   size_t * bytesizes, void ** dsts, unsigned * num_sizes, size_t ** internal_sizes)
 {
+    (void)bytesizes;   // implied by the sub range sizes
+
+    std::vector<unsigned> num_ranges(num_files);
+    std::vector<size_t> range_offsets;
+    std::vector<size_t> range_sizes;
+    std::vector<void *> range_dsts;
+
+    char * dst = static_cast<char *>(dsts[0]);
+    for (unsigned i = 0; i < num_files; ++i)
+    {
+        num_ranges[i] = num_sizes[i];
+
+        size_t offset = file_offsets[i];
+        for (unsigned j = 0; j < num_sizes[i]; ++j)
+        {
+            const size_t size = internal_sizes[i][j];
+            range_offsets.push_back(offset);
+            range_sizes.push_back(size);
+            range_dsts.push_back(dst);
+            offset += size;
+            dst += size;
+        }
+    }
+
     SubmissionId submission_id = 0;
-    return runai_request(streamer, &submission_id, num_files, paths, file_offsets, bytesizes, dsts, num_sizes, internal_sizes);
+    return runai_request(streamer, &submission_id, num_files, paths, num_ranges.data(),
+                         range_offsets.data(), range_sizes.data(), range_dsts.data());
 }
 
 inline int next_response(void * streamer, unsigned * file_index, unsigned * index)

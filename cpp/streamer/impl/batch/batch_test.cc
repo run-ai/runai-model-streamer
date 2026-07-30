@@ -140,6 +140,47 @@ TEST(Read, Sanity)
     EXPECT_FALSE(mismatch);
 }
 
+// A batch whose range is empty (start == end) reads nothing: neither the block loop nor the tail read
+// in Batch::read runs, because num_chunks is 0 and file_offset == range.end. Its tasks must still be
+// notified - a zero sized range owes exactly one response, like any other range - otherwise the
+// submission waits forever for a response that never comes.
+TEST(Read, Empty_Range)
+{
+    const auto start = utils::random::number<size_t>(0, 1024);
+
+    // the file must exist and be seekable to start; its contents are never read
+    const auto data = utils::random::buffer(start + 1);
+    utils::temp::File file(data);
+    const auto path = file.path;
+    common::s3::S3ClientWrapper::Params params;
+
+    auto responder = std::make_shared<common::Responder>(1);
+    const auto config = std::make_shared<Config>();
+
+    const auto file_index = utils::random::number();
+    const auto range_index = utils::random::number();
+
+    // a single zero sized range: one task, no bytes
+    auto request = std::make_shared<Request>(start, file_index, range_index, 1 /* tasks */, 0 /* bytesize */, nullptr);
+
+    Tasks tasks;
+    tasks.push_back(Task(request, start, 0 /* size */, 0 /* destination offset */));
+
+    Batch batch(utils::random::number(), utils::random::number(), file_index, path, params, std::move(tasks), responder, config);
+
+    EXPECT_EQ(batch.total_bytes(), 0);
+
+    std::atomic<bool> stopped(false);
+    EXPECT_NO_THROW(batch.execute(stopped));
+
+    // The response must arrive even though nothing was read. Timed rather than blocking so that a
+    // regression fails the test instead of hanging it.
+    auto r = batch.responder->pop(5000);
+    EXPECT_EQ(r.ret, common::ResponseCode::Success);
+    EXPECT_EQ(r.file_index, file_index);
+    EXPECT_EQ(r.index, range_index);
+}
+
 TEST(Read, Error)
 {
     std::string path;

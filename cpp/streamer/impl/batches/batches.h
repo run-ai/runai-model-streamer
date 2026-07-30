@@ -15,11 +15,19 @@
 namespace runai::llm::streamer::impl
 {
 
-// Transforms a file read request into batches, one batch per process
-// Batches is a group of Batch objects, which together read the same file
+// Transforms one ContiguousTransfer into batches, one batch per worker it was divided between.
+// Batches is a group of Batch objects which together read the same contiguous span of one file.
+//
+// Built per transfer rather than per file: within a transfer the ranges tile one contiguous span of
+// both file and destination, which is the assumption Batch is built on. A file with non-adjacent
+// ranges simply yields several Batches.
 
 struct Batches
 {
+    // range_sizes are the transfer's ranges in order, and first_range_index is the index of its first
+    // range within the file - so the j-th range of this transfer is request index first_range_index + j.
+    // That index is what the caller receives back as the response's `index`, so it must be the index in
+    // the file's original range list, not the position within this transfer.
     Batches(SubmissionId submission_id,
            unsigned file_index,
            const std::vector<FileReadTask> & file_read_tasks,
@@ -27,7 +35,8 @@ struct Batches
            std::shared_ptr<common::Responder> responder,
            const std::string & path,
            const common::s3::S3ClientWrapper::Params & params,
-           const std::vector<size_t> & internal_sizes);
+           const std::vector<size_t> & range_sizes,
+           unsigned first_range_index);
 
     Batches(Batches &&) = default;
     Batches & operator=(Batches &&) = default;
@@ -62,14 +71,17 @@ struct Batches
     };
 
     // create all the tasks
-    void build_tasks(std::shared_ptr<const Config> config, const std::string & path, const common::s3::S3ClientWrapper::Params & params, const std::vector<size_t> & internal_sizes);
+    void build_tasks(std::shared_ptr<const Config> config, const std::string & path, const common::s3::S3ClientWrapper::Params & params, const std::vector<size_t> & range_sizes);
 
-    // create tasks of a given request
-    void handle_request(std::vector<Tasks> & v_tasks, unsigned request_index, size_t request_file_offset, size_t request_size, char * destination);
+    // create tasks of a given range; range_index is the index within the FILE, not within this transfer
+    void handle_request(std::vector<Tasks> & v_tasks, unsigned range_index, size_t request_file_offset, size_t request_size, char * destination);
 
     SubmissionId _submission_id;
 
     unsigned _file_index;
+
+    // index within the file of this transfer's first range
+    unsigned _first_range_index;
 
     unsigned _size;
 

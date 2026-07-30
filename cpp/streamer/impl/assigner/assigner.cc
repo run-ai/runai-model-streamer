@@ -1,15 +1,10 @@
 #include "streamer/impl/assigner/assigner.h"
 
 #include <algorithm>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
-#include <numeric> // For std::accumulate
-#include <cmath>   // For std::ceil
-#include <stdexcept> // For exceptions
-#include <limits>  // For numeric_limits
-#include <map>
-#include <utility>
 
 #include "common/exception/exception.h"
 #include "common/storage_uri/storage_uri.h"
@@ -19,41 +14,26 @@
 namespace runai::llm::streamer::impl
 {
 
-Assigner::Assigner(
-        const std::vector<std::string> & paths,
-        const std::vector<size_t> & file_offsets,
-        const std::vector<size_t>&  bytesizes,
-        const std::vector<void*> & dsts,
-        std::shared_ptr<const Config> config) :
+Assigner::Assigner(const std::vector<FileRanges> & request, std::shared_ptr<const Config> config) :
 _config(config),
-_is_object_storage(check_object_storage(paths)),
-_num_workers(_is_object_storage ? _config->s3_concurrency : _config->concurrency)
+_is_object_storage(check_object_storage(request)),
+_num_workers(_is_object_storage ? _config->s3_concurrency : _config->concurrency),
+_num_workloads(0)
 {
-    LOG(DEBUG) << "Assigning " << paths.size() << " files to " << _num_workers << " workers";
-    const size_t num_files = paths.size();
-    if (num_files == 0)
+    LOG(DEBUG) << "Assigning " << request.size() << " files to " << _num_workers << " workers";
+
+    if (request.empty())
     {
         LOG(WARNING) << "Assigner: No files provided.";
         return; // Nothing to assign
     }
 
-    if (!(num_files == file_offsets.size() && num_files == bytesizes.size() && (num_files == dsts.size() || dsts.size() == 1)))
-    {
-        LOG(ERROR) <<  "Input vector sizes mismatch " << num_files << " " << file_offsets.size() << " " << bytesizes.size() << " " << dsts.size();
-        throw common::Exception(common::ResponseCode::InvalidParameterError);
-    }
+    const size_t total_bytes_to_read = coalesce(request);
 
-    // Calculate Total Workload
-    size_t total_bytes_to_read = 0;
-    for (size_t size : bytesizes)
+    if (_transfers.empty())
     {
-        // Check for potential overflow if sizes are huge
-        if (total_bytes_to_read > std::numeric_limits<size_t>::max() - size)
-        {
-            LOG(ERROR) << "Total byte size calculation overflow";
-            throw common::Exception(common::ResponseCode::InvalidParameterError);
-        }
-        total_bytes_to_read += size;
+        LOG(WARNING) << "Assigner: no ranges to read.";
+        return;
     }
 
     if (total_bytes_to_read == 0)
@@ -61,98 +41,142 @@ _num_workers(_is_object_storage ? _config->s3_concurrency : _config->concurrency
         LOG(WARNING) << "Total bytes to read is zero.";
     }
 
-    // Determine Workload per Worker
-    size_t base_bytes_remainder;
-    size_t base_bytes_per_worker = bytes_per_worker(total_bytes_to_read, base_bytes_remainder);
-    LOG(DEBUG) << "base_bytes_per_worker: " << base_bytes_per_worker << " base_bytes_remainder: " << base_bytes_remainder;
+    assign(total_bytes_to_read);
+}
+
+// Merge each file's ranges into ContiguousTransfers. Single pass over the ranges, which also
+// accumulates the byte total and detects unordered input - none of these needs its own scan.
+size_t Assigner::coalesce(const std::vector<FileRanges> & request)
+{
+    size_t total_bytes = 0;
+
+    // The best case is one transfer per file. Growing past that is cheap: ContiguousTransfer's move is
+    // noexcept (two vector moves plus PODs), so reallocation moves the range vectors rather than
+    // copying them.
+    _transfers.reserve(request.size());
+
+    for (unsigned file_index = 0; file_index < request.size(); ++file_index)
+    {
+        const auto & ranges = request[file_index].ranges;
+
+        // Index of the transfer currently open for extension; _transfers.size() means "none open".
+        // Reset per file, which is also what stops a transfer from ever spanning two files.
+        size_t open = _transfers.size();
+        bool ordered = true;
+
+        for (unsigned i = 0; i < ranges.size(); ++i)
+        {
+            const auto & range = ranges[i];
+            char * const destination = static_cast<char *>(range.dst);
+
+            if (total_bytes > std::numeric_limits<size_t>::max() - range.size)
+            {
+                LOG(ERROR) << "Total byte size calculation overflow";
+                throw common::Exception(common::ResponseCode::InvalidParameterError);
+            }
+            total_bytes += range.size;
+
+            if (open < _transfers.size())
+            {
+                auto & current = _transfers[open];
+
+                // Extend only when adjacent in BOTH the file and the destination: a single read fills a
+                // single contiguous buffer, so either gap alone breaks the merge.
+                if (current.offset + current.size == range.offset &&
+                    current.destination + current.size == destination)
+                {
+                    current.size += range.size;
+                    current.range_sizes.push_back(range.size);
+                    continue;
+                }
+
+                // Noticed here for free rather than in a separate ordering pass
+                ordered = ordered && range.offset >= current.offset;
+            }
+
+            // NOTE: never hold a reference into _transfers across this push - it may reallocate.
+            // The open transfer is tracked by index for exactly that reason.
+            open = _transfers.size();
+            _transfers.emplace_back();
+
+            auto & opened = _transfers.back();
+            opened.file_index = file_index;
+            opened.offset = range.offset;
+            opened.size = range.size;
+            opened.destination = destination;
+            opened.first_range_index = i;
+            opened.range_sizes.push_back(range.size);
+        }
+
+        if (!ordered)
+        {
+            LOG(DEBUG) << "Ranges of " << request[file_index].path << " are not ordered by ascending"
+                       << " offset; coalescing is limited to ranges adjacent in the order given";
+        }
+    }
+
+    LOG(DEBUG) << "Coalesced the request into " << _transfers.size() << " contiguous transfers";
+
+    return total_bytes;
+}
+
+// Divide the transfers between the workers by total bytes. A transfer larger than a worker's remaining
+// target is split, with offset and destination advancing together so every slice stays contiguous.
+void Assigner::assign(size_t total_bytes_to_read)
+{
+    size_t base_bytes_remainder = 0;
+    const size_t base_bytes_per_worker = bytes_per_worker(total_bytes_to_read, base_bytes_remainder);
 
     _worker_assignments.resize(_num_workers);
 
-    // ASSUMES dsts[0] is base of one large buffer
-    char * global_dst_buffer = static_cast<char *>(dsts[0]);
+    size_t index = 0;     // the transfer being assigned
+    size_t consumed = 0;  // how many of its bytes are already assigned
 
-    size_t current_global_dst_offset = 0; // Tracks position in the conceptual global buffer
-    size_t current_file_index = 0;
-    size_t current_offset_within_file = file_offsets[0]; // Start at the beginning of the first file's range
-
-    for (unsigned workload_idx = 0; workload_idx < _num_workers && current_file_index < num_files; ++workload_idx)
+    for (unsigned workload_idx = 0; workload_idx < _num_workers && index < _transfers.size(); ++workload_idx)
     {
-        size_t target_bytes_for_this_worker = (workload_idx == 0 ? base_bytes_per_worker + base_bytes_remainder : base_bytes_per_worker);
+        const size_t target = (workload_idx == 0 ? base_bytes_per_worker + base_bytes_remainder : base_bytes_per_worker);
+        size_t assigned = 0;
 
-        size_t bytes_assigned_to_this_worker = 0;
+        LOG(DEBUG) << "Assigning work to worker " << workload_idx << ", target bytes: " << target;
 
-        LOG(DEBUG) << "Assigning work to worker " << workload_idx << ", target bytes: " << target_bytes_for_this_worker;
-
-        while (current_file_index < num_files)
+        while (index < _transfers.size())
         {
-            const std::string& file_path = paths[current_file_index];
-            const size_t file_start_offset = file_offsets[current_file_index];
-            const size_t file_total_requested_size = bytesizes[current_file_index];
-            char* current_global_dst_ptr = global_dst_buffer + current_global_dst_offset;
+            auto & transfer = _transfers[index];
 
-            if (file_total_requested_size > 0 && bytes_assigned_to_this_worker >= target_bytes_for_this_worker)
+            // A zero sized transfer is still given a task: its ranges are zero sized, and every range
+            // owes exactly one response whatever its size.
+            if (transfer.size > 0 && assigned >= target)
             {
                 break;
             }
 
-            // Sanity check: current offset should be within the requested range for the file
-            if (file_total_requested_size && (current_offset_within_file < file_start_offset || current_offset_within_file >= file_start_offset + file_total_requested_size))
+            const size_t remaining = transfer.size - consumed;
+            const size_t to_assign = std::min(remaining, target - assigned);
+
+            transfer.tasks.emplace_back(workload_idx,
+                                        transfer.file_index,
+                                        transfer.offset + consumed,
+                                        to_assign,
+                                        transfer.destination + consumed);
+
+            LOG(SPAM) << "  Worker " << workload_idx << ": file " << transfer.file_index
+                      << " offset " << transfer.offset + consumed << " size " << to_assign;
+
+            assigned += to_assign;
+            consumed += to_assign;
+            _worker_assignments[workload_idx].total_bytes += to_assign;
+
+            if (consumed == transfer.size)
             {
-                LOG(ERROR) << "Logic error: current_offset_within_file (" << current_offset_within_file
-                        << ") is outside the requested range [" << file_start_offset << ", "
-                        << file_start_offset + file_total_requested_size << ") for file " << current_file_index;
-                throw std::logic_error("Internal error during workload assignment: Invalid file offset.");
+                ++index;
+                consumed = 0;
             }
+        }
 
-            const size_t bytes_remaining_in_current_file = (file_start_offset + file_total_requested_size) - current_offset_within_file;
-            const size_t bytes_still_needed_by_worker = target_bytes_for_this_worker - bytes_assigned_to_this_worker;
+        LOG(DEBUG) << "Finished assignment for worker " << workload_idx << ", total bytes assigned: " << assigned;
+    }
 
-            const size_t bytes_to_assign_now = std::min(bytes_remaining_in_current_file, bytes_still_needed_by_worker);
-
-            LOG(DEBUG) << "bytes_to_assign_now: " << bytes_to_assign_now;
-
-            if (file_total_requested_size == 0 || bytes_to_assign_now > 0)
-            {
-                 // Create Task
-
-                 LOG(DEBUG) << "Assigned read file task to worker " << workload_idx << " file index: " << current_file_index << " file offset: " << current_offset_within_file << " bytesize: " << bytes_to_assign_now << " destination " << static_cast<void *>(current_global_dst_ptr);
-                _worker_assignments[workload_idx].tasks.emplace_back(
-                    workload_idx,
-                    current_file_index,
-                    file_path,
-                    current_offset_within_file,
-                    bytes_to_assign_now,
-                    current_global_dst_ptr);
-
-                // --- Update State ---
-                bytes_assigned_to_this_worker += bytes_to_assign_now;
-                _worker_assignments[workload_idx].total_bytes += bytes_to_assign_now;
-                current_offset_within_file += bytes_to_assign_now;
-                current_global_dst_offset += bytes_to_assign_now; // Advance global destination offset
-
-                LOG(SPAM) << "  Worker " << workload_idx << ": Assigned task - File " << current_file_index
-                            << " ('" << file_path << "'), Offset " << current_offset_within_file - bytes_to_assign_now
-                            << ", Size " << bytes_to_assign_now;
-            }
-
-            // Check if we finished the current file
-            LOG(DEBUG) << "file_start_offset " << file_start_offset << " file_total_requested_size: " << file_total_requested_size << " current_offset_within_file: " << current_offset_within_file << " file_start_offset + file_total_requested_size: " << file_start_offset + file_total_requested_size;
-            if (current_offset_within_file == file_start_offset + file_total_requested_size)
-            {
-                LOG(DEBUG) << "Finished current file " << current_file_index;
-                current_file_index++;
-                if (current_file_index < num_files)
-                {
-                    // Reset offset for the new file to its starting requested offset
-                    current_offset_within_file = file_offsets[current_file_index];
-                }
-            }
-        } // End while loop for assigning work to current worker
-
-        LOG(DEBUG) << "Finished assignment for worker " << workload_idx << ", total bytes assigned: " << bytes_assigned_to_this_worker;
-    } // End for loop iterating through workers
-
-    // Verification
+    // Verification - every byte assigned exactly once, and every transfer fully covered by its tasks
     size_t assigned_total = 0;
     for (const auto & assignment : _worker_assignments)
     {
@@ -162,42 +186,30 @@ _num_workers(_is_object_storage ? _config->s3_concurrency : _config->concurrency
     ASSERT(assigned_total == total_bytes_to_read) << "Verification failed: Total bytes assigned (" << assigned_total
         << ") does not match total bytes requested (" << total_bytes_to_read << ")";
 
+    for (size_t i = 0; i < _transfers.size(); ++i)
+    {
+        size_t transfer_total = 0;
+        for (const auto & task : _transfers[i].tasks)
+        {
+            transfer_total += task.size;
+        }
+        ASSERT(transfer_total == _transfers[i].size) << "Transfer " << i << " of file " << _transfers[i].file_index
+            << " assigned " << transfer_total << " bytes but covers " << _transfers[i].size;
+    }
+
     LOG(DEBUG) << "Workload assignment verification successful. Total bytes assigned: " << assigned_total;
-
-    unsigned i = 0;
-    for (auto & worker : _worker_assignments)
-    {
-        for (auto & read_task : worker.tasks)
-        {
-            const auto file_index = read_task.original_file_index;
-            _assignments[file_index].push_back(std::move(read_task));
-        }
-        ++i;
-    }
-
-    // Verification
-    for (unsigned i = 0; i < paths.size(); ++i)
-    {
-        size_t file_assigned_total = 0;
-        for (auto & task : _assignments[i])
-        {
-            file_assigned_total += task.size;
-        }
-        ASSERT(file_assigned_total == bytesizes[i]) << "File index " << i << " total assigned " << file_assigned_total << " not equal to file size " << bytesizes[i];
-    }
 }
 
-bool Assigner::check_object_storage(const std::vector<std::string> & paths) const
+bool Assigner::check_object_storage(const std::vector<FileRanges> & request) const
 {
-    if (paths.size() == 0)
+    if (request.empty())
     {
         return false;
     }
 
-    std::shared_ptr<common::s3::StorageUri> uri;
     try
     {
-        uri = std::make_shared<common::s3::StorageUri>(paths[0]);
+        common::s3::StorageUri uri(request[0].path);
         return true;
     }
     catch(const std::exception& e)
@@ -207,11 +219,9 @@ bool Assigner::check_object_storage(const std::vector<std::string> & paths) cons
     return false;
 }
 
-// Access the assignments of a given file by the original file index
-const std::vector<FileReadTask> & Assigner::file_assignments(unsigned file_index) const
+const std::vector<ContiguousTransfer> & Assigner::transfers() const
 {
-    ASSERT(file_index < _assignments.size()) << "file index " << file_index << " overflow";
-    return _assignments.at(file_index);
+    return _transfers;
 }
 
 unsigned Assigner::get_num_workers() const

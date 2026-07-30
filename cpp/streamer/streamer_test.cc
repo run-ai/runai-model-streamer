@@ -28,11 +28,63 @@ namespace
 // streams and drain by a known count, so submit() discards the id and next_response() blocks (timeout 0) for
 // the next sub-range. There is no finish-on-drain: a submission's last response carries submission_done, so
 // the tests never call next_response() past the expected count (that would block).
+// submit() keeps the classic per-file argument shape so the tests below are unchanged, and adapts it to
+// the range API: each file's sub ranges tile [file_offsets[i], file_offsets[i] + bytesizes[i]) in order,
+// and every file is written consecutively into the single buffer at dsts[0] - the layout the previous
+// API implied.
 inline int submit(void * streamer, unsigned num_files, const char ** paths, size_t * file_offsets,
                   size_t * bytesizes, void ** dsts, unsigned * num_sizes, size_t ** internal_sizes)
 {
+    (void)bytesizes;   // implied by the sub range sizes
+
+    std::vector<unsigned> num_ranges(num_files);
+    std::vector<size_t> range_offsets;
+    std::vector<size_t> range_sizes;
+    std::vector<void *> range_dsts;
+
+    char * dst = static_cast<char *>(dsts[0]);
+    for (unsigned i = 0; i < num_files; ++i)
+    {
+        num_ranges[i] = num_sizes[i];
+
+        size_t offset = file_offsets[i];
+        for (unsigned j = 0; j < num_sizes[i]; ++j)
+        {
+            const size_t size = internal_sizes[i][j];
+            range_offsets.push_back(offset);
+            range_sizes.push_back(size);
+            range_dsts.push_back(dst);
+            offset += size;
+            dst += size;
+        }
+    }
+
     SubmissionId submission_id = 0;
-    return runai_request(streamer, &submission_id, num_files, paths, file_offsets, bytesizes, dsts, num_sizes, internal_sizes);
+    return runai_request(streamer, &submission_id, num_files, paths, num_ranges.data(),
+                         range_offsets.data(), range_sizes.data(), range_dsts.data());
+}
+
+// Single-file variant that reports the submission id, for the concurrent-submission tests. The sub ranges
+// tile [offset, offset + sum(sizes)) and are written consecutively from dst.
+inline int submit_one(void * streamer, SubmissionId * id, const char * path, size_t offset,
+                      void * dst, std::vector<size_t> & sizes)
+{
+    unsigned num_ranges = sizes.size();
+    std::vector<size_t> range_offsets;
+    std::vector<void *> range_dsts;
+
+    char * d = static_cast<char *>(dst);
+    size_t o = offset;
+    for (const auto size : sizes)
+    {
+        range_offsets.push_back(o);
+        range_dsts.push_back(d);
+        o += size;
+        d += size;
+    }
+
+    return runai_request(streamer, id, 1, &path, &num_ranges,
+                         range_offsets.data(), sizes.data(), range_dsts.data());
 }
 
 inline int next_response(void * streamer, unsigned * file_index, unsigned * index)
@@ -93,6 +145,38 @@ TEST_F(StreamerTest, Creation)
     auto res = runai_start(&streamer);
     EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success));
     EXPECT_NE(streamer, nullptr);
+
+    EXPECT_NO_THROW(runai_end(streamer));
+}
+
+// Replaces AssignerTest.Mismatched_Input_Sizes, which asserted the old per-file vector length check.
+// Lengths cannot disagree now - num_ranges describes the flat arrays - so what remains checkable at the C
+// boundary is null-ness, validated in submit_request before anything is dereferenced.
+TEST(Request, Null_Parameters)
+{
+    void * streamer = nullptr;
+    ASSERT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
+
+    SubmissionId id = 0;
+    const char * path = "/tmp/no-such-file";
+    unsigned num_ranges = 1;
+    size_t offset = 0;
+    size_t size = 10;
+    std::vector<char> buffer(size);
+    void * dst = buffer.data();
+
+    const auto invalid = static_cast<int>(common::ResponseCode::InvalidParameterError);
+
+    EXPECT_EQ(runai_request(streamer, &id, 1, nullptr, &num_ranges, &offset, &size, &dst), invalid);
+    EXPECT_EQ(runai_request(streamer, &id, 1, &path, nullptr, &offset, &size, &dst), invalid);
+    EXPECT_EQ(runai_request(streamer, &id, 1, &path, &num_ranges, nullptr, &size, &dst), invalid);
+    EXPECT_EQ(runai_request(streamer, &id, 1, &path, &num_ranges, &offset, nullptr, &dst), invalid);
+    EXPECT_EQ(runai_request(streamer, &id, 1, &path, &num_ranges, &offset, &size, nullptr), invalid);
+
+    // a null path entry is caught before it is used to construct a std::string - the previous code built
+    // the vector straight from the array, which was undefined behaviour on a null element
+    const char * null_path = nullptr;
+    EXPECT_EQ(runai_request(streamer, &id, 1, &null_path, &num_ranges, &offset, &size, &dst), invalid);
 
     EXPECT_NO_THROW(runai_end(streamer));
 }
@@ -439,27 +523,22 @@ TEST(AsyncEx, ConcurrentSubmissionsDemux)
 
     const char * path = file.path.c_str();
     size_t offset = 0;
-    size_t bytesize = size;
 
     // Submission A: 2 sub-ranges into dstA
     std::vector<unsigned char> dstA(size);
     const size_t s1 = size / 2;
     std::vector<size_t> subA = { s1, size - s1 };
-    size_t * subA_ptr = subA.data();
-    unsigned numA = 2;
     SubmissionId idA = 0;
     void * dstA_ptr = dstA.data();
-    ASSERT_EQ(runai_request(streamer, &idA, 1, &path, &offset, &bytesize, &dstA_ptr, &numA, &subA_ptr),
+    ASSERT_EQ(submit_one(streamer, &idA, path, offset, dstA_ptr, subA),
               static_cast<int>(common::ResponseCode::Success));
 
     // Submission B: 1 sub-range into dstB
     std::vector<unsigned char> dstB(size);
     std::vector<size_t> subB = { size };
-    size_t * subB_ptr = subB.data();
-    unsigned numB = 1;
     SubmissionId idB = 0;
     void * dstB_ptr = dstB.data();
-    ASSERT_EQ(runai_request(streamer, &idB, 1, &path, &offset, &bytesize, &dstB_ptr, &numB, &subB_ptr),
+    ASSERT_EQ(submit_one(streamer, &idB, path, offset, dstB_ptr, subB),
               static_cast<int>(common::ResponseCode::Success));
 
     EXPECT_NE(idA, 0u);
@@ -519,25 +598,19 @@ TEST(AsyncEx, PerSubmissionErrorIsolation)
 
     // Submission A: valid full read
     std::vector<unsigned char> dstA(data_size);
-    size_t bytesizeA = data_size;
     std::vector<size_t> subA = { data_size };
-    size_t * subA_ptr = subA.data();
-    unsigned numA = 1;
     SubmissionId idA = 0;
     void * dstA_ptr = dstA.data();
-    ASSERT_EQ(runai_request(streamer, &idA, 1, &path, &offset, &bytesizeA, &dstA_ptr, &numA, &subA_ptr),
+    ASSERT_EQ(submit_one(streamer, &idA, path, offset, dstA_ptr, subA),
               static_cast<int>(common::ResponseCode::Success));
 
     // Submission B: read past EOF -> EofError
     const size_t over = data_size + utils::random::number(1, 100);
     std::vector<unsigned char> dstB(over);
-    size_t bytesizeB = over;
     std::vector<size_t> subB = { over };
-    size_t * subB_ptr = subB.data();
-    unsigned numB = 1;
     SubmissionId idB = 0;
     void * dstB_ptr = dstB.data();
-    ASSERT_EQ(runai_request(streamer, &idB, 1, &path, &offset, &bytesizeB, &dstB_ptr, &numB, &subB_ptr),
+    ASSERT_EQ(submit_one(streamer, &idB, path, offset, dstB_ptr, subB),
               static_cast<int>(common::ResponseCode::Success));
 
     EXPECT_NE(idA, idB);
@@ -596,12 +669,9 @@ TEST(AsyncEx, MultipleSubmitterThreads)
             {
                 const char * path = file.path.c_str();
                 size_t offset = 0;
-                size_t bytesize = size;
                 std::vector<size_t> sub = { size };
-                size_t * sub_ptr = sub.data();
-                unsigned num = 1;
                 void * dst = dsts[t].data();
-                submit_ret[t] = runai_request(streamer, &ids[t], 1, &path, &offset, &bytesize, &dst, &num, &sub_ptr);
+                submit_ret[t] = submit_one(streamer, &ids[t], path, offset, dst, sub);
             });
         }
     }

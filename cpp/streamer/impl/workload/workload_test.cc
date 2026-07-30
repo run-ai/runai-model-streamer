@@ -21,6 +21,38 @@
 namespace runai::llm::streamer::impl
 {
 
+namespace
+{
+
+// Build a request whose ranges tile each file contiguously and are packed consecutively into a single
+// buffer - the layout the previous single-destination API implied. Every file therefore coalesces to
+// exactly one ContiguousTransfer, which keeps these tests equivalent to what they asserted before.
+std::vector<FileRanges> build_contiguous_request(const std::vector<std::string> & paths,
+                                                 const std::vector<std::vector<size_t>> & chunks,
+                                                 char * buffer)
+{
+    std::vector<FileRanges> request(paths.size());
+
+    char * dst = buffer;
+    for (size_t i = 0; i < paths.size(); ++i)
+    {
+        request[i].path = paths[i];
+        request[i].ranges.reserve(chunks[i].size());
+
+        size_t offset = 0;
+        for (const auto size : chunks[i])
+        {
+            request[i].ranges.push_back(ReadRange{ offset, size, dst });
+            offset += size;
+            dst += size;
+        }
+    }
+
+    return request;
+}
+
+} // namespace
+
 TEST(Workload, Sanity)
 {
     auto num_files = utils::random::number(1, 10);
@@ -30,9 +62,7 @@ TEST(Workload, Sanity)
 
     std::atomic<bool> stopped(false);
     std::vector<std::string> paths;
-    std::vector<size_t> file_offsets;
-    std::vector<size_t> bytesizes;
-    std::vector<void*> dsts;
+    std::vector<std::vector<size_t>> chunks(num_files);
     std::vector<std::vector<uint8_t>> data(num_files);
     std::vector<unsigned> num_chunks(num_files);
     std::vector<utils::temp::File> file;
@@ -52,42 +82,47 @@ TEST(Workload, Sanity)
         total_bytes += size;
         data[i] = utils::random::buffer(size);
         file.push_back(utils::temp::File(data[i]));
-
         paths.push_back(file[i].path);
-        file_offsets.push_back(0);
-        bytesizes.push_back(size);
+
+        // The ranges must exist before the Assigner is built - it coalesces them - so the chunk sizes
+        // are chosen here rather than after the assignment as they used to be.
+        chunks[i] = utils::random::chunks(size, num_chunks[i]);
+        EXPECT_EQ(chunks[i].size(), num_chunks[i]);
+        EXPECT_EQ(std::accumulate(chunks[i].begin(), chunks[i].end(), static_cast<size_t>(0)), size);
+
+        for (unsigned j = 0; j < num_chunks[i]; ++j)
+        {
+            expected_responses[i].insert(j);
+        }
     }
 
     std::vector<char> buffer(total_bytes);
-    dsts.push_back(buffer.data());
+    const auto request = build_contiguous_request(paths, chunks, buffer.data());
 
     {
-        Assigner assigner(paths, file_offsets, bytesizes, dsts, config);
+        Assigner assigner(request, config);
 
-        EXPECT_GT(assigner.file_assignments(0).size(), 0);
-        EXPECT_LE(assigner.file_assignments(0).size(), config->concurrency);
+        // each file's ranges are adjacent in both the file and the buffer, so each file is one transfer
+        EXPECT_EQ(assigner.transfers().size(), num_files);
         EXPECT_LE(assigner.num_workloads(), config->concurrency);
 
         std::vector<Workload> workloads(assigner.num_workloads());
 
-        for (unsigned file_idx = 0; file_idx < num_files; ++file_idx)
+        for (const auto & transfer : assigner.transfers())
         {
-            auto chunks = utils::random::chunks(bytesizes[file_idx], num_chunks[file_idx]);
-            EXPECT_EQ(chunks.size(), num_chunks[file_idx]);
-            auto total_chunks_size = std::accumulate(chunks.begin(), chunks.end(), 0u);
-            EXPECT_EQ(total_chunks_size, bytesizes[file_idx]);
+            EXPECT_GT(transfer.tasks.size(), 0);
+            EXPECT_LE(transfer.tasks.size(), config->concurrency);
+            EXPECT_EQ(transfer.first_range_index, 0);
+            EXPECT_EQ(transfer.range_sizes.size(), num_chunks[transfer.file_index]);
 
-            Batches batches(utils::random::number(), file_idx, assigner.file_assignments(file_idx), config, responder, file[file_idx].path, s3_params, chunks);
+            Batches batches(utils::random::number(), transfer.file_index, transfer.tasks, config, responder,
+                            request[transfer.file_index].path, s3_params,
+                            transfer.range_sizes, transfer.first_range_index);
 
             for (size_t j = 0; j < batches.size(); ++j)
             {
                 auto & batch = batches[j];
                 workloads[batch.workload_index].add_batch(std::move(batch));
-            }
-
-            for (unsigned i = 0; i < num_chunks[file_idx]; ++i)
-            {
-                expected_responses[file_idx].insert(i);
             }
         }
         // execute workloads
@@ -136,15 +171,15 @@ TEST(Workload, Stopped)
 
     std::atomic<bool> stopped(false);
     std::vector<std::string> paths;
-    std::vector<size_t> file_offsets;
-    std::vector<size_t> bytesizes;
-    std::vector<void*> dsts;
+    std::vector<std::vector<size_t>> chunks(num_files);
     std::vector<std::vector<uint8_t>> data(num_files);
     std::vector<unsigned> num_chunks(num_files);
     std::vector<utils::temp::File> file;
     std::vector<std::set<int>> expected_responses(num_files);
 
     const auto chunk_size = utils::random::number<size_t>(1, 1024);
+    // concurrency 1: coalescing must still merge each file's ranges into a single read, since it runs
+    // before any work is divided between workers
     auto config = std::make_shared<Config>(1, 1, utils::random::number<size_t>(1, 1024), chunk_size, false /* do not force minimum chunk size */);
     auto responder = std::make_shared<common::Responder>(0);
 
@@ -158,41 +193,40 @@ TEST(Workload, Stopped)
         total_bytes += size;
         data[i] = utils::random::buffer(size);
         file.push_back(utils::temp::File(data[i]));
-
         paths.push_back(file[i].path);
-        file_offsets.push_back(0);
-        bytesizes.push_back(size);
+
+        chunks[i] = utils::random::chunks(size, num_chunks[i]);
+        EXPECT_EQ(chunks[i].size(), num_chunks[i]);
+        EXPECT_EQ(std::accumulate(chunks[i].begin(), chunks[i].end(), static_cast<size_t>(0)), size);
+
+        for (unsigned j = 0; j < num_chunks[i]; ++j)
+        {
+            expected_responses[i].insert(j);
+        }
     }
 
     std::vector<char> buffer(total_bytes);
-    dsts.push_back(buffer.data());
+    const auto request = build_contiguous_request(paths, chunks, buffer.data());
 
-    Assigner assigner(paths, file_offsets, bytesizes, dsts, config);
+    Assigner assigner(request, config);
 
-    EXPECT_GT(assigner.file_assignments(0).size(), 0);
-    EXPECT_LE(assigner.file_assignments(0).size(), config->concurrency);
-
+    EXPECT_EQ(assigner.transfers().size(), num_files);
 
     Workload workload;
 
-    for (unsigned file_idx = 0; file_idx < num_files; ++file_idx)
+    for (const auto & transfer : assigner.transfers())
     {
-        auto chunks = utils::random::chunks(bytesizes[file_idx], num_chunks[file_idx]);
-        EXPECT_EQ(chunks.size(), num_chunks[file_idx]);
-        auto total_chunks_size = std::accumulate(chunks.begin(), chunks.end(), 0u);
-        EXPECT_EQ(total_chunks_size, bytesizes[file_idx]);
+        // one worker, so a transfer is never split
+        EXPECT_EQ(transfer.tasks.size(), 1);
 
-        Batches batches(utils::random::number(), file_idx, assigner.file_assignments(file_idx), config, responder, file[file_idx].path, s3_params, chunks);
+        Batches batches(utils::random::number(), transfer.file_index, transfer.tasks, config, responder,
+                        request[transfer.file_index].path, s3_params,
+                        transfer.range_sizes, transfer.first_range_index);
 
         for (size_t j = 0; j < batches.size(); ++j)
         {
             auto & batch = batches[j];
             workload.add_batch(std::move(batch));
-        }
-
-        for (unsigned i = 0; i < num_chunks[file_idx]; ++i)
-        {
-            expected_responses[file_idx].insert(i);
         }
     }
 
