@@ -27,7 +27,7 @@ class TestBindings(unittest.TestCase):
             3: {"expected_text": "Test-Text3"},
         }
         with FileStreamer() as fs:
-            fs.stream_files([FileChunks(file_id, file_path, 1, request_sizes)])
+            fs.stream_files([FileChunks.contiguous(file_id, file_path, 1, request_sizes)])
             seen = set()
             for res_file_id, id, dst in fs.get_chunks():
                 seen.add(id)
@@ -55,7 +55,7 @@ class TestBindings(unittest.TestCase):
             2: {"expected_text": "Test-Text3"},
         }
         with FileStreamer() as fs:
-            fs.stream_files([FileChunks(file_id, file_path, 1, request_sizes)])
+            fs.stream_files([FileChunks.contiguous(file_id, file_path, 1, request_sizes)])
             seen = set()
             for res_file_id, id, dst in fs.get_chunks():
                 seen.add(id)
@@ -92,7 +92,7 @@ class TestBindings(unittest.TestCase):
             8: {"expected_text": "I"},
         }
         with FileStreamer() as fs:
-            fs.stream_files([FileChunks(file_id, file_path, 1, request_sizes)])
+            fs.stream_files([FileChunks.contiguous(file_id, file_path, 1, request_sizes)])
             seen = set()
             for res_file_id, id, dst, in fs.get_chunks():
                 seen.add(id)
@@ -104,6 +104,41 @@ class TestBindings(unittest.TestCase):
             # every range produced exactly one response (full drain across multiple buffer requests)
             self.assertEqual(seen, set(id_to_results))
 
+    def test_empty_file_first_does_not_drop_the_rest(self):
+        # end-to-end regression for issue #157: an empty shard ahead of a data shard used to close the
+        # request, which get_chunks reads as end of stream, silently dropping every remaining file
+        empty_path = os.path.join(self.temp_dir, "empty.txt")
+        open(empty_path, "w").close()
+        data_path = os.path.join(self.temp_dir, "data.txt")
+        with open(data_path, "w") as file:
+            file.write("HelloWorld")
+
+        with FileStreamer() as fs:
+            fs.stream_files([
+                FileChunks(17, empty_path, [], []),
+                FileChunks.contiguous(18, data_path, 0, [5, 5]),
+            ])
+            results = [(file_id, index, dst.numpy().tobytes().decode("utf-8"))
+                       for file_id, index, dst in fs.get_chunks()]
+
+        self.assertEqual(sorted(results), [(18, 0, "Hello"), (18, 1, "World")])
+
+    def test_file_of_only_zero_sized_ranges_is_answered(self):
+        # A file whose tensors are all zero sized is not an empty shard - it has header entries, and
+        # safetensors yields those tensors. Each zero-sized range must still get its own response, or
+        # the caller's tensor indexing drifts. This used to be skipped in Python because the C++ layer
+        # could not answer a zero-sized range (an empty batch range never completed its tasks).
+        file_path = os.path.join(self.temp_dir, "zeros.txt")
+        with open(file_path, "w") as file:
+            file.write("content")
+
+        with FileStreamer() as fs:
+            fs.stream_files([FileChunks.contiguous(17, file_path, 0, [0, 0, 0])])
+            results = [(file_id, index, len(dst.numpy().tobytes()))
+                       for file_id, index, dst in fs.get_chunks()]
+
+        self.assertEqual(sorted(results), [(17, 0, 0), (17, 1, 0), (17, 2, 0)])
+
     def test_get_chunks_raises_on_read_error(self):
         # FileStreamer is single-submission and fail-fast: a per-sub-range error from the streamer must raise
         # out of get_chunks (the low-level binding no longer raises, so FileStreamer itself enforces this).
@@ -114,7 +149,7 @@ class TestBindings(unittest.TestCase):
             file.write("short")   # 5 bytes
 
         with FileStreamer() as fs:
-            fs.stream_files([FileChunks(file_id, file_path, 0, [20])])   # one 20-byte range from a 5-byte file
+            fs.stream_files([FileChunks.contiguous(file_id, file_path, 0, [20])])   # one 20-byte range from a 5-byte file
             with self.assertRaises(ValueError):
                 list(fs.get_chunks())
 

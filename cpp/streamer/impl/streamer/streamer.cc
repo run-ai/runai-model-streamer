@@ -18,6 +18,7 @@
 #include "streamer/impl/workload/workload.h"
 #include "streamer/impl/object_storage_worker/object_storage_worker.h"
 #include "streamer/impl/assigner/assigner.h"
+#include "streamer/impl/batches/batches.h"
 #include "common/exception/exception.h"
 #include "common/storage_uri/storage_uri.h"
 

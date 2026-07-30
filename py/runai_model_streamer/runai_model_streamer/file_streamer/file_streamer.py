@@ -163,13 +163,24 @@ class FileStreamer:
         if self.active_request is None:
             return
 
+        self.submit_active_request()
+
+    def submit_active_request(self) -> None:
+        # The three range arrays are flat and grouped by file, in the order of paths - which is the order
+        # the request's files are in, and the order range_dsts was built in, so it passes through as is.
+        #
+        # range_dsts are RAW ADDRESSES into the requests iterator's buffer: they keep nothing alive. The
+        # buffer must outlive the submission, until its last response has been consumed. That holds here
+        # because self.requests_iterator owns the buffer and is only replaced by the next stream_files,
+        # which cannot start before get_chunks has drained this one.
+        request = self.active_request
         self.submission_id = runai_request(
             self.streamer,
-            [file_request.path for file_request in self.active_request.files],
-            [file_request.offset for file_request in self.active_request.files],
-            [sum(file_request.chunks) for file_request in self.active_request.files],
-            self.requests_iterator.file_buffers,
-            [file_request.chunks for file_request in self.active_request.files],
+            [file_request.path for file_request in request.files],
+            [len(file_request.sizes) for file_request in request.files],
+            [offset for file_request in request.files for offset in file_request.offsets],
+            [size for file_request in request.files for size in file_request.sizes],
+            request.range_dsts,
         )
 
     def get_chunks(self) -> Iterator:
@@ -187,14 +198,7 @@ class FileStreamer:
             if self.active_request is None:
                 break
 
-            self.submission_id = runai_request(
-                self.streamer,
-                [file_request.path for file_request in self.active_request.files],
-                [file_request.offset for file_request in self.active_request.files],
-                [sum(file_request.chunks) for file_request in self.active_request.files],
-                self.requests_iterator.file_buffers,
-                [file_request.chunks for file_request in self.active_request.files],
-            )
+            self.submit_active_request()
 
     # This function iterates over indexes of ready chunks.
     # The indexes are relative to the last request that sent
@@ -203,7 +207,7 @@ class FileStreamer:
         # Only one submission is in flight at a time (get_chunks fully drains the active request before
         # submitting the next), so every response here belongs to self.submission_id and the count loop is
         # exact. runai_response blocks indefinitely (timeout 0) and returns None only on teardown.
-        for i in range(sum(len(file_request.chunks) for file_request in self.active_request.files)):
+        for i in range(self.active_request.num_ranges):
             response = runai_response(self.streamer)
             if response is None:
                 return

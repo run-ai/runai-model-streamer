@@ -59,19 +59,20 @@ def partition_by_chunks(
         return [[] for _ in range(n)]
 
     # 1. Flatten the input `FileChunks` into a single list of `_WorkUnit`s.
+    # Zero-sized ranges are kept, not filtered: a zero-element tensor is a real safetensors entry
+    # (header shape [0, 3], data_offsets [x, x]) that the reference implementation yields, and
+    # create_torch_tensor reconstructs its shape. Dropping them here would make the distributed path
+    # yield fewer tensors than the single-process path.
     all_units: List[_WorkUnit] = []
-    for req_idx, request in enumerate(file_stream_requests):
-        current_offset = request.offset
-        for chunk_idx, chunk_size in enumerate(request.chunks):
-            if chunk_size > 0:
-                all_units.append(_WorkUnit(
-                    path=request.path,
-                    offset=current_offset,
-                    size=chunk_size,
-                    original_request_index=request.id,
-                    original_chunk_index=chunk_idx
-                ))
-            current_offset += chunk_size
+    for request in file_stream_requests:
+        for chunk_idx, (offset, size) in enumerate(zip(request.offsets, request.sizes)):
+            all_units.append(_WorkUnit(
+                path=request.path,
+                offset=offset,
+                size=size,
+                original_request_index=request.id,
+                original_chunk_index=chunk_idx
+            ))
 
     # 2. Sort the atomic work units from largest to smallest.
     all_units.sort(key=lambda u: u.size, reverse=True)
@@ -95,28 +96,32 @@ def partition_by_chunks(
             units_by_path[unit.path].append(unit)
         
         for path, units in units_by_path.items():
-            units.sort(key=lambda u: u.offset)
-            if not units:
-                continue
+            # Sorted by offset not in order to merge anything - ranges carry their own offsets now - but
+            # because the C++ assigner only coalesces ranges that arrive in ascending file order. Sorting
+            # here is what lets it turn a rank's scattered ranges back into contiguous transfers.
+            #
+            # Size breaks ties so that a zero sized range sorts BEFORE a range starting at the same
+            # offset. Placed after, it would land at the far end of the preceding range and break the
+            # transfer twice; placed before, both the file offsets and the destinations stay adjacent.
+            units.sort(key=lambda u: (u.offset, u.size))
 
-            current_fc = FileChunks(id=id_generator, path=path, offset=units[0].offset, chunks=[units[0].size])
-            current_map = {0: (units[0].original_request_index, units[0].original_chunk_index, units[0].size)}
+            # One FileChunks per path per rank. Previously a rank's units for a path were split into one
+            # FileChunks per contiguous run, which on a 66-shard model produced 16308 entries (mean run
+            # length 1.14) and 16308 duplicated path strings for 66 distinct paths.
+            new_partition.append((
+                FileChunks(
+                    id=id_generator,
+                    path=path,
+                    offsets=[unit.offset for unit in units],
+                    sizes=[unit.size for unit in units],
+                ),
+                {
+                    index: (unit.original_request_index, unit.original_chunk_index, unit.size)
+                    for index, unit in enumerate(units)
+                },
+            ))
             id_generator += 1
-            
-            for i in range(1, len(units)):
-                next_unit = units[i]
-                if current_fc.offset + sum(current_fc.chunks) == next_unit.offset:
-                    new_chunk_index = len(current_fc.chunks)
-                    current_fc.chunks.append(next_unit.size)
-                    current_map[new_chunk_index] = (next_unit.original_request_index, next_unit.original_chunk_index, next_unit.size)
-                else:
-                    new_partition.append((current_fc, current_map))
-                    current_fc = FileChunks(id=id_generator, path=path, offset=next_unit.offset, chunks=[next_unit.size])
-                    current_map = {0: (next_unit.original_request_index, next_unit.original_chunk_index, next_unit.size)}
-                    id_generator += 1
-            
-            new_partition.append((current_fc, current_map))
-        
+
         result_partitions.append(new_partition)
 
     return result_partitions
@@ -151,7 +156,7 @@ def partition_by_files(
     requests_with_indices = list(enumerate(file_stream_requests))
     sorted_requests = sorted(
         requests_with_indices,
-        key=lambda item: sum(item[1].chunks),
+        key=lambda item: item[1].total_size(),
         reverse=True
     )
 
@@ -165,12 +170,12 @@ def partition_by_files(
         # Create the source map. Since we aren't changing the chunk order within
         # the FileChunks object, the mapping is direct.
         source_map = {
-            chunk_idx: (original_request_index, chunk_idx, request.chunks[chunk_idx])
-            for chunk_idx in range(len(request.chunks))
+            chunk_idx: (original_request_index, chunk_idx, request.sizes[chunk_idx])
+            for chunk_idx in range(len(request.sizes))
         }
-        
+
         partitions[min_size_idx].append((request, source_map))
-        partition_sizes[min_size_idx] += sum(request.chunks)
+        partition_sizes[min_size_idx] += request.total_size()
 
     return partitions
 
@@ -196,12 +201,12 @@ def partition(file_stream_requests: List[FileChunks], n: int) -> List[List[Tuple
 def get_total_number_of_chunks(partitions: List[List[Tuple[FileChunks, dict]]]) -> int:
     if partitions is None or len(partitions) == 0:
         return 0
-    return sum(sum(len(fc.chunks) for fc, _ in p) for p in partitions)
+    return sum(sum(len(fc.sizes) for fc, _ in p) for p in partitions)
 
 def get_total_size_of_partition(partition: List[Tuple[FileChunks, dict]]) -> int:
     if partition is None or len(partition) == 0:
         return 0
-    return sum(sum(fc.chunks) for fc, _ in partition)
+    return sum(fc.total_size() for fc, _ in partition)
 
 def log_partition_info(partitions: List[List[Tuple[FileChunks, dict]]]):
     log_string = "[RunAI Streamer][Distributed] Partitions sizes:"

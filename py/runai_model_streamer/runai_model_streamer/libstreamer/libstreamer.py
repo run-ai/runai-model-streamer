@@ -63,39 +63,42 @@ def runai_end(streamer: t_streamer) -> None:
 def runai_request(
     streamer: t_streamer,
     paths: List[str],
-    file_offsets: List[int],
-    bytesizes: List[int],
-    dsts: List[memoryview],
-    internal_sizes: List[List[int]],
+    num_ranges: List[int],
+    range_offsets: List[int],
+    range_sizes: List[int],
+    range_dsts: List[int],
 ) -> int:
     """Multi-request submit. Non-blocking: returns the assigned submission id; use it to demux the
     responses from runai_response. Credentials are streamer-scoped (runai_set_credentials), not passed
-    here. Many submissions may be in flight at once."""
+    here. Many submissions may be in flight at once.
+
+    A submission is a list of files, each carrying a list of RANGES. A range is an arbitrary
+    (source offset, size) within its file with its own destination: ranges need not be contiguous in the
+    file, need not be contiguous in memory, and need not be ordered. Exactly one response is issued per
+    range, including a zero-sized one.
+
+    paths carries one entry per file, however many ranges that file has. The three range arrays are flat,
+    indexed identically, and grouped by file in the order of paths: file f's ranges occupy
+    [sum(num_ranges[:f]), sum(num_ranges[:f+1])). Destinations must not overlap - that is the caller's
+    responsibility and is not verified.
+
+    range_dsts holds ABSOLUTE integer addresses - one complete pointer per range, not offsets from a
+    base, and in no required order. Deliberately not memoryviews:
+      - a destination need not be host memory at all. A CUDA device pointer has no Python buffer object,
+        so a base-buffer + offsets signature would silently restrict destinations to the host.
+      - destinations need not share a buffer, which is the same generality the range API exists for.
+      - it avoids one memoryview -> address conversion per range on the submit path (~n per submission).
+    The cost is that raw addresses keep nothing alive: THE CALLER MUST KEEP THE UNDERLYING BUFFERS ALIVE
+    for the lifetime of the submission, until its last response has been consumed."""
     num_files = len(paths)
     c_paths = (ctypes.c_char_p * num_files)(*[path.encode("utf-8") for path in paths])
-    c_file_offsets = (ctypes.c_uint64 * len(file_offsets))(*file_offsets)
-    c_bytesizes = (ctypes.c_uint64 * len(bytesizes))(*bytesizes)
-    dst_addrs = [
-        ctypes.cast(ctypes.c_void_p(ctypes.addressof(ctypes.c_char.from_buffer(dst))), ctypes.c_void_p)
-        for dst in dsts
-    ]
-    c_dsts = (ctypes.c_void_p * len(dst_addrs))(*dst_addrs)
+    c_num_ranges = (ctypes.c_uint32 * num_files)(*num_ranges)
 
-    # c_num_sizes: number of ranges for each file
-    num_ranges_per_file_list = [len(sublist) for sublist in internal_sizes]
-    c_num_sizes = (ctypes.c_uint32 * num_files)(*num_ranges_per_file_list)
-
-    # c_internal_sizes: array of pointers, one per file, each to that file's array of range sizes. The backing
-    # arrays are held in the local `internal_sizes_arrays` so they outlive the C call - c_internal_sizes stores
-    # raw pointers into them, so they must not be garbage collected before fn_runai_request returns.
-    internal_sizes_arrays = [
-        (ctypes.c_uint64 * num_ranges_for_this_file)(*actual_sublist_data)
-        for num_ranges_for_this_file, actual_sublist_data in zip(num_ranges_per_file_list, internal_sizes)
-    ]
-    PtrToUint64ArrayType = ctypes.POINTER(ctypes.c_uint64)
-    c_internal_sizes = (PtrToUint64ArrayType * num_files)()
-    for i, individual_c_array_obj in enumerate(internal_sizes_arrays):
-        c_internal_sizes[i] = ctypes.cast(individual_c_array_obj, PtrToUint64ArrayType)
+    # The flat range arrays: one allocation each, no nested pointer array to keep alive across the call
+    total_ranges = len(range_sizes)
+    c_range_offsets = (ctypes.c_uint64 * total_ranges)(*range_offsets)
+    c_range_sizes = (ctypes.c_uint64 * total_ranges)(*range_sizes)
+    c_range_dsts = (ctypes.c_void_p * total_ranges)(*range_dsts)
 
     submission_id = ctypes.c_uint64()
     error_code = dll.fn_runai_request(
@@ -103,11 +106,10 @@ def runai_request(
         ctypes.byref(submission_id),
         num_files,
         c_paths,
-        c_file_offsets,
-        c_bytesizes,
-        c_dsts,
-        c_num_sizes,
-        c_internal_sizes,
+        c_num_ranges,
+        c_range_offsets,
+        c_range_sizes,
+        c_range_dsts,
     )
     if error_code != SUCCESS_ERROR_CODE:
         raise ValueError(

@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "streamer/impl/assigner/assigner.h"
+#include "streamer/impl/batches/batches.h"
 
 #include "utils/random/random.h"
 #include "utils/temp/file/file.h"

@@ -3,6 +3,7 @@ import tempfile
 import shutil
 import os
 import mmap
+import ctypes
 from runai_model_streamer.libstreamer.libstreamer import (
     SUCCESS_ERROR_CODE,
     runai_start,
@@ -13,6 +14,12 @@ from runai_model_streamer.libstreamer.libstreamer import (
 from runai_model_streamer.s3_utils.s3_utils import (
     S3Credentials,
 )
+
+
+def buffer_address(buffer) -> int:
+    # range_dsts are absolute addresses, so the destination buffer's base has to be taken explicitly -
+    # the binding no longer accepts a Python buffer object and derives offsets from it
+    return ctypes.addressof(ctypes.c_char.from_buffer(buffer))
 
 
 class TestBindings(unittest.TestCase):
@@ -52,9 +59,17 @@ class TestBindings(unittest.TestCase):
                 region_name="us-west-2",
                 endpoint="optional_endpoint"))
 
-        items = [[10, 9], [11, 8]]
+        # Two files, two ranges each. Every range carries its own source offset and its own destination
+        # address, so the layout below is stated outright rather than derived from a base offset plus
+        # consecutive sizes: file 1 reads 10 bytes at 1 and 9 at 11, file 2 reads 11 at 1 and 8 at 12.
+        base = buffer_address(buffer)
         submission_id = runai_request(
-            streamer, [file_path_1, file_path_2], [1, 1], [19, 19], [buffer], items
+            streamer,
+            [file_path_1, file_path_2],
+            [2, 2],                                 # num_ranges per file
+            [1, 11, 1, 12],                         # range_offsets, flat and grouped by file
+            [10, 9, 11, 8],                         # range_sizes
+            [base, base + 10, base + 19, base + 30] # range_dsts, absolute addresses
         )
 
         # collect all four sub-range responses (order across files is not guaranteed)
@@ -81,6 +96,58 @@ class TestBindings(unittest.TestCase):
         self.assertEqual(bytes(buffer[30:38]), b"TestText")
         self.assertEqual(id(buffer), buffer_ptr)
 
+    def test_zero_sized_range_is_answered(self):
+        # A zero-sized range is a range: it gets its own response, like any other. The caller's indexing
+        # counts on exactly one response per range, so swallowing it would shift every later index.
+        file_path = os.path.join(self.temp_dir, "zeros.txt")
+        with open(file_path, "w") as file:
+            file.write("abcde")
+
+        buffer = mmap.mmap(-1, 64, mmap.MAP_ANONYMOUS | mmap.MAP_PRIVATE)
+        base = buffer_address(buffer)
+
+        streamer = runai_start()
+        submission_id = runai_request(
+            streamer, [file_path], [2], [0, 0], [0, 5], [base, base]
+        )
+
+        seen = []
+        for _ in range(2):
+            result = runai_response(streamer)
+            self.assertIsNotNone(result)
+            ret, sub_id, file_index, range_index, submission_done = result
+            self.assertEqual(ret, SUCCESS_ERROR_CODE)
+            self.assertEqual(sub_id, submission_id)
+            seen.append(range_index)
+
+        self.assertEqual(sorted(seen), [0, 1])
+        self.assertEqual(bytes(buffer[0:5]), b"abcde")
+
+    def test_file_without_ranges_produces_no_response(self):
+        # A file may carry no ranges at all. It is accepted and simply contributes nothing - the
+        # submission completes on the responses of the files that do have ranges.
+        empty_path = os.path.join(self.temp_dir, "no_ranges.txt")
+        open(empty_path, "w").close()
+        data_path = os.path.join(self.temp_dir, "data.txt")
+        with open(data_path, "w") as file:
+            file.write("payload")
+
+        buffer = mmap.mmap(-1, 64, mmap.MAP_ANONYMOUS | mmap.MAP_PRIVATE)
+
+        streamer = runai_start()
+        submission_id = runai_request(
+            streamer, [empty_path, data_path], [0, 1], [0], [7], [buffer_address(buffer)]
+        )
+
+        result = runai_response(streamer)
+        self.assertIsNotNone(result)
+        ret, sub_id, file_index, range_index, submission_done = result
+        self.assertEqual(ret, SUCCESS_ERROR_CODE)
+        self.assertEqual(sub_id, submission_id)
+        self.assertEqual(file_index, 1)
+        self.assertTrue(submission_done)
+        self.assertEqual(bytes(buffer[0:7]), b"payload")
+
     def test_response_error_is_returned_not_raised(self):
         # A per-sub-range error (here EOF: asking for more bytes than the file holds) must be SURFACED by the
         # binding as data - a tuple with a non-Success response_code - NOT raised and NOT returned as None.
@@ -95,8 +162,10 @@ class TestBindings(unittest.TestCase):
         streamer = runai_start()
         self.assertNotEqual(streamer, 0)
 
-        # one sub-range asking for 20 bytes from a 5-byte file -> the read falls short (EOF error)
-        submission_id = runai_request(streamer, [file_path], [0], [20], [buffer], [[20]])
+        # one range asking for 20 bytes from a 5-byte file -> the read falls short (EOF error)
+        submission_id = runai_request(
+            streamer, [file_path], [1], [0], [20], [buffer_address(buffer)]
+        )
 
         result = runai_response(streamer)
         # not raised, and not the teardown FinishedError (which would return None)

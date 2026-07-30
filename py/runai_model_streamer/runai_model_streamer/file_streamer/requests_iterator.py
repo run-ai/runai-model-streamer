@@ -23,29 +23,65 @@ class MemoryCapMode(enum.Enum):
     largest_chunk = 3
 
 class FileChunks:
-    def __init__(self, id: int, path: str, offset: int, chunks: List[int]) -> None:
+    """One file plus the ranges to read from it. A range is an arbitrary (offset, size) within the
+    file: ranges need not be contiguous with each other and need not be ordered.
+
+    offsets and sizes are parallel lists rather than a list of (offset, size) pairs because they are
+    exactly the C layer's range_offsets / range_sizes arrays - they pass through with no per-range
+    object, which matters at a few hundred thousand tensors per model."""
+
+    def __init__(self, id: int, path: str, offsets: List[int], sizes: List[int]) -> None:
+        if len(offsets) != len(sizes):
+            raise ValueError(
+                f"offsets ({len(offsets)}) and sizes ({len(sizes)}) must be parallel"
+            )
         self.id = id # the id of the file chunk must be unique in the context of a single stream_files request
         self.path = path
-        self.offset = offset
-        self.chunks = chunks
+        self.offsets = offsets
+        self.sizes = sizes
+
+    @staticmethod
+    def contiguous(id: int, path: str, offset: int, sizes: List[int]) -> "FileChunks":
+        """The common case: sizes laid out back to back in the file, starting at offset."""
+        offsets = []
+        running = offset
+        for size in sizes:
+            offsets.append(running)
+            running += size
+        return FileChunks(id, path, offsets, sizes)
 
     def total_size(self) -> int:
-        return sum(self.chunks)
+        return sum(self.sizes)
 
     def max_chunk_size(self) -> int:
-        return max(self.chunks)
+        return max(self.sizes)
 
     def __repr__(self) -> str:
         """Provides a clear string representation for the object."""
-        return (f"FileChunks(id='{self.id}', path='{self.path}', offset={self.offset}, "
-                f"num_chunks={len(self.chunks)}, total_size={self.total_size()})")
+        return (f"FileChunks(id='{self.id}', path='{self.path}', "
+                f"num_ranges={len(self.sizes)}, total_size={self.total_size()})")
 
 class FilesRequest:
+    """One submission: the files to read, plus a destination for every range.
+
+    range_dsts is flat and in flattened range order (file 0's ranges, then file 1's, ...) - it IS the
+    array handed to runai_request, and the same array response-time lookup indexes. file_base holds
+    each file's first flat position, so mapping a response's (file_index, range_index) to a
+    destination is O(1) rather than a prefix-sum walk per response."""
+
     def __init__(self) -> None:
         self.files: List[FileChunks] = []
+        self.file_base: List[int] = []
+        self.num_ranges = 0
+        self.range_dsts: List[int] = []
 
     def append(self, file_chunks: FileChunks) -> None:
+        self.file_base.append(self.num_ranges)
+        self.num_ranges += len(file_chunks.sizes)
         self.files.append(file_chunks)
+
+    def flat_index(self, file_index: int, range_index: int) -> int:
+        return self.file_base[file_index] + range_index
 
 
 class FilesRequestsIteratorWithBuffer:
@@ -55,32 +91,37 @@ class FilesRequestsIteratorWithBuffer:
             f"[RunAI Streamer] CPU Buffer size: {humanize.naturalsize(buffer_size, binary=True)} for files: {[file_chunks.path for file_chunks in files_chunks]}"
         )
         self.buffer = np.empty(buffer_size, dtype=np.uint8)
-        self.file_buffers = []
+        # The buffer's base address. Destinations are absolute addresses (that is the C contract), and
+        # this class packs them itself, so it can recover a range's slice of the buffer by subtracting
+        # the base. That is local knowledge of its own allocation, not an assumption the range API makes.
+        self.buffer_address = self.buffer.ctypes.data
 
-    def get_global_file_and_chunk(self, local_file_index: int, local_chunk_index: int) -> Tuple[str, int, memoryview]:
-        file_id, global_chunk_index = self.files_requests_iterator.get_global_file_and_chunk(
-            local_file_index, local_chunk_index
+    def get_global_file_and_chunk(self, local_file_index: int, local_range_index: int) -> Tuple[str, int, memoryview]:
+        file_id, global_range_index = self.files_requests_iterator.get_global_file_and_chunk(
+            local_file_index, local_range_index
         )
-        file_buffer = self.file_buffers[local_file_index]
-
-        file_active_chunks = self.files_requests_iterator.active_request.files[local_file_index].chunks
-        chunk_offset_start = sum(file_active_chunks[:local_chunk_index])
-        chunk_offset_end = chunk_offset_start + file_active_chunks[local_chunk_index]
-        return file_id, global_chunk_index, file_buffer[chunk_offset_start: chunk_offset_end]
+        request = self.files_requests_iterator.active_request
+        start = request.range_dsts[request.flat_index(local_file_index, local_range_index)] - self.buffer_address
+        size = request.files[local_file_index].sizes[local_range_index]
+        return file_id, global_range_index, self.buffer[start: start + size]
 
     def next_request(self) -> Optional[FilesRequest]:
-        next_requests = self.files_requests_iterator.next_request()
-        if next_requests is None or len(next_requests.files) == 0:
+        request = self.files_requests_iterator.next_request()
+        if request is None or len(request.files) == 0:
             return None
 
-        self.file_buffers = []
-        global_buffer_offset = 0
-        for file_request in next_requests.files:
-            chunks_size = sum(file_request.chunks)
-            self.file_buffers.append(self.buffer[global_buffer_offset: global_buffer_offset + chunks_size])
-            global_buffer_offset += chunks_size
-            
-        return next_requests
+        # Pack this request's ranges back to back into the buffer, one absolute address per range.
+        # Placement is free now (each range carries its own destination), so packing is just a running
+        # cursor - no per-file sub-buffer, and no requirement that a file's ranges be adjacent.
+        dsts = []
+        cursor = self.buffer_address
+        for file_chunks in request.files:
+            for size in file_chunks.sizes:
+                dsts.append(cursor)
+                cursor += size
+        request.range_dsts = dsts
+
+        return request
 
     @staticmethod
     def with_memory_cap(
@@ -90,20 +131,20 @@ class FilesRequestsIteratorWithBuffer:
     ) -> FilesRequestsIteratorWithBuffer:
         memory_limit = 0
         if memory_mode == MemoryCapMode.unlimited:
-            memory_limit = sum(sum(file.chunks) for file in files_chunks)
+            memory_limit = sum(file.total_size() for file in files_chunks)
         elif memory_mode == MemoryCapMode.largest_chunk:
-            memory_limit = max(max(file_chunks.chunks) for file_chunks in files_chunks)
+            memory_limit = _largest_range(files_chunks)
         elif memory_mode == MemoryCapMode.limited:
             if user_memory_limit is None:
                 raise RunaiStreamerMemoryLimitException(
                     f"MemoryCapMode is Limited, but no limit supplied"
                 )
-            largest_chunk = max((max(file_chunks.chunks, default=0) for file_chunks in files_chunks), default=0)
+            largest_chunk = _largest_range(files_chunks)
             if user_memory_limit < largest_chunk:
                 raise RunaiStreamerMemoryLimitException(
                     f"Memory limit supplied: {user_memory_limit} cannot be smaller than: {largest_chunk}"
                 )
-            memory_limit = min(user_memory_limit, sum(sum(file.chunks) for file in files_chunks))
+            memory_limit = min(user_memory_limit, sum(file.total_size() for file in files_chunks))
  
         return FilesRequestsIteratorWithBuffer(memory_limit, files_chunks)
 
@@ -143,8 +184,8 @@ class FilesRequestsIterator:
         
         if self.active_request is not None:
             for file_chunks in self.active_request.files:
-                self.file_to_current_chunk_index[file_chunks.id] += len(file_chunks.chunks)
-            
+                self.file_to_current_chunk_index[file_chunks.id] += len(file_chunks.sizes)
+
         files_request = FilesRequest()
         current_request_memory_size = 0
         while self.q:
@@ -156,20 +197,24 @@ class FilesRequestsIterator:
             if finished:
                 self.q.popleft()
             
-            if len(file_chunks.chunks) == 0 or sum(file_chunks.chunks) == 0:
+            if len(file_chunks.sizes) == 0:
                 if finished:
-                    # The file itself has no data to stream (e.g. an empty
+                    # The file itself has no range to stream (e.g. an empty
                     # safetensors shard): skip it and keep packing from the
                     # next file. Terminating here would silently drop every
                     # remaining file in the queue.
                     continue
-                # The next chunk does not fit into this request's remaining
+                # The next range does not fit into this request's remaining
                 # buffer budget: close this request; the file stays queued
                 # for the next request.
                 break
 
+            # Note the condition above is on the RANGE COUNT, not the byte total: a file that
+            # contributed only zero-sized ranges is a real contribution. The C++ layer answers a
+            # zero-sized range like any other, and the caller's tensor indexing counts on exactly
+            # one response per range.
             files_request.append(file_chunks)
-            current_request_memory_size += sum(file_chunks.chunks)
+            current_request_memory_size += file_chunks.total_size()
 
         if len(files_request.files) == 0:
             files_request = None
@@ -177,46 +222,40 @@ class FilesRequestsIterator:
         return files_request
 
 class FileChunksIterator:
+    """Hands out prefixes of a file's ranges, each fitting a caller-supplied byte budget. Ranges carry
+    their own offsets now, so this is a slice of both parallel lists - no running offset to track."""
 
     def __init__(
         self, file_chunks: FileChunks
     ) -> None:
         self.id = file_chunks.id
         self.path = file_chunks.path
-        self.next_request_offset = file_chunks.offset
-        self.chunks_iterator = ChunksIterator(file_chunks.chunks)
+        self.offsets = file_chunks.offsets
+        self.sizes = file_chunks.sizes
+        self.next_index = 0
 
     def is_finished(self) -> bool:
-        return self.chunks_iterator.is_finished()
+        return self.next_index >= len(self.sizes)
 
     def next_chunks(self, size: int) -> FileChunks:
-        chunks = self.chunks_iterator.next_chunks(size)
-        starting_offset = self.next_request_offset
-        self.next_request_offset += sum(chunks)
-        return FileChunks(self.id, self.path, starting_offset, chunks)
+        start = self.next_index
+        end = start
+        remaining = size
+        while end < len(self.sizes) and self.sizes[end] <= remaining:
+            remaining -= self.sizes[end]
+            end += 1
+        self.next_index = end
+        return FileChunks(self.id, self.path, self.offsets[start:end], self.sizes[start:end])
 
-class ChunksIterator:
-    def __init__(
-        self, chunks: List[int]
-    ) -> None:
-        self.q = deque(chunks)
+def _largest_range(files_chunks: List[FileChunks]) -> int:
+    """The largest single range across all the files, or 0 when there is none.
 
-    def is_finished(self) -> bool:
-        return len(self.q) == 0
+    Both defaults are load bearing: a file may carry no ranges at all (an empty safetensors shard),
+    and the file list itself may be empty (stream_files([])). This is the buffer's lower bound - a
+    request must be able to hold at least one range, or next_request would return an empty request,
+    which the caller reads as end of stream."""
+    return max((max(file_chunks.sizes, default=0) for file_chunks in files_chunks), default=0)
 
-    def next_chunks(self, size: int) -> List[int]:
-        chunks = []
-        current_request_size = 0
-
-        while not self.is_finished():
-            candidate_chunk = self.q[0]
-            if current_request_size + candidate_chunk > size:
-                return chunks
-
-            chunks.append(self.q.popleft())
-            current_request_size += candidate_chunk
-
-        return chunks
 
 def _get_memory_mode(memory_limit: str | None) -> MemoryCapMode:
     if memory_limit == "-1":

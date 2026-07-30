@@ -59,7 +59,7 @@ def random_file_chunks(i, dir):
         expected_id_to_results[j] = {
             "expected_content": expected_content,
         }
-    return expected_id_to_results, FileChunks(i, file_path, initial_offset, request_sizes)
+    return expected_id_to_results, FileChunks.contiguous(i, file_path, initial_offset, request_sizes)
 
 class TestFuzzing(unittest.TestCase):
     def setUp(self):
@@ -76,7 +76,7 @@ class TestFuzzing(unittest.TestCase):
             file_to_file_chunks[file_chunks.id] = file_chunks
             files_chunks.append(file_chunks)
 
-        random_memory_mode([chunk for chunk in file_chunks.chunks for file_chunks in files_chunks])
+        random_memory_mode([size for file_chunks in files_chunks for size in file_chunks.sizes])
 
         with FileStreamer() as fs:
             fs.stream_files(files_chunks)

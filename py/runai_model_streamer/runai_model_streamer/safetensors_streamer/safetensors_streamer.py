@@ -264,7 +264,7 @@ class SafetensorsStreamer:
             path = paths[i]
             self.files_to_tensors_metadata[i] = tensors_metadata
             self.total_size += sum(tensor_sizes)
-            file_stream_requests.append(FileChunks(i, path, file_offset, tensor_sizes))
+            file_stream_requests.append(FileChunks.contiguous(i, path, file_offset, tensor_sizes))
 
         self.file_streamer.stream_files(
             file_stream_requests,

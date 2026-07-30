@@ -4,7 +4,7 @@ runai_cc_auto_library(
     name = "assigner",
     deps = [
         "//streamer/impl/assigner/file_read_task",
-        "//streamer/impl/batches",
+        "//streamer/impl/request",
         "//common/exception",
         "//common/storage_uri",
         "//streamer/impl/config",
