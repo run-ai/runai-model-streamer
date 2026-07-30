@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -729,7 +730,9 @@ TEST_F(StreamerTest, Multiple_Files_Error)
     set_backend_shutdown_policy(utils::random::boolean() ? common::backend_api::ObjectShutdownPolicy_t::OBJECT_SHUTDOWN_POLICY_ON_STREAMER_SHUTDOWN : common::backend_api::ObjectShutdownPolicy_t::OBJECT_SHUTDOWN_POLICY_ON_PROCESS_EXIT);
 
     const auto error_code = common::ResponseCode::FileAccessError;
-    utils::temp::Env env_rc("RUNAI_STREAMER_S3_MOCK_RESPONSE_CODE", static_cast<int>(error_code));
+    // Scoped to the reads only, released before runai_end below: the injected code reaches every mock entry
+    // point, so leaving it set across teardown injects failures into the shutdown path too.
+    auto env_rc = std::make_unique<utils::temp::Env>("RUNAI_STREAMER_S3_MOCK_RESPONSE_CODE", static_cast<int>(error_code));
 
     void * streamer;
     EXPECT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
@@ -764,6 +767,7 @@ TEST_F(StreamerTest, Multiple_Files_Error)
         expected_response[file_index].erase(r);
     }
 
+    env_rc.reset();   // stop injecting failures before the streamer tears the backend down
     runai_end(streamer);
     EXPECT_EQ(verify_mock(), 0);
 }
