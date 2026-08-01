@@ -40,8 +40,15 @@ def positional_bytes(nbytes, seed):
     Position-sensitive on purpose: with a constant or random-but-uniform filler, a range read from the
     wrong offset, two ranges whose destinations were swapped, or a chunk written at the wrong place
     inside its range all still compare equal. Here each of those changes the bytes.
+
+    Returns exactly nbytes, whether or not that is a multiple of 4: a whole number of words is generated
+    and the tail trimmed, so the last word may be partial. Truncating `nbytes // 4` instead would return
+    a SHORT buffer for any size that is not a multiple of 4, and the resulting file would be shorter than
+    the fixture believes - surfacing later as an EOF error from whichever range reaches the end, which
+    says nothing about the real cause.
     """
-    return (np.arange(nbytes // 4, dtype=np.uint32) + np.uint32(seed)).tobytes()
+    num_words = -(-nbytes // 4)   # ceil, so the buffer covers nbytes before trimming
+    return (np.arange(num_words, dtype=np.uint32) + np.uint32(seed)).tobytes()[:nbytes]
 
 def random_letters(x):
     return ''.join(random.choices(string.ascii_letters, k=x))
