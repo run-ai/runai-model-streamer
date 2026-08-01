@@ -667,4 +667,78 @@ TEST(ListFiles, FilesystemEmptyDirectory)
     EXPECT_TRUE(entries.empty());
 }
 
+TEST(Async, Scattered_Ranges_And_Destinations)
+{
+    // The point of the range API: ranges need not be contiguous in the file, need not be ordered, and
+    // need not be written to adjacent memory. Every other data test here goes through async_read, which
+    // tiles one span of the file into one buffer - so none of them would notice if offsets or
+    // destinations were silently paired by position instead of being honoured per range.
+    const size_t size = 1000;
+    const auto data = utils::random::buffer(size);
+    utils::temp::File file(data);
+    const auto expected = utils::Fd::read(file.path);
+    ASSERT_EQ(expected.size(), size);
+
+    const auto chunk_size = utils::random::number<size_t>(1, 1024);
+    Config config(utils::random::number(1, 20), utils::random::number(1, 20), chunk_size,
+                  utils::random::number<size_t>(1, chunk_size), false /* do not enforce minimum */);
+    Streamer streamer(config);
+
+    // deliberately: descending file order, gaps between ranges, a zero-sized range, and two ranges
+    // reading the SAME source bytes (source overlap is legal - only destinations must not overlap)
+    const std::vector<std::pair<size_t, size_t>> ranges =
+    {
+        { 700, 120 },
+        {  50, 200 },
+        { 400,   0 },
+        { 700, 120 },
+        { 900, 100 },
+    };
+
+    // each destination is its OWN allocation, not an offset into a shared buffer: this is what proves a
+    // destination need not belong to any single buffer. The extra byte is a guard against an over-long write.
+    std::vector<std::vector<unsigned char>> dsts;
+    for (const auto & range : ranges)
+    {
+        dsts.emplace_back(range.second + 1, 0xAB);
+    }
+
+    FileRanges file_ranges;
+    file_ranges.path = file.path;
+    for (size_t i = 0; i < ranges.size(); ++i)
+    {
+        file_ranges.ranges.push_back(ReadRange{ ranges[i].first, ranges[i].second, dsts[i].data() });
+    }
+
+    std::vector<FileRanges> request{ file_ranges };
+    SubmissionId submission_id = 0;
+    EXPECT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+
+    std::set<unsigned> received;
+    for (size_t i = 0; i < ranges.size(); ++i)
+    {
+        const auto r = recv(streamer);
+        EXPECT_EQ(r.response.ret, common::ResponseCode::Success);
+        EXPECT_EQ(r.response.file_index, 0u);
+        received.insert(r.response.index);
+        EXPECT_EQ(r.submission_done, i + 1 == ranges.size());
+    }
+
+    // exactly one response per range, indexed within the file - a dropped or duplicated zero-sized
+    // range would shift every later index
+    EXPECT_EQ(received.size(), ranges.size());
+
+    for (size_t i = 0; i < ranges.size(); ++i)
+    {
+        const auto offset = ranges[i].first;
+        const auto length = ranges[i].second;
+        for (size_t j = 0; j < length; ++j)
+        {
+            ASSERT_EQ(dsts[i][j], expected[offset + j])
+                << "range " << i << " (offset " << offset << " size " << length << ") differs at byte " << j;
+        }
+        EXPECT_EQ(dsts[i][length], 0xAB) << "range " << i << " wrote past the end of its destination";
+    }
+}
+
 }; // namespace runai::llm::streamer::impl

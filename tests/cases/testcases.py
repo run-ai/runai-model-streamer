@@ -8,6 +8,8 @@ import random
 import string
 import subprocess
 import resource
+import numpy as np
+from unittest.mock import patch
 from safetensors.torch import safe_open
 from tests.safetensors.generator import create_random_safetensors, create_sized_safetensors
 from tests.safetensors.comparison import tensor_maps_are_equal
@@ -17,9 +19,29 @@ from runai_model_streamer.safetensors_streamer.safetensors_streamer import (
     pull_files
 )
 from runai_model_streamer.file_streamer.file_streamer import FileStreamer
+from runai_model_streamer.file_streamer.requests_iterator import (
+    FileChunks,
+    RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME,
+)
 
 METADATA_SUFFIX = ['safetensors', 'json', 'config', 'xml', 'pt', 'bin']
 FILE_COUNT = 5
+
+# Object storage splits a range into chunks of RUNAI_STREAMER_CHUNK_BYTESIZE (default 8 MiB, minimum
+# 5 MiB), so the scattered-ranges file is sized to hold one range that spans several of them.
+MIB = 1024 * 1024
+SCATTERED_BIG_FILE_BYTESIZE = 12 * MIB
+SCATTERED_SMALL_FILE_BYTESIZE = 1 * MIB
+
+
+def positional_bytes(nbytes, seed):
+    """Content in which every 4-byte word encodes its own position (offset/4, plus a per-file seed).
+
+    Position-sensitive on purpose: with a constant or random-but-uniform filler, a range read from the
+    wrong offset, two ranges whose destinations were swapped, or a chunk written at the wrong place
+    inside its range all still compare equal. Here each of those changes the bytes.
+    """
+    return (np.arange(nbytes // 4, dtype=np.uint32) + np.uint32(seed)).tobytes()
 
 def random_letters(x):
     return ''.join(random.choices(string.ascii_letters, k=x))
@@ -105,7 +127,122 @@ def compatibility_test_cases(backend_class, scheme, bucket_name):
             equal, message = tensor_maps_are_equal(our, their)
             if not equal:
                 self.fail(f"Tensor mismatch: {message}")
-        
+
+        def _upload_positional_file(self, filename, bytesize, seed):
+            """Write a position-encoded file locally, upload it, and return (url, local content)."""
+            content = positional_bytes(bytesize, seed)
+            path = os.path.join(self.temp_dir, filename)
+            with open(path, "wb") as f:
+                f.write(content)
+            self.server.upload_file(self.bucket_name, "", path)
+            return f"{self.scheme}://{self.bucket_name}/{filename}", content
+
+        def _stream_and_check_ranges(self, files, memory_limit):
+            """Stream the given scattered ranges and assert every range delivered the exact bytes.
+
+            files: list of (url, local_content, [(offset, size), ...]) - the ranges in the order they
+            are submitted, which is deliberately NOT the order they appear in the file.
+            """
+            requests = [
+                FileChunks(
+                    id=i,
+                    path=url,
+                    offsets=[offset for offset, _ in ranges],
+                    sizes=[size for _, size in ranges],
+                )
+                for i, (url, _content, ranges) in enumerate(files)
+            ]
+
+            got = {}
+            with patch.dict(os.environ, {RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME: str(memory_limit)}):
+                with FileStreamer() as streamer:
+                    streamer.stream_files(requests)
+                    for file_id, range_index, tensor in streamer.get_chunks():
+                        key = (file_id, range_index)
+                        self.assertNotIn(key, got, f"range {key} was delivered twice")
+                        # uint8 tensor of shape (1, size) viewing the streamer's buffer; copy the bytes
+                        # out now, since the buffer is reused once the next request is submitted
+                        got[key] = tensor.numpy().tobytes()
+
+            expected_keys = {
+                (i, j)
+                for i, (_url, _content, ranges) in enumerate(files)
+                for j in range(len(ranges))
+            }
+            self.assertEqual(
+                set(got),
+                expected_keys,
+                "every range must produce exactly one response, including zero-sized ones",
+            )
+
+            for i, (url, content, ranges) in enumerate(files):
+                for j, (offset, size) in enumerate(ranges):
+                    expected = content[offset:offset + size]
+                    self.assertEqual(
+                        got[(i, j)],
+                        expected,
+                        f"wrong bytes for range {j} of {url} (offset={offset}, size={size}, "
+                        f"memory_limit={memory_limit})",
+                    )
+
+        def test_scattered_ranges(self):
+            """Read arbitrary, non-contiguous, unordered ranges into scattered destinations.
+
+            This is the per-range destinations API used as a caller would use it, rather than through
+            the safetensors path - which only ever submits one contiguous, ascending span per file and
+            so never produces the shapes this exercises. Each awkward shape below targets a specific
+            position-based assumption:
+
+              - ranges NOT in file order, and with gaps between them, so one file yields several
+                contiguous transfers (hence several batches) rather than a single span;
+              - a range larger than the object-storage chunk size, so it is split across several
+                backend reads that must land back to back at the right place;
+              - a zero-sized range, which does no backend read at all yet must still produce exactly
+                one response, in order;
+              - two ranges reading the SAME source bytes into DIFFERENT destinations, which nothing
+                can satisfy by aliasing or by reusing a destination;
+              - two files in one submission, so a response must be attributed to the right file.
+
+            Run twice: once with an unlimited memory cap (the whole thing is one submission) and once
+            with a cap smaller than the total (the ranges are split across several submissions, so the
+            buffer is reused and the per-request destination packing is re-done).
+            """
+            big_url, big_content = self._upload_positional_file(
+                f"scattered_big_{random_letters(5)}.bin", SCATTERED_BIG_FILE_BYTESIZE, seed=0
+            )
+            small_url, small_content = self._upload_positional_file(
+                f"scattered_small_{random_letters(5)}.bin", SCATTERED_SMALL_FILE_BYTESIZE, seed=1 << 20
+            )
+
+            big_ranges = [
+                (11 * MIB, 1024),      # near EOF, requested first: not in file order
+                (64, 1024),            # far earlier in the file
+                (2 * MIB, 9 * MIB),    # spans several object-storage chunks
+                (1 * MIB, 4096),
+                (5 * MIB, 0),          # zero-sized: no backend read, but still one response
+                (1 * MIB, 4096),       # same source bytes as above, different destination
+                (0, 4),                # the very first bytes, requested last
+            ]
+            small_ranges = [
+                (SCATTERED_SMALL_FILE_BYTESIZE - 512, 512),   # the tail
+                (0, SCATTERED_SMALL_FILE_BYTESIZE),           # the whole file
+                (4096, 8192),
+            ]
+            files = [
+                (big_url, big_content, big_ranges),
+                (small_url, small_content, small_ranges),
+            ]
+
+            # -1 = unlimited: one submission holding every range.
+            self._stream_and_check_ranges(files, memory_limit=-1)
+
+            # Just above the largest single range - the smallest cap that can still make progress. It
+            # splits even ONE file's ranges across submissions, so the buffer is reused between them and
+            # the responses of the later submissions have to be mapped back to the right global range
+            # index. A cap large enough to split only at a file boundary would not cover that.
+            largest_range = max(size for _offset, size in big_ranges + small_ranges)
+            self._stream_and_check_ranges(files, memory_limit=largest_range + 2048)
+
         def test_teardown_while_streaming(self):
             """
             Kill the streamer (context-manager __exit__ -> runai_end) while object-storage
