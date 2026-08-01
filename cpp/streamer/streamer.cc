@@ -138,6 +138,11 @@ _RUNAI_EXTERN_C int runai_set_credentials(
 
         return static_cast<int>(s->set_credentials(common::s3::Credentials(param_keys, param_values, num_params)));
     }
+    catch (const common::Exception & e)
+    {
+        // report the specific code (see runai_request for why this matters)
+        return static_cast<int>(e.error());
+    }
     catch(...)
     {
     }
@@ -173,6 +178,15 @@ _RUNAI_EXTERN_C int runai_request(
         // credentials are streamer-scoped (runai_set_credentials), not per request
         return submit_request(s, out_submission_id, num_files, paths, num_ranges, range_offsets, range_sizes, range_dsts);
     }
+    catch (const common::Exception & e)
+    {
+        // Report the specific code rather than collapsing it to UnknownError. async_request lets typed
+        // exceptions escape - a null destination or a byte-total overflow both throw InvalidParameterError -
+        // and UnknownError is the code that tells a caller to abort everything, whereas an argument error is
+        // attributable to this submission and recoverable. Nothing is committed when these throw, so
+        // returning the real code leaves no responses owed.
+        return static_cast<int>(e.error());
+    }
     catch(...)
     {
     }
@@ -203,6 +217,11 @@ _RUNAI_EXTERN_C int runai_response(
         if (out_submission_id != nullptr) *out_submission_id = r.submission_id;
         if (submission_done != nullptr) *submission_done = done ? 1 : 0;
         return static_cast<int>(r.ret);
+    }
+    catch (const common::Exception & e)
+    {
+        // report the specific code (see runai_request for why this matters)
+        return static_cast<int>(e.error());
     }
     catch(...)
     {

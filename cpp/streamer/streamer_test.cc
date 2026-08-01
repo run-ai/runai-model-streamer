@@ -178,6 +178,18 @@ TEST(Request, Null_Parameters)
     const char * null_path = nullptr;
     EXPECT_EQ(runai_request(streamer, &id, 1, &null_path, &num_ranges, &offset, &size, &dst), invalid);
 
+    // A null destination ELEMENT (the array itself is fine) is caught deeper, by verify_requests, which
+    // throws rather than returning. The specific code has to survive the C boundary: UnknownError is what
+    // tells a caller to abort everything, while an argument error is attributable and recoverable, so
+    // collapsing this to UnknownError would turn a bad argument into a dead stream.
+    void * null_dst = nullptr;
+    EXPECT_EQ(runai_request(streamer, &id, 1, &path, &num_ranges, &offset, &size, &null_dst), invalid);
+
+    // a zero-sized range writes nothing, so a null destination there is accepted
+    size_t zero = 0;
+    EXPECT_EQ(runai_request(streamer, &id, 1, &path, &num_ranges, &offset, &zero, &null_dst),
+              static_cast<int>(common::ResponseCode::Success));
+
     EXPECT_NO_THROW(runai_end(streamer));
 }
 
