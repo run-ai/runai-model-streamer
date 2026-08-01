@@ -26,6 +26,11 @@ struct State {
     std::vector<MockRange> ranges;
     unsigned total_items = 0;
     unsigned current_item = 0;
+
+    // Set when the file could not be opened. Every range still gets a response, carrying this code -
+    // the real streamer fails a file's ranges individually rather than dropping them, and a dropped
+    // response would hang the caller (runai_response blocks).
+    int error = 0;
 };
 
 State __state;
@@ -43,18 +48,31 @@ unsigned __response_given = 0;   // responses handed out so far
 // when it is served, since ranges need not be ordered or adjacent.
 int request(void * streamer, const char * path, unsigned num_ranges, const size_t * range_offsets, const size_t * range_sizes, void ** range_dsts, State * state)
 {
+    // Record the ranges BEFORE touching the file. The submission owes exactly one response per range
+    // whatever happens below, and runai_request does not consult this function's result - so returning
+    // early would leave total_items at 0 while the response counter had already been raised by num_ranges,
+    // and those responses would never be produced. The caller would then block forever in runai_response.
+    state->ranges.reserve(num_ranges);
+    bool needs_file = false;
+    for (unsigned j = 0; j < num_ranges; ++j) {
+        state->ranges.push_back(MockRange{ range_offsets[j], range_sizes[j], reinterpret_cast<char*>(range_dsts[j]) });
+        needs_file = needs_file || range_sizes[j] != 0;
+    }
+    state->total_items = num_ranges;
+
+    // A zero-sized range never reaches storage in the real streamer, so a file whose ranges are all
+    // zero-sized (or which has no ranges at all) is answered without being opened.
+    if (!needs_file) {
+        return 0;
+    }
+
     state->file = utils::Fd(::open(path, O_RDONLY));
     if (state->file.fd() == -1) {
         LOG(ERROR) << "Error opening file: " << path;
+        state->error = 2;   // common::ResponseCode::FileAccessError, reported once per range
         return -1;
     }
 
-    state->ranges.reserve(num_ranges);
-    for (unsigned j = 0; j < num_ranges; ++j) {
-        state->ranges.push_back(MockRange{ range_offsets[j], range_sizes[j], reinterpret_cast<char*>(range_dsts[j]) });
-    }
-
-    state->total_items = num_ranges;
     return 0;
 }
 
@@ -66,6 +84,24 @@ int response(void * streamer, unsigned * index, State * state)
 {
     size_t result = 0;
     const auto & range = state->ranges[state->current_item];
+
+    // Consume the item up front, so every exit below produces exactly one response for this range.
+    *index = state->current_item;
+    state->current_item++;
+
+    // A zero-sized range is completed without touching the file - it reaches no storage in the real
+    // streamer, so it must succeed even when the file could not be opened.
+    if (range.size == 0)
+    {
+        return 0;
+    }
+
+    // The file could not be opened: report the error for this range rather than dropping its response.
+    if (state->error != 0)
+    {
+        return state->error;
+    }
+
     int ret = 0;
     try
     {
@@ -85,8 +121,6 @@ int response(void * streamer, unsigned * index, State * state)
         ret = 3;   // common::ResponseCode::EofError
     }
 
-    *index = state->current_item;
-    state->current_item++;
     return ret;
 }
 

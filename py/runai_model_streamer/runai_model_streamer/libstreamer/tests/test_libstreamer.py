@@ -165,6 +165,51 @@ class TestBindings(unittest.TestCase):
         self.assertEqual(bytes(buffer[13:40]), b"\x00" * 27)
         self.assertEqual(bytes(buffer[45:64]), b"\x00" * 19)
 
+    def test_zero_sized_range_needs_no_file(self):
+        # A zero-sized range reaches no storage, so it is answered even for a path that cannot be opened.
+        # Nothing may be dropped either: the response counter is raised per range regardless, so a range
+        # whose response is never produced hangs the caller (runai_response blocks indefinitely).
+        missing = os.path.join(self.temp_dir, "does_not_exist.bin")
+        self.assertFalse(os.path.exists(missing))
+
+        buffer = mmap.mmap(-1, 64, mmap.MAP_ANONYMOUS | mmap.MAP_PRIVATE)
+        base = buffer_address(buffer)
+
+        streamer = runai_start()
+        submission_id = runai_request(streamer, [missing], [2], [0, 0], [0, 0], [base, base])
+
+        for _ in range(2):
+            result = runai_response(streamer)
+            self.assertIsNotNone(result)
+            ret, sub_id, _file_index, _range_index, _done = result
+            self.assertEqual(ret, SUCCESS_ERROR_CODE)
+            self.assertEqual(sub_id, submission_id)
+
+    def test_unopenable_file_reports_one_error_per_range(self):
+        # A file that cannot be opened fails each of its ranges, as the real streamer does. The failure
+        # mode being guarded is not a wrong code but a HANG: dropping the responses would leave the
+        # caller waiting on a count that can never be reached.
+        missing = os.path.join(self.temp_dir, "also_missing.bin")
+        self.assertFalse(os.path.exists(missing))
+
+        buffer = mmap.mmap(-1, 64, mmap.MAP_ANONYMOUS | mmap.MAP_PRIVATE)
+        base = buffer_address(buffer)
+
+        streamer = runai_start()
+        submission_id = runai_request(streamer, [missing], [3], [0, 8, 16], [8, 8, 8], [base, base + 8, base + 16])
+
+        seen = []
+        for _ in range(3):
+            result = runai_response(streamer)
+            self.assertIsNotNone(result)
+            ret, sub_id, _file_index, range_index, _done = result
+            self.assertEqual(sub_id, submission_id)
+            self.assertNotEqual(ret, SUCCESS_ERROR_CODE)
+            seen.append(range_index)
+
+        # exactly one response per range, none dropped and none duplicated
+        self.assertEqual(sorted(seen), [0, 1, 2])
+
     def test_mismatched_array_lengths_are_rejected(self):
         # The C side takes the range count as sum(num_ranges) and indexes all three flat arrays up to it,
         # so a mismatch here is an out-of-bounds read in native code, not an exception: ctypes silently
