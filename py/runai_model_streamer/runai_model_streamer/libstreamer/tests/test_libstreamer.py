@@ -165,6 +165,37 @@ class TestBindings(unittest.TestCase):
         self.assertEqual(bytes(buffer[13:40]), b"\x00" * 27)
         self.assertEqual(bytes(buffer[45:64]), b"\x00" * 19)
 
+    def test_mismatched_array_lengths_are_rejected(self):
+        # The C side takes the range count as sum(num_ranges) and indexes all three flat arrays up to it,
+        # so a mismatch here is an out-of-bounds read in native code, not an exception: ctypes silently
+        # zero-pads an array built from too few initializers. These must fail in Python.
+        file_path = os.path.join(self.temp_dir, "lengths.txt")
+        with open(file_path, "w") as file:
+            file.write("abcdefgh")
+
+        buffer = mmap.mmap(-1, 64, mmap.MAP_ANONYMOUS | mmap.MAP_PRIVATE)
+        base = buffer_address(buffer)
+        streamer = runai_start()
+
+        # num_ranges shorter than paths - the second file would silently lose all of its ranges
+        with self.assertRaises(ValueError):
+            runai_request(streamer, [file_path, file_path], [1], [0, 4], [4, 4], [base, base + 4])
+
+        # sum(num_ranges) larger than the range arrays - this is the out-of-bounds read
+        with self.assertRaises(ValueError):
+            runai_request(streamer, [file_path], [3], [0], [4], [base])
+
+        # the parallel arrays disagree with each other
+        with self.assertRaises(ValueError):
+            runai_request(streamer, [file_path], [2], [0], [4, 4], [base, base + 4])
+        with self.assertRaises(ValueError):
+            runai_request(streamer, [file_path], [2], [0, 4], [4, 4], [base])
+
+        # the correctly shaped version of the same submission is accepted
+        self.assertIsNotNone(
+            runai_request(streamer, [file_path], [2], [0, 4], [4, 4], [base, base + 4])
+        )
+
     def test_file_without_ranges_produces_no_response(self):
         # A file may carry no ranges at all. It is accepted and simply contributes nothing - the
         # submission completes on the responses of the files that do have ranges.

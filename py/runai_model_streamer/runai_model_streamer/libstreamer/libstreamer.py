@@ -90,12 +90,33 @@ def runai_request(
       - it avoids one memoryview -> address conversion per range on the submit path (~n per submission).
     The cost is that raw addresses keep nothing alive: THE CALLER MUST KEEP THE UNDERLYING BUFFERS ALIVE
     for the lifetime of the submission, until its last response has been consumed."""
+    # Validate the shape here, at the FFI boundary: this is the last point at which a mismatch is a Python
+    # error rather than undefined behaviour. The C side takes the range count as sum(num_ranges) and indexes
+    # all three flat arrays up to it, while the arrays below are sized from len(range_sizes) - so a
+    # sum(num_ranges) larger than the arrays reads past their end, in native code, with nothing raised.
+    # ctypes will not catch it: an array built from too FEW initializers is silently zero-padded (a short
+    # num_ranges would make a file lose all of its ranges, a short range_offsets would read from offset 0).
+    # Costs one sum over the file count - tens per submission - not per range.
     num_files = len(paths)
+    total_ranges = len(range_sizes)
+    if len(num_ranges) != num_files:
+        raise ValueError(
+            f"num_ranges has {len(num_ranges)} entries but there are {num_files} paths"
+        )
+    if not (len(range_offsets) == len(range_dsts) == total_ranges):
+        raise ValueError(
+            f"range_offsets ({len(range_offsets)}), range_sizes ({total_ranges}) and range_dsts "
+            f"({len(range_dsts)}) must be parallel"
+        )
+    if sum(num_ranges) != total_ranges:
+        raise ValueError(
+            f"sum(num_ranges) is {sum(num_ranges)} but the range arrays hold {total_ranges} entries"
+        )
+
     c_paths = (ctypes.c_char_p * num_files)(*[path.encode("utf-8") for path in paths])
     c_num_ranges = (ctypes.c_uint32 * num_files)(*num_ranges)
 
     # The flat range arrays: one allocation each, no nested pointer array to keep alive across the call
-    total_ranges = len(range_sizes)
     c_range_offsets = (ctypes.c_uint64 * total_ranges)(*range_offsets)
     c_range_sizes = (ctypes.c_uint64 * total_ranges)(*range_sizes)
     c_range_dsts = (ctypes.c_void_p * total_ranges)(*range_dsts)
