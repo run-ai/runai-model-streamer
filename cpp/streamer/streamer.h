@@ -63,6 +63,14 @@ _RUNAI_EXTERN_C int runai_set_credentials(
 // The three flat arrays are indexed identically and grouped by file in the order of paths: file f's
 // ranges occupy [sum(num_ranges[0..f)), sum(num_ranges[0..f])). Destinations must not overlap.
 //
+// RESPONSE COUNT - a submission owes exactly sum(num_ranges) responses, one per range:
+//   - a ZERO-SIZED range still gets its own response (it is completed immediately, without reaching
+//     storage), so it must be counted like any other;
+//   - a file with num_ranges[f] == 0 contributes no responses, and is otherwise accepted.
+// Size the response loop by that sum. runai_response blocks indefinitely at timeout_ms = 0, so a
+// caller that skips zero-sized ranges when counting waits for a response that has already been
+// delivered. A submission with sum(num_ranges) == 0 owes nothing and completes immediately.
+//
 // Credentials are NOT passed here - set them once via runai_set_credentials.
 //  out_submission_id : always set to this submission's id once one is assigned, and left 0 only
 //                      if the call fails before that (e.g. invalid parameters). On Success it

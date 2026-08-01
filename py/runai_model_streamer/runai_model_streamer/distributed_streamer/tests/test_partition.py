@@ -13,12 +13,18 @@ from runai_model_streamer.file_streamer import FileChunks
 
 class TestPartitioning(unittest.TestCase):
     def setUp(self):
-        """Set up a standard set of requests for use in multiple tests."""
+        """Set up a standard set of requests for use in multiple tests.
+
+        The ids are deliberately NOT the requests' positions in this list. A source map's first element is
+        the original FileChunks.id (see DistributedStreamer.rank_dicts_map), and the only production caller
+        happens to assign id == position - so fixtures that do the same cannot tell the two apart, and a
+        policy emitting positional indices would pass. These ids make that distinguishable.
+        """
         self.requests: List[FileChunks] = [
-            FileChunks.contiguous(0, path="file_A.dat", offset=1000, sizes=[100, 50, 200]), # Total: 350
-            FileChunks.contiguous(1, path="file_B.dat", offset=0, sizes=[400]),             # Total: 400
-            FileChunks.contiguous(2, path="file_A.dat", offset=5000, sizes=[80, 20]),       # Total: 100
-            FileChunks.contiguous(3, path="file_C.dat", offset=800, sizes=[300, 150]),      # Total: 450
+            FileChunks.contiguous(101, path="file_A.dat", offset=1000, sizes=[100, 50, 200]), # Total: 350
+            FileChunks.contiguous(7, path="file_B.dat", offset=0, sizes=[400]),               # Total: 400
+            FileChunks.contiguous(55, path="file_A.dat", offset=5000, sizes=[80, 20]),        # Total: 100
+            FileChunks.contiguous(23, path="file_C.dat", offset=800, sizes=[300, 150]),       # Total: 450
         ]
         self.total_size = sum(r.total_size() for r in self.requests) # 1300
 
@@ -111,6 +117,34 @@ class TestPartitioning(unittest.TestCase):
 
         self._verify_all_chunks_present(self.requests, partitions)
         self._verify_chunk_maps(self.requests, partitions)
+
+    def test_source_maps_reference_original_ids_not_positions(self):
+        """Both policies must key the source map on the original FileChunks.id.
+
+        The receiving ranks look a tensor up by the id carried in the broadcast metadata
+        (DistributedStreamer.rank_dicts_map -> safetensors metadata), so a policy that emitted the
+        request's POSITION in the input list would hand back the wrong tensor whenever the caller's ids
+        are not 0..n-1. Asserted for both policies together because they are interchangeable behind
+        RUNAI_STREAMER_PARTITION_POLICY and must agree on this.
+        """
+        original_ids = {request.id for request in self.requests}
+        positions = set(range(len(self.requests)))
+        self.assertTrue(original_ids.isdisjoint(positions),
+                        "fixture must use ids that are not positions, or this test proves nothing")
+
+        for policy in (partition_by_files, partition_by_chunks):
+            for n in (1, 3, 5):
+                mapped_ids = {
+                    source_id
+                    for partition in policy(self.requests, n)
+                    for _new_fc, source_map in partition
+                    for source_id, _chunk_idx, _size in source_map.values()
+                }
+                self.assertEqual(
+                    mapped_ids, original_ids,
+                    f"{policy.__name__} with n={n} mapped to {sorted(mapped_ids)}; "
+                    f"expected the original ids {sorted(original_ids)}",
+                )
 
     def test_partition_by_chunks(self):
         """Tests for the partition_by_chunks function."""

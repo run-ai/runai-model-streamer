@@ -152,11 +152,10 @@ def partition_by_files(
     if not file_stream_requests:
         return [[] for _ in range(n)]
 
-    # 1. Sort the FileChunks objects from largest to smallest total size, keeping track of original index.
-    requests_with_indices = list(enumerate(file_stream_requests))
+    # 1. Sort the FileChunks objects from largest to smallest total size.
     sorted_requests = sorted(
-        requests_with_indices,
-        key=lambda item: item[1].total_size(),
+        file_stream_requests,
+        key=lambda request: request.total_size(),
         reverse=True
     )
 
@@ -164,13 +163,19 @@ def partition_by_files(
     partitions: List[List[Tuple[FileChunks, Dict[int, Tuple[int, int, int]]]]] = [[] for _ in range(n)]
     partition_sizes: List[int] = [0] * n
 
-    for original_request_index, request in sorted_requests:
+    for request in sorted_requests:
         min_size_idx = partition_sizes.index(min(partition_sizes))
         
-        # Create the source map. Since we aren't changing the chunk order within
+        # Create the source map. Since we aren't changing the range order within
         # the FileChunks object, the mapping is direct.
+        #
+        # Keyed on request.id, NOT the request's position in file_stream_requests: the map's contract is
+        # "original FileChunks.id and range index" (see DistributedStreamer.rank_dicts_map), which is what
+        # partition_by_chunks emits and what the receiving ranks look tensors up by. Today the only
+        # production caller happens to assign id == position, so the two agree by accident - but a caller
+        # that does not would silently receive the wrong tensor under the `files` policy.
         source_map = {
-            chunk_idx: (original_request_index, chunk_idx, request.sizes[chunk_idx])
+            chunk_idx: (request.id, chunk_idx, request.sizes[chunk_idx])
             for chunk_idx in range(len(request.sizes))
         }
 
