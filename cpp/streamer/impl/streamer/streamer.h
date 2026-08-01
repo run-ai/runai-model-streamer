@@ -90,10 +90,12 @@ struct Streamer
     // Try to parse path as an object storage URI; returns nullptr for a filesystem path
     std::shared_ptr<common::s3::StorageUri> try_parse_uri(const std::string & path);
 
-    // Reject a submission that mixes object-storage plugins, and lock the streamer to a single
-    // object-storage plugin (first object-storage submission wins). Filesystem paths are ignored and coexist
-    // with the lock. Returns UnsupportedBackendMix on a mixed submission or a plugin differing from the lock,
-    // else Success.
+    // Reject a submission that mixes backends, and lock the streamer to a single object-storage plugin
+    // (first object-storage submission wins). A submission must be either wholly filesystem or wholly one
+    // object-storage plugin; the STREAMER may serve both kinds across different submissions (BackendPools
+    // keeps one pool per kind). Returns UnsupportedBackendMix when a submission mixes filesystem with
+    // object storage, mixes two object-storage plugins, or uses a plugin differing from the lock; else
+    // Success.
     common::ResponseCode lock_object_plugin(const std::vector<FileRanges> & request);
     // Build the object-storage params for a batch. Credentials are NOT included here (they are read only at
     // client creation, from credentials()); the batch params carry the URI, which is all the per-read path uses.

@@ -37,6 +37,7 @@ runai_cc_test(
             "//common/backend_api/object_storage",
            "//utils/random",
             "//utils/temp/env",
+            "//utils/temp/file",
             "//utils/dylib",
             "//utils/logging",
             "//utils/fdlimit",

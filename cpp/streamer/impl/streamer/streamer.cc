@@ -385,14 +385,24 @@ void Streamer::verify_requests(std::vector<FileRanges> & request)
 
 common::ResponseCode Streamer::lock_object_plugin(const std::vector<FileRanges> & request)
 {
-    // Find the object-storage plugin this submission uses (filesystem paths are ignored and coexist);
-    // reject a submission that itself mixes two object-storage plugins.
+    // Classify every path, and reject a submission that mixes backends - either two object-storage
+    // plugins, or filesystem and object storage together.
+    //
+    // A STREAMER serves both kinds happily: BackendPools holds one pool per kind, created lazily, so a
+    // filesystem submission and an object-storage submission can follow each other on the same streamer.
+    // A SUBMISSION must pick one, because the Assigner divides it with a single backend's worker count
+    // and block size, and a workload must be homogeneous for BackendPools::push to route it. Without
+    // this check a mixed submission is accepted or rejected depending on where the assigner's slice
+    // happens to land - InvalidParameterError out of Workload::add_batch when both kinds share a
+    // workload, silently accepted with the wrong block size when they do not.
     std::optional<BackendPools::Plugin> submission_plugin;
+    bool has_filesystem = false;
     for (const auto & file : request)
     {
         auto uri = try_parse_uri(file.path);
         if (uri == nullptr)
         {
+            has_filesystem = true;
             continue;   // filesystem path
         }
 
@@ -411,6 +421,12 @@ common::ResponseCode Streamer::lock_object_plugin(const std::vector<FileRanges> 
     if (!submission_plugin.has_value())
     {
         return common::ResponseCode::Success;   // pure filesystem submission - nothing to lock
+    }
+
+    if (has_filesystem)
+    {
+        LOG(ERROR) << "Submission mixes filesystem and object storage paths; rejecting";
+        return common::ResponseCode::UnsupportedBackendMix;
     }
 
     // Lock the object-storage pool to this plugin (first submission) or verify it matches; the lock lives in

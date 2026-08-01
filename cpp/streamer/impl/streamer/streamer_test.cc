@@ -555,6 +555,44 @@ TEST(AsyncRequest, MixedObjectPluginsRejected)
     EXPECT_EQ(streamer.async_request(request), common::ResponseCode::UnsupportedBackendMix);
 }
 
+// A submission must pick ONE backend kind. The streamer serves both across submissions (see
+// FilesystemAndObjectStorageSubmissionsCoexist), but within a submission the Assigner divides the work
+// with a single backend's worker count and block size, and a workload has to be homogeneous to be routed.
+// Rejecting up front replaces a slice-dependent outcome: without the check, this is InvalidParameterError
+// when both kinds land in one workload and silently accepted with the wrong block size when they do not.
+TEST(AsyncRequest, MixedFilesystemAndObjectStorageRejected)
+{
+    const auto size = utils::random::number(100, 1000);
+    const auto chunk_size = utils::random::number<size_t>(1, 1024);
+    const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
+    Config config(utils::random::number(1, 20), utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
+
+    Streamer streamer(config);
+
+    const auto data = utils::random::buffer(size);
+    utils::temp::File file(data);
+
+    std::vector<unsigned char> dst0(size);
+    std::vector<unsigned char> dst1(size);
+
+    // both orders: the check must not depend on which kind is seen first (a first-file test would pass
+    // one of these by accident)
+    {
+        std::vector<FileRanges> request;
+        request.push_back(FileRanges{ file.path, { ReadRange{ 0, static_cast<size_t>(size), dst0.data() } } });
+        request.push_back(FileRanges{ "s3://bucket/a.txt", { ReadRange{ 0, static_cast<size_t>(size), dst1.data() } } });
+
+        EXPECT_EQ(streamer.async_request(request), common::ResponseCode::UnsupportedBackendMix);
+    }
+    {
+        std::vector<FileRanges> request;
+        request.push_back(FileRanges{ "s3://bucket/a.txt", { ReadRange{ 0, static_cast<size_t>(size), dst0.data() } } });
+        request.push_back(FileRanges{ file.path, { ReadRange{ 0, static_cast<size_t>(size), dst1.data() } } });
+
+        EXPECT_EQ(streamer.async_request(request), common::ResponseCode::UnsupportedBackendMix);
+    }
+}
+
 namespace
 {
 

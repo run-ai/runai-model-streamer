@@ -200,6 +200,11 @@ void Assigner::assign(size_t total_bytes_to_read)
     LOG(DEBUG) << "Workload assignment verification successful. Total bytes assigned: " << assigned_total;
 }
 
+// The submission's backend kind. Reading it from the first file alone is sound because a submission is
+// homogeneous by then: Streamer::lock_object_plugin rejects one that mixes filesystem with object storage
+// (or two object-storage plugins) with UnsupportedBackendMix, before an Assigner is ever constructed. That
+// is what lets one worker count and one block size cover the whole submission, and what guarantees every
+// workload is homogeneous for BackendPools::push to route.
 bool Assigner::check_object_storage(const std::vector<FileRanges> & request) const
 {
     if (request.empty())
