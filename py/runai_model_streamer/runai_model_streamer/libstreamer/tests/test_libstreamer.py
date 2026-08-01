@@ -123,6 +123,48 @@ class TestBindings(unittest.TestCase):
         self.assertEqual(sorted(seen), [0, 1])
         self.assertEqual(bytes(buffer[0:5]), b"abcde")
 
+    def test_scattered_ranges_and_destinations(self):
+        # Ranges that are non-contiguous and unordered in BOTH the file and the destination buffer -
+        # the shape the per-range API exists for. Every other test here happens to submit ranges that
+        # tile one span, which a backend that seeks once per file and walks its destination forward
+        # would serve correctly by accident; this one it cannot.
+        file_path = os.path.join(self.temp_dir, "scattered.txt")
+        with open(file_path, "w") as file:
+            file.write("ABCDEFGHIJKLMNOPQRST")   # 20 bytes, every byte distinct
+
+        buffer = mmap.mmap(-1, 64, mmap.MAP_ANONYMOUS | mmap.MAP_PRIVATE)   # zero filled
+        base = buffer_address(buffer)
+
+        # last bytes first, then the first bytes, then the middle; destinations in a third order again
+        offsets = [15, 0, 8]
+        sizes = [5, 3, 2]
+        dsts = [base + 40, base + 10, base + 0]
+
+        streamer = runai_start()
+        submission_id = runai_request(streamer, [file_path], [3], offsets, sizes, dsts)
+
+        seen = []
+        for _ in range(3):
+            result = runai_response(streamer)
+            self.assertIsNotNone(result)
+            ret, sub_id, file_index, range_index, submission_done = result
+            self.assertEqual(ret, SUCCESS_ERROR_CODE)
+            self.assertEqual(sub_id, submission_id)
+            self.assertEqual(file_index, 0)
+            seen.append(range_index)
+
+        # one response per range, indexed as submitted
+        self.assertEqual(sorted(seen), [0, 1, 2])
+
+        self.assertEqual(bytes(buffer[40:45]), b"PQRST")
+        self.assertEqual(bytes(buffer[10:13]), b"ABC")
+        self.assertEqual(bytes(buffer[0:2]), b"IJ")
+
+        # nothing was written outside the requested destinations
+        self.assertEqual(bytes(buffer[2:10]), b"\x00" * 8)
+        self.assertEqual(bytes(buffer[13:40]), b"\x00" * 27)
+        self.assertEqual(bytes(buffer[45:64]), b"\x00" * 19)
+
     def test_file_without_ranges_produces_no_response(self):
         # A file may carry no ranges at all. It is accepted and simply contributes nothing - the
         # submission completes on the responses of the files that do have ranges.

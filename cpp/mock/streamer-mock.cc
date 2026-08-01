@@ -12,13 +12,20 @@
 
 namespace runai::llm::streamer
 {
+// One range of a submission, exactly as the caller described it: its own source offset, size and
+// destination. The mock keeps all three per range rather than a file offset plus a running destination
+// cursor, so a submission whose ranges are non-contiguous in the file or in memory is served correctly.
+struct MockRange {
+    size_t offset;
+    size_t size;
+    char * dst;
+};
+
 struct State {
     utils::Fd file;
-    std::vector<size_t> read_item_sizes;
+    std::vector<MockRange> ranges;
     unsigned total_items = 0;
     unsigned current_item = 0;
-    char* destination = nullptr;
-    unsigned current_dst_offset = 0;
 };
 
 State __state;
@@ -32,7 +39,9 @@ unsigned __response_total = 0;   // total sub-range responses expected for the c
 unsigned __response_given = 0;   // responses handed out so far
 
 
-int request(void * streamer, const char * path, size_t file_offset, size_t bytesize, char * dst, unsigned num_sizes, size_t * internal_sizes, State * state)
+// Record one file's ranges. The seek is deliberately NOT done here: each range seeks to its own offset
+// when it is served, since ranges need not be ordered or adjacent.
+int request(void * streamer, const char * path, unsigned num_ranges, const size_t * range_offsets, const size_t * range_sizes, void ** range_dsts, State * state)
 {
     state->file = utils::Fd(::open(path, O_RDONLY));
     if (state->file.fd() == -1) {
@@ -40,21 +49,12 @@ int request(void * streamer, const char * path, size_t file_offset, size_t bytes
         return -1;
     }
 
-    try
-    {
-        state->file.seek(file_offset);
-    }
-    catch(const std::exception& e)
-    {
-        LOG(ERROR) << "Error seek in file: " << path << " to: " << file_offset;
-        return -1;
+    state->ranges.reserve(num_ranges);
+    for (unsigned j = 0; j < num_ranges; ++j) {
+        state->ranges.push_back(MockRange{ range_offsets[j], range_sizes[j], reinterpret_cast<char*>(range_dsts[j]) });
     }
 
-    state->read_item_sizes.resize(num_sizes);
-    std::memcpy(state->read_item_sizes.data(), internal_sizes, num_sizes * sizeof(size_t));
-
-    state->total_items = num_sizes;
-    state->destination = dst;
+    state->total_items = num_ranges;
     return 0;
 }
 
@@ -65,26 +65,26 @@ int request(void * streamer, const char * path, size_t file_offset, size_t bytes
 int response(void * streamer, unsigned * index, State * state)
 {
     size_t result = 0;
-    auto to_read = state->read_item_sizes[state->current_item];
-    auto to_dst = state->destination + state->current_dst_offset;
+    const auto & range = state->ranges[state->current_item];
     int ret = 0;
     try
     {
-        result = state->file.read(to_read, to_dst, utils::Fd::Read::Eof);
+        // seek per range: the previous range may have been elsewhere in the file, or later in it
+        state->file.seek(range.offset);
+        result = state->file.read(range.size, range.dst, utils::Fd::Read::Eof);
     }
     catch(const std::exception& e)
     {
-        LOG(ERROR) << "Failed to read from file";
+        LOG(ERROR) << "Failed to read from file at offset " << range.offset;
         ret = 2;   // common::ResponseCode::FileAccessError
     }
 
-    if (ret == 0 && result != to_read)
+    if (ret == 0 && result != range.size)
     {
         LOG(ERROR) << "Reached EOF";
         ret = 3;   // common::ResponseCode::EofError
     }
 
-    state->current_dst_offset += result;
     *index = state->current_item;
     state->current_item++;
     return ret;
@@ -147,27 +147,20 @@ extern "C" int runai_request(
     __response_given = 0;
 
     // The range arrays are flat and grouped by file in the order of paths; base walks that grouping.
-    //
-    // The mock reads each file as ONE contiguous span, starting at its first range's offset and
-    // destination. That matches every caller today - a file's ranges are laid out consecutively in both
-    // the file and the destination - but a genuinely scattered request would need a seek per range here.
+    // Each file's ranges are handed over as they were submitted - every range keeps its own offset,
+    // size and destination, so scattered submissions are served correctly rather than collapsed into
+    // one contiguous span per file.
     size_t base = 0;
     for (unsigned i = 0; i < num_files; ++i) {
         const unsigned n = num_ranges[i];
 
-        size_t bytesize = 0;
-        for (unsigned j = 0; j < n; ++j) {
-            bytesize += range_sizes[base + j];
-        }
-
         State state;
         request(streamer,
                 paths[i],
-                n > 0 ? range_offsets[base] : 0,
-                bytesize,
-                n > 0 ? reinterpret_cast<char*>(range_dsts[base]) : nullptr,
                 n,
+                range_offsets + base,
                 range_sizes + base,
+                range_dsts + base,
                 &state);
 
         __response_total += n;
