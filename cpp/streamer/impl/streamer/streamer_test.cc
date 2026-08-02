@@ -41,6 +41,19 @@ Received recv(Streamer & streamer)
     return Received{ response, submission_done };
 }
 
+// The range indices a submission of n ranges owes: exactly {0, 1, ... n-1}. Compared as a SET, because a
+// count (received.size() == n) also passes when a range is answered twice and another dropped, or when an
+// index is out of range entirely.
+std::set<unsigned> range_indices(unsigned n)
+{
+    std::set<unsigned> indices;
+    for (unsigned i = 0; i < n; ++i)
+    {
+        indices.insert(i);
+    }
+    return indices;
+}
+
 // short wait used to assert a fresh/empty responder delivers nothing (it times out rather than blocking)
 constexpr unsigned EMPTY_WAIT_MS = 50;
 
@@ -492,7 +505,7 @@ TEST(Async, Zero_Sized_Ranges)
         EXPECT_EQ(done, i + 1 == num_ranges);   // completion lands on the last range
     }
 
-    EXPECT_EQ(received.size(), num_ranges);
+    EXPECT_EQ(received, range_indices(num_ranges));
 }
 
 TEST(Async, ConcurrentRequests)
@@ -806,7 +819,7 @@ TEST(Async, Scattered_Ranges_And_Destinations)
 
     // deliberately: descending file order, gaps between ranges, a zero-sized range, and two ranges
     // reading the SAME source bytes (source overlap is legal - only destinations must not overlap)
-    const std::vector<std::pair<size_t, size_t>> ranges =
+    std::vector<std::pair<size_t, size_t>> ranges =
     {
         { 700, 120 },
         {  50, 200 },
@@ -814,6 +827,15 @@ TEST(Async, Scattered_Ranges_And_Destinations)
         { 700, 120 },
         { 900, 100 },
     };
+
+    // Then a random number of random ranges on top: the five above are the shapes worth naming, but their
+    // count is arbitrary, and a fixed count is one a position bug can fit by accident.
+    const unsigned extra = utils::random::number(0, 15);
+    for (unsigned i = 0; i < extra; ++i)
+    {
+        const size_t offset = utils::random::number<size_t>(0, size - 1);
+        ranges.emplace_back(offset, utils::random::number<size_t>(0, size - offset));
+    }
 
     // each destination is its OWN allocation, not an offset into a shared buffer: this is what proves a
     // destination need not belong to any single buffer. The extra byte is a guard against an over-long write.
@@ -846,7 +868,7 @@ TEST(Async, Scattered_Ranges_And_Destinations)
 
     // exactly one response per range, indexed within the file - a dropped or duplicated zero-sized
     // range would shift every later index
-    EXPECT_EQ(received.size(), ranges.size());
+    EXPECT_EQ(received, range_indices(ranges.size()));
 
     for (size_t i = 0; i < ranges.size(); ++i)
     {

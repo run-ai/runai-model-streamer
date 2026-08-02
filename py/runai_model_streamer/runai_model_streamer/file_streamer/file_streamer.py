@@ -207,39 +207,62 @@ class FileStreamer:
         # Only one submission is in flight at a time (get_chunks fully drains the active request before
         # submitting the next), so every response here belongs to self.submission_id and the count loop is
         # exact. runai_response blocks indefinitely (timeout 0) and returns None only on teardown.
-        for i in range(self.active_request.num_ranges):
-            response = runai_response(self.streamer)
-            if response is None:
-                return
-            ret, submission_id, file_relative_index, chunk_relative_index, _submission_done = response
-            # Single-submission invariant: FileStreamer drains one submission fully before starting the next,
-            # so every response must belong to self.submission_id. This catches a stale response from a prior
-            # (e.g. failed) submission being misattributed to this one and returning wrong data. Use if/raise
-            # (not assert) so this data-integrity check is not stripped under `python -O`.
-            # REMOVE THIS for the ring buffer: FileStreamer will then manage CONCURRENT submissions and
-            # request_ready_chunks must demux responses by submission_id instead of enforcing a single one.
-            if submission_id != self.submission_id:
-                raise ValueError(
-                    f"response for submission {submission_id} but expected {self.submission_id}"
-                )
-            # single-submission streaming: any per-sub-range error fails the whole stream (fail-fast)
-            if ret != SUCCESS_ERROR_CODE:
-                raise ValueError(
-                    f"Could not receive response from libstreamer due to: {runai_response_str(ret)}"
-                )
+        num_ranges = self.active_request.num_ranges
+        consumed = 0
+        try:
+            for i in range(num_ranges):
+                response = runai_response(self.streamer)
+                if response is None:
+                    return
+                consumed += 1
+                ret, submission_id, file_relative_index, chunk_relative_index, _submission_done = response
+                # Single-submission invariant: FileStreamer drains one submission fully before starting the next,
+                # so every response must belong to self.submission_id. This catches a stale response from a prior
+                # (e.g. failed) submission being misattributed to this one and returning wrong data. Use if/raise
+                # (not assert) so this data-integrity check is not stripped under `python -O`.
+                # REMOVE THIS for the ring buffer: FileStreamer will then manage CONCURRENT submissions and
+                # request_ready_chunks must demux responses by submission_id instead of enforcing a single one.
+                if submission_id != self.submission_id:
+                    raise ValueError(
+                        f"response for submission {submission_id} but expected {self.submission_id}"
+                    )
+                # single-submission streaming: any per-sub-range error fails the whole stream (fail-fast)
+                if ret != SUCCESS_ERROR_CODE:
+                    raise ValueError(
+                        f"Could not receive response from libstreamer due to: {runai_response_str(ret)}"
+                    )
 
-            file_path, chunk_index, chunk_buffer = self.requests_iterator.get_global_file_and_chunk(file_relative_index, chunk_relative_index)
-            # create one dimensional tensor from the chunk buffer
-            # we return a tensor of shape (1, chunk_buffer.size)
-            # the data type of the original chunk_buffer, as created by the requests_iterator, is preserved (uint8)
-            tensor = torch.from_numpy(chunk_buffer).view(1, -1)
+                file_path, chunk_index, chunk_buffer = self.requests_iterator.get_global_file_and_chunk(file_relative_index, chunk_relative_index)
+                # create one dimensional tensor from the chunk buffer
+                # we return a tensor of shape (1, chunk_buffer.size)
+                # the data type of the original chunk_buffer, as created by the requests_iterator, is preserved (uint8)
+                tensor = torch.from_numpy(chunk_buffer).view(1, -1)
 
-            # currently file streamer is always reading a cpu buffer
-            # so we don't need to move the tensor to the device
-            # for future GDS/CUDA support we will need to move the tensor to the device (cpu or different device)
-            if self.device_str == "cpu":
-                yield file_path, chunk_index, tensor
-            else:
-                device_tensor = tensor.to(self.device_str)
-                yield file_path, chunk_index, device_tensor
+                # currently file streamer is always reading a cpu buffer
+                # so we don't need to move the tensor to the device
+                # for future GDS/CUDA support we will need to move the tensor to the device (cpu or different device)
+                if self.device_str == "cpu":
+                    yield file_path, chunk_index, tensor
+                else:
+                    device_tensor = tensor.to(self.device_str)
+                    yield file_path, chunk_index, device_tensor
+        finally:
+            # The submission must be drained however this generator ends, not only when it runs to
+            # completion. range_dsts are raw addresses into the requests iterator's buffer, so a range still
+            # in flight writes into memory the next stream_files has already freed and handed to the next
+            # submission - and its late response is then delivered to that submission's drain loop, which
+            # rejects it and abandons ITS responses in turn, so the streamer never recovers.
+            # A finally covers both exits: the fail-fast raises above, and a caller abandoning the generator
+            # (break, or raising inside its for loop - which safetensors_pytorch does), since closing a
+            # generator resumes it here.
+            self.drain_active_submission(num_ranges - consumed)
+
+    def drain_active_submission(self, remaining: int) -> None:
+        # self.streamer is already cleared if the generator is collected after __exit__; runai_end has joined
+        # the workers by then, so there is nothing left to wait for and the handle must not be touched.
+        if not self.streamer:
+            return
+        for _ in range(remaining):
+            if runai_response(self.streamer) is None:
+                return   # teardown: no further responses are coming
 

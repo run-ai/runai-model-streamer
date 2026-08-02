@@ -8,7 +8,8 @@ from runai_model_streamer.s3_utils.s3_utils import (
 
 SUCCESS_ERROR_CODE = 0
 FINISHED_ERROR_CODE = 1
-# common::ResponseCode::TimedOut (see cpp/common/response_code/response_code.h)
+# common::ResponseCode::FileAccessError / TimedOut (see cpp/common/response_code/response_code.h)
+FILE_ACCESS_ERROR_CODE = 2
 TIMED_OUT_ERROR_CODE = 16
 
 # Widths of the C types the range arrays are converted to (unsigned num_ranges, size_t offsets/sizes,

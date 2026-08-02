@@ -53,16 +53,15 @@ int request(void * streamer, const char * path, unsigned num_ranges, const size_
     // early would leave total_items at 0 while the response counter had already been raised by num_ranges,
     // and those responses would never be produced. The caller would then block forever in runai_response.
     state->ranges.reserve(num_ranges);
-    bool needs_file = false;
     for (unsigned j = 0; j < num_ranges; ++j) {
         state->ranges.push_back(MockRange{ range_offsets[j], range_sizes[j], reinterpret_cast<char*>(range_dsts[j]) });
-        needs_file = needs_file || range_sizes[j] != 0;
     }
     state->total_items = num_ranges;
 
-    // A zero-sized range never reaches storage in the real streamer, so a file whose ranges are all
-    // zero-sized (or which has no ranges at all) is answered without being opened.
-    if (!needs_file) {
+    // A file with NO ranges yields no transfer and no batch in the real streamer, so it is never opened.
+    // All-zero-sized ranges are different: they do yield a batch, and Batch::execute opens the file before
+    // looking at any size - so an unopenable file fails them (verified: it returns FileAccessError).
+    if (num_ranges == 0) {
         return 0;
     }
 
@@ -89,17 +88,17 @@ int response(void * streamer, unsigned * index, State * state)
     *index = state->current_item;
     state->current_item++;
 
-    // A zero-sized range is completed without touching the file - it reaches no storage in the real
-    // streamer, so it must succeed even when the file could not be opened.
-    if (range.size == 0)
-    {
-        return 0;
-    }
-
-    // The file could not be opened: report the error for this range rather than dropping its response.
+    // The file could not be opened: report the error rather than dropping the response. Checked BEFORE the
+    // zero-sized shortcut, because the real streamer opens the file regardless of range size.
     if (state->error != 0)
     {
         return state->error;
+    }
+
+    // A zero-sized range reads nothing, so it is completed without touching the (successfully opened) file.
+    if (range.size == 0)
+    {
+        return 0;
     }
 
     int ret = 0;

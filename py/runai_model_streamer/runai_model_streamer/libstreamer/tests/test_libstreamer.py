@@ -5,6 +5,7 @@ import os
 import mmap
 import ctypes
 from runai_model_streamer.libstreamer.libstreamer import (
+    FILE_ACCESS_ERROR_CODE,
     SUCCESS_ERROR_CODE,
     runai_start,
     runai_set_credentials,
@@ -26,20 +27,25 @@ class TestBindings(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
 
-    def _drain(self, streamer, submission_id, num_ranges):
-        """Consume a submission's responses, asserting each succeeded, and return the range indices seen.
+    def _drain(self, streamer, submission_id, num_ranges, expected_code=SUCCESS_ERROR_CODE):
+        """Consume a submission's responses, asserting each carried expected_code, and return the range
+        indices seen.
 
         Every accepted submission must be drained before its destination buffer goes out of scope:
         runai_request is non-blocking and range_dsts are raw addresses that keep nothing alive, so an
         in-flight submission can be writing into memory the test has already released. Draining also
         checks the submission_done flag is set exactly once, on the last response.
+
+        expected_code is a parameter because a FAILING submission must complete just as strictly as a
+        successful one - same count, same flag on the last response. That is the case where dropping a
+        response is easiest and hangs the caller hardest.
         """
         seen = []
         for response_number in range(num_ranges):
             result = runai_response(streamer)
             self.assertIsNotNone(result)
             ret, sub_id, _file_index, range_index, submission_done = result
-            self.assertEqual(ret, SUCCESS_ERROR_CODE)
+            self.assertEqual(ret, expected_code)
             self.assertEqual(sub_id, submission_id)
             seen.append(range_index)
 
@@ -195,10 +201,15 @@ class TestBindings(unittest.TestCase):
         self.assertEqual(bytes(buffer[13:40]), b"\x00" * 27)
         self.assertEqual(bytes(buffer[45:64]), b"\x00" * 19)
 
-    def test_zero_sized_range_needs_no_file(self):
-        # A zero-sized range reaches no storage, so it is answered even for a path that cannot be opened.
-        # Nothing may be dropped either: the response counter is raised per range regardless, so a range
-        # whose response is never produced hangs the caller (runai_response blocks indefinitely).
+    def test_zero_sized_ranges_on_unopenable_file_are_still_answered(self):
+        # A zero-sized range reads nothing, but it does NOT skip the file: the streamer opens the file for
+        # every batch before it looks at any range size, so a range in an unopenable file fails with it -
+        # verified against the real library, which returns FileAccessError here.
+        #
+        # The point of the test is that the ranges are ANSWERED, not what they answer. The response counter
+        # is raised per range regardless of size, so a range whose response is never produced hangs the
+        # caller (runai_response blocks indefinitely), and the failing path is where dropping one is
+        # easiest.
         missing = os.path.join(self.temp_dir, "does_not_exist.bin")
         self.assertFalse(os.path.exists(missing))
 
@@ -208,10 +219,12 @@ class TestBindings(unittest.TestCase):
         streamer = runai_start()
         submission_id = runai_request(streamer, [missing], [2], [0, 0], [0, 0], [base, base])
 
-        # Both ranges must be accounted for individually: counting two successful responses would also
-        # accept the same range answered twice while the other was dropped, which is the failure this
-        # test exists to catch. _drain also checks the submission-done flag lands on the last response.
-        self.assertEqual(self._drain(streamer, submission_id, 2), [0, 1])
+        # Both ranges must be accounted for individually: counting two responses would also accept the
+        # same range answered twice while the other was dropped, which is the failure this test exists to
+        # catch. _drain also checks the submission-done flag lands on the last response.
+        self.assertEqual(
+            self._drain(streamer, submission_id, 2, expected_code=FILE_ACCESS_ERROR_CODE), [0, 1]
+        )
 
     def test_unopenable_file_reports_one_error_per_range(self):
         # A file that cannot be opened fails each of its ranges, as the real streamer does. The failure

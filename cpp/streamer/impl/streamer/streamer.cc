@@ -5,6 +5,7 @@
 #include <atomic>
 #include <filesystem>
 #include <memory>
+#include <limits>
 #include <numeric>
 #include <optional>
 #include <string>
@@ -189,17 +190,30 @@ common::ResponseCode Streamer::async_request(
         return ret;
     }
 
-    // One response is issued per range whatever its size - a zero-sized range is completed immediately
-    // below rather than reaching storage - so total_sizes counts every range.
-    unsigned total_sizes = 0;
+    // One response per range whatever its size, so total_ranges counts every range - a zero-sized one is
+    // completed below without reaching storage. A COUNT, unlike total_bytes beside it.
+    size_t total_ranges = 0;
     size_t total_bytes = 0;
     for (const auto & file : request)
     {
-        total_sizes += file.ranges.size();
+        total_ranges += file.ranges.size();
         for (const auto & range : file.ranges)
         {
             total_bytes += range.size;
         }
+    }
+
+    // The responder and the submission registry both carry the expected count as `unsigned`, so a total
+    // that does not fit would truncate to total_ranges % 2^32 - fewer responses expected than ranges
+    // submitted, so the submission reports done early and the caller frees buffers still being written.
+    // Rejected before an id is minted, rather than narrowed silently.
+    //
+    // Untested on purpose: unreachable below ~4.29 billion ranges in one submission.
+    if (total_ranges > std::numeric_limits<unsigned>::max())
+    {
+        LOG(ERROR) << "Submission has " << total_ranges << " ranges, which exceeds the maximum of "
+                   << std::numeric_limits<unsigned>::max();
+        return common::ResponseCode::InvalidParameterError;
     }
 
     // Mint the submission id up front so batches can be stamped with it, and hand it back to the
@@ -221,7 +235,7 @@ common::ResponseCode Streamer::async_request(
     // zero would insert an entry that consume() can never erase. Returning Success with the minted id
     // leaves nothing behind. (A submission whose ranges are all ZERO SIZED is different - it does owe
     // one response per range, and goes through the normal path below.)
-    if (total_sizes == 0)
+    if (total_ranges == 0)
     {
         LOG(DEBUG) << "Submission " << submission_id << " contains no ranges; nothing to read";
         return common::ResponseCode::Success;
@@ -286,8 +300,10 @@ common::ResponseCode Streamer::async_request(
 
     // Commit the submission: register it, grow the persistent responder's expected count, then
     // dispatch. increment() must happen before any workload runs so _running covers the responses.
-    _submissions.add(submission_id, total_sizes, total_bytes);
-    _responder->increment(total_sizes);
+    // narrowing is safe: the guard above rejected anything that does not fit
+    const auto expected_responses = static_cast<unsigned>(total_ranges);
+    _submissions.add(submission_id, expected_responses, total_bytes);
+    _responder->increment(expected_responses);
 
     // The drain guard relies on push_back's strong guarantee for the workload whose push throws,
     // which holds only because Workload's move is noexcept (so the throw is the node allocation,

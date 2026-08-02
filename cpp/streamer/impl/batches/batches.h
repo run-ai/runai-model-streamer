@@ -83,8 +83,6 @@ struct Batches
     // index within the file of this transfer's first range
     unsigned _first_range_index;
 
-    unsigned _size;
-
     BatchItr _itr;
 
     std::vector<Batch> _batches;

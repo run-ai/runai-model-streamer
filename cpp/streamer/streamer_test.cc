@@ -158,7 +158,11 @@ TEST(Request, Null_Parameters)
     ASSERT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
 
     SubmissionId id = 0;
-    const char * path = "/tmp/no-such-file";
+    // a real file, so the one submission that IS accepted below reads successfully and the test is about
+    // argument validation only
+    const auto data = utils::random::buffer(utils::random::number(10, 100));
+    utils::temp::File file(data);
+    const char * path = file.path.c_str();
     unsigned num_ranges = 1;
     size_t offset = 0;
     size_t size = 10;
@@ -189,6 +193,19 @@ TEST(Request, Null_Parameters)
     size_t zero = 0;
     EXPECT_EQ(runai_request(streamer, &id, 1, &path, &num_ranges, &offset, &zero, &null_dst),
               static_cast<int>(common::ResponseCode::Success));
+
+    // The only submission accepted above, so it owes one response and must be drained before the test
+    // returns - an in-flight submission writes into buffers the caller has released.
+    unsigned file_index = 0;
+    unsigned range_index = 0;
+    int submission_done = 0;
+    SubmissionId response_id = 0;
+    EXPECT_EQ(runai_response(streamer, &response_id, &file_index, &range_index, &submission_done, 0),
+              static_cast<int>(common::ResponseCode::Success));
+    EXPECT_EQ(response_id, id);
+    EXPECT_EQ(file_index, 0u);
+    EXPECT_EQ(range_index, 0u);
+    EXPECT_EQ(submission_done, 1);
 
     EXPECT_NO_THROW(runai_end(streamer));
 }
