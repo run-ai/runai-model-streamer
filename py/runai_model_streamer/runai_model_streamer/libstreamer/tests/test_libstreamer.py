@@ -26,6 +26,28 @@ class TestBindings(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
 
+    def _drain(self, streamer, submission_id, num_ranges):
+        """Consume a submission's responses, asserting each succeeded, and return the range indices seen.
+
+        Every accepted submission must be drained before its destination buffer goes out of scope:
+        runai_request is non-blocking and range_dsts are raw addresses that keep nothing alive, so an
+        in-flight submission can be writing into memory the test has already released. Draining also
+        checks the submission_done flag is set exactly once, on the last response.
+        """
+        seen = []
+        done_count = 0
+        for _ in range(num_ranges):
+            result = runai_response(streamer)
+            self.assertIsNotNone(result)
+            ret, sub_id, _file_index, range_index, submission_done = result
+            self.assertEqual(ret, SUCCESS_ERROR_CODE)
+            self.assertEqual(sub_id, submission_id)
+            seen.append(range_index)
+            if submission_done:
+                done_count += 1
+        self.assertEqual(done_count, 1, "submission_done must be set exactly once, on the last response")
+        return sorted(seen)
+
     def test_runai_library(self):
         # Multi-request API: submit returns a submission id, and each response reports its submission id,
         # file/range and whether the submission is complete. Also exercises runai_set_credentials (streamer-
@@ -236,10 +258,14 @@ class TestBindings(unittest.TestCase):
         with self.assertRaises(ValueError):
             runai_request(streamer, [file_path], [2], [0, 4], [4, 4], [base])
 
-        # the correctly shaped version of the same submission is accepted
-        self.assertIsNotNone(
-            runai_request(streamer, [file_path], [2], [0, 4], [4, 4], [base, base + 4])
-        )
+        # The correctly shaped version of the same submission is accepted - and is DRAINED before the test
+        # returns. runai_request is non-blocking and the destinations are raw addresses that keep nothing
+        # alive, so leaving a submission in flight lets the buffer be released while the library is still
+        # writing into it.
+        submission_id = runai_request(streamer, [file_path], [2], [0, 4], [4, 4], [base, base + 4])
+        self.assertIsNotNone(submission_id)
+        self.assertEqual(self._drain(streamer, submission_id, 2), [0, 1])
+        self.assertEqual(bytes(buffer[0:8]), b"abcdefgh")
 
     def test_out_of_range_values_are_rejected(self):
         # ctypes converts out-of-range integers SILENTLY - c_uint32(-1) becomes 4294967295 and
@@ -270,10 +296,11 @@ class TestBindings(unittest.TestCase):
         with self.assertRaises(ValueError):
             runai_request(streamer, [file_path], [1], [0], [4], [-1])
 
-        # a valid submission of the same shape still goes through
-        self.assertIsNotNone(
-            runai_request(streamer, [file_path], [1], [0], [4], [base])
-        )
+        # a valid submission of the same shape still goes through, and is drained before returning
+        submission_id = runai_request(streamer, [file_path], [1], [0], [4], [base])
+        self.assertIsNotNone(submission_id)
+        self.assertEqual(self._drain(streamer, submission_id, 1), [0])
+        self.assertEqual(bytes(buffer[0:4]), b"abcd")
 
     def test_file_without_ranges_produces_no_response(self):
         # A file may carry no ranges at all. It is accepted and simply contributes nothing - the
