@@ -298,22 +298,40 @@ common::ResponseCode Streamer::async_request(
     // If dispatch throws (e.g. bad_alloc) after increment(), drain the not-yet-dispatched
     // workloads (index >= next) as UnknownError on unwind, so every sub-range still completes and
     // the responder/registry reach zero - the consumer gets a clean failure instead of hanging.
-    // The exception then propagates and the caller maps it to UnknownError.
     size_t next = 0;
     utils::ScopeGuard drain_guard([&]() { drain_undispatched(submission_id, workloads, next); });
 
-    for (; next < workloads.size(); ++next) // ++next runs after the body, so a throwing push leaves next at it
+    try
     {
-        if (workloads[next].size() > 0)
+        for (; next < workloads.size(); ++next) // ++next runs after the body, so a throwing push leaves next at it
         {
-            LOG(DEBUG) << "Submission " << submission_id << " sending workload to worker with batches " << workloads[next].size();
+            if (workloads[next].size() > 0)
+            {
+                LOG(DEBUG) << "Submission " << submission_id << " sending workload to worker with batches " << workloads[next].size();
 
-            // route to the pool for this workload's backend kind (a workload is homogeneous)
-            const auto kind = workloads[next].is_object_storage()
-                ? BackendPools::Kind::ObjectStorage
-                : BackendPools::Kind::FileSystem;
-            _pools.push(kind, std::move(workloads[next]));
+                // route to the pool for this workload's backend kind (a workload is homogeneous)
+                const auto kind = workloads[next].is_object_storage()
+                    ? BackendPools::Kind::ObjectStorage
+                    : BackendPools::Kind::FileSystem;
+                _pools.push(kind, std::move(workloads[next]));
+            }
         }
+    }
+    catch (...)
+    {
+        // A failure HERE is past the point of no return: the submission is registered and its responses
+        // are already counted. There is no recovery - report UnknownError, whatever was thrown.
+        //
+        // UnknownError is the code that tells the caller to abort everything; every other code says the
+        // failure is attributable to this submission and the caller may carry on. Reporting a specific
+        // code from here would be a lie, because drain_undispatched (still armed - it runs as this
+        // returns) fails the undispatched ranges as UnknownError, and because the drain itself is
+        // best-effort under severe OOM, so the submission-done flag may never arrive. Normalising here
+        // rather than relying on the C layer's catch-all keeps that true whatever a future change throws:
+        // today only std::bad_alloc can escape, which the catch-all would have mapped correctly by
+        // accident, but a common::Exception would now surface its own code instead.
+        LOG(ERROR) << "Submission " << submission_id << " failed during dispatch; reporting UnknownError";
+        return common::ResponseCode::UnknownError;
     }
 
     drain_guard.cancel(); // all workloads dispatched

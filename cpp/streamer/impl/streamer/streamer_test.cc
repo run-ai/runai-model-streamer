@@ -67,6 +67,40 @@ TEST(Creation, Sanity)
     EXPECT_FALSE(submission_done);
 }
 
+// A read failure is attributable to its file, so it must NOT be reported as UnknownError. UnknownError is
+// reserved for unrecoverable conditions (corruption, out of memory) and tells the caller to abort
+// everything - reporting it for one file's I/O error would poison every other in-flight submission.
+//
+// A directory is the cheapest real read failure available: open(O_RDONLY) succeeds on it, and the read
+// then fails with EISDIR - no fault injection needed.
+TEST(Async, ReadFailureIsAttributableNotUnknown)
+{
+    utils::temp::Dir dir;
+
+    const auto chunk_size = utils::random::number<size_t>(1, 1024);
+    const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
+    Config config(utils::random::number(1, 20), utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
+
+    Streamer streamer(config);
+
+    const size_t size = 128;
+    std::vector<unsigned char> dst(size);
+
+    std::vector<FileRanges> request;
+    request.push_back(FileRanges{ dir.path, { ReadRange{ 0, size, dst.data() } } });
+
+    EXPECT_EQ(streamer.async_request(request), common::ResponseCode::Success);
+
+    bool done = false;
+    const auto response = streamer.response(60000, done);
+
+    EXPECT_NE(response.ret, common::ResponseCode::Success);
+    EXPECT_NE(response.ret, common::ResponseCode::UnknownError)
+        << "a per-file read failure must not tell the caller to abort everything";
+    // the submission still completes - the caller's buffer is released only on this flag
+    EXPECT_TRUE(done);
+}
+
 TEST(Async, ResponseBlocksUntilResponseArrives)
 {
     // response(0) on a streamer with no ready response BLOCKS until one arrives (persistent responder, no

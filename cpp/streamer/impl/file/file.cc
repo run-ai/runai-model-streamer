@@ -43,7 +43,13 @@ void File::read(size_t bytesize, char * buffer)
     }
     catch(const std::exception& e)
     {
-        throw common::Exception(common::ResponseCode::UnknownError);
+        // FileAccessError, not UnknownError: a failed read is attributable to THIS file, and the caller
+        // may keep going with the rest. UnknownError is reserved for unrecoverable conditions (corruption,
+        // out of memory) and tells the caller to abort everything - so using it here would let one file's
+        // I/O error poison every other in-flight submission. seek() and the short-read path below already
+        // report specific codes for the same reason.
+        LOG(ERROR) << "Failed to read " << bytesize << " bytes with fd " << _fd.fd();
+        throw common::Exception(common::ResponseCode::FileAccessError);
     }
 
     if (result != bytesize)
