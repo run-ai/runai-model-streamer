@@ -11,6 +11,12 @@ FINISHED_ERROR_CODE = 1
 # common::ResponseCode::TimedOut (see cpp/common/response_code/response_code.h)
 TIMED_OUT_ERROR_CODE = 16
 
+# Widths of the C types the range arrays are converted to (unsigned num_ranges, size_t offsets/sizes,
+# void* destinations). ctypes wraps out-of-range values silently, so runai_request range-checks against
+# these before converting.
+UINT32_LIMIT = 1 << 32
+UINT64_LIMIT = 1 << 64
+
 
 def _credentials_param_arrays(s3_credentials: Optional[S3Credentials]):
     # Marshal S3Credentials into the (param_keys, param_values, num_params) key/value form used by
@@ -108,10 +114,33 @@ def runai_request(
             f"range_offsets ({len(range_offsets)}), range_sizes ({total_ranges}) and range_dsts "
             f"({len(range_dsts)}) must be parallel"
         )
+
+    # Range-check the VALUES before trusting them, because ctypes does not: it converts out-of-range
+    # integers silently, so a Python-side check of the original list can agree while the C side sees
+    # something else entirely. c_uint32(-1) becomes 4294967295 and c_uint32(2**32) becomes 0.
+    # num_ranges is the dangerous one: [-1, 1] sums to 0 in Python - matching an empty range array and
+    # passing the total check below - while C reads ~4 billion ranges for that file and indexes far past
+    # the arrays. Checked per element; num_ranges is one entry per file, so this is tens of comparisons.
+    if any(not (0 <= n < UINT32_LIMIT) for n in num_ranges):
+        raise ValueError(
+            f"every num_ranges value must fit an unsigned 32-bit integer, got {list(num_ranges)}"
+        )
     if sum(num_ranges) != total_ranges:
         raise ValueError(
             f"sum(num_ranges) is {sum(num_ranges)} but the range arrays hold {total_ranges} entries"
         )
+
+    # The flat arrays are checked with min()/max() rather than a per-element loop: they run at C speed, so
+    # this stays negligible beside the ctypes conversion below even at hundreds of thousands of ranges,
+    # whereas a Python-level loop over every range would not be. A negative size wraps to an enormous read
+    # length, and a negative offset to an enormous seek.
+    if total_ranges:
+        if min(range_sizes) < 0 or max(range_sizes) >= UINT64_LIMIT:
+            raise ValueError("every range size must fit an unsigned 64-bit integer")
+        if min(range_offsets) < 0 or max(range_offsets) >= UINT64_LIMIT:
+            raise ValueError("every range offset must fit an unsigned 64-bit integer")
+        if min(range_dsts) < 0 or max(range_dsts) >= UINT64_LIMIT:
+            raise ValueError("every range destination must be a valid address")
 
     c_paths = (ctypes.c_char_p * num_files)(*[path.encode("utf-8") for path in paths])
     c_num_ranges = (ctypes.c_uint32 * num_files)(*num_ranges)

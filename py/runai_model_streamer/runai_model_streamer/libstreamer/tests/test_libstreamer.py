@@ -241,6 +241,40 @@ class TestBindings(unittest.TestCase):
             runai_request(streamer, [file_path], [2], [0, 4], [4, 4], [base, base + 4])
         )
 
+    def test_out_of_range_values_are_rejected(self):
+        # ctypes converts out-of-range integers SILENTLY - c_uint32(-1) becomes 4294967295 and
+        # c_uint32(2**32) becomes 0 - so a check against the Python values can agree while the C side
+        # receives something else. These must be rejected before the conversion.
+        file_path = os.path.join(self.temp_dir, "ranges.txt")
+        with open(file_path, "w") as file:
+            file.write("abcdefgh")
+
+        buffer = mmap.mmap(-1, 64, mmap.MAP_ANONYMOUS | mmap.MAP_PRIVATE)
+        base = buffer_address(buffer)
+        streamer = runai_start()
+
+        # The case a sum-only check cannot catch: sum([-1, 1]) == 0 matches an empty range array, but
+        # ctypes turns -1 into 4294967295 and the C side then indexes ~4 billion ranges.
+        with self.assertRaises(ValueError):
+            runai_request(streamer, [file_path, file_path], [-1, 1], [], [], [])
+
+        # wraps to 0, silently costing the file all of its ranges
+        with self.assertRaises(ValueError):
+            runai_request(streamer, [file_path], [2**32], [0], [4], [base])
+
+        # negative size wraps to an enormous read length; negative offset to an enormous seek
+        with self.assertRaises(ValueError):
+            runai_request(streamer, [file_path], [1], [0], [-1], [base])
+        with self.assertRaises(ValueError):
+            runai_request(streamer, [file_path], [1], [-1], [4], [base])
+        with self.assertRaises(ValueError):
+            runai_request(streamer, [file_path], [1], [0], [4], [-1])
+
+        # a valid submission of the same shape still goes through
+        self.assertIsNotNone(
+            runai_request(streamer, [file_path], [1], [0], [4], [base])
+        )
+
     def test_file_without_ranges_produces_no_response(self):
         # A file may carry no ranges at all. It is accepted and simply contributes nothing - the
         # submission completes on the responses of the files that do have ranges.
