@@ -35,17 +35,25 @@ class TestBindings(unittest.TestCase):
         checks the submission_done flag is set exactly once, on the last response.
         """
         seen = []
-        done_count = 0
-        for _ in range(num_ranges):
+        for response_number in range(num_ranges):
             result = runai_response(streamer)
             self.assertIsNotNone(result)
             ret, sub_id, _file_index, range_index, submission_done = result
             self.assertEqual(ret, SUCCESS_ERROR_CODE)
             self.assertEqual(sub_id, submission_id)
             seen.append(range_index)
-            if submission_done:
-                done_count += 1
-        self.assertEqual(done_count, 1, "submission_done must be set exactly once, on the last response")
+
+            # Asserted against the response's POSITION, not merely counted: the flag is the caller's
+            # signal that it may release the destination buffers, so setting it early is a
+            # use-after-free, and a "set exactly once" count passes for exactly that case. Position, not
+            # range index - responses may arrive in any order, and the flag belongs to whichever is
+            # delivered last.
+            self.assertEqual(
+                submission_done,
+                response_number == num_ranges - 1,
+                f"submission_done must be set only on the last response, but response "
+                f"{response_number + 1} of {num_ranges} reported {submission_done}",
+            )
         return sorted(seen)
 
     def test_runai_library(self):
@@ -200,12 +208,10 @@ class TestBindings(unittest.TestCase):
         streamer = runai_start()
         submission_id = runai_request(streamer, [missing], [2], [0, 0], [0, 0], [base, base])
 
-        for _ in range(2):
-            result = runai_response(streamer)
-            self.assertIsNotNone(result)
-            ret, sub_id, _file_index, _range_index, _done = result
-            self.assertEqual(ret, SUCCESS_ERROR_CODE)
-            self.assertEqual(sub_id, submission_id)
+        # Both ranges must be accounted for individually: counting two successful responses would also
+        # accept the same range answered twice while the other was dropped, which is the failure this
+        # test exists to catch. _drain also checks the submission-done flag lands on the last response.
+        self.assertEqual(self._drain(streamer, submission_id, 2), [0, 1])
 
     def test_unopenable_file_reports_one_error_per_range(self):
         # A file that cannot be opened fails each of its ranges, as the real streamer does. The failure
@@ -295,6 +301,16 @@ class TestBindings(unittest.TestCase):
             runai_request(streamer, [file_path], [1], [-1], [4], [base])
         with self.assertRaises(ValueError):
             runai_request(streamer, [file_path], [1], [0], [4], [-1])
+
+        # The other end of the 64-bit range, which wraps just as silently and in a different way for each
+        # field: c_uint64(2**64) becomes 0, so an oversized size is a zero-length read and an oversized
+        # offset reads from the start of the file; c_void_p(2**64) becomes NULL.
+        with self.assertRaises(ValueError):
+            runai_request(streamer, [file_path], [1], [0], [2**64], [base])
+        with self.assertRaises(ValueError):
+            runai_request(streamer, [file_path], [1], [2**64], [4], [base])
+        with self.assertRaises(ValueError):
+            runai_request(streamer, [file_path], [1], [0], [4], [2**64])
 
         # a valid submission of the same shape still goes through, and is drained before returning
         submission_id = runai_request(streamer, [file_path], [1], [0], [4], [base])

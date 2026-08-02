@@ -23,12 +23,32 @@ class TestAnnotationsResolve(unittest.TestCase):
     every annotation so the next one fails here instead.
     """
 
+    # Modules allowed to fail to import, mapped to why. Empty on purpose: every module in the package
+    # imports cleanly in the environment the suite runs in. An entry here means "this module is not
+    # annotation-checked", so adding one should be a conscious trade, not a side effect of a broad except.
+    OPTIONAL_MODULES = {}
+
     def _import_package_modules(self):
-        """Import every module in the package. Returns (modules, skipped)."""
+        """Import every module in the package. Returns (modules, failures).
+
+        A module that fails to import is a FAILURE, not something to skip: it is never annotation-checked,
+        so tolerating it would let this test quietly stop covering whatever broke - which is the same
+        silent-degradation the test exists to prevent. Every module in the package imports cleanly today,
+        so there is nothing to tolerate.
+
+        If a genuinely optional dependency is introduced later, add the module to OPTIONAL_MODULES with a
+        reason. That is a deliberate, reviewable decision; broadening the except clause is not.
+        """
         modules = []
-        skipped = []
+        failures = []
+
+        # walk_packages swallows ImportError from a package's __init__ unless onerror is given, which
+        # would silently drop that package AND every module under it.
+        def onerror(name):
+            failures.append(f"{name}: package failed to import while walking (its submodules were skipped)")
+
         for module_info in pkgutil.walk_packages(
-            runai_model_streamer.__path__, prefix=f"{runai_model_streamer.__name__}."
+            runai_model_streamer.__path__, prefix=f"{runai_model_streamer.__name__}.", onerror=onerror
         ):
             name = module_info.name
             if ".tests" in name:
@@ -36,11 +56,11 @@ class TestAnnotationsResolve(unittest.TestCase):
             try:
                 modules.append(importlib.import_module(name))
             except Exception as error:
-                # Optional backends (boto3, torch.distributed, a plugin .so) may be absent in this
-                # environment. An import failure is not this test's subject and would fail loudly in the
-                # tests that actually use the module.
-                skipped.append(f"{name}: {type(error).__name__}: {error}")
-        return modules, skipped
+                if name in self.OPTIONAL_MODULES:
+                    continue
+                failures.append(f"{name}: {type(error).__name__}: {error}")
+
+        return modules, failures
 
     def _annotated_targets(self, module):
         """Functions and classes DEFINED in this module, plus the classes' own methods."""
@@ -60,9 +80,26 @@ class TestAnnotationsResolve(unittest.TestCase):
                     if callable(member):
                         yield f"{attr_name}.{member_name}", member
 
+    def test_every_module_imports(self):
+        """A module that cannot be imported is never annotation-checked, so guard that separately.
+
+        Asserted in its own test so a broken import is reported as a broken import, rather than as a
+        missing annotation failure or - worse - as a pass.
+        """
+        modules, import_failures = self._import_package_modules()
+
+        self.assertEqual(
+            import_failures,
+            [],
+            "modules in the package failed to import, so their annotations were never checked:\n  "
+            + "\n  ".join(import_failures),
+        )
+        self.assertTrue(modules, "no modules were discovered in the package - the walk found nothing")
+
     def test_every_annotation_resolves(self):
-        modules, skipped = self._import_package_modules()
-        self.assertTrue(modules, f"no modules could be imported; skipped: {skipped}")
+        modules, import_failures = self._import_package_modules()
+        self.assertEqual(import_failures, [], "see test_every_module_imports")
+        self.assertTrue(modules, "no modules were discovered in the package - the walk found nothing")
 
         failures = []
         for module in modules:
