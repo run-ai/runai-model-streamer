@@ -277,7 +277,7 @@ class _distributedStreamer:
                 self.distribution_group = None
         return
 
-    def create_distribution_group(self) -> dist.GroupSpec:
+    def create_distribution_group(self) -> Optional[dist.ProcessGroup]:
         if self.distribution_group:
             return self.distribution_group
 
@@ -297,7 +297,7 @@ class _distributedStreamer:
         logger.debug(f"[RunAI Streamer][Distributed] Created distribution group with size {dist.get_world_size(group=group)}")
         return group
 
-    def create_local_distribution_group(self) -> dist.GroupSpec:
+    def create_local_distribution_group(self) -> Optional[dist.ProcessGroup]:
         """
         Creates a torch.distributed.ProcessGroup containing all ranks on the current node.
         This version uses a coordinated creation pattern to avoid deadlocks.

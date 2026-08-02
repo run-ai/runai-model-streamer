@@ -257,7 +257,7 @@ def _largest_range(files_chunks: List[FileChunks]) -> int:
     return max((max(file_chunks.sizes, default=0) for file_chunks in files_chunks), default=0)
 
 
-def _get_memory_mode(memory_limit: str | None) -> MemoryCapMode:
+def _get_memory_mode(memory_limit: Optional[str]) -> MemoryCapMode:
     if memory_limit == "-1":
         return MemoryCapMode.unlimited
     elif memory_limit == "0":

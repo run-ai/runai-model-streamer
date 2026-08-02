@@ -4,6 +4,7 @@ import struct
 import json
 from typing import List, Tuple, Optional, Any
 from runai_model_streamer.distributed_streamer.distributed_streamer import (DistributedStreamer, FileChunks)
+from runai_model_streamer.s3_utils.s3_utils import S3Credentials
 
 SAFETENSORS_DATA_OFFSETS_KEY = "data_offsets"
 SAFETENSORS_NAME_KEY = "name"
