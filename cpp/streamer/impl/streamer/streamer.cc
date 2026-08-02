@@ -399,6 +399,16 @@ common::ResponseCode Streamer::lock_object_plugin(const std::vector<FileRanges> 
     bool has_filesystem = false;
     for (const auto & file : request)
     {
+        // A file with no ranges reaches no storage at all (verify_requests accepts it deliberately, and it
+        // yields no transfer), so it must not influence backend selection. Classifying it would let an
+        // empty "s3://..." entry permanently lock the streamer's plugin - and build the object-storage
+        // pool - for a submission that reads nothing, and would reject a filesystem submission that merely
+        // carries an empty object-storage entry alongside it.
+        if (file.ranges.empty())
+        {
+            continue;
+        }
+
         auto uri = try_parse_uri(file.path);
         if (uri == nullptr)
         {

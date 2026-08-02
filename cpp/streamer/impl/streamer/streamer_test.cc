@@ -593,6 +593,54 @@ TEST(AsyncRequest, MixedFilesystemAndObjectStorageRejected)
     }
 }
 
+// A file with no ranges reaches no storage (verify_requests accepts it deliberately, and it yields no
+// transfer), so it must take no part in backend selection.
+TEST(AsyncRequest, FilesWithoutRangesDoNotSelectTheBackend)
+{
+    const auto size = utils::random::number(100, 1000);
+    const auto chunk_size = utils::random::number<size_t>(1, 1024);
+    const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
+    Config config(utils::random::number(1, 20), utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
+
+    const auto data = utils::random::buffer(size);
+    utils::temp::File file(data);
+
+    {
+        // An empty object-storage entry must not lock the streamer's plugin: that submission reads
+        // nothing, so a later submission using a DIFFERENT plugin is still legitimate. Both submissions
+        // here are empty, so neither reaches a pool or loads a plugin - the lock alone is under test.
+        Streamer streamer(config);
+
+        std::vector<FileRanges> s3_only;
+        s3_only.push_back(FileRanges{ "s3://bucket/empty.txt", {} });
+        EXPECT_EQ(streamer.async_request(s3_only), common::ResponseCode::Success);
+
+        std::vector<FileRanges> gcs_only;
+        gcs_only.push_back(FileRanges{ "gs://bucket/empty.txt", {} });
+        EXPECT_EQ(streamer.async_request(gcs_only), common::ResponseCode::Success);
+    }
+
+    {
+        // A filesystem submission carrying an empty object-storage entry is NOT a mixed submission: the
+        // empty entry contributes no batch, so every workload is still filesystem. It must also not
+        // select the object-storage worker count and block size for the assignment.
+        Streamer streamer(config);
+
+        std::vector<unsigned char> dst(size);
+        std::vector<FileRanges> request;
+        request.push_back(FileRanges{ "s3://bucket/empty.txt", {} });
+        request.push_back(FileRanges{ file.path, { ReadRange{ 0, static_cast<size_t>(size), dst.data() } } });
+
+        EXPECT_EQ(streamer.async_request(request), common::ResponseCode::Success);
+
+        // drain the single range and check it really read the filesystem file
+        bool done = false;
+        const auto response = streamer.response(60000, done);
+        EXPECT_EQ(response.ret, common::ResponseCode::Success);
+        EXPECT_EQ(dst, std::vector<unsigned char>(data.begin(), data.end()));
+    }
+}
+
 namespace
 {
 

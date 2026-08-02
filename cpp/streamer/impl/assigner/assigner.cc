@@ -207,18 +207,27 @@ void Assigner::assign(size_t total_bytes_to_read)
 // workload is homogeneous for BackendPools::push to route.
 bool Assigner::check_object_storage(const std::vector<FileRanges> & request) const
 {
-    if (request.empty())
+    // The first file WITH RANGES decides. A file with no ranges yields no transfer and reaches no storage,
+    // so it must not select the backend - otherwise an empty "s3://..." entry alongside real filesystem
+    // files would pick the object-storage worker count and block size for a submission that only ever
+    // touches the filesystem. lock_object_plugin skips those entries for the same reason.
+    for (const auto & file : request)
     {
-        return false;
-    }
+        if (file.ranges.empty())
+        {
+            continue;
+        }
 
-    try
-    {
-        common::s3::StorageUri uri(request[0].path);
-        return true;
-    }
-    catch(const std::exception& e)
-    {
+        try
+        {
+            common::s3::StorageUri uri(file.path);
+            return true;
+        }
+        catch(const std::exception& e)
+        {
+        }
+
+        return false;
     }
 
     return false;
