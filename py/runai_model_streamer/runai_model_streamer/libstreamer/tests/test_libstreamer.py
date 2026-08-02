@@ -250,18 +250,24 @@ class TestBindings(unittest.TestCase):
         base = buffer_address(buffer)
         streamer = runai_start()
 
+        # Matched on the MESSAGE, not merely on ValueError: several guards raise ValueError here, so a
+        # bare assertRaises passes when a different one fires. Removing the guard a case is named for
+        # would then leave the case green while testing nothing - deleting the uint32 check, for
+        # instance, makes that input trip the sum check instead, which is also a ValueError. The
+        # patterns are distinctive fragments, so rewording a message does not break them.
+
         # num_ranges shorter than paths - the second file would silently lose all of its ranges
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "entries but there are"):
             runai_request(streamer, [file_path, file_path], [1], [0, 4], [4, 4], [base, base + 4])
 
         # sum(num_ranges) larger than the range arrays - this is the out-of-bounds read
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "but the range arrays hold"):
             runai_request(streamer, [file_path], [3], [0], [4], [base])
 
         # the parallel arrays disagree with each other
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "must be parallel"):
             runai_request(streamer, [file_path], [2], [0], [4, 4], [base, base + 4])
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "must be parallel"):
             runai_request(streamer, [file_path], [2], [0, 4], [4, 4], [base])
 
         # The correctly shaped version of the same submission is accepted - and is DRAINED before the test
@@ -285,31 +291,34 @@ class TestBindings(unittest.TestCase):
         base = buffer_address(buffer)
         streamer = runai_start()
 
+        # Matched on the MESSAGE (see test_mismatched_array_lengths_are_rejected): each case must trip
+        # the guard it is named for, or it silently stops covering that guard.
+
         # The case a sum-only check cannot catch: sum([-1, 1]) == 0 matches an empty range array, but
         # ctypes turns -1 into 4294967295 and the C side then indexes ~4 billion ranges.
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "unsigned 32-bit integer"):
             runai_request(streamer, [file_path, file_path], [-1, 1], [], [], [])
 
         # wraps to 0, silently costing the file all of its ranges
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "unsigned 32-bit integer"):
             runai_request(streamer, [file_path], [2**32], [0], [4], [base])
 
         # negative size wraps to an enormous read length; negative offset to an enormous seek
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "range size must fit"):
             runai_request(streamer, [file_path], [1], [0], [-1], [base])
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "range offset must fit"):
             runai_request(streamer, [file_path], [1], [-1], [4], [base])
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "range destination must be"):
             runai_request(streamer, [file_path], [1], [0], [4], [-1])
 
         # The other end of the 64-bit range, which wraps just as silently and in a different way for each
         # field: c_uint64(2**64) becomes 0, so an oversized size is a zero-length read and an oversized
         # offset reads from the start of the file; c_void_p(2**64) becomes NULL.
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "range size must fit"):
             runai_request(streamer, [file_path], [1], [0], [2**64], [base])
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "range offset must fit"):
             runai_request(streamer, [file_path], [1], [2**64], [4], [base])
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "range destination must be"):
             runai_request(streamer, [file_path], [1], [0], [4], [2**64])
 
         # a valid submission of the same shape still goes through, and is drained before returning
