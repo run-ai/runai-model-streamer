@@ -4,6 +4,7 @@ import struct
 import json
 from typing import List, Tuple, Optional, Any
 from runai_model_streamer.distributed_streamer.distributed_streamer import (DistributedStreamer, FileChunks)
+from runai_model_streamer.s3_utils.s3_utils import S3Credentials
 
 SAFETENSORS_DATA_OFFSETS_KEY = "data_offsets"
 SAFETENSORS_NAME_KEY = "name"
@@ -73,7 +74,11 @@ class SafetensorsMetadata:
                 tensor_metadata = SafetensorMetadata(name, safetensor_metadata)
                 self.tensors_metadata.append(tensor_metadata)
 
-        self.tensors_metadata.sort(key=lambda x: x.offsets.start)
+        # Size breaks ties so a ZERO ELEMENT tensor sorts before a real tensor that starts at the same
+        # offset - data_offsets [16, 16] and [16, 48] share a start. Without the tie-break the order comes
+        # from the header's key order via the stable sort, and if the real tensor happened to come first
+        # the gap check below would compute 16 + 32 > 16 and reject a perfectly good file as overlapping.
+        self.tensors_metadata.sort(key=lambda x: (x.offsets.start, x.get_bytesize()))
 
         for i in range(len(self.tensors_metadata)):
             current_tensor = self.tensors_metadata[i]
@@ -102,7 +107,7 @@ class SafetensorsMetadata:
     @staticmethod
     def from_files(fs: DistributedStreamer, filenames: List[str], s3_credentials: Optional[S3Credentials]) -> List[SafetensorsMetadata]:
         # 1. Read the first 8 bytes (The Header Size)
-        fs.stream_files([FileChunks(i, filenames[i], 0, [SAFETENSORS_HEADER_BUFFER_SIZE]) for i in range(len(filenames))], s3_credentials, "cpu", False)
+        fs.stream_files([FileChunks.contiguous(i, filenames[i], 0, [SAFETENSORS_HEADER_BUFFER_SIZE]) for i in range(len(filenames))], s3_credentials, "cpu", False)
         
         header_sizes = {}
         
@@ -127,7 +132,7 @@ class SafetensorsMetadata:
 
         # 2. Read the JSON Header Body
         metadatas = {}
-        fs.stream_files([FileChunks(i, filenames[i], SAFETENSORS_HEADER_BUFFER_SIZE, [header_size]) for i, header_size in header_sizes.items()], s3_credentials, "cpu", False)
+        fs.stream_files([FileChunks.contiguous(i, filenames[i], SAFETENSORS_HEADER_BUFFER_SIZE, [header_size]) for i, header_size in header_sizes.items()], s3_credentials, "cpu", False)
         
         # Wrap the second loop to catch truncation during JSON read
         try:

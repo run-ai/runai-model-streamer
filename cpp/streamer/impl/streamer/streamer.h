@@ -17,6 +17,7 @@
 #include "streamer/impl/workload/workload.h"
 #include "streamer/impl/s3/s3.h"
 #include "streamer/impl/batches/batches.h"
+#include "streamer/impl/request/request.h"
 #include "streamer/impl/submissions/submissions_mgr.h"
 #include "streamer/impl/pools/backend_pools.h"
 
@@ -48,13 +49,13 @@ struct Streamer
     // per request - async_request/list_files use whatever was set here.
     common::ResponseCode set_credentials(const common::s3::Credentials & credentials);
 
+    // Submit a read request: a list of files, each with the ranges to read from it. A range is an
+    // arbitrary (offset, size) within its file with its own destination - ranges need not be contiguous
+    // in the file, contiguous in memory, or ordered.
+    // Exactly one response is issued per range, including for a zero-sized range (which is completed
+    // immediately without reaching storage). A file with no ranges contributes no responses.
     common::ResponseCode async_request(
-      std::vector<std::string> & paths,
-      std::vector<size_t> & file_offsets,
-      std::vector<size_t> & bytesizes,
-      std::vector<void *> & dsts,
-      std::vector<unsigned> & num_sizes,
-      std::vector<std::vector<size_t>> & internal_sizes,
+      std::vector<FileRanges> & request,
       SubmissionId * out_submission_id = nullptr);
 
     // Consume the next ready sub-range response over the persistent responder. Blocks up to timeout_ms
@@ -89,11 +90,13 @@ struct Streamer
     // Try to parse path as an object storage URI; returns nullptr for a filesystem path
     std::shared_ptr<common::s3::StorageUri> try_parse_uri(const std::string & path);
 
-    // Reject a submission that mixes object-storage plugins, and lock the streamer to a single
-    // object-storage plugin (first object-storage submission wins). Filesystem paths are ignored and coexist
-    // with the lock. Returns UnsupportedBackendMix on a mixed submission or a plugin differing from the lock,
-    // else Success.
-    common::ResponseCode lock_object_plugin(const std::vector<std::string> & paths);
+    // Reject a submission that mixes backends, and lock the streamer to a single object-storage plugin
+    // (first object-storage submission wins). A submission must be either wholly filesystem or wholly one
+    // object-storage plugin; the STREAMER may serve both kinds across different submissions (BackendPools
+    // keeps one pool per kind). Returns UnsupportedBackendMix when a submission mixes filesystem with
+    // object storage, mixes two object-storage plugins, or uses a plugin differing from the lock; else
+    // Success.
+    common::ResponseCode lock_object_plugin(const std::vector<FileRanges> & request);
     // Build the object-storage params for a batch. Credentials are NOT included here (they are read only at
     // client creation, from credentials()); the batch params carry the URI, which is all the per-read path uses.
     common::s3::S3ClientWrapper::Params handle_s3(unsigned file_index, const std::string & path);
@@ -102,7 +105,7 @@ struct Streamer
     // its own mutex). Called only at client-creation points (the worker's first client build, and list_files)
     // - never on the per-request path.
     common::s3::Credentials credentials() const;
-    void verify_requests(std::vector<std::string> & paths, std::vector<size_t> & file_offsets, std::vector<size_t> & bytesizes, std::vector<unsigned> & num_sizes, std::vector<void *> & dsts);
+    void verify_requests(std::vector<FileRanges> & request);
 
     // Account for one consumed response of submission_id (delegates to _submissions): on the
     // submission's last response, log per-submission throughput. Returns true iff it was the

@@ -12,13 +12,25 @@
 
 namespace runai::llm::streamer
 {
+// One range of a submission, exactly as the caller described it: its own source offset, size and
+// destination. The mock keeps all three per range rather than a file offset plus a running destination
+// cursor, so a submission whose ranges are non-contiguous in the file or in memory is served correctly.
+struct MockRange {
+    size_t offset;
+    size_t size;
+    char * dst;
+};
+
 struct State {
     utils::Fd file;
-    std::vector<size_t> read_item_sizes;
+    std::vector<MockRange> ranges;
     unsigned total_items = 0;
     unsigned current_item = 0;
-    char* destination = nullptr;
-    unsigned current_dst_offset = 0;
+
+    // Set when the file could not be opened. Every range still gets a response, carrying this code -
+    // the real streamer fails a file's ranges individually rather than dropping them, and a dropped
+    // response would hang the caller (runai_response blocks).
+    int error = 0;
 };
 
 State __state;
@@ -32,29 +44,34 @@ unsigned __response_total = 0;   // total sub-range responses expected for the c
 unsigned __response_given = 0;   // responses handed out so far
 
 
-int request(void * streamer, const char * path, size_t file_offset, size_t bytesize, char * dst, unsigned num_sizes, size_t * internal_sizes, State * state)
+// Record one file's ranges. The seek is deliberately NOT done here: each range seeks to its own offset
+// when it is served, since ranges need not be ordered or adjacent.
+int request(void * streamer, const char * path, unsigned num_ranges, const size_t * range_offsets, const size_t * range_sizes, void ** range_dsts, State * state)
 {
+    // Record the ranges BEFORE touching the file. The submission owes exactly one response per range
+    // whatever happens below, and runai_request does not consult this function's result - so returning
+    // early would leave total_items at 0 while the response counter had already been raised by num_ranges,
+    // and those responses would never be produced. The caller would then block forever in runai_response.
+    state->ranges.reserve(num_ranges);
+    for (unsigned j = 0; j < num_ranges; ++j) {
+        state->ranges.push_back(MockRange{ range_offsets[j], range_sizes[j], reinterpret_cast<char*>(range_dsts[j]) });
+    }
+    state->total_items = num_ranges;
+
+    // A file with NO ranges yields no transfer and no batch in the real streamer, so it is never opened.
+    // All-zero-sized ranges are different: they do yield a batch, and Batch::execute opens the file before
+    // looking at any size - so an unopenable file fails them (verified: it returns FileAccessError).
+    if (num_ranges == 0) {
+        return 0;
+    }
+
     state->file = utils::Fd(::open(path, O_RDONLY));
     if (state->file.fd() == -1) {
         LOG(ERROR) << "Error opening file: " << path;
+        state->error = 2;   // common::ResponseCode::FileAccessError, reported once per range
         return -1;
     }
 
-    try
-    {
-        state->file.seek(file_offset);
-    }
-    catch(const std::exception& e)
-    {
-        LOG(ERROR) << "Error seek in file: " << path << " to: " << file_offset;
-        return -1;
-    }
-
-    state->read_item_sizes.resize(num_sizes);
-    std::memcpy(state->read_item_sizes.data(), internal_sizes, num_sizes * sizeof(size_t));
-
-    state->total_items = num_sizes;
-    state->destination = dst;
     return 0;
 }
 
@@ -65,28 +82,44 @@ int request(void * streamer, const char * path, size_t file_offset, size_t bytes
 int response(void * streamer, unsigned * index, State * state)
 {
     size_t result = 0;
-    auto to_read = state->read_item_sizes[state->current_item];
-    auto to_dst = state->destination + state->current_dst_offset;
+    const auto & range = state->ranges[state->current_item];
+
+    // Consume the item up front, so every exit below produces exactly one response for this range.
+    *index = state->current_item;
+    state->current_item++;
+
+    // The file could not be opened: report the error rather than dropping the response. Checked BEFORE the
+    // zero-sized shortcut, because the real streamer opens the file regardless of range size.
+    if (state->error != 0)
+    {
+        return state->error;
+    }
+
+    // A zero-sized range reads nothing, so it is completed without touching the (successfully opened) file.
+    if (range.size == 0)
+    {
+        return 0;
+    }
+
     int ret = 0;
     try
     {
-        result = state->file.read(to_read, to_dst, utils::Fd::Read::Eof);
+        // seek per range: the previous range may have been elsewhere in the file, or later in it
+        state->file.seek(range.offset);
+        result = state->file.read(range.size, range.dst, utils::Fd::Read::Eof);
     }
     catch(const std::exception& e)
     {
-        LOG(ERROR) << "Failed to read from file";
+        LOG(ERROR) << "Failed to read from file at offset " << range.offset;
         ret = 2;   // common::ResponseCode::FileAccessError
     }
 
-    if (ret == 0 && result != to_read)
+    if (ret == 0 && result != range.size)
     {
         LOG(ERROR) << "Reached EOF";
         ret = 3;   // common::ResponseCode::EofError
     }
 
-    state->current_dst_offset += result;
-    *index = state->current_item;
-    state->current_item++;
     return ret;
 }
 
@@ -134,11 +167,10 @@ extern "C" int runai_request(
     SubmissionId * out_submission_id,
     unsigned num_files,
     const char ** paths,
-    size_t * file_offsets,
-    size_t * bytesizes,
-    void ** dsts,
-    unsigned * num_sizes,
-    size_t ** internal_sizes
+    unsigned * num_ranges,
+    size_t * range_offsets,
+    size_t * range_sizes,
+    void ** range_dsts
 )
 {
     __multi_state.clear();
@@ -147,13 +179,26 @@ extern "C" int runai_request(
     __response_total = 0;
     __response_given = 0;
 
-    int buffer_start = 0;
+    // The range arrays are flat and grouped by file in the order of paths; base walks that grouping.
+    // Each file's ranges are handed over as they were submitted - every range keeps its own offset,
+    // size and destination, so scattered submissions are served correctly rather than collapsed into
+    // one contiguous span per file.
+    size_t base = 0;
     for (unsigned i = 0; i < num_files; ++i) {
+        const unsigned n = num_ranges[i];
+
         State state;
-        request(streamer, paths[i], file_offsets[i], bytesizes[i], reinterpret_cast<char*>(dsts[0]) + buffer_start, num_sizes[i], internal_sizes[i], &state);
-        buffer_start = buffer_start + bytesizes[i];
-        __response_total += num_sizes[i];
+        request(streamer,
+                paths[i],
+                n,
+                range_offsets + base,
+                range_sizes + base,
+                range_dsts + base,
+                &state);
+
+        __response_total += n;
         __multi_state.push_back(std::move(state));
+        base += n;
     }
 
     __submission_id += 1;

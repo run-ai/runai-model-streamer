@@ -5,11 +5,32 @@
 #include <memory>
 #include <functional>
 #include <string>
+#include <vector>
 
 #include "common/response_code/response_code.h"
 
 namespace runai::llm::streamer::impl
 {
+
+// ReadRange - a single range to read, as supplied by the caller: an arbitrary (offset, size) within its
+// file, with its own destination. Ranges need not be contiguous in the file, need not be contiguous in
+// memory, and need not be ordered. This is the input description; Request below is the streamer's
+// internal per-range object built from it.
+
+struct ReadRange
+{
+    size_t offset;   // source offset within the file
+    size_t size;     // bytes to read
+    void * dst;      // destination for this range
+};
+
+// FileRanges - one file of a submission, with all the ranges requested from it
+
+struct FileRanges
+{
+    std::string path;
+    std::vector<ReadRange> ranges;
+};
 
 // Request represents a sub range in a file
 // For each request the streamer will issue a correponding response when the sub range is ready

@@ -140,6 +140,47 @@ TEST(Read, Sanity)
     EXPECT_FALSE(mismatch);
 }
 
+// A batch whose range is empty (start == end) reads nothing: neither the block loop nor the tail read
+// in Batch::read runs, because num_chunks is 0 and file_offset == range.end. Its tasks must still be
+// notified - a zero sized range owes exactly one response, like any other range - otherwise the
+// submission waits forever for a response that never comes.
+TEST(Read, Empty_Range)
+{
+    const auto start = utils::random::number<size_t>(0, 1024);
+
+    // the file must exist and be seekable to start; its contents are never read
+    const auto data = utils::random::buffer(start + 1);
+    utils::temp::File file(data);
+    const auto path = file.path;
+    common::s3::S3ClientWrapper::Params params;
+
+    auto responder = std::make_shared<common::Responder>(1);
+    const auto config = std::make_shared<Config>();
+
+    const auto file_index = utils::random::number();
+    const auto range_index = utils::random::number();
+
+    // a single zero sized range: one task, no bytes
+    auto request = std::make_shared<Request>(start, file_index, range_index, 1 /* tasks */, 0 /* bytesize */, nullptr);
+
+    Tasks tasks;
+    tasks.push_back(Task(request, start, 0 /* size */, 0 /* destination offset */));
+
+    Batch batch(utils::random::number(), utils::random::number(), file_index, path, params, std::move(tasks), responder, config);
+
+    EXPECT_EQ(batch.total_bytes(), 0);
+
+    std::atomic<bool> stopped(false);
+    EXPECT_NO_THROW(batch.execute(stopped));
+
+    // The response must arrive even though nothing was read. Timed rather than blocking so that a
+    // regression fails the test instead of hanging it.
+    auto r = batch.responder->pop(5000);
+    EXPECT_EQ(r.ret, common::ResponseCode::Success);
+    EXPECT_EQ(r.file_index, file_index);
+    EXPECT_EQ(r.index, range_index);
+}
+
 TEST(Read, Error)
 {
     std::string path;
@@ -353,6 +394,56 @@ TEST(Read, Stopped_During_Read)
             EXPECT_TRUE(mismatch);
         }
     }
+}
+
+// handle_error on a batch that ALREADY completed must produce no further response.
+//
+// Reached in practice: ObjectStorageWorker::report_workload records errors per FILE index, and one file now
+// contributes several batches (one per contiguous transfer) - so when one transfer fails and another
+// succeeds, handle_error is called on the successful one too. A second response for a range that already
+// answered would overrun the submission's expected count.
+//
+// Nothing in Batch prevents it. Task::_finished and Request::finished's exact-count check do, independently,
+// so this fails only when both are lost. It pins the contract - one response per range, ever - not either
+// mechanism.
+TEST(Batch, Handle_Error_After_Completion_Is_Silent)
+{
+    const auto start = utils::random::number<size_t>(0, 1024);
+    const auto size = utils::random::number<size_t>(1, 1024);
+    const auto data = utils::random::buffer(start + size);
+    utils::temp::File file(data);
+    common::s3::S3ClientWrapper::Params params;
+
+    // ONE range, so exactly one response is owed - the whole subject of the test. PERSISTENT for the reason
+    // the streamer uses it: a drained FINISH_ON_DRAIN responder answers FinishedError, hiding whether
+    // anything was pushed; a drained persistent one has nothing to give, so the second pop times out.
+    auto responder = std::make_shared<common::Responder>(1, common::QueueMode::PERSISTENT);
+
+    const auto chunk_bytesize = utils::random::number<size_t>(1, size);
+    const auto config = std::make_shared<Config>(utils::random::number(1, 4), chunk_bytesize, utils::random::number<size_t>(1, chunk_bytesize), false /* do not force minimum chunk size */);
+
+    std::vector<char> dst(size);
+    auto request = std::make_shared<Request>(start, utils::random::number(), utils::random::number(), 1, size, dst.data());
+
+    Tasks tasks;
+    tasks.push_back(Task(request, start, size, 0));
+
+    Batch batch(utils::random::number(), utils::random::number(), utils::random::number(), file.path, params, std::move(tasks), responder, config);
+
+    std::atomic<bool> stopped(false);
+    EXPECT_NO_THROW(batch.execute(stopped));
+
+    EXPECT_EQ(responder->pop().ret, common::ResponseCode::Success);
+
+    // the successful batch is failed anyway, as report_workload would do
+    EXPECT_NO_THROW(batch.handle_error(common::ResponseCode::FileAccessError));
+
+    // TimedOut, not a second response: nothing more was pushed
+    EXPECT_EQ(responder->pop(200).ret, common::ResponseCode::TimedOut);
+
+    // and no push beyond the one expected: with the count at zero an extra push is REJECTED rather than
+    // queued, so the timeout above would not see it - only this flag does
+    EXPECT_EQ(responder->valid(), common::ResponseCode::Success);
 }
 
 }; // namespace runai::llm::streamer::impl

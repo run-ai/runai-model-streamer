@@ -232,7 +232,7 @@ class _distributedStreamerParams:
         self.broadcast_timeout = self.get_broadcast_timeout()
 
         # find the size of the maximal chunk for the reusable buffer
-        max_chunks_per_file = (fc.max_chunk_size() for fc in file_stream_requests if fc.chunks)
+        max_chunks_per_file = (fc.max_chunk_size() for fc in file_stream_requests if fc.sizes)
         self.max_chunk = max(max_chunks_per_file, default=0)
 
         # set the value of RUNAI_STREAMER_PROCESS_GROUP_SIZE to be the number of processes in the distribution group (or 1 if process group is not initialized)
@@ -277,7 +277,7 @@ class _distributedStreamer:
                 self.distribution_group = None
         return
 
-    def create_distribution_group(self) -> dist.GroupSpec:
+    def create_distribution_group(self) -> Optional[dist.ProcessGroup]:
         if self.distribution_group:
             return self.distribution_group
 
@@ -297,7 +297,7 @@ class _distributedStreamer:
         logger.debug(f"[RunAI Streamer][Distributed] Created distribution group with size {dist.get_world_size(group=group)}")
         return group
 
-    def create_local_distribution_group(self) -> dist.GroupSpec:
+    def create_local_distribution_group(self) -> Optional[dist.ProcessGroup]:
         """
         Creates a torch.distributed.ProcessGroup containing all ranks on the current node.
         This version uses a coordinated creation pattern to avoid deadlocks.

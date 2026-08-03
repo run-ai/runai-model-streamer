@@ -41,6 +41,19 @@ Received recv(Streamer & streamer)
     return Received{ response, submission_done };
 }
 
+// The range indices a submission of n ranges owes: exactly {0, 1, ... n-1}. Compared as a SET, because a
+// count (received.size() == n) also passes when a range is answered twice and another dropped, or when an
+// index is out of range entirely.
+std::set<unsigned> range_indices(unsigned n)
+{
+    std::set<unsigned> indices;
+    for (unsigned i = 0; i < n; ++i)
+    {
+        indices.insert(i);
+    }
+    return indices;
+}
+
 // short wait used to assert a fresh/empty responder delivers nothing (it times out rather than blocking)
 constexpr unsigned EMPTY_WAIT_MS = 50;
 
@@ -65,6 +78,40 @@ TEST(Creation, Sanity)
     auto r = streamer.response(EMPTY_WAIT_MS, submission_done);
     EXPECT_EQ(r.ret, common::ResponseCode::TimedOut);
     EXPECT_FALSE(submission_done);
+}
+
+// A read failure is attributable to its file, so it must NOT be reported as UnknownError. UnknownError is
+// reserved for unrecoverable conditions (corruption, out of memory) and tells the caller to abort
+// everything - reporting it for one file's I/O error would poison every other in-flight submission.
+//
+// A directory is the cheapest real read failure available: open(O_RDONLY) succeeds on it, and the read
+// then fails with EISDIR - no fault injection needed.
+TEST(Async, ReadFailureIsAttributableNotUnknown)
+{
+    utils::temp::Dir dir;
+
+    const auto chunk_size = utils::random::number<size_t>(1, 1024);
+    const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
+    Config config(utils::random::number(1, 20), utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
+
+    Streamer streamer(config);
+
+    const size_t size = 128;
+    std::vector<unsigned char> dst(size);
+
+    std::vector<FileRanges> request;
+    request.push_back(FileRanges{ dir.path, { ReadRange{ 0, size, dst.data() } } });
+
+    EXPECT_EQ(streamer.async_request(request), common::ResponseCode::Success);
+
+    bool done = false;
+    const auto response = streamer.response(60000, done);
+
+    EXPECT_NE(response.ret, common::ResponseCode::Success);
+    EXPECT_NE(response.ret, common::ResponseCode::UnknownError)
+        << "a per-file read failure must not tell the caller to abort everything";
+    // the submission still completes - the caller's buffer is released only on this flag
+    EXPECT_TRUE(done);
 }
 
 TEST(Async, ResponseBlocksUntilResponseArrives)
@@ -376,7 +423,7 @@ TEST(Async, End_Of_File_Error)
     EXPECT_EQ(done_count, 1u);   // submission completes once its last sub-range lands
 }
 
-TEST(Async, Zero_Requests_Error)
+TEST(Async, Zero_Requests)
 {
     auto size = utils::random::number(100, 1000);
 
@@ -394,12 +441,14 @@ TEST(Async, Zero_Requests_Error)
     Streamer streamer(config);
 
     std::vector<char> dst(size);
-    // sending zero instead of num_chunks
-    EXPECT_EQ(streamer.async_read(utils::random::string(), 0, size, dst.data(), 0, chunks.data()), common::ResponseCode::InvalidParameterError);
-    // the failed request created no submission, so there is nothing to receive
+
+    // A submission with no ranges is accepted, not rejected: it simply reads nothing. Empties are
+    // absorbed rather than refused, so there is no InvalidParameterError / EmptyRequestError here any
+    // more. It is not registered either, so it owes no responses and there is nothing to receive.
+    EXPECT_EQ(streamer.async_read(utils::random::string(), 0, size, dst.data(), 0, chunks.data()), common::ResponseCode::Success);
 }
 
-TEST(Async, Zero_Bytes_To_Read_Error)
+TEST(Async, Zero_Bytes_To_Read)
 {
     auto size = utils::random::number(100, 1000);
 
@@ -417,22 +466,46 @@ TEST(Async, Zero_Bytes_To_Read_Error)
     Streamer streamer(config);
 
     std::vector<char> dst(size);
-    // sending zero instead of num_chunks
 
-    for (unsigned num_chunks_ : {0U, num_chunks})
+    // Zero ranges is legal and reads nothing. (The path is random and does not exist, which does not
+    // matter: with no ranges nothing ever reaches storage.)
+    EXPECT_EQ(streamer.async_read(utils::random::string(), 0, 0, dst.data(), 0, chunks.data()), common::ResponseCode::Success);
+}
+
+// Replaces the second branch of the old Zero_Bytes_To_Read_Error, which asserted that a zero total with
+// non-zero sub ranges was rejected. That contradiction is unrepresentable now - the ranges define the
+// span, there is no separate total to disagree with - so this asserts what the new contract says
+// instead: zero sized ranges are accepted AND answered, one response each.
+TEST(Async, Zero_Sized_Ranges)
+{
+    const unsigned num_ranges = utils::random::number(1, 20);
+    std::vector<size_t> zero_chunks(num_ranges, 0);
+
+    const auto chunk_size = utils::random::number<size_t>(1, 1024);
+    const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
+    Config config(utils::random::number(1, 20), utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
+
+    Streamer streamer(config);
+
+    // a real file: a zero sized transfer still opens its file, it just reads nothing from it
+    const auto data = utils::random::buffer(utils::random::number(1, 100));
+    utils::temp::File file(data);
+
+    std::vector<char> dst(1);
+    EXPECT_EQ(streamer.async_read(file.path, 0, 0, dst.data(), num_ranges, zero_chunks.data()),
+              common::ResponseCode::Success);
+
+    std::set<unsigned> received;
+    for (unsigned i = 0; i < num_ranges; ++i)
     {
-        auto result = streamer.async_read(utils::random::string(), 0, 0, dst.data(), num_chunks_, chunks.data());
-        if (num_chunks_ > 0)
-        {
-            EXPECT_EQ(result, common::ResponseCode::InvalidParameterError);
-        }
-        else
-        {
-            EXPECT_EQ(result, common::ResponseCode::EmptyRequestError);
-        }
-
-        // the failed request created no submission, so there is nothing to receive
+        bool done = false;
+        const auto r = streamer.response(60000, done);
+        EXPECT_EQ(r.ret, common::ResponseCode::Success);
+        received.insert(r.index);
+        EXPECT_EQ(done, i + 1 == num_ranges);   // completion lands on the last range
     }
+
+    EXPECT_EQ(received, range_indices(num_ranges));
 }
 
 TEST(Async, ConcurrentRequests)
@@ -485,32 +558,27 @@ TEST(Async, ConcurrentRequests)
     }
 }
 
+// Previously this asserted the Assigner's "Input vector sizes mismatch" throw - it passed two paths but
+// one entry in every other vector. Mismatched lengths are unrepresentable now (a request is a list of
+// FileRanges), so it asserts the surviving property of a submission whose paths disagree: mixing two
+// object-storage plugins is rejected up front. A different pair than MixedObjectPluginsRejected below.
 TEST(AsyncRequest, InvalidScheme)
 {
-    auto size = utils::random::number(100, 1000);
-    const auto data = utils::random::buffer(size);
-    std::string s3_path = "s3://s3-bucket/file-01.txt";
-    std::string gcs_path = "gs://gcs-bucket/file-02.txt";
-
+    const auto size = utils::random::number(100, 1000);
     const auto chunk_size = utils::random::number<size_t>(1, 1024);
     const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
     Config config(utils::random::number(1, 20), utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
 
-
     Streamer streamer(config);
 
-    std::vector<unsigned char> dst(size);
-    std::vector<size_t> sizes;
-    sizes.push_back(size);
+    std::vector<unsigned char> dst0(size);
+    std::vector<unsigned char> dst1(size);
 
-    std::vector<std::string> paths = {s3_path, gcs_path};
-    std::vector<size_t> file_offsets = {0};
-    std::vector<size_t> bytesizes = {size};
-    std::vector<void *> dsts = {dst.data()};
-    std::vector<unsigned> num_sizes = {1};
-    std::vector<std::vector<size_t>> internal_sizes =  { sizes };
+    std::vector<FileRanges> request;
+    request.push_back(FileRanges{ "s3://s3-bucket/file-01.txt", { ReadRange{ 0, static_cast<size_t>(size), dst0.data() } } });
+    request.push_back(FileRanges{ "az://az-account/file-02.txt", { ReadRange{ 0, static_cast<size_t>(size), dst1.data() } } });
 
-    EXPECT_THROW(streamer.async_request(paths, file_offsets, bytesizes, dsts, num_sizes, internal_sizes), runai::llm::streamer::common::Exception);
+    EXPECT_EQ(streamer.async_request(request), common::ResponseCode::UnsupportedBackendMix);
 }
 
 TEST(AsyncRequest, MixedObjectPluginsRejected)
@@ -527,15 +595,97 @@ TEST(AsyncRequest, MixedObjectPluginsRejected)
 
     // a single submission that mixes two object-storage plugins (s3 + gcs) is rejected up front,
     // before any dispatch or plugin load
-    std::vector<std::string> paths = {"s3://bucket/a.txt", "gs://bucket/b.txt"};
-    std::vector<size_t> file_offsets = {0, 0};
-    std::vector<size_t> bytesizes = {size, size};
-    std::vector<void *> dsts = {dst0.data(), dst1.data()};
-    std::vector<unsigned> num_sizes = {1, 1};
-    std::vector<std::vector<size_t>> internal_sizes = { {static_cast<size_t>(size)}, {static_cast<size_t>(size)} };
+    std::vector<FileRanges> request;
+    request.push_back(FileRanges{ "s3://bucket/a.txt", { ReadRange{ 0, static_cast<size_t>(size), dst0.data() } } });
+    request.push_back(FileRanges{ "gs://bucket/b.txt", { ReadRange{ 0, static_cast<size_t>(size), dst1.data() } } });
 
-    EXPECT_EQ(streamer.async_request(paths, file_offsets, bytesizes, dsts, num_sizes, internal_sizes),
-              common::ResponseCode::UnsupportedBackendMix);
+    EXPECT_EQ(streamer.async_request(request), common::ResponseCode::UnsupportedBackendMix);
+}
+
+// A submission must pick ONE backend kind. The streamer serves both across submissions (see
+// FilesystemAndObjectStorageSubmissionsCoexist), but within a submission the Assigner divides the work
+// with a single backend's worker count and block size, and a workload has to be homogeneous to be routed.
+// Rejecting up front replaces a slice-dependent outcome: without the check, this is InvalidParameterError
+// when both kinds land in one workload and silently accepted with the wrong block size when they do not.
+TEST(AsyncRequest, MixedFilesystemAndObjectStorageRejected)
+{
+    const auto size = utils::random::number(100, 1000);
+    const auto chunk_size = utils::random::number<size_t>(1, 1024);
+    const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
+    Config config(utils::random::number(1, 20), utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
+
+    Streamer streamer(config);
+
+    const auto data = utils::random::buffer(size);
+    utils::temp::File file(data);
+
+    std::vector<unsigned char> dst0(size);
+    std::vector<unsigned char> dst1(size);
+
+    // both orders: the check must not depend on which kind is seen first (a first-file test would pass
+    // one of these by accident)
+    {
+        std::vector<FileRanges> request;
+        request.push_back(FileRanges{ file.path, { ReadRange{ 0, static_cast<size_t>(size), dst0.data() } } });
+        request.push_back(FileRanges{ "s3://bucket/a.txt", { ReadRange{ 0, static_cast<size_t>(size), dst1.data() } } });
+
+        EXPECT_EQ(streamer.async_request(request), common::ResponseCode::UnsupportedBackendMix);
+    }
+    {
+        std::vector<FileRanges> request;
+        request.push_back(FileRanges{ "s3://bucket/a.txt", { ReadRange{ 0, static_cast<size_t>(size), dst0.data() } } });
+        request.push_back(FileRanges{ file.path, { ReadRange{ 0, static_cast<size_t>(size), dst1.data() } } });
+
+        EXPECT_EQ(streamer.async_request(request), common::ResponseCode::UnsupportedBackendMix);
+    }
+}
+
+// A file with no ranges reaches no storage (verify_requests accepts it deliberately, and it yields no
+// transfer), so it must take no part in backend selection.
+TEST(AsyncRequest, FilesWithoutRangesDoNotSelectTheBackend)
+{
+    const auto size = utils::random::number(100, 1000);
+    const auto chunk_size = utils::random::number<size_t>(1, 1024);
+    const auto bulk_size = utils::random::number<size_t>(1, chunk_size);
+    Config config(utils::random::number(1, 20), utils::random::number(1, 20), chunk_size, bulk_size, false /* do not enforce minimum */);
+
+    const auto data = utils::random::buffer(size);
+    utils::temp::File file(data);
+
+    {
+        // An empty object-storage entry must not lock the streamer's plugin: that submission reads
+        // nothing, so a later submission using a DIFFERENT plugin is still legitimate. Both submissions
+        // here are empty, so neither reaches a pool or loads a plugin - the lock alone is under test.
+        Streamer streamer(config);
+
+        std::vector<FileRanges> s3_only;
+        s3_only.push_back(FileRanges{ "s3://bucket/empty.txt", {} });
+        EXPECT_EQ(streamer.async_request(s3_only), common::ResponseCode::Success);
+
+        std::vector<FileRanges> gcs_only;
+        gcs_only.push_back(FileRanges{ "gs://bucket/empty.txt", {} });
+        EXPECT_EQ(streamer.async_request(gcs_only), common::ResponseCode::Success);
+    }
+
+    {
+        // A filesystem submission carrying an empty object-storage entry is NOT a mixed submission: the
+        // empty entry contributes no batch, so every workload is still filesystem. It must also not
+        // select the object-storage worker count and block size for the assignment.
+        Streamer streamer(config);
+
+        std::vector<unsigned char> dst(size);
+        std::vector<FileRanges> request;
+        request.push_back(FileRanges{ "s3://bucket/empty.txt", {} });
+        request.push_back(FileRanges{ file.path, { ReadRange{ 0, static_cast<size_t>(size), dst.data() } } });
+
+        EXPECT_EQ(streamer.async_request(request), common::ResponseCode::Success);
+
+        // drain the single range and check it really read the filesystem file
+        bool done = false;
+        const auto response = streamer.response(60000, done);
+        EXPECT_EQ(response.ret, common::ResponseCode::Success);
+        EXPECT_EQ(dst, std::vector<unsigned char>(data.begin(), data.end()));
+    }
 }
 
 namespace
@@ -648,6 +798,89 @@ TEST(ListFiles, FilesystemEmptyDirectory)
 
     const auto entries = streamer.list_files(dir.path, true, {}, {});
     EXPECT_TRUE(entries.empty());
+}
+
+TEST(Async, Scattered_Ranges_And_Destinations)
+{
+    // The point of the range API: ranges need not be contiguous in the file, need not be ordered, and
+    // need not be written to adjacent memory. Every other data test here goes through async_read, which
+    // tiles one span of the file into one buffer - so none of them would notice if offsets or
+    // destinations were silently paired by position instead of being honoured per range.
+    const size_t size = 1000;
+    const auto data = utils::random::buffer(size);
+    utils::temp::File file(data);
+    const auto expected = utils::Fd::read(file.path);
+    ASSERT_EQ(expected.size(), size);
+
+    const auto chunk_size = utils::random::number<size_t>(1, 1024);
+    Config config(utils::random::number(1, 20), utils::random::number(1, 20), chunk_size,
+                  utils::random::number<size_t>(1, chunk_size), false /* do not enforce minimum */);
+    Streamer streamer(config);
+
+    // deliberately: descending file order, gaps between ranges, a zero-sized range, and two ranges
+    // reading the SAME source bytes (source overlap is legal - only destinations must not overlap)
+    std::vector<std::pair<size_t, size_t>> ranges =
+    {
+        { 700, 120 },
+        {  50, 200 },
+        { 400,   0 },
+        { 700, 120 },
+        { 900, 100 },
+    };
+
+    // Then a random number of random ranges on top: the five above are the shapes worth naming, but their
+    // count is arbitrary, and a fixed count is one a position bug can fit by accident.
+    const unsigned extra = utils::random::number(0, 15);
+    for (unsigned i = 0; i < extra; ++i)
+    {
+        const size_t offset = utils::random::number<size_t>(0, size - 1);
+        ranges.emplace_back(offset, utils::random::number<size_t>(0, size - offset));
+    }
+
+    // each destination is its OWN allocation, not an offset into a shared buffer: this is what proves a
+    // destination need not belong to any single buffer. The extra byte is a guard against an over-long write.
+    std::vector<std::vector<unsigned char>> dsts;
+    for (const auto & range : ranges)
+    {
+        dsts.emplace_back(range.second + 1, 0xAB);
+    }
+
+    FileRanges file_ranges;
+    file_ranges.path = file.path;
+    for (size_t i = 0; i < ranges.size(); ++i)
+    {
+        file_ranges.ranges.push_back(ReadRange{ ranges[i].first, ranges[i].second, dsts[i].data() });
+    }
+
+    std::vector<FileRanges> request{ file_ranges };
+    SubmissionId submission_id = 0;
+    EXPECT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+
+    std::set<unsigned> received;
+    for (size_t i = 0; i < ranges.size(); ++i)
+    {
+        const auto r = recv(streamer);
+        EXPECT_EQ(r.response.ret, common::ResponseCode::Success);
+        EXPECT_EQ(r.response.file_index, 0u);
+        received.insert(r.response.index);
+        EXPECT_EQ(r.submission_done, i + 1 == ranges.size());
+    }
+
+    // exactly one response per range, indexed within the file - a dropped or duplicated zero-sized
+    // range would shift every later index
+    EXPECT_EQ(received, range_indices(ranges.size()));
+
+    for (size_t i = 0; i < ranges.size(); ++i)
+    {
+        const auto offset = ranges[i].first;
+        const auto length = ranges[i].second;
+        for (size_t j = 0; j < length; ++j)
+        {
+            ASSERT_EQ(dsts[i][j], expected[offset + j])
+                << "range " << i << " (offset " << offset << " size " << length << ") differs at byte " << j;
+        }
+        EXPECT_EQ(dsts[i][length], 0xAB) << "range " << i << " wrote past the end of its destination";
+    }
 }
 
 }; // namespace runai::llm::streamer::impl

@@ -89,14 +89,16 @@ Batches::Batches(SubmissionId submission_id,
                  std::shared_ptr<common::Responder> responder,
                  const std::string & path,
                  const common::s3::S3ClientWrapper::Params & params,
-                 const std::vector<size_t> & internal_sizes) :
+                 const std::vector<size_t> & range_sizes,
+                 unsigned first_range_index) :
     _submission_id(submission_id),
     _file_index(file_index),
+    _first_range_index(first_range_index),
     _itr(file_read_tasks),
     _responder(responder)
 {
     _batches.reserve(file_read_tasks.size());
-    build_tasks(config, path, params, internal_sizes);
+    build_tasks(config, path, params, range_sizes);
 }
 
 unsigned Batches::size() const
@@ -115,13 +117,16 @@ size_t Batches::total() const
     return _total;
 }
 
-void Batches::build_tasks(std::shared_ptr<const Config> config, const std::string & path, const common::s3::S3ClientWrapper::Params & params, const std::vector<size_t> & internal_sizes)
+void Batches::build_tasks(std::shared_ptr<const Config> config, const std::string & path, const common::s3::S3ClientWrapper::Params & params, const std::vector<size_t> & range_sizes)
 {
     const auto num_workers = _itr.workers();
     LOG(DEBUG) << "Building tasks for " <<num_workers << " workers";
     std::vector<Tasks> v_tasks(num_workers);
 
-    auto num_sizes = internal_sizes.size();
+    auto num_sizes = range_sizes.size();
+
+    // Within a transfer the ranges tile one contiguous span of both the file and the destination, so
+    // both cursors advance by the range size. That is exactly what coalescing guarantees.
     size_t request_file_offset = _itr.read_task(0).offset_in_file;
 
     auto destination_start = static_cast<char *>(_itr.read_task(0).destination);
@@ -129,13 +134,16 @@ void Batches::build_tasks(std::shared_ptr<const Config> config, const std::strin
     auto current_request_destination = destination_start;
 
     // iterate over the workers and the requests to fill each worker share
-    for (unsigned request_index = 0; request_index < num_sizes; ++request_index)
+    for (unsigned i = 0; i < num_sizes; ++i)
     {
         // create tasks for the entire requested range before sending to the threadpool
-        const size_t request_size = internal_sizes[request_index];
+        const size_t request_size = range_sizes[i];
 
-        handle_request(v_tasks, request_index, request_file_offset, request_size, current_request_destination);
-        LOG(DEBUG) << "created request index " << request_index << " dst " << static_cast<void *>(current_request_destination);
+        // the response carries the index within the FILE, so offset by this transfer's first range
+        const unsigned range_index = _first_range_index + i;
+
+        handle_request(v_tasks, range_index, request_file_offset, request_size, current_request_destination);
+        LOG(DEBUG) << "created request index " << range_index << " dst " << static_cast<void *>(current_request_destination);
 
         current_request_destination += request_size;
         request_file_offset += request_size;
@@ -161,7 +169,7 @@ void Batches::build_tasks(std::shared_ptr<const Config> config, const std::strin
     }
 }
 
-void Batches::handle_request(std::vector<Tasks> & v_tasks, unsigned request_index, size_t request_file_offset, size_t request_size, char * destination)
+void Batches::handle_request(std::vector<Tasks> & v_tasks, unsigned range_index, size_t request_file_offset, size_t request_size, char * destination)
 {
     LOG(DEBUG) << "request file offset " << request_file_offset << " size " << request_size;
 
@@ -184,7 +192,7 @@ void Batches::handle_request(std::vector<Tasks> & v_tasks, unsigned request_inde
         destination_offset += to_read;
     } while (bytes_to_request > 0);
 
-    auto request_ptr = std::make_shared<Request>(request_file_offset, _file_index, request_index, infos.size(), request_size, destination);
+    auto request_ptr = std::make_shared<Request>(request_file_offset, _file_index, range_index, infos.size(), request_size, destination);
 
     // create tasks
     for (auto & [batch_id, info] : infos)

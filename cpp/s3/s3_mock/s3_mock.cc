@@ -88,12 +88,11 @@ common::backend_api::ResponseCode_t obj_close_backend(common::backend_api::Objec
 {
     const auto guard = std::unique_lock<std::mutex>(__mutex);
 
-    auto response_code = common::response_code_from(utils::getenv<int>("RUNAI_STREAMER_S3_MOCK_RESPONSE_CODE", static_cast<int>(common::ResponseCode::Success)));
-    if (response_code != common::ResponseCode::Success)
-    {
-        LOG(ERROR) << "S3 mock backend not closed";
-        return response_code;
-    }
+    // RUNAI_STREAMER_S3_MOCK_RESPONSE_CODE deliberately does NOT apply here. It exists to inject read
+    // failures, and a test that sets it for the duration of a read is very likely to still have it set when
+    // the streamer is destroyed - which used to make the streamer's own teardown fail to close the backend,
+    // leaving the mock open while the wrapper believed it closed. Every later obj_open_backend then failed
+    // with "already opened" for the rest of the process. Failure injection must not break the lifecycle.
 
     if (!__opened)
     {
@@ -102,7 +101,7 @@ common::backend_api::ResponseCode_t obj_close_backend(common::backend_api::Objec
     }
 
     __opened = false;
-    return response_code;
+    return common::ResponseCode::Success;
 }
 
 common::backend_api::ObjectShutdownPolicy_t obj_get_backend_shutdown_policy()

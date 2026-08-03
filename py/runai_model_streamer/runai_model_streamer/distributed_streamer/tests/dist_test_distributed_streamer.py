@@ -46,7 +46,7 @@ class TestDistributedStreamer(unittest.TestCase):
                 content = torch.randint(0, 256, (spec["size"],), dtype=torch.uint8).numpy().tobytes()
                 with open(file_path, "wb") as f:
                     f.write(content)
-                file_requests.append(FileChunks(id=i, path=file_path, chunks=spec["chunks"], offset=0))
+                file_requests.append(FileChunks.contiguous(id=i, path=file_path, sizes=spec["chunks"], offset=0))
             data_bytes = pickle.dumps(file_requests)
             size_tensor = torch.tensor([len(data_bytes)], dtype=torch.long)
         else:
@@ -69,7 +69,7 @@ class TestDistributedStreamer(unittest.TestCase):
         for req in requests:
             with open(req.path, "rb") as f:
                 original_data_map[req.id] = f.read()
-        reconstructed_data_map = {req.id: [None] * len(req.chunks) for req in requests}
+        reconstructed_data_map = {req.id: [None] * len(req.sizes) for req in requests}
         env_vars = {"RUNAI_STREAMER_DIST": "1", "RUNAI_STREAMER_DIST_BUFFER_MIN_BYTESIZE": "0"}
         with patch.dict(os.environ, env_vars):
             with DistributedStreamer() as streamer:
@@ -128,7 +128,7 @@ class TestDistributedStreamer(unittest.TestCase):
             with open(req.path, "rb") as f:
                 original_data_map[req.id] = f.read()
 
-        reconstructed_data_map = {req.id: [None] * len(req.chunks) for req in requests}
+        reconstructed_data_map = {req.id: [None] * len(req.sizes) for req in requests}
         env_vars = {"RUNAI_STREAMER_DIST": "1", "RUNAI_STREAMER_DIST_BUFFER_MIN_BYTESIZE": "0"}
         with patch.dict(os.environ, env_vars):
             with DistributedStreamer() as streamer:
@@ -207,7 +207,7 @@ class TestDistributedStreamer(unittest.TestCase):
                     streamer.is_distributed,
                     "Distributed streaming should be disabled for gloo backend when RUNAI_STREAMER_DIST=auto"
                 )
-                reconstructed_data_map = {req.id: [None] * len(req.chunks) for req in requests}
+                reconstructed_data_map = {req.id: [None] * len(req.sizes) for req in requests}
                 for req_id, chunk_idx, data_tensor in streamer.get_chunks():
                     reconstructed_data_map[req_id][chunk_idx] = data_tensor.cpu().numpy().tobytes()
 

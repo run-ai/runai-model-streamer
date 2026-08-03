@@ -12,14 +12,12 @@
 namespace runai::llm::streamer
 {
 
-// Library for reading a large file concurrently to a given host memory buffer
-// Reads a single file at a time
+// Library for reading files concurrently into host memory buffers
+// A single submission (runai_request) may cover many files, and many submissions may be in flight at
+// once - each response carries the id of the submission it belongs to
 // NOT THREAD SAFE - caller must not send requests and responses in parallel
 
-// creates streamer object with threadpool of the given size
-// returns streamer response code Success or error code
-// chunk_bytesize : number of bytes to read by each thread before sending response to the caller (in case there are new completed sub requests)
-// block_bytesize : maximal number of bytes to read from the storage in a single read call
+// Creates a streamer object; see streamer.h for the configuration environment variables.
 
 _RUNAI_EXTERN_C int runai_start(void ** streamer)
 {
@@ -62,43 +60,60 @@ _RUNAI_EXTERN_C void runai_end(void * streamer)
     }
 }
 
-// send asynchronous read request to read multiple files
-//
-// num_files : number of files to read
-// paths : list of files paths
-// file_offsets : offset for each file path, from which to start reading
-// bytesizes : size of each destination buffer
-// dsts : destination buffers
-//        for reading to CPU memory, dsts[0] only is used as a single buffer to contain all the files in the order specified by paths
-// num_sizes : number of sub requests for each file
-// internal_sizes : a list containing the size of each sub request, where the first sub request starts at the given file offset and each sub request starts at the end of the previous one
-// return Success if request is valid
-
 namespace
 {
 
 // Marshal the C request arrays and submit, forwarding out_submission_id. Credentials are NOT passed here:
 // they are streamer-scoped, set once via runai_set_credentials.
+//
+// The C arrays are flat and grouped by file in the order of paths; they are transposed here into one
+// FileRanges per file, each holding its ranges as (offset, size, dst) triples. Validation is ordered so
+// that no array is dereferenced before it has been checked - in particular paths[i] is checked before
+// being used to construct a std::string.
 int submit_request(impl::Streamer * s,
                    SubmissionId * out_submission_id,
                    unsigned num_files,
-                   const char ** paths, size_t * file_offsets, size_t * bytesizes,
-                   void ** dsts, unsigned * num_sizes, size_t ** internal_sizes)
+                   const char ** paths, unsigned * num_ranges,
+                   size_t * range_offsets, size_t * range_sizes, void ** range_dsts)
 {
-    std::vector<std::string> paths_v(paths, paths + num_files);
-    std::vector<size_t> file_offsets_v(file_offsets, file_offsets + num_files);
-    std::vector<size_t> bytesizes_v(bytesizes, bytesizes + num_files);
-    std::vector<void *> dsts_v(dsts, dsts + num_files);
-    std::vector<unsigned> num_sizes_v(num_sizes, num_sizes + num_files);
-    std::vector<size_t *> internal_sizes_v(internal_sizes, internal_sizes + num_files);
-
-    std::vector<std::vector<size_t>> internal_sizes_vv(num_files);
-    for (unsigned i = 0; i < num_files; ++i)
+    if (num_files > 0 && (paths == nullptr || num_ranges == nullptr))
     {
-        internal_sizes_vv[i] = std::vector<size_t>(internal_sizes_v[i], internal_sizes_v[i] + num_sizes_v[i]);
+        return static_cast<int>(common::ResponseCode::InvalidParameterError);
     }
 
-    return static_cast<int>(s->async_request(paths_v, file_offsets_v, bytesizes_v, dsts_v, num_sizes_v, internal_sizes_vv, out_submission_id));
+    size_t total_ranges = 0;
+    for (unsigned i = 0; i < num_files; ++i)
+    {
+        total_ranges += num_ranges[i];
+    }
+
+    // the range arrays are dereferenced only if the submission actually carries ranges
+    if (total_ranges > 0 && (range_offsets == nullptr || range_sizes == nullptr || range_dsts == nullptr))
+    {
+        return static_cast<int>(common::ResponseCode::InvalidParameterError);
+    }
+
+    std::vector<impl::FileRanges> request(num_files);
+
+    size_t base = 0;
+    for (unsigned i = 0; i < num_files; ++i)
+    {
+        if (paths[i] == nullptr)
+        {
+            return static_cast<int>(common::ResponseCode::InvalidParameterError);
+        }
+        request[i].path = paths[i];
+
+        const unsigned n = num_ranges[i];
+        request[i].ranges.reserve(n);
+        for (unsigned j = 0; j < n; ++j)
+        {
+            request[i].ranges.push_back(impl::ReadRange{ range_offsets[base + j], range_sizes[base + j], range_dsts[base + j] });
+        }
+        base += n;
+    }
+
+    return static_cast<int>(s->async_request(request, out_submission_id));
 }
 
 } // namespace
@@ -123,6 +138,11 @@ _RUNAI_EXTERN_C int runai_set_credentials(
 
         return static_cast<int>(s->set_credentials(common::s3::Credentials(param_keys, param_values, num_params)));
     }
+    catch (const common::Exception & e)
+    {
+        // report the specific code (see runai_request for why this matters)
+        return static_cast<int>(e.error());
+    }
     catch(...)
     {
     }
@@ -134,11 +154,10 @@ _RUNAI_EXTERN_C int runai_request(
     SubmissionId * out_submission_id,
     unsigned num_files,
     const char ** paths,
-    size_t * file_offsets,
-    size_t * bytesizes,
-    void ** dsts,
-    unsigned * num_sizes,
-    size_t ** internal_sizes
+    unsigned * num_ranges,
+    size_t * range_offsets,
+    size_t * range_sizes,
+    void ** range_dsts
 )
 {
     // default the id to 0 ("none") so every return path - including early failures and a throw
@@ -157,7 +176,16 @@ _RUNAI_EXTERN_C int runai_request(
         }
 
         // credentials are streamer-scoped (runai_set_credentials), not per request
-        return submit_request(s, out_submission_id, num_files, paths, file_offsets, bytesizes, dsts, num_sizes, internal_sizes);
+        return submit_request(s, out_submission_id, num_files, paths, num_ranges, range_offsets, range_sizes, range_dsts);
+    }
+    catch (const common::Exception & e)
+    {
+        // Report the specific code rather than collapsing it to UnknownError. async_request lets typed
+        // exceptions escape - a null destination or a byte-total overflow both throw InvalidParameterError -
+        // and UnknownError is the code that tells a caller to abort everything, whereas an argument error is
+        // attributable to this submission and recoverable. Nothing is committed when these throw, so
+        // returning the real code leaves no responses owed.
+        return static_cast<int>(e.error());
     }
     catch(...)
     {
@@ -189,6 +217,11 @@ _RUNAI_EXTERN_C int runai_response(
         if (out_submission_id != nullptr) *out_submission_id = r.submission_id;
         if (submission_done != nullptr) *submission_done = done ? 1 : 0;
         return static_cast<int>(r.ret);
+    }
+    catch (const common::Exception & e)
+    {
+        // report the specific code (see runai_request for why this matters)
+        return static_cast<int>(e.error());
     }
     catch(...)
     {

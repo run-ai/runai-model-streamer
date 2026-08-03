@@ -12,7 +12,10 @@ MIN_NUM_FILES = 1
 MAX_NUM_FILES = 20
 MIN_CHUNK_NUM = 1
 MAX_CHUNK_NUM = 500
-MIN_CHUNK_SIZE = 16
+# 0, not 16: a zero sized range is legal and is what a zero element tensor produces, so the fuzzer has to
+# be able to generate one. It reaches no storage yet still owes exactly one response, which is where
+# off-by-one indexing shows up - and at 0 it lands anywhere in a file's list, including first and last.
+MIN_CHUNK_SIZE = 0
 MAX_CHUNK_SIZE = 2048
 
 
@@ -29,11 +32,19 @@ def random_chunks():
 
 
 def random_memory_mode(chunks):
-    memory_mode = random.choice([-1])
-    os.environ[RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME] = str(memory_mode)
+    # -1 unlimited (a single request holds everything), 0 largest-chunk (a request holds one range),
+    # anything else is a byte limit. Only the latter two exercise the multi-request packing loop, the
+    # per-file range bookkeeping across requests, and buffer reuse.
+    #
+    # chunks can legitimately be empty: a file whose generated chunk list has a single entry contributes
+    # only an initial_offset and no ranges at all, so max()/sum() would have nothing to work with.
+    memory_mode = random.choice([-1, 0, 1]) if chunks else -1
     if memory_mode == 1:
+        # never below the largest range, or no request could hold it and packing would stall
         memory_limit = random.randint(max(chunks), sum(chunks))
-        os.environ[RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME] = str(memory_limit)
+    else:
+        memory_limit = memory_mode
+    os.environ[RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME] = str(memory_limit)
 
 def random_file_chunks(i, dir):
     file_content, chunk_sizes = random_chunks()
@@ -59,7 +70,7 @@ def random_file_chunks(i, dir):
         expected_id_to_results[j] = {
             "expected_content": expected_content,
         }
-    return expected_id_to_results, FileChunks(i, file_path, initial_offset, request_sizes)
+    return expected_id_to_results, FileChunks.contiguous(i, file_path, initial_offset, request_sizes)
 
 class TestFuzzing(unittest.TestCase):
     def setUp(self):
@@ -76,8 +87,9 @@ class TestFuzzing(unittest.TestCase):
             file_to_file_chunks[file_chunks.id] = file_chunks
             files_chunks.append(file_chunks)
 
-        random_memory_mode([chunk for chunk in file_chunks.chunks for file_chunks in files_chunks])
+        random_memory_mode([size for file_chunks in files_chunks for size in file_chunks.sizes])
 
+        received = set()
         with FileStreamer() as fs:
             fs.stream_files(files_chunks)
             for file, id, dst in fs.get_chunks():
@@ -91,6 +103,16 @@ class TestFuzzing(unittest.TestCase):
                     dst.numpy().tobytes(),
                     expected_id_to_results[id]["expected_content"],
                 )
+                received.add((file, id))
+
+        # Checking the content of whatever arrived is not enough: a request that silently ends the
+        # stream early (issue #157) delivers only correct chunks and would pass. Assert the exact set.
+        expected = {
+            (file_id, range_index)
+            for file_id, results in expected_file_to_id_to_results.items()
+            for range_index in results
+        }
+        self.assertEqual(received, expected)
 
     def tearDown(self):
         os.environ.pop(RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME, None)

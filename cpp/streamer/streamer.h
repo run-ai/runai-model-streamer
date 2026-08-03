@@ -15,14 +15,18 @@ namespace runai::llm::streamer
 
 typedef void (*RunaiFileListCallback)(const char* path, size_t file_size, void* user_data);
 
-// Library for reading a large file concurrently to a given host memory buffer
-// Reads a single file at a time
+// Library for reading files concurrently into host memory buffers
+// A single submission (runai_request) may cover many files, and many submissions may be in flight at
+// once - each response carries the id of the submission it belongs to
 // NOT THREAD SAFE - caller must not send requests and responses in parallel
 
-// creates streamer object with threadpool of the given size
-// return streamer response code Success or error code
-// chunk_bytesize : number of bytes to read by each thread before sending response to the caller (in case there are new completed sub requests)
-// block_bytesize : maximal number of bytes to read from the storage in a single read call
+// Creates a streamer object; returns Success or an error code.
+// Takes no configuration arguments - the streamer configures itself from the environment. Each variable
+// below sets BOTH backends; when a variable is unset the two backends fall back to different defaults:
+//   RUNAI_STREAMER_CONCURRENCY    : number of worker threads. Unset: 16 filesystem, 8 object storage
+//   RUNAI_STREAMER_CHUNK_BYTESIZE : bytes per read call. Unset: 2 MiB filesystem, the S3 client default
+//                                   for object storage. Minimums are enforced - 2 MiB and 5 MiB respectively
+// Worker pools are created lazily, one per backend actually used.
 
 _RUNAI_EXTERN_C int runai_start(void ** streamer /* return parameter */);
 
@@ -45,15 +49,28 @@ _RUNAI_EXTERN_C int runai_set_credentials(
 
 // Multi-request submit: read multiple files concurrently.
 //
-// num_files : number of files to read
-// paths : list of files paths
-// file_offsets : offset for each file path, from which to start reading
-// bytesizes : size of each destination buffer
-// dsts : destination buffers; for reading to CPU memory, dsts[0] only is used as a single buffer to contain
-//        all the files in the order specified by paths
-// num_sizes : number of sub requests for each file
-// internal_sizes : a list containing the size of each sub request, where the first sub request starts at the
-//                  given file offset and each subsequent sub request starts at the end of the previous one
+// A submission is a list of files; each file carries a list of RANGES to read. A range is an
+// arbitrary (source offset, size) within its file with its own destination - ranges need not be
+// contiguous in the file, need not be contiguous in memory, and need not be ordered.
+//
+// num_files     : number of files to read
+// paths         : list of file paths - one entry per file, however many ranges that file has
+// num_ranges    : number of ranges for each file
+// range_offsets : flat array of sum(num_ranges) source offsets, each within its owning file
+// range_sizes   : flat array of sum(num_ranges) range sizes in bytes
+// range_dsts    : flat array of sum(num_ranges) destination pointers
+//
+// The three flat arrays are indexed identically and grouped by file in the order of paths: file f's
+// ranges occupy [sum(num_ranges[0..f)), sum(num_ranges[0..f])). Destinations must not overlap.
+//
+// RESPONSE COUNT - a submission owes exactly sum(num_ranges) responses, one per range:
+//   - a ZERO-SIZED range still gets its own response (it is completed immediately, without reaching
+//     storage), so it must be counted like any other;
+//   - a file with num_ranges[f] == 0 contributes no responses, and is otherwise accepted.
+// Size the response loop by that sum. runai_response blocks indefinitely at timeout_ms = 0, so a
+// caller that skips zero-sized ranges when counting waits for a response that has already been
+// delivered. A submission with sum(num_ranges) == 0 owes nothing and completes immediately.
+//
 // Credentials are NOT passed here - set them once via runai_set_credentials.
 //  out_submission_id : always set to this submission's id once one is assigned, and left 0 only
 //                      if the call fails before that (e.g. invalid parameters). On Success it
@@ -65,19 +82,18 @@ _RUNAI_EXTERN_C int runai_request(
     SubmissionId * out_submission_id /* return parameter */,
     unsigned num_files,
     const char ** paths,
-    size_t * file_offsets,
-    size_t * bytesizes,
-    void ** dsts,
-    unsigned * num_sizes,
-    size_t ** internal_sizes
+    unsigned * num_ranges,
+    size_t * range_offsets,
+    size_t * range_sizes,
+    void ** range_dsts
 );
 
-// Multi-request response. Returns the next ready sub-range from any in-flight submission.
+// Multi-request response. Returns the next ready range from any in-flight submission.
 //  out_submission_id : set to the owning submission's id (which submission this response is for).
-//  file_index, index : the file and sub-range within that submission.
+//  file_index, index : the file, and the index of the range within that file, as submitted.
 //  submission_done   : set to 1 iff this was the submission's last response (it is now complete).
 //  timeout_ms        : max time to wait for a response; 0 blocks indefinitely.
-// ret is the truthful per-sub-range code (Success or a specific error), TimedOut on timeout, or
+// ret is the truthful per-range code (Success or a specific error), TimedOut on timeout, or
 // FinishedError on teardown.
 _RUNAI_EXTERN_C int runai_response(
     void * streamer,

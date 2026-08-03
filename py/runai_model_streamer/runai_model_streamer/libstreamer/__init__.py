@@ -38,11 +38,10 @@ class LibstreamerDLLWrapper:
             ctypes.POINTER(ctypes.c_uint64),                 # out_submission_id
             ctypes.c_uint32,                                 # num_files
             ctypes.POINTER(ctypes.c_char_p),                 # paths
-            ctypes.POINTER(ctypes.c_size_t),                 # file_offsets
-            ctypes.POINTER(ctypes.c_size_t),                 # bytesizes
-            ctypes.POINTER(ctypes.c_void_p),                 # dsts
-            ctypes.POINTER(ctypes.c_uint32),                 # num_sizes
-            ctypes.POINTER(ctypes.POINTER(ctypes.c_size_t)), # internal_sizes
+            ctypes.POINTER(ctypes.c_uint32),                 # num_ranges
+            ctypes.POINTER(ctypes.c_size_t),                 # range_offsets
+            ctypes.POINTER(ctypes.c_size_t),                 # range_sizes
+            ctypes.POINTER(ctypes.c_void_p),                 # range_dsts
         ]
         self.fn_runai_request.restype = ctypes.c_int
 

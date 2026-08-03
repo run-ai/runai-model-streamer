@@ -36,7 +36,7 @@ std::size_t ObjectStorageWorker::capacity(const Workload & first)
     // Config so the reference S3 holds stays valid after the building workload finalizes (batches dropped).
     if (_reader == nullptr)
     {
-        const auto & batch = first.batches().begin()->second;
+        const auto & batch = first.batches().front();
         _config = batch.config;
         _chunk_bytesize = std::max(static_cast<size_t>(1), _config->s3_block_bytesize);
 
@@ -103,7 +103,7 @@ void ObjectStorageWorker::enqueue(Workload && workload)
 {
     // Count chunks up front so we can reserve one contiguous block of handles and size chunk_task_idx.
     size_t total_chunks = 0;
-    for (const auto & [file_index, batch] : workload.batches())
+    for (const auto & batch : workload.batches())
     {
         for (const auto & task : batch.tasks)
         {
@@ -121,7 +121,7 @@ void ObjectStorageWorker::enqueue(Workload && workload)
         Inflight wl;
         wl.workload = std::move(workload);
         // the workload was fully populated via add_batch before dispatch, so batches() is complete here
-        for (auto & [file_index, batch] : wl.workload.batches())
+        for (auto & batch : wl.workload.batches())
         {
             for (const auto & task : batch.tasks)
             {
@@ -155,7 +155,10 @@ void ObjectStorageWorker::enqueue(Workload && workload)
         wl.chunk_task_idx.resize(total_chunks);
 
         size_t next_chunk = 0;
-        for (auto & [file_index, batch] : wl.workload.batches())
+        // &batch below outlives this loop (it is stored in wl.tasks and used to route completions): the
+        // workload has already been moved into its _inflight entry, _inflight is node-stable, and no batch is
+        // added to a dispatched workload - so the batches vector is never grown or moved again.
+        for (auto & batch : wl.workload.batches())
         {
             for (const auto & task : batch.tasks)
             {
@@ -286,14 +289,16 @@ void ObjectStorageWorker::complete_chunk(InflightMap::iterator wlit, size_t task
 
 void ObjectStorageWorker::report_workload(Inflight & wl, common::ResponseCode code)
 {
-    for (auto & [file_index, batch] : wl.workload.batches())
+    for (auto & batch : wl.workload.batches())
     {
         // whole-workload abort fails every file; otherwise fail only files with a recorded error
         // (handle_error(Success) is a no-op for files whose tasks all completed)
         auto error_code = code;
         if (error_code == common::ResponseCode::Success)
         {
-            auto it = wl.error_by_file_index.find(file_index);
+            // batch.file_index, not the batch's position: one file can contribute several batches (one per
+            // contiguous transfer), and errors are recorded per file, so several batches can share an entry
+            auto it = wl.error_by_file_index.find(batch.file_index);
             if (it != wl.error_by_file_index.end())
             {
                 error_code = it->second;

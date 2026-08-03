@@ -8,6 +8,7 @@ runai_cc_auto_library(
         "//streamer/impl/batches",
         "//streamer/impl/workload",
         "//streamer/impl/object_storage_worker",
+        "//streamer/impl/request",
         "//streamer/impl/submissions:submissions_mgr",
         "//streamer/impl/pools:backend_pools",
         "//common/responder",

@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,7 @@
 #include "utils/env/env.h"
 #include "utils/dylib/dylib.h"
 #include "utils/temp/env/env.h"
+#include "utils/temp/file/file.h"
 #include "utils/fdlimit/fdlimit.h"
 
 namespace runai::llm::streamer
@@ -28,11 +30,39 @@ namespace
 // expected, the test fails visibly instead of blocking forever (the multi-request API has no finish-on-drain).
 constexpr unsigned RESPONSE_TIMEOUT_MS = 60000;
 
+// Keeps the classic per-file argument shape so the tests below are unchanged, and adapts it to the range
+// API: each file's sub ranges tile [file_offsets[i], file_offsets[i] + bytesizes[i]) in order, and every
+// file is written consecutively into the single buffer at dsts[0] - the layout the previous API implied.
 inline int submit(void * streamer, unsigned num_files, const char ** paths, size_t * file_offsets,
                   size_t * bytesizes, void ** dsts, unsigned * num_sizes, size_t ** internal_sizes)
 {
+    (void)bytesizes;   // implied by the sub range sizes
+
+    std::vector<unsigned> num_ranges(num_files);
+    std::vector<size_t> range_offsets;
+    std::vector<size_t> range_sizes;
+    std::vector<void *> range_dsts;
+
+    char * dst = static_cast<char *>(dsts[0]);
+    for (unsigned i = 0; i < num_files; ++i)
+    {
+        num_ranges[i] = num_sizes[i];
+
+        size_t offset = file_offsets[i];
+        for (unsigned j = 0; j < num_sizes[i]; ++j)
+        {
+            const size_t size = internal_sizes[i][j];
+            range_offsets.push_back(offset);
+            range_sizes.push_back(size);
+            range_dsts.push_back(dst);
+            offset += size;
+            dst += size;
+        }
+    }
+
     SubmissionId submission_id = 0;
-    return runai_request(streamer, &submission_id, num_files, paths, file_offsets, bytesizes, dsts, num_sizes, internal_sizes);
+    return runai_request(streamer, &submission_id, num_files, paths, num_ranges.data(),
+                         range_offsets.data(), range_sizes.data(), range_dsts.data());
 }
 
 inline int next_response(void * streamer, unsigned * file_index, unsigned * index)
@@ -693,6 +723,125 @@ TEST_F(StreamerTest, Multiple_Files)
     EXPECT_EQ(verify_mock(), 0);
 }
 
+// A submission must pick one backend kind (Streamer::lock_object_plugin rejects a mix), but a STREAMER
+// serves both: BackendPools holds one pool per kind, created lazily, so filesystem and object-storage
+// submissions coexist on the same handle. Both orders are exercised, because the pools are created
+// lazily and by different paths - the filesystem pool on first push, the object-storage pool by the
+// plugin lock - so an ordering bug would show up in only one of them.
+TEST_F(StreamerTest, Filesystem_And_Object_Storage_Submissions_Coexist)
+{
+    utils::Dylib dylib("libstreamers3.so");
+    auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
+
+    const auto fs_data = utils::random::buffer(utils::random::number(100, 1000));
+    utils::temp::File fs_file(fs_data);
+
+    // Read the filesystem file in one range, and drain it, checking the bytes actually arrived.
+    auto read_filesystem = [&](void * streamer)
+    {
+        std::vector<unsigned char> dst(fs_data.size());
+        void * dst_ptr = dst.data();
+        const char * path = fs_file.path.c_str();
+        unsigned num_ranges = 1;
+        size_t offset = 0;
+        size_t size = fs_data.size();
+
+        SubmissionId submission_id = 0;
+        EXPECT_EQ(runai_request(streamer, &submission_id, 1, &path, &num_ranges, &offset, &size, &dst_ptr),
+                  static_cast<int>(common::ResponseCode::Success));
+
+        unsigned file_index = 0;
+        unsigned range_index = 0;
+        EXPECT_EQ(next_response(streamer, &file_index, &range_index),
+                  static_cast<int>(common::ResponseCode::Success));
+        EXPECT_EQ(dst, std::vector<unsigned char>(fs_data.begin(), fs_data.end()));
+    };
+
+    // Read the fixture's object-storage files, and drain every expected response.
+    auto read_object_storage = [&](void * streamer)
+    {
+        EXPECT_EQ(submit(streamer, num_files, file_names.data(), file_offsets.data(), sizes.data(),
+                         dsts.data(), num_ranges.data(), internal_sizes.data()),
+                  static_cast<int>(common::ResponseCode::Success));
+
+        for (unsigned i = 0; i < num_expected_responses; ++i)
+        {
+            unsigned file_index = 0;
+            unsigned range_index = 0;
+            const auto response_code = next_response(streamer, &file_index, &range_index);
+            EXPECT_EQ(response_code, static_cast<int>(common::ResponseCode::Success));
+            if (response_code != static_cast<int>(common::ResponseCode::Success))
+            {
+                break;
+            }
+        }
+    };
+
+    void * streamer;
+    ASSERT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
+
+    read_filesystem(streamer);
+    read_object_storage(streamer);
+
+    runai_end(streamer);
+    EXPECT_EQ(verify_mock(), 0);
+}
+
+// The reverse order, as its own test rather than a second streamer in the one above: the object-storage
+// mock's backend handle is process-global, so two streamers in a single test exercise the plugin
+// teardown/reopen lifecycle instead of the thing under test. Every test in this file uses one streamer.
+TEST_F(StreamerTest, Object_Storage_Then_Filesystem_Submission)
+{
+    utils::Dylib dylib("libstreamers3.so");
+    auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
+
+    const auto fs_data = utils::random::buffer(utils::random::number(100, 1000));
+    utils::temp::File fs_file(fs_data);
+
+    void * streamer;
+    ASSERT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
+
+    // object storage first - this is what creates the object-storage pool (via the plugin lock)
+    EXPECT_EQ(submit(streamer, num_files, file_names.data(), file_offsets.data(), sizes.data(),
+                     dsts.data(), num_ranges.data(), internal_sizes.data()),
+              static_cast<int>(common::ResponseCode::Success));
+
+    for (unsigned i = 0; i < num_expected_responses; ++i)
+    {
+        unsigned file_index = 0;
+        unsigned range_index = 0;
+        const auto response_code = next_response(streamer, &file_index, &range_index);
+        EXPECT_EQ(response_code, static_cast<int>(common::ResponseCode::Success));
+        if (response_code != static_cast<int>(common::ResponseCode::Success))
+        {
+            break;
+        }
+    }
+
+    // then a filesystem submission on the same streamer, which creates the filesystem pool
+    {
+        std::vector<unsigned char> dst(fs_data.size());
+        void * dst_ptr = dst.data();
+        const char * path = fs_file.path.c_str();
+        unsigned n_ranges = 1;
+        size_t offset = 0;
+        size_t size = fs_data.size();
+
+        SubmissionId submission_id = 0;
+        EXPECT_EQ(runai_request(streamer, &submission_id, 1, &path, &n_ranges, &offset, &size, &dst_ptr),
+                  static_cast<int>(common::ResponseCode::Success));
+
+        unsigned file_index = 0;
+        unsigned range_index = 0;
+        EXPECT_EQ(next_response(streamer, &file_index, &range_index),
+                  static_cast<int>(common::ResponseCode::Success));
+        EXPECT_EQ(dst, std::vector<unsigned char>(fs_data.begin(), fs_data.end()));
+    }
+
+    runai_end(streamer);
+    EXPECT_EQ(verify_mock(), 0);
+}
+
 TEST_F(StreamerTest, Multiple_Files_Error)
 {
     utils::Dylib dylib("libstreamers3.so");
@@ -701,7 +850,9 @@ TEST_F(StreamerTest, Multiple_Files_Error)
     set_backend_shutdown_policy(utils::random::boolean() ? common::backend_api::ObjectShutdownPolicy_t::OBJECT_SHUTDOWN_POLICY_ON_STREAMER_SHUTDOWN : common::backend_api::ObjectShutdownPolicy_t::OBJECT_SHUTDOWN_POLICY_ON_PROCESS_EXIT);
 
     const auto error_code = common::ResponseCode::FileAccessError;
-    utils::temp::Env env_rc("RUNAI_STREAMER_S3_MOCK_RESPONSE_CODE", static_cast<int>(error_code));
+    // Scoped to the reads only, released before runai_end below: the injected code reaches every mock entry
+    // point, so leaving it set across teardown injects failures into the shutdown path too.
+    auto env_rc = std::make_unique<utils::temp::Env>("RUNAI_STREAMER_S3_MOCK_RESPONSE_CODE", static_cast<int>(error_code));
 
     void * streamer;
     EXPECT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
@@ -736,6 +887,7 @@ TEST_F(StreamerTest, Multiple_Files_Error)
         expected_response[file_index].erase(r);
     }
 
+    env_rc.reset();   // stop injecting failures before the streamer tears the backend down
     runai_end(streamer);
     EXPECT_EQ(verify_mock(), 0);
 }

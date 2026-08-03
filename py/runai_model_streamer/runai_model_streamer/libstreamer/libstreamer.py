@@ -8,8 +8,15 @@ from runai_model_streamer.s3_utils.s3_utils import (
 
 SUCCESS_ERROR_CODE = 0
 FINISHED_ERROR_CODE = 1
-# common::ResponseCode::TimedOut (see cpp/common/response_code/response_code.h)
+# common::ResponseCode::FileAccessError / TimedOut (see cpp/common/response_code/response_code.h)
+FILE_ACCESS_ERROR_CODE = 2
 TIMED_OUT_ERROR_CODE = 16
+
+# Widths of the C types the range arrays are converted to (unsigned num_ranges, size_t offsets/sizes,
+# void* destinations). ctypes wraps out-of-range values silently, so runai_request range-checks against
+# these before converting.
+UINT32_LIMIT = 1 << 32
+UINT64_LIMIT = 1 << 64
 
 
 def _credentials_param_arrays(s3_credentials: Optional[S3Credentials]):
@@ -63,39 +70,86 @@ def runai_end(streamer: t_streamer) -> None:
 def runai_request(
     streamer: t_streamer,
     paths: List[str],
-    file_offsets: List[int],
-    bytesizes: List[int],
-    dsts: List[memoryview],
-    internal_sizes: List[List[int]],
+    num_ranges: List[int],
+    range_offsets: List[int],
+    range_sizes: List[int],
+    range_dsts: List[int],
 ) -> int:
     """Multi-request submit. Non-blocking: returns the assigned submission id; use it to demux the
     responses from runai_response. Credentials are streamer-scoped (runai_set_credentials), not passed
-    here. Many submissions may be in flight at once."""
+    here. Many submissions may be in flight at once.
+
+    A submission is a list of files, each carrying a list of RANGES. A range is an arbitrary
+    (source offset, size) within its file with its own destination: ranges need not be contiguous in the
+    file, need not be contiguous in memory, and need not be ordered. Exactly one response is issued per
+    range, including a zero-sized one.
+
+    paths carries one entry per file, however many ranges that file has. The three range arrays are flat,
+    indexed identically, and grouped by file in the order of paths: file f's ranges occupy
+    [sum(num_ranges[:f]), sum(num_ranges[:f+1])). Destinations must not overlap - that is the caller's
+    responsibility and is not verified.
+
+    range_dsts holds ABSOLUTE integer addresses - one complete pointer per range, not offsets from a
+    base, and in no required order. Deliberately not memoryviews:
+      - a destination need not be host memory at all. A CUDA device pointer has no Python buffer object,
+        so a base-buffer + offsets signature would silently restrict destinations to the host.
+      - destinations need not share a buffer, which is the same generality the range API exists for.
+      - it avoids one memoryview -> address conversion per range on the submit path (~n per submission).
+    The cost is that raw addresses keep nothing alive: THE CALLER MUST KEEP THE UNDERLYING BUFFERS ALIVE
+    for the lifetime of the submission, until its last response has been consumed."""
+    # Validate the shape here, at the FFI boundary: this is the last point at which a mismatch is a Python
+    # error rather than undefined behaviour. The C side takes the range count as sum(num_ranges) and indexes
+    # all three flat arrays up to it, while the arrays below are sized from len(range_sizes) - so a
+    # sum(num_ranges) larger than the arrays reads past their end, in native code, with nothing raised.
+    # ctypes will not catch it: an array built from too FEW initializers is silently zero-padded (a short
+    # num_ranges would make a file lose all of its ranges, a short range_offsets would read from offset 0).
+    # Costs one sum over the file count - tens per submission - not per range.
     num_files = len(paths)
+    total_ranges = len(range_sizes)
+    if len(num_ranges) != num_files:
+        raise ValueError(
+            f"num_ranges has {len(num_ranges)} entries but there are {num_files} paths"
+        )
+    if not (len(range_offsets) == len(range_dsts) == total_ranges):
+        raise ValueError(
+            f"range_offsets ({len(range_offsets)}), range_sizes ({total_ranges}) and range_dsts "
+            f"({len(range_dsts)}) must be parallel"
+        )
+
+    # Range-check the VALUES before trusting them, because ctypes does not: it converts out-of-range
+    # integers silently, so a Python-side check of the original list can agree while the C side sees
+    # something else entirely. c_uint32(-1) becomes 4294967295 and c_uint32(2**32) becomes 0.
+    # num_ranges is the dangerous one: [-1, 1] sums to 0 in Python - matching an empty range array and
+    # passing the total check below - while C reads ~4 billion ranges for that file and indexes far past
+    # the arrays. Checked per element; num_ranges is one entry per file, so this is tens of comparisons.
+    if any(not (0 <= n < UINT32_LIMIT) for n in num_ranges):
+        raise ValueError(
+            f"every num_ranges value must fit an unsigned 32-bit integer, got {list(num_ranges)}"
+        )
+    if sum(num_ranges) != total_ranges:
+        raise ValueError(
+            f"sum(num_ranges) is {sum(num_ranges)} but the range arrays hold {total_ranges} entries"
+        )
+
+    # The flat arrays are checked with min()/max() rather than a per-element loop: they run at C speed, so
+    # this stays negligible beside the ctypes conversion below even at hundreds of thousands of ranges,
+    # whereas a Python-level loop over every range would not be. A negative size wraps to an enormous read
+    # length, and a negative offset to an enormous seek.
+    if total_ranges:
+        if min(range_sizes) < 0 or max(range_sizes) >= UINT64_LIMIT:
+            raise ValueError("every range size must fit an unsigned 64-bit integer")
+        if min(range_offsets) < 0 or max(range_offsets) >= UINT64_LIMIT:
+            raise ValueError("every range offset must fit an unsigned 64-bit integer")
+        if min(range_dsts) < 0 or max(range_dsts) >= UINT64_LIMIT:
+            raise ValueError("every range destination must be a valid address")
+
     c_paths = (ctypes.c_char_p * num_files)(*[path.encode("utf-8") for path in paths])
-    c_file_offsets = (ctypes.c_uint64 * len(file_offsets))(*file_offsets)
-    c_bytesizes = (ctypes.c_uint64 * len(bytesizes))(*bytesizes)
-    dst_addrs = [
-        ctypes.cast(ctypes.c_void_p(ctypes.addressof(ctypes.c_char.from_buffer(dst))), ctypes.c_void_p)
-        for dst in dsts
-    ]
-    c_dsts = (ctypes.c_void_p * len(dst_addrs))(*dst_addrs)
+    c_num_ranges = (ctypes.c_uint32 * num_files)(*num_ranges)
 
-    # c_num_sizes: number of ranges for each file
-    num_ranges_per_file_list = [len(sublist) for sublist in internal_sizes]
-    c_num_sizes = (ctypes.c_uint32 * num_files)(*num_ranges_per_file_list)
-
-    # c_internal_sizes: array of pointers, one per file, each to that file's array of range sizes. The backing
-    # arrays are held in the local `internal_sizes_arrays` so they outlive the C call - c_internal_sizes stores
-    # raw pointers into them, so they must not be garbage collected before fn_runai_request returns.
-    internal_sizes_arrays = [
-        (ctypes.c_uint64 * num_ranges_for_this_file)(*actual_sublist_data)
-        for num_ranges_for_this_file, actual_sublist_data in zip(num_ranges_per_file_list, internal_sizes)
-    ]
-    PtrToUint64ArrayType = ctypes.POINTER(ctypes.c_uint64)
-    c_internal_sizes = (PtrToUint64ArrayType * num_files)()
-    for i, individual_c_array_obj in enumerate(internal_sizes_arrays):
-        c_internal_sizes[i] = ctypes.cast(individual_c_array_obj, PtrToUint64ArrayType)
+    # The flat range arrays: one allocation each, no nested pointer array to keep alive across the call
+    c_range_offsets = (ctypes.c_uint64 * total_ranges)(*range_offsets)
+    c_range_sizes = (ctypes.c_uint64 * total_ranges)(*range_sizes)
+    c_range_dsts = (ctypes.c_void_p * total_ranges)(*range_dsts)
 
     submission_id = ctypes.c_uint64()
     error_code = dll.fn_runai_request(
@@ -103,11 +157,10 @@ def runai_request(
         ctypes.byref(submission_id),
         num_files,
         c_paths,
-        c_file_offsets,
-        c_bytesizes,
-        c_dsts,
-        c_num_sizes,
-        c_internal_sizes,
+        c_num_ranges,
+        c_range_offsets,
+        c_range_sizes,
+        c_range_dsts,
     )
     if error_code != SUCCESS_ERROR_CODE:
         raise ValueError(
