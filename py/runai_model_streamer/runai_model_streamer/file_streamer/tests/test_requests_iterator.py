@@ -1,11 +1,95 @@
+import os
 import unittest
+from unittest.mock import patch
 from runai_model_streamer.file_streamer.requests_iterator import (
     FileChunksIterator,
     FilesRequestsIterator,
     FilesRequestsIteratorWithBuffer,
     FileChunks,
-    MemoryCapMode
+    MemoryCapMode,
+    RunaiStreamerMemoryLimitException,
+    RUNAI_STREAMER_RING_BUFFER_SIZE_BYTES_ENV_VAR_NAME,
+    RUNAI_STREAMER_MIN_RING_BUFFERS_ENV_VAR_NAME,
+    _ring_sizing,
 )
+
+
+class TestRingSizing(unittest.TestCase):
+    """The ring's (buffer_size, num_buffers). Ranges are sized in bytes, and the configured minimum
+    buffer size is overridden per test so the fixtures stay small and readable."""
+
+    def files(self, *sizes_per_file):
+        return [
+            FileChunks.contiguous(i, f"{i}.txt", 0, list(sizes))
+            for i, sizes in enumerate(sizes_per_file)
+        ]
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFER_SIZE_BYTES_ENV_VAR_NAME: "100",
+                             RUNAI_STREAMER_MIN_RING_BUFFERS_ENV_VAR_NAME: "2"})
+    def test_limited_derives_count_from_budget(self):
+        # budget 500, buffer 100 -> 5 buffers, and there is data for all 5
+        self.assertEqual(_ring_sizing(MemoryCapMode.limited, self.files([100] * 5), 500), (100, 5))
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFER_SIZE_BYTES_ENV_VAR_NAME: "100",
+                             RUNAI_STREAMER_MIN_RING_BUFFERS_ENV_VAR_NAME: "2"})
+    def test_limit_tighter_than_configured_size_shrinks_the_buffer(self):
+        # the user's cap wins over the configured minimum size: a 60 byte budget must not hand out
+        # a 100 byte buffer. The MIN_RING_BUFFERS floor then exceeds the budget, which is deliberate.
+        buffer_size, num_buffers = _ring_sizing(MemoryCapMode.limited, self.files([10] * 20), 60)
+        self.assertEqual(buffer_size, 60)
+        self.assertEqual(num_buffers, 2)
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFER_SIZE_BYTES_ENV_VAR_NAME: "100",
+                             RUNAI_STREAMER_MIN_RING_BUFFERS_ENV_VAR_NAME: "2"})
+    def test_largest_range_floors_the_buffer_size(self):
+        # a single range larger than the configured size must still fit, or the stream cannot progress
+        buffer_size, _ = _ring_sizing(MemoryCapMode.limited, self.files([250], [10]), 1000)
+        self.assertEqual(buffer_size, 250)
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFER_SIZE_BYTES_ENV_VAR_NAME: "100",
+                             RUNAI_STREAMER_MIN_RING_BUFFERS_ENV_VAR_NAME: "2"})
+    def test_count_never_exceeds_the_data(self):
+        # 1000 byte budget would allow 10 buffers, but there are only 150 bytes to read
+        self.assertEqual(_ring_sizing(MemoryCapMode.limited, self.files([50] * 3), 1000), (100, 2))
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFER_SIZE_BYTES_ENV_VAR_NAME: "100",
+                             RUNAI_STREAMER_MIN_RING_BUFFERS_ENV_VAR_NAME: "3"})
+    def test_min_ring_buffers_is_a_floor_not_a_target(self):
+        buffer_size, num_buffers = _ring_sizing(MemoryCapMode.limited, self.files([10] * 5), 50)
+        self.assertEqual(buffer_size, 50)
+        self.assertEqual(num_buffers, 3)
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFER_SIZE_BYTES_ENV_VAR_NAME: "100"})
+    def test_unlimited_budgets_the_whole_stream(self):
+        # -1 keeps its documented meaning: unlimited really is unlimited, so the ring spans the data
+        self.assertEqual(_ring_sizing(MemoryCapMode.unlimited, self.files([100] * 7), None), (100, 7))
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFER_SIZE_BYTES_ENV_VAR_NAME: "100",
+                             RUNAI_STREAMER_MIN_RING_BUFFERS_ENV_VAR_NAME: "2"})
+    def test_largest_chunk_mode_stays_a_single_buffer(self):
+        # mode 0 exists to mean minimal memory; a ring would defeat the only reason to ask for it
+        self.assertEqual(_ring_sizing(MemoryCapMode.largest_chunk, self.files([10, 40], [25]), None), (40, 1))
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFER_SIZE_BYTES_ENV_VAR_NAME: "100",
+                             RUNAI_STREAMER_MIN_RING_BUFFERS_ENV_VAR_NAME: "2"})
+    def test_nothing_to_read_gives_one_empty_buffer(self):
+        self.assertEqual(_ring_sizing(MemoryCapMode.unlimited, self.files([], []), None), (0, 1))
+        self.assertEqual(_ring_sizing(MemoryCapMode.unlimited, self.files([0, 0]), None), (0, 1))
+
+    def test_limit_below_largest_range_is_rejected(self):
+        with self.assertRaises(RunaiStreamerMemoryLimitException):
+            _ring_sizing(MemoryCapMode.limited, self.files([250]), 100)
+
+    def test_limited_without_a_limit_is_rejected(self):
+        with self.assertRaises(RunaiStreamerMemoryLimitException):
+            _ring_sizing(MemoryCapMode.limited, self.files([10]), None)
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_MIN_RING_BUFFERS_ENV_VAR_NAME: "0"})
+    def test_zero_min_ring_buffers_still_yields_a_ring(self):
+        _, num_buffers = _ring_sizing(MemoryCapMode.largest_chunk, self.files([10]), None)
+        self.assertEqual(num_buffers, 1)
+        _, num_buffers = _ring_sizing(MemoryCapMode.unlimited, self.files([10]), None)
+        self.assertGreaterEqual(num_buffers, 1)
 
 
 class TestFileChunks(unittest.TestCase):
@@ -298,19 +382,19 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
         requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
             MemoryCapMode.unlimited, [FileChunks.contiguous(17, "a.txt", 10, [1, 2, 3, 4])], 100
         )
-        self.assertEqual(len(requests_iterator.buffer), 10)
+        self.assertEqual(requests_iterator.buffer_size, 10)
 
     def test_memory_cap_limited(self):
         requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
             MemoryCapMode.limited, [FileChunks.contiguous(17, "a.txt", 10, [1, 2, 3, 4])], 5
         )
-        self.assertEqual(len(requests_iterator.buffer), 5)
+        self.assertEqual(requests_iterator.buffer_size, 5)
 
     def test_memory_cap_largest_chunk(self):
         requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
             MemoryCapMode.largest_chunk, [FileChunks.contiguous(17, "a.txt", 10, [1, 2, 3, 4])], 5
         )
-        self.assertEqual(len(requests_iterator.buffer), 4)
+        self.assertEqual(requests_iterator.buffer_size, 4)
 
     def test_memory_cap_largest_chunk_multi_file(self):
         requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
@@ -319,7 +403,7 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
              FileChunks.contiguous(18, "b.txt", 10, [1, 2, 7, 4])],
             5,
         )
-        self.assertEqual(len(requests_iterator.buffer), 7)
+        self.assertEqual(requests_iterator.buffer_size, 7)
 
     def test_memory_cap_largest_chunk_no_files(self):
         # the largest_chunk branch used to call a bare max() and raise on an empty sequence, while the
@@ -327,7 +411,7 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
         requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
             MemoryCapMode.largest_chunk, [], None
         )
-        self.assertEqual(len(requests_iterator.buffer), 0)
+        self.assertEqual(requests_iterator.buffer_size, 0)
         self.assertIsNone(requests_iterator.next_request())
 
     def test_memory_cap_largest_chunk_empty_shard(self):
@@ -336,13 +420,13 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
             [FileChunks(17, "empty.txt", [], []), FileChunks.contiguous(18, "a.txt", 10, [4])],
             None,
         )
-        self.assertEqual(len(requests_iterator.buffer), 4)
+        self.assertEqual(requests_iterator.buffer_size, 4)
 
     def test_memory_cap_largest_chunk_only_zero_sized_ranges(self):
         requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
             MemoryCapMode.largest_chunk, [FileChunks.contiguous(17, "zeros.txt", 10, [0, 0])], None
         )
-        self.assertEqual(len(requests_iterator.buffer), 0)
+        self.assertEqual(requests_iterator.buffer_size, 0)
 
         files_requests = requests_iterator.next_request()
         self.assertIsNotNone(files_requests)
@@ -354,7 +438,7 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
             [FileChunks.contiguous(17, "a.txt", 10, [1, 2]), FileChunks.contiguous(18, "b.txt", 10, [3, 4])],
             50,
         )
-        self.assertEqual(len(requests_iterator.buffer), 10)
+        self.assertEqual(requests_iterator.buffer_size, 10)
 
     def test_range_dsts_pack_the_request(self):
         # replaces the old per-file file_buffers: destinations are per range now, packed back to back
@@ -365,17 +449,21 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
              FileChunks.contiguous(18, "b.txt", 10, [1, 2, 7, 4])],
             5,
         )
-        self.assertEqual(len(requests_iterator.buffer), 7)
-        base = requests_iterator.buffer_address
+        self.assertEqual(requests_iterator.buffer_size, 7)
+        base = requests_iterator.buffer_addresses[0]
 
         files_requests = requests_iterator.next_request()
         self.assertEqual([f.id for f in files_requests.files], [17])
         self.assertEqual(files_requests.range_dsts, [base, base + 1, base + 3])
 
+        # largest_chunk mode is a ring of one, so the single buffer has to come back before the next
+        # request can be built - and the next request then packs from that same base.
+        requests_iterator.release(files_requests)
+
         files_requests = requests_iterator.next_request()
         self.assertEqual([f.id for f in files_requests.files], [17, 18])
-        # a.txt's remaining 4 bytes, then b.txt's 1 and 2 - one destination per range, and the buffer
-        # is reused from its start for every request
+        # a.txt's remaining 4 bytes, then b.txt's 1 and 2 - one destination per range, packed from the
+        # start of the buffer this request was given
         self.assertEqual(files_requests.range_dsts, [base, base + 4, base + 5])
         self.assertEqual(files_requests.file_base, [0, 1])
 
@@ -385,11 +473,11 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
             [FileChunks.contiguous(17, "a.txt", 10, [1, 2]), FileChunks.contiguous(18, "b.txt", 10, [3, 4])],
             5,
         )
-        self.assertEqual(len(requests_iterator.buffer), 10)
+        self.assertEqual(requests_iterator.buffer_size, 10)
 
         request = requests_iterator.next_request()
-        requests_iterator.buffer[0] = 9
-        requests_iterator.buffer[3] = 8
+        requests_iterator.buffers[0][0] = 9
+        requests_iterator.buffers[0][3] = 8
 
         file_id, range_index, view = requests_iterator.get_global_file_and_range(request, 0, 0)
         self.assertEqual((file_id, range_index), (17, 0))
@@ -400,6 +488,72 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
         self.assertEqual((file_id, range_index), (18, 0))
         self.assertEqual(len(view), 3)
         self.assertEqual(view[0], 8)
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFER_SIZE_BYTES_ENV_VAR_NAME: "4",
+                             RUNAI_STREAMER_MIN_RING_BUFFERS_ENV_VAR_NAME: "2"})
+    def test_consecutive_requests_get_distinct_buffers(self):
+        # 3 ranges of 4 bytes with a 4 byte buffer, and a budget affording exactly 2 buffers: one range
+        # per request, and the second request must NOT land in the first one's buffer - that is the
+        # whole point of the pool.
+        requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
+            MemoryCapMode.limited, [FileChunks.contiguous(17, "a.txt", 10, [4, 4, 4])], 8
+        )
+        self.assertEqual((requests_iterator.buffer_size, requests_iterator.num_buffers), (4, 2))
+
+        first = requests_iterator.next_request()
+        first_index = first.buffer_index
+        second = requests_iterator.next_request()
+        self.assertNotEqual(first_index, second.buffer_index)
+        self.assertNotEqual(first.range_dsts, second.range_dsts)
+
+        # exhausted: a third request has nowhere to go until one comes back
+        self.assertFalse(requests_iterator.has_free_buffer())
+        with self.assertRaises(RuntimeError):
+            requests_iterator.next_request()
+
+        # released, so the third request reuses the first one's buffer and packs from its base
+        requests_iterator.release(first)
+        third = requests_iterator.next_request()
+        self.assertEqual(third.buffer_index, first_index)
+        self.assertEqual(third.range_dsts, [requests_iterator.buffer_addresses[first_index]])
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFER_SIZE_BYTES_ENV_VAR_NAME: "4",
+                             RUNAI_STREAMER_MIN_RING_BUFFERS_ENV_VAR_NAME: "2"})
+    def test_releasing_twice_is_rejected(self):
+        # a double release would put the same buffer in the free list twice, so two live requests would
+        # silently share it and overwrite each other's data
+        requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
+            MemoryCapMode.limited, [FileChunks.contiguous(17, "a.txt", 10, [4, 4])], 8
+        )
+        request = requests_iterator.next_request()
+        requests_iterator.release(request)
+        with self.assertRaises(ValueError):
+            requests_iterator.release(request)
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFER_SIZE_BYTES_ENV_VAR_NAME: "4",
+                             RUNAI_STREAMER_MIN_RING_BUFFERS_ENV_VAR_NAME: "3"})
+    def test_buffers_are_distinct_slices_of_one_allocation(self):
+        requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
+            MemoryCapMode.limited, [FileChunks.contiguous(17, "a.txt", 10, [4, 4, 4])], 12
+        )
+        self.assertEqual(len(requests_iterator.buffers), 3)
+        self.assertEqual(len(requests_iterator.pool), 12)
+
+        # writing through one buffer must not disturb another, and each view must alias the pool
+        for index, buffer in enumerate(requests_iterator.buffers):
+            buffer[:] = index
+        self.assertEqual(list(requests_iterator.pool), [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2])
+        self.assertEqual(
+            requests_iterator.buffer_addresses,
+            [requests_iterator.pool.ctypes.data + 4 * i for i in range(3)],
+        )
+
+    def test_end_of_stream_does_not_consume_a_buffer(self):
+        requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
+            MemoryCapMode.largest_chunk, [], None
+        )
+        self.assertIsNone(requests_iterator.next_request())
+        self.assertTrue(requests_iterator.has_free_buffer())
 
     def test_get_global_file_and_range_zero_sized_range(self):
         requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(

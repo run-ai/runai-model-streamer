@@ -194,6 +194,11 @@ class FileStreamer:
         while True:
             yield from self.request_ready_chunks()
 
+            # The request is drained and the consumer has resumed past its last yield, so every view
+            # into its buffer has been used. Returning it to the pool before building the next request
+            # is what lets a ring of N buffers serve an arbitrarily long stream.
+            self.requests_iterator.release(self.active_request)
+
             self.active_request = self.requests_iterator.next_request()
             if self.active_request is None:
                 break
