@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <cstring>
 #include <filesystem>
+#include <map>
 #include <vector>
 #include "utils/fd/fd.h"
 #include "utils/logging/logging.h"
@@ -33,15 +34,23 @@ struct State {
     int error = 0;
 };
 
-State __state;
-std::vector<State> __multi_state;
-unsigned __multi_file_count = 0;
-unsigned __current_multi_file = 0;
+// One submission in flight. The caller may have several at once, so each owns its files, its cursor and
+// its response counters - sharing any of them attributes one submission's progress to another, and a
+// shared file list means a second request destroys the first one's pending work.
+struct Submission {
+    std::vector<State> files;
+    unsigned current_file = 0;
+    unsigned response_total = 0;
+    unsigned response_given = 0;
 
-// multi-request bookkeeping: the mock serves one submission at a time, so a single id/counter suffices.
-SubmissionId __submission_id = 0;
-unsigned __response_total = 0;   // total sub-range responses expected for the current submission
-unsigned __response_given = 0;   // responses handed out so far
+    bool drained() const { return response_given >= response_total; }
+};
+
+// Live submissions, keyed by the id responses are attributed to and erased once drained. A map (rather
+// than a list walked per response) because the id is the lookup key and ids are handed out in order.
+std::map<SubmissionId, Submission> __submissions;
+SubmissionId __last_submission_id = 0;    // monotonic for the process, so a stale id is never reused
+SubmissionId __round_robin_cursor = 0;    // id served last, so the next response comes from another submission
 
 
 // Record one file's ranges. The seek is deliberately NOT done here: each range seeks to its own offset
@@ -125,7 +134,11 @@ int response(void * streamer, unsigned * index, State * state)
 
 extern "C" int runai_start(void ** streamer)
 {
-    __state = State{};
+    // A new streamer starts with nothing in flight. runai_request now ACCUMULATES submissions rather than
+    // replacing the single one, so without a reset here a test that abandons a submission undrained would
+    // leak it into the next test's responses.
+    __submissions.clear();
+    __round_robin_cursor = 0;
     *streamer = reinterpret_cast<void*>(0x123456789ABCDEF0);
     return 0;
 }
@@ -134,23 +147,21 @@ extern "C" void runai_end(void * streamer)
 {
 }
 
-// Pull the next ready sub-range across the multi-file state (shared by runai_response). Returns -1 when
-// every file is drained.
-static int mock_next_response(void * streamer, unsigned * file_index, unsigned * index)
+// Serve the next range of ONE submission. Returns -1 when that submission has no range left.
+static int submission_next_response(void * streamer, Submission & submission, unsigned * file_index, unsigned * index)
 {
-    if (__current_multi_file >= __multi_state.size()) {
-        return -1; // All files processed
+    while (submission.current_file < submission.files.size())
+    {
+        State & state = submission.files[submission.current_file];
+        if (state.current_item >= state.total_items)
+        {
+            ++submission.current_file;
+            continue;
+        }
+        *file_index = submission.current_file;
+        return response(streamer, index, &state);
     }
-
-    State& state = __multi_state[__current_multi_file];
-
-    if (state.current_item >= state.total_items) {
-        ++__current_multi_file;
-        return mock_next_response(streamer, file_index, index); // recurse to next file
-    }
-
-    *file_index = __current_multi_file;
-    return response(streamer, index, &state);
+    return -1;
 }
 
 extern "C" int runai_set_credentials(
@@ -173,11 +184,7 @@ extern "C" int runai_request(
     void ** range_dsts
 )
 {
-    __multi_state.clear();
-    __current_multi_file = 0;
-    __multi_file_count = num_files;
-    __response_total = 0;
-    __response_given = 0;
+    Submission submission;
 
     // The range arrays are flat and grouped by file in the order of paths; base walks that grouping.
     // Each file's ranges are handed over as they were submitted - every range keeps its own offset,
@@ -196,14 +203,20 @@ extern "C" int runai_request(
                 range_dsts + base,
                 &state);
 
-        __response_total += n;
-        __multi_state.push_back(std::move(state));
+        submission.response_total += n;
+        submission.files.push_back(std::move(state));
         base += n;
     }
 
-    __submission_id += 1;
+    const SubmissionId id = ++__last_submission_id;
     if (out_submission_id != nullptr) {
-        *out_submission_id = __submission_id;
+        *out_submission_id = id;
+    }
+
+    // A submission owing no responses is never made live: it can never be drained, so it would stall the
+    // round robin forever. It is simply complete on arrival, which is what no responses means.
+    if (submission.response_total > 0) {
+        __submissions.emplace(id, std::move(submission));
     }
     return 0;
 }
@@ -217,19 +230,41 @@ extern "C" int runai_response(
     unsigned timeout_ms
 )
 {
-    int r = mock_next_response(streamer, file_index, index);
-    if (r < 0) {
-        return r;   // no more sub-ranges (drained) - not a real response
+    if (__submissions.empty()) {
+        return -1;   // everything drained - not a real response
     }
+
+    // Round robin across the live submissions so responses INTERLEAVE. The real streamer makes no ordering
+    // promise across submissions - its responder is demuxed by submission id for exactly that reason - so a
+    // mock that drained them in order would certify a caller that wrongly assumes ordering. Deterministic,
+    // and with one submission in flight it is the previous file-by-file order.
+    auto it = __submissions.upper_bound(__round_robin_cursor);
+    if (it == __submissions.end()) {
+        it = __submissions.begin();
+    }
+
+    const SubmissionId id = it->first;
+    Submission & submission = it->second;
+
+    int r = submission_next_response(streamer, submission, file_index, index);
+    if (r < 0) {
+        return r;   // a live submission always has a range left; defensive
+    }
+
+    __round_robin_cursor = id;
+    submission.response_given += 1;
 
     // r is a real sub-range result: 0 (Success) or a per-range error code. Set the out-params in both cases
     // (like the real C API), so a per-range error still carries its submission id and submission_done.
     if (out_submission_id != nullptr) {
-        *out_submission_id = __submission_id;
+        *out_submission_id = id;
     }
-    __response_given += 1;
+    const bool done = submission.drained();
     if (submission_done != nullptr) {
-        *submission_done = (__response_given >= __response_total) ? 1 : 0;
+        *submission_done = done ? 1 : 0;
+    }
+    if (done) {
+        __submissions.erase(it);
     }
     return r;
 }
