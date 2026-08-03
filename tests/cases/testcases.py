@@ -204,8 +204,8 @@ def compatibility_test_cases(backend_class, scheme, bucket_name):
                 contiguous transfers (hence several batches) rather than a single span;
               - a range larger than the object-storage chunk size, so it is split across several
                 backend reads that must land back to back at the right place;
-              - a zero-sized range, which does no backend read at all yet must still produce exactly
-                one response, in order;
+              - zero-sized ranges FIRST, in the middle and LAST in a file's list, each doing no backend
+                read at all yet still producing exactly one response, in order;
               - two ranges reading the SAME source bytes into DIFFERENT destinations, which nothing
                 can satisfy by aliasing or by reusing a destination;
               - two files in one submission, so a response must be attributed to the right file.
@@ -221,19 +221,25 @@ def compatibility_test_cases(backend_class, scheme, bucket_name):
                 f"scattered_small_{random_letters(5)}.bin", SCATTERED_SMALL_FILE_BYTESIZE, seed=1 << 20
             )
 
+            # Zero-sized ranges appear FIRST, in the middle, and LAST. Position matters on its own: the
+            # first range seeds the destination cursor and the coalescing pass, and the last one is the
+            # range whose response carries submission-done - so a zero-sized range dropped or mis-indexed
+            # at either edge fails differently than one in the middle.
             big_ranges = [
-                (11 * MIB, 1024),      # near EOF, requested first: not in file order
+                (3 * MIB, 0),          # zero-sized, FIRST
+                (11 * MIB, 1024),      # near EOF: not in file order
                 (64, 1024),            # far earlier in the file
                 (2 * MIB, 9 * MIB),    # spans several object-storage chunks
                 (1 * MIB, 4096),
-                (5 * MIB, 0),          # zero-sized: no backend read, but still one response
+                (5 * MIB, 0),          # zero-sized, MIDDLE
                 (1 * MIB, 4096),       # same source bytes as above, different destination
-                (0, 4),                # the very first bytes, requested last
+                (0, 4),                # the very first bytes, requested late
             ]
             small_ranges = [
                 (SCATTERED_SMALL_FILE_BYTESIZE - 512, 512),   # the tail
                 (0, SCATTERED_SMALL_FILE_BYTESIZE),           # the whole file
                 (4096, 8192),
+                (SCATTERED_SMALL_FILE_BYTESIZE, 0),           # zero-sized, LAST, and at EOF
             ]
             files = [
                 (big_url, big_content, big_ranges),

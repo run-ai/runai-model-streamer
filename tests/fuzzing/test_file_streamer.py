@@ -12,7 +12,10 @@ MIN_NUM_FILES = 1
 MAX_NUM_FILES = 20
 MIN_CHUNK_NUM = 1
 MAX_CHUNK_NUM = 500
-MIN_CHUNK_SIZE = 16
+# 0, not 16: a zero sized range is legal and is what a zero element tensor produces, so the fuzzer has to
+# be able to generate one. It reaches no storage yet still owes exactly one response, which is where
+# off-by-one indexing shows up - and at 0 it lands anywhere in a file's list, including first and last.
+MIN_CHUNK_SIZE = 0
 MAX_CHUNK_SIZE = 2048
 
 

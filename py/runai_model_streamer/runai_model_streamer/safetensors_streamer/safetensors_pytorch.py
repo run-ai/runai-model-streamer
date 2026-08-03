@@ -74,7 +74,11 @@ class SafetensorsMetadata:
                 tensor_metadata = SafetensorMetadata(name, safetensor_metadata)
                 self.tensors_metadata.append(tensor_metadata)
 
-        self.tensors_metadata.sort(key=lambda x: x.offsets.start)
+        # Size breaks ties so a ZERO ELEMENT tensor sorts before a real tensor that starts at the same
+        # offset - data_offsets [16, 16] and [16, 48] share a start. Without the tie-break the order comes
+        # from the header's key order via the stable sort, and if the real tensor happened to come first
+        # the gap check below would compute 16 + 32 > 16 and reject a perfectly good file as overlapping.
+        self.tensors_metadata.sort(key=lambda x: (x.offsets.start, x.get_bytesize()))
 
         for i in range(len(self.tensors_metadata)):
             current_tensor = self.tensors_metadata[i]

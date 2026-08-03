@@ -120,6 +120,15 @@ def generate_random_data(min_tensors, max_tensors):
         dtype = random.choice(all_available)
         shape = tuple(random.randint(1, 10) for _ in range(random.randint(1, 4)))
 
+        # Sometimes a ZERO ELEMENT tensor (one dimension is 0). It is a real safetensors entry - the
+        # reference implementation writes it with data_offsets [x, x] and yields it on read - and it is
+        # where a zero sized range comes from in production. Every layer has to carry it: one response is
+        # still owed for it, its shape must survive, and the distributed path must not drop it.
+        if random.randint(1, 6) == 1:
+            dims = list(shape)
+            dims[random.randrange(len(dims))] = 0
+            shape = tuple(dims)
+
         try:
             if dtype == torch.bool:
                 t = torch.rand(shape) > 0.5
