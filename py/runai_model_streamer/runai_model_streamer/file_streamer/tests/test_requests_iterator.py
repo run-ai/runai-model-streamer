@@ -193,24 +193,29 @@ class TestFilesRequestsIterator(unittest.TestCase):
         self.assertEqual(files_requests.files[0].id, 17)
         self.assertEqual(files_requests.files[0].sizes, [3])
 
-    def test_get_global_file_and_chunk(self):
+    def test_get_global_file_and_range(self):
         files_requests_iterator = FilesRequestsIterator(3, [FileChunks.contiguous(17, "a.txt", 10, [1, 2, 3, 4])])
 
-        files_requests_iterator.next_request()
+        first = files_requests_iterator.next_request()
 
-        file_id, chunk_index = files_requests_iterator.get_global_file_and_chunk(0, 0)
+        file_id, range_index = files_requests_iterator.get_global_file_and_range(first, 0, 0)
         self.assertEqual(file_id, 17)
-        self.assertEqual(chunk_index, 0)
+        self.assertEqual(range_index, 0)
 
-        file_id, chunk_index = files_requests_iterator.get_global_file_and_chunk(0, 1)
+        file_id, range_index = files_requests_iterator.get_global_file_and_range(first, 0, 1)
         self.assertEqual(file_id, 17)
-        self.assertEqual(chunk_index, 1)
+        self.assertEqual(range_index, 1)
 
-        files_requests_iterator.next_request()
+        second = files_requests_iterator.next_request()
 
-        file_id, chunk_index = files_requests_iterator.get_global_file_and_chunk(0, 0)
+        file_id, range_index = files_requests_iterator.get_global_file_and_range(second, 0, 0)
         self.assertEqual(file_id, 17)
-        self.assertEqual(chunk_index, 2)
+        self.assertEqual(range_index, 2)
+
+        # The earlier request is still resolvable now that a later one has been built - each request
+        # carries its own range_base rather than reading iterator state that has moved on. This is what
+        # allows a response to arrive while a subsequent submission is already in flight.
+        self.assertEqual(files_requests_iterator.get_global_file_and_range(first, 0, 1), (17, 1))
 
     def test_file_chunks_zero_chunks(self):
         requests_iterator = FilesRequestsIterator(10, [FileChunks(17, "a.txt", [], [])])
@@ -374,7 +379,7 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
         self.assertEqual(files_requests.range_dsts, [base, base + 4, base + 5])
         self.assertEqual(files_requests.file_base, [0, 1])
 
-    def test_get_global_file_and_chunk_aliases_the_buffer(self):
+    def test_get_global_file_and_range_aliases_the_buffer(self):
         requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
             MemoryCapMode.unlimited,
             [FileChunks.contiguous(17, "a.txt", 10, [1, 2]), FileChunks.contiguous(18, "b.txt", 10, [3, 4])],
@@ -382,31 +387,31 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
         )
         self.assertEqual(len(requests_iterator.buffer), 10)
 
-        requests_iterator.next_request()
+        request = requests_iterator.next_request()
         requests_iterator.buffer[0] = 9
         requests_iterator.buffer[3] = 8
 
-        file_id, chunk_index, view = requests_iterator.get_global_file_and_chunk(0, 0)
-        self.assertEqual((file_id, chunk_index), (17, 0))
+        file_id, range_index, view = requests_iterator.get_global_file_and_range(request, 0, 0)
+        self.assertEqual((file_id, range_index), (17, 0))
         self.assertEqual(len(view), 1)
         self.assertEqual(view[0], 9)
 
-        file_id, chunk_index, view = requests_iterator.get_global_file_and_chunk(1, 0)
-        self.assertEqual((file_id, chunk_index), (18, 0))
+        file_id, range_index, view = requests_iterator.get_global_file_and_range(request, 1, 0)
+        self.assertEqual((file_id, range_index), (18, 0))
         self.assertEqual(len(view), 3)
         self.assertEqual(view[0], 8)
 
-    def test_get_global_file_and_chunk_zero_sized_range(self):
+    def test_get_global_file_and_range_zero_sized_range(self):
         requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
             MemoryCapMode.unlimited, [FileChunks.contiguous(17, "a.txt", 10, [5, 0, 3])], None
         )
 
-        requests_iterator.next_request()
+        request = requests_iterator.next_request()
 
-        file_id, chunk_index, view = requests_iterator.get_global_file_and_chunk(0, 1)
-        self.assertEqual((file_id, chunk_index), (17, 1))
+        file_id, range_index, view = requests_iterator.get_global_file_and_range(request, 0, 1)
+        self.assertEqual((file_id, range_index), (17, 1))
         self.assertEqual(len(view), 0)
 
         # the zero sized range consumes no buffer, so the range after it starts where it did
-        _, _, view = requests_iterator.get_global_file_and_chunk(0, 2)
+        _, _, view = requests_iterator.get_global_file_and_range(request, 0, 2)
         self.assertEqual(len(view), 3)

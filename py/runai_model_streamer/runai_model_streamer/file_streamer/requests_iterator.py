@@ -67,21 +67,32 @@ class FilesRequest:
     range_dsts is flat and in flattened range order (file 0's ranges, then file 1's, ...) - it IS the
     array handed to runai_request, and the same array response-time lookup indexes. file_base holds
     each file's first flat position, so mapping a response's (file_index, range_index) to a
-    destination is O(1) rather than a prefix-sum walk per response."""
+    destination is O(1) rather than a prefix-sum walk per response.
+
+    range_base is the other half of that mapping: each file's first GLOBAL range index, i.e. how many
+    of that file's ranges earlier requests already covered. Both bases are frozen when the file is
+    appended, which is what makes a request self-describing - everything needed to interpret one of
+    its responses is in the request object, not in iterator state that has since moved on. That is the
+    prerequisite for keeping several submissions in flight at once."""
 
     def __init__(self) -> None:
         self.files: List[FileChunks] = []
         self.file_base: List[int] = []
+        self.range_base: List[int] = []
         self.num_ranges = 0
         self.range_dsts: List[int] = []
 
-    def append(self, file_chunks: FileChunks) -> None:
+    def append(self, file_chunks: FileChunks, range_base: int) -> None:
         self.file_base.append(self.num_ranges)
+        self.range_base.append(range_base)
         self.num_ranges += len(file_chunks.sizes)
         self.files.append(file_chunks)
 
     def flat_index(self, file_index: int, range_index: int) -> int:
         return self.file_base[file_index] + range_index
+
+    def global_range_index(self, file_index: int, range_index: int) -> int:
+        return self.range_base[file_index] + range_index
 
 
 class FilesRequestsIteratorWithBuffer:
@@ -96,11 +107,12 @@ class FilesRequestsIteratorWithBuffer:
         # the base. That is local knowledge of its own allocation, not an assumption the range API makes.
         self.buffer_address = self.buffer.ctypes.data
 
-    def get_global_file_and_chunk(self, local_file_index: int, local_range_index: int) -> Tuple[str, int, memoryview]:
-        file_id, global_range_index = self.files_requests_iterator.get_global_file_and_chunk(
-            local_file_index, local_range_index
+    def get_global_file_and_range(
+        self, request: FilesRequest, local_file_index: int, local_range_index: int
+    ) -> Tuple[int, int, np.ndarray]:
+        file_id, global_range_index = self.files_requests_iterator.get_global_file_and_range(
+            request, local_file_index, local_range_index
         )
-        request = self.files_requests_iterator.active_request
         start = request.range_dsts[request.flat_index(local_file_index, local_range_index)] - self.buffer_address
         size = request.files[local_file_index].sizes[local_range_index]
         return file_id, global_range_index, self.buffer[start: start + size]
@@ -168,23 +180,28 @@ class FilesRequestsIterator:
         self.q = deque(FileChunksIterator(file_chunks)
             for file_chunks in files_chunks)
         
-        self.file_to_current_chunk_index = {}
+        # Per file, how many of its ranges have already been assigned to some request. Updated as each
+        # request is BUILT, so nothing reads it at response time - a request carries its own frozen
+        # range_base instead. Counting here rather than retroactively on the following call is what lets
+        # several requests be in flight: the map belongs to request construction, not to draining.
+        self.file_to_assigned_ranges = {}
         for file_chunks in files_chunks:
-            self.file_to_current_chunk_index[file_chunks.id] = 0
+            self.file_to_assigned_ranges[file_chunks.id] = 0
 
-        self.active_request: FilesRequest = None
-
-    def get_global_file_and_chunk(self, local_file_index: int, local_chunk_index: int) -> Tuple[str, int]:
-        file_id = self.active_request.files[local_file_index].id
-        return file_id, self.file_to_current_chunk_index[file_id] + local_chunk_index
+    def get_global_file_and_range(
+        self, request: FilesRequest, local_file_index: int, local_range_index: int
+    ) -> Tuple[int, int]:
+        # Answered entirely from the request, so a response can be resolved against its own submission
+        # however far the iterator has moved on since. The first element is the caller-assigned
+        # FileChunks.id, not a path.
+        return (
+            request.files[local_file_index].id,
+            request.global_range_index(local_file_index, local_range_index),
+        )
 
     def next_request(self) -> Optional[FilesRequest]:
         if not self.q:
             return None
-        
-        if self.active_request is not None:
-            for file_chunks in self.active_request.files:
-                self.file_to_current_chunk_index[file_chunks.id] += len(file_chunks.sizes)
 
         files_request = FilesRequest()
         current_request_memory_size = 0
@@ -213,12 +230,12 @@ class FilesRequestsIterator:
             # contributed only zero-sized ranges is a real contribution. The C++ layer answers a
             # zero-sized range like any other, and the caller's tensor indexing counts on exactly
             # one response per range.
-            files_request.append(file_chunks)
+            files_request.append(file_chunks, self.file_to_assigned_ranges[file_chunks.id])
+            self.file_to_assigned_ranges[file_chunks.id] += len(file_chunks.sizes)
             current_request_memory_size += file_chunks.total_size()
 
         if len(files_request.files) == 0:
             files_request = None
-        self.active_request = files_request
         return files_request
 
 class FileChunksIterator:

@@ -215,7 +215,7 @@ class FileStreamer:
                 if response is None:
                     return
                 consumed += 1
-                ret, submission_id, file_relative_index, chunk_relative_index, _submission_done = response
+                ret, submission_id, file_relative_index, range_relative_index, _submission_done = response
                 # Single-submission invariant: FileStreamer drains one submission fully before starting the next,
                 # so every response must belong to self.submission_id. This catches a stale response from a prior
                 # (e.g. failed) submission being misattributed to this one and returning wrong data. Use if/raise
@@ -232,20 +232,22 @@ class FileStreamer:
                         f"Could not receive response from libstreamer due to: {runai_response_str(ret)}"
                     )
 
-                file_path, chunk_index, chunk_buffer = self.requests_iterator.get_global_file_and_chunk(file_relative_index, chunk_relative_index)
-                # create one dimensional tensor from the chunk buffer
-                # we return a tensor of shape (1, chunk_buffer.size)
-                # the data type of the original chunk_buffer, as created by the requests_iterator, is preserved (uint8)
-                tensor = torch.from_numpy(chunk_buffer).view(1, -1)
+                file_id, range_index, range_buffer = self.requests_iterator.get_global_file_and_range(
+                    self.active_request, file_relative_index, range_relative_index
+                )
+                # create one dimensional tensor from the range buffer
+                # we return a tensor of shape (1, range_buffer.size)
+                # the data type of the original range_buffer, as created by the requests_iterator, is preserved (uint8)
+                tensor = torch.from_numpy(range_buffer).view(1, -1)
 
                 # currently file streamer is always reading a cpu buffer
                 # so we don't need to move the tensor to the device
                 # for future GDS/CUDA support we will need to move the tensor to the device (cpu or different device)
                 if self.device_str == "cpu":
-                    yield file_path, chunk_index, tensor
+                    yield file_id, range_index, tensor
                 else:
                     device_tensor = tensor.to(self.device_str)
-                    yield file_path, chunk_index, device_tensor
+                    yield file_id, range_index, device_tensor
         finally:
             # The submission must be drained however this generator ends, not only when it runs to
             # completion. range_dsts are raw addresses into the requests iterator's buffer, so a range still
