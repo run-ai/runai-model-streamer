@@ -57,7 +57,9 @@ class TestSafetensorsStreamerMock(unittest.TestCase):
             # Pass the *fake* path here. The patcher will rewrite it.
             run_sf.stream_file(fake_s3_path, None, "cpu")
             for name, tensor in run_sf.get_tensors():
-                our[name] = tensor
+                # clone: the yielded tensor is a VIEW into a ring buffer that is recycled once
+                # the generator advances, so anything compared after the loop must own its data
+                our[name] = tensor.clone()
 
         # 5. Load baseline from the REAL LOCAL PATH
         their = {}
@@ -96,7 +98,9 @@ class TestSafetensorsStreamerMock(unittest.TestCase):
         with SafetensorsStreamer() as run_sf:
             run_sf.stream_file(fake_gs_path, None, "cpu")
             for name, tensor in run_sf.get_tensors():
-                our[name] = tensor
+                # clone: the yielded tensor is a VIEW into a ring buffer that is recycled once
+                # the generator advances, so anything compared after the loop must own its data
+                our[name] = tensor.clone()
 
         # 5. Load baseline from the REAL LOCAL PATH
         their = {}

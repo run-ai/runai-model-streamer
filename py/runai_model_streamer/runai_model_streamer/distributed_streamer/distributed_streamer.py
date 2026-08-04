@@ -11,6 +11,11 @@ from runai_model_streamer.file_streamer import (
     FileChunks,
 )
 
+from runai_model_streamer.file_streamer.requests_iterator import (
+    RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME,
+    DEFAULT_MEMORY_LIMIT_STRING,
+)
+
 from runai_model_streamer.distributed_streamer.partition import (
     partition,
     get_total_number_of_chunks,
@@ -260,6 +265,8 @@ class _distributedStreamer:
         self.my_global_rank = 0
         self.groups_by_ranks = []
         self.broadcast_timeout = DEFAULT_BROADCAST_TIMEOUT
+        self.num_processes_on_node = 1
+        self.max_chunk = 0
 
     def __enter__(self) -> _distributedStreamer:
         return self
@@ -343,6 +350,8 @@ class _distributedStreamer:
         self.groups_by_ranks = params.groups_by_ranks
         self.broadcast_timeout = params.broadcast_timeout
         self.max_chunk = params.max_chunk
+        # the ranks sharing this host: the divisor for the node-total memory limit (see rank_memory_limit)
+        self.num_processes_on_node = params.num_processes_on_node
 
         # create distribution group for configuring timeout and possibly broadcast locally in each node 
         # The group must be created before partitioning the tensors, in case the group will be local
@@ -377,22 +386,47 @@ class _distributedStreamer:
             return
 
         # read files
-        original_memory_limit = os.environ.get("RUNAI_STREAMER_MEMORY_LIMIT")
-        try:
-            # for distributed streaming only - change default memory limit to unlimited
-            if self.original_group_rank == 0:
-                logger.debug(f"[RunAI Streamer][Distributed] Setting memory limit to unlimited")
-            if original_memory_limit == None:
-                os.environ["RUNAI_STREAMER_MEMORY_LIMIT"] = "-1"
-            self.file_streamer.stream_files(self.rank_file_chunks_list, credentials, "cpu")
-        except Exception as e:
-            raise e
-        finally:
-            if original_memory_limit is None:
-                os.environ.pop("RUNAI_STREAMER_MEMORY_LIMIT", None)
-            else:
-                os.environ["RUNAI_STREAMER_MEMORY_LIMIT"] = original_memory_limit
+        self.file_streamer.stream_files(
+            self.rank_file_chunks_list, credentials, "cpu", memory_limit=self.rank_memory_limit()
+        )
         self.reading_from_storage = True
+
+    def rank_memory_limit(self) -> int:
+        """This rank's share of RUNAI_STREAMER_MEMORY_LIMIT, which is a NODE total.
+
+        The ranks sharing a host share its RAM, so reading the variable per rank silently multiplies it
+        by the number of ranks on the node - which is how a 40 GB setting becomes hundreds of GB
+        resident. Divide by the ranks on THIS node, not the world size: with tensor parallelism spanning
+        hosts, world size counts ranks whose RAM sits on other machines, and every buffer would be
+        shrunk by the number of nodes for no benefit. It is also the denominator that matches the
+        partitioning, which is done within the node group - so the ranks sharing a host are exactly the
+        set that collectively reads one copy of the data.
+
+        -1 (unlimited) and 0 (largest range) are modes rather than quantities, and pass through unchanged.
+
+        This replaces the previous forced -1. Unlimited sized the host buffer to the whole of this rank's
+        share, which is the model-sized allocation the ring buffer exists to remove; the ring makes a
+        bounded limit cheap, so there is no longer a reason to opt out of one by default."""
+        configured = os.environ.get(RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME)
+        limit = int(configured) if configured is not None else int(DEFAULT_MEMORY_LIMIT_STRING)
+        if limit <= 0:
+            return limit
+
+        ranks = max(1, self.num_processes_on_node or 1)
+        # Floored at the largest range: a rank has to be able to buffer one whole tensor or streaming
+        # cannot progress, and with many ranks on a node the plain share can fall below that. A rank at
+        # that floor gets exactly ONE buffer - the ring never exceeds its budget, so a share that pays
+        # for a single buffer buys a single buffer, i.e. the sequential drain-then-refill path. Ring
+        # depth on such a node needs a larger node total, not a larger floor.
+        per_rank = max(limit // ranks, self.max_chunk)
+
+        if self.original_group_rank == 0:
+            logger.info(
+                f"[RunAI Streamer][Distributed] CPU memory limit "
+                f"{humanize.naturalsize(limit, binary=True)} is a node total: {ranks} rank(s) on this "
+                f"node -> {humanize.naturalsize(per_rank, binary=True)} per rank"
+            )
+        return per_rank
 
     def get_chunks(self) -> Iterator:
         if not self.file_streamer:

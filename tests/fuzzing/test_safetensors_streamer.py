@@ -43,7 +43,9 @@ class TestSafetensorStreamerFuzzing(unittest.TestCase):
         with SafetensorsStreamer() as run_sf:
             run_sf.stream_file(file_path, None, "cpu", False)
             for name, tensor in run_sf.get_tensors():
-                our[name] = tensor
+                # clone: the yielded tensor is a VIEW into a ring buffer that is recycled once
+                # the generator advances, so anything compared after the loop must own its data
+                our[name] = tensor.clone()
 
         their = {}
         # This MUST succeed now. If safe_open fails, our generator is producing invalid files.
@@ -63,7 +65,9 @@ class TestSafetensorStreamerFuzzing(unittest.TestCase):
         with SafetensorsStreamer() as run_sf:
             run_sf.stream_files(file_paths)
             for name, tensor in run_sf.get_tensors():
-                our[name] = tensor
+                # clone: the yielded tensor is a VIEW into a ring buffer that is recycled once
+                # the generator advances, so anything compared after the loop must own its data
+                our[name] = tensor.clone()
 
         their = {}
         for file_path in file_paths:

@@ -14,10 +14,8 @@ logger = logging.getLogger(__name__)
 RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME = "RUNAI_STREAMER_MEMORY_LIMIT"
 DEFAULT_MEMORY_LIMIT_STRING = "40000000000" # 40 GB (to be set to unlimited for distributed streaming)
 
-RUNAI_STREAMER_RING_BUFFER_SIZE_BYTES_ENV_VAR_NAME = "RUNAI_STREAMER_RING_BUFFER_SIZE_BYTES"
-DEFAULT_RING_BUFFER_SIZE_BYTES = 1024 * 1024 * 1024   # 1 GiB
-RUNAI_STREAMER_MIN_RING_BUFFERS_ENV_VAR_NAME = "RUNAI_STREAMER_MIN_RING_BUFFERS"
-DEFAULT_MIN_RING_BUFFERS = 2
+RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME = "RUNAI_STREAMER_RING_BUFFERS"
+DEFAULT_RING_BUFFERS = 4
 
 class RunaiStreamerMemoryLimitException(Exception):
     pass
@@ -184,15 +182,17 @@ class FilesRequestsIteratorWithBuffer:
     @staticmethod
     def with_memory_mode(
         files_chunks: List[FileChunks],
+        memory_limit: Optional[int] = None,
     ) -> FilesRequestsIteratorWithBuffer:
-        memory_limit = os.getenv(RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME)
+        """memory_limit, when given, overrides the environment.
+
+        The distributed path derives a PER RANK limit from the node total, which cannot be passed via
+        the environment without mutating process state that other ranks and later calls also read."""
         if memory_limit is None:
-            memory_limit = DEFAULT_MEMORY_LIMIT_STRING
-        memory_mode = _get_memory_mode(memory_limit)
-        if memory_limit is not None:
-            memory_limit = int(memory_limit)
+            configured = os.getenv(RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME)
+            memory_limit = int(configured if configured is not None else DEFAULT_MEMORY_LIMIT_STRING)
         return FilesRequestsIteratorWithBuffer.with_memory_cap(
-            memory_mode, files_chunks, memory_limit
+            _get_memory_mode(memory_limit), files_chunks, memory_limit
         )
 
 class FilesRequestsIterator:
@@ -302,13 +302,16 @@ def _ring_sizing(
 ) -> Tuple[int, int]:
     """(buffer_size, num_buffers) for the ring.
 
-    The BUFFER SIZE is the configured quantity and the count is derived, not the other way round.
-    A single submission is already spread across every C++ worker (Assigner divides its total bytes
-    between 16 filesystem / 8 object-storage workers), so more buffers add no parallelism - they only
-    cover the serial gap at the request boundary. What a buffer size that is too small does cost is
-    real: below roughly 32 MiB (filesystem) or 64 MiB (object storage) the workers do not even get one
-    block each. Hence a configured minimum size, floored by the largest single range, with the count
-    following from the memory limit."""
+    The DEPTH is the configured quantity and the buffer size is derived - the reverse of what this used
+    to do. Depth saturates: measured on a 207 GiB model over object storage at a fixed 10 GiB limit,
+    going from 1 buffer to 2 was worth 6.2% and 2 to 4 a further 1.5%, with nothing beyond. A saturating
+    quantity has a meaningful default; a good buffer size does not, since it depends on the model and the
+    budget. At a fixed limit the choice costs no memory either way - N x B is pinned to the budget - so
+    depth is a pure shape parameter and the memory limit alone controls how much host RAM the ring uses.
+
+    The buffer size is made as large as the depth allows (budget // N), floored by the largest single
+    range because a range carries one destination address and so cannot span two buffers. That floor is
+    what caps the reachable depth at budget // largest_range."""
     largest = _largest_range(files_chunks)
     total = sum(file_chunks.total_size() for file_chunks in files_chunks)
 
@@ -330,52 +333,43 @@ def _ring_sizing(
             )
         budget = min(user_memory_limit, total)
 
-    # min(configured, budget) so a limit tighter than the configured size is still honoured; max with
-    # largest so a buffer always holds at least one range, or the stream cannot progress.
-    buffer_size = max(largest, min(_ring_buffer_size(), budget))
+    target = _ring_buffers()
+
+    # As large as the depth allows, floored by the largest range. Both terms are <= budget (the limit is
+    # validated against largest above, and total >= largest always), so the ring can never exceed the
+    # limit - which is why there is no longer a warning for that case.
+    buffer_size = max(largest, budget // target)
 
     # Nothing to read at all (no ranges, or only zero-sized ones): one empty buffer, as before.
     if buffer_size == 0:
         return 0, 1
 
-    # The floor keeps the ring a ring - at least one buffer filling behind the one being consumed.
-    # It is a FLOOR, so it may exceed what the budget allows; that is deliberate, and the caller
-    # logs it. ceil(total/buffer_size) stops us allocating more buffers than there is data.
-    num_buffers = max(
-        _min_ring_buffers(),
-        min(budget // buffer_size, math.ceil(total / buffer_size)),
-    )
-
-    # The floor won: we are about to use more than the caller allowed. Say so with both numbers rather
-    # than exceeding a stated limit silently - an operator who set a limit and got more than they asked
-    # for has to be able to find out why from the log.
-    if num_buffers * buffer_size > budget:
-        logger.warning(
-            f"[RunAI Streamer] CPU ring needs {num_buffers} x "
-            f"{humanize.naturalsize(buffer_size, binary=True)} = "
-            f"{humanize.naturalsize(num_buffers * buffer_size, binary=True)}, which exceeds the memory "
-            f"limit of {humanize.naturalsize(budget, binary=True)}: "
-            f"{RUNAI_STREAMER_MIN_RING_BUFFERS_ENV_VAR_NAME}={_min_ring_buffers()} is a floor, so that "
-            f"many buffers are allocated regardless. Lower it to 1 to honour the limit exactly, at the "
-            f"cost of the pipelining the ring provides."
-        )
+    # budget // buffer_size re-derives the depth the budget can actually pay for, which drops below the
+    # target whenever the largest range lifted the buffer size above budget // target.
+    #
+    # ceil(total/buffer_size) then caps it at the number of requests there will be: a buffer that can
+    # never hold a request should not exist, and a stream fitting one buffer produces exactly one request
+    # (ceil == 1 iff total <= B) - which is precisely what the two safetensors metadata reads are on
+    # every model load. It can UNDERCOUNT when ranges pack wastefully (three 6 byte ranges in a 10 byte
+    # buffer take three requests, not two), leaving the ring a buffer shallower than it might be. That is
+    # a depth question, not a correctness one, and it can never collapse a multi-request stream to a
+    # single buffer, since ceil == 1 means the whole stream fits.
+    num_buffers = min(target, budget // buffer_size, math.ceil(total / buffer_size))
 
     return buffer_size, num_buffers
 
 
-def _ring_buffer_size() -> int:
-    return int(os.getenv(RUNAI_STREAMER_RING_BUFFER_SIZE_BYTES_ENV_VAR_NAME, DEFAULT_RING_BUFFER_SIZE_BYTES))
-
-
-def _min_ring_buffers() -> int:
+def _ring_buffers() -> int:
     # clamped at 1 so a hostile 0 cannot produce a ring with no buffers
-    return max(1, int(os.getenv(RUNAI_STREAMER_MIN_RING_BUFFERS_ENV_VAR_NAME, DEFAULT_MIN_RING_BUFFERS)))
+    return max(1, int(os.getenv(RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME, DEFAULT_RING_BUFFERS)))
 
 
-def _get_memory_mode(memory_limit: Optional[str]) -> MemoryCapMode:
-    if memory_limit == "-1":
+def _get_memory_mode(memory_limit: int) -> MemoryCapMode:
+    # An int rather than the raw string, because an explicitly supplied limit never was one - and it
+    # makes " -1" or "-01" behave like -1, which the string comparison rejected.
+    if memory_limit == -1:
         return MemoryCapMode.unlimited
-    elif memory_limit == "0":
+    elif memory_limit == 0:
         return MemoryCapMode.largest_chunk
     else:
         return MemoryCapMode.limited

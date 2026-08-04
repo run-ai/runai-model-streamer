@@ -62,7 +62,9 @@ class TestSafetensorsStreamer(unittest.TestCase):
         with SafetensorsStreamer() as run_sf:
             run_sf.stream_file(file_path, None, "cpu")
             for name, tensor in run_sf.get_tensors():
-                our[name] = tensor
+                # clone: the yielded tensor is a VIEW into a ring buffer that is recycled once
+                # the generator advances, so anything compared after the loop must own its data
+                our[name] = tensor.clone()
 
         their = {}
         with safe_open(file_path, framework="pt", device="cpu") as f:
@@ -299,7 +301,9 @@ class TestSafetensorsStreamer(unittest.TestCase):
             streamer.stream_file(path, None, "cpu")
             tensors = {}
             for name, tensor in streamer.get_tensors():
-                tensors[name] = tensor
+                # clone: the yielded tensor is a VIEW into a ring buffer that is recycled once
+                # the generator advances, so anything compared after the loop must own its data
+                tensors[name] = tensor.clone()
             
             self.assertIn("First", tensors)
             self.assertIn("Second", tensors)

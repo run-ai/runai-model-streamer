@@ -9,11 +9,11 @@ from runai_model_streamer.file_streamer import (FileStreamer, FileChunks)
 class TestRecoveryAfterRangeError(unittest.TestCase):
     """A per-range error must not break the streamer for everything after it.
 
-    Runs against the REAL library on purpose. The mock cannot express this: it serves one submission at a
-    time and resets its state on every runai_request, so responses abandoned by a previous submission simply
-    vanish and the streamer always appears to recover.
+    Runs against the REAL library on purpose. The mock cannot express this: it serves every range
+    synchronously from the calling thread, so a range is never genuinely in flight when the error fires
+    and the streamer always appears to recover.
 
-    Nothing here is filesystem specific. The drain lives in FileStreamer.request_ready_chunks, above the
+    Nothing here is filesystem specific. The drain lives in FileStreamer.get_chunks, above the
     backend, so an object-storage submission fails and recovers through the very same code - the filesystem
     is used only because it needs no emulator. Object storage differs in severity, not behaviour: its reads
     are genuinely in flight when the error fires, so more ranges are still writing into a buffer the next

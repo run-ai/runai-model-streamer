@@ -15,6 +15,10 @@ from runai_model_streamer.distributed_streamer.distributed_streamer import (
     RUNAI_STREAMER_CUDA_ALIGNMENT_ENV_VAR,
 )
 from runai_model_streamer.file_streamer import FileChunks
+from runai_model_streamer.file_streamer.requests_iterator import (
+    RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME,
+    RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME,
+)
 
 class TestDistributedStreamer(unittest.TestCase):
     
@@ -24,6 +28,9 @@ class TestDistributedStreamer(unittest.TestCase):
         cls.world_size = dist.get_world_size()
 
     def setUp(self):
+        # No buffer-size override is needed any more. The buffer size is now derived as budget // N, so
+        # it scales with the fixture instead of being a fixed 1 GiB minimum that collapsed onto the whole
+        # stream and left every test with a single request and a ring that never cycled.
         if self.rank == 0:
             self.temp_dir = tempfile.mkdtemp()
         else:
@@ -81,6 +88,47 @@ class TestDistributedStreamer(unittest.TestCase):
                 self.assertEqual(original_data_map[req.id], reconstructed_bytes)
             if self.rank == 0:
                 print(f"\n✅ Success test verified on all {self.world_size} ranks.")
+
+    def test_1_success_deep_ring_buffer(self):
+        # Pins the ring exactly, rather than letting it fall out of whatever the fixture happens to be:
+        # a rank with several submissions in flight, recycling buffers between them.
+        #
+        # RUNAI_STREAMER_MEMORY_LIMIT is a NODE total, so it is divided by the ranks on this host: the
+        # limit below is sized for 4 buffers PER RANK (4 x 260 x world_size). The buffer size is not set
+        # at all - budget // 4 lands on the chunk size on its own, which is the point of the new rule.
+        chunk = 260
+        num_chunks = 20
+        buffers_per_rank = 4
+        file_specs = [{"size": chunk * num_chunks, "chunks": [chunk] * num_chunks}]
+        requests = self._prepare_file_requests(file_specs)
+
+        original_data_map = {}
+        for req in requests:
+            with open(req.path, "rb") as f:
+                original_data_map[req.id] = f.read()
+        reconstructed_data_map = {req.id: [None] * len(req.sizes) for req in requests}
+
+        env_vars = {
+            "RUNAI_STREAMER_DIST": "1",
+            "RUNAI_STREAMER_DIST_BUFFER_MIN_BYTESIZE": "0",
+            RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: str(buffers_per_rank),
+            RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME: str(chunk * buffers_per_rank * self.world_size),
+        }
+        with patch.dict(os.environ, env_vars):
+            with DistributedStreamer() as streamer:
+                streamer.stream_files(requests, None, "cpu", True)
+                for req_id, chunk_idx, data_tensor in streamer.get_chunks():
+                    reconstructed_data_map[req_id][chunk_idx] = data_tensor.cpu().numpy().tobytes()
+
+                # the per-rank share really did buy a deep ring, not the floor of 2
+                requests_iterator = streamer.distributed_streamer.file_streamer.requests_iterator
+                self.assertEqual(requests_iterator.buffer_size, chunk)
+                self.assertEqual(requests_iterator.num_buffers, buffers_per_rank)
+
+            for req_id, chunks in reconstructed_data_map.items():
+                self.assertEqual(original_data_map[req_id], b"".join(chunks))
+            if self.rank == 0:
+                print(f"\n✅ Deep ring buffer test verified on all {self.world_size} ranks.")
 
     def test_1_success_empty_file_list(self):
         requests = []
