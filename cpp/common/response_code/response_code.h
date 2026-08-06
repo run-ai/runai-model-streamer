@@ -28,6 +28,10 @@ enum class ResponseCode : int
     TimedOut,
     UnsupportedBackendMix,
     CredentialsAlreadySet,
+    // Internal object-storage completion: the backend exhausted its own retry policy, but classified
+    // the terminal failure as safe for the streamer to retry. ObjectStorageWorker consumes this code and
+    // must convert it to FileAccessError before a response reaches the public API.
+    RetryableFileAccessError,
     __Max,
 };
 

@@ -42,6 +42,7 @@ constexpr std::array<const char *, static_cast<size_t>(ResponseCode::__Max)> __m
     "Timed out waiting for a response",
     "Streamer is locked to a single object-storage backend (S3/GCS/Azure); mixing object-storage backends in one streamer or submission is not supported",
     "Credentials were already set to a different value; create a new streamer to use different credentials",
+    "Retryable object storage file access error",
 };
 
 const char * description(int response_code)

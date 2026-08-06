@@ -1,10 +1,12 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -77,6 +79,8 @@ class ObjectStorageWorker : public utils::CapacityWorker<Workload, ObjectChunk>
     // workload once its last task lands. On stop / a drained responder, fail every in-flight workload.
     void drain_batch(std::atomic<bool> & stopped) override;
 
+    bool has_deferred_work() const override;
+
  private:
     // Per-task runtime state, indexed by local task index (assigned 0..N-1 in enqueue order). Touched only
     // by this worker thread.
@@ -88,14 +92,22 @@ class ObjectStorageWorker : public utils::CapacityWorker<Workload, ObjectChunk>
         common::ResponseCode error = common::ResponseCode::Success;   // first failing chunk's code
     };
 
+    struct ChunkState
+    {
+        ObjectChunk chunk;
+        size_t task_idx;
+        unsigned retry_count = 0;   // application-level retries already scheduled for this chunk
+    };
+
     // Per-in-flight-workload state, owned here and kept alive until the workload's last task finalizes.
     struct Inflight
     {
         Workload workload;                                         // owns the batches/responder/config
-        std::vector<size_t> chunk_task_idx;                        // handle - handle_base -> task index
+        std::vector<ChunkState> chunks;                            // handle - handle_base -> chunk state
         std::vector<TaskState> tasks;                              // per task (only non-zero-size tasks)
         std::map<unsigned, common::ResponseCode> error_by_file_index;   // first error per file (finalize)
         size_t remaining_tasks = 0;                                // tasks not yet completed; 0 -> finalize
+        std::optional<Workload::RetryDeadline> retry_deadline;     // one absolute deadline per submission
     };
 
     // In-flight workloads keyed by their handle block base. The blocks are contiguous and disjoint, so a
@@ -110,7 +122,16 @@ class ObjectStorageWorker : public utils::CapacityWorker<Workload, ObjectChunk>
     // Account one completed chunk of a task (from the backend or a short-circuit): free the window slot,
     // record the task's first error, report the task once its last chunk lands, and finalize the workload
     // once its last task lands.
-    void complete_chunk(InflightMap::iterator wlit, size_t task_idx, common::ResponseCode ret);
+    void complete_chunk(InflightMap::iterator wlit, size_t chunk_idx, common::ResponseCode ret);
+
+    // Release the failed attempt's window credit and schedule the same chunk after full-jitter backoff.
+    // Returns false when no retry budget exists or the submission deadline has expired.
+    bool schedule_retry(InflightMap::iterator wlit, size_t chunk_idx);
+
+    // Move retry entries whose jitter delay elapsed back into the normal capacity queue.
+    void promote_due_retries();
+
+    static std::chrono::milliseconds retry_delay(unsigned retry_count);
 
     // Push each batch's aggregate result: the whole-workload `code` if non-Success, else the batch's own
     // per-file error (Success for files whose tasks all succeeded).
@@ -131,6 +152,7 @@ class ObjectStorageWorker : public utils::CapacityWorker<Workload, ObjectChunk>
     unsigned _max_responses = 1;
 
     InflightMap _inflight;
+    std::multimap<Workload::RetryDeadline, ObjectChunk> _delayed_retries;
 
     // Next async chunk handle. The backend requires a unique handle per in-flight request on a client, and
     // each worker has its own client - so a completion only ever returns to the worker that submitted it and

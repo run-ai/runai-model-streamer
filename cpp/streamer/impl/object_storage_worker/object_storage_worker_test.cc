@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <chrono>
 #include <map>
 #include <memory>
 #include <numeric>
@@ -190,8 +191,40 @@ class ObjectStorageWorkerTest : public ::testing::Test
     void set_response_time(unsigned ms) { _dylib.dlsym<void(*)(unsigned)>("runai_mock_s3_set_response_time_ms")(ms); }
     void set_sentinel(bool on)          { _dylib.dlsym<void(*)(bool)>("runai_mock_s3_set_append_finished_sentinel")(on); }
     void set_window(size_t bytes)       { _dylib.dlsym<void(*)(size_t)>("runai_mock_s3_set_inflight_window")(bytes); }
+    void set_read_failures(unsigned count, common::ResponseCode code)
+    {
+        _dylib.dlsym<void(*)(unsigned, common::backend_api::ResponseCode_t)>("runai_mock_s3_set_read_failures")(count, code);
+    }
+    size_t total_read_requests()        { return _dylib.dlsym<size_t(*)()>("runai_mock_s3_total_read_requests")(); }
     size_t max_concurrent()             { return _dylib.dlsym<size_t(*)()>("runai_mock_s3_max_concurrent")(); }
     int clients()                       { return _dylib.dlsym<int(*)()>("runai_mock_s3_clients")(); }
+
+    static size_t count_object_chunks(const std::vector<Workload> & workloads, size_t chunk_bytesize)
+    {
+        size_t result = 0;
+        for (const auto & workload : workloads)
+        {
+            for (const auto & batch : workload.batches())
+            {
+                for (const auto & task : batch.tasks)
+                {
+                    if (task.info.bytesize > 0)
+                    {
+                        result += (task.info.bytesize + chunk_bytesize - 1) / chunk_bytesize;
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
+    static void set_retry_deadline(std::vector<Workload> & workloads, std::chrono::steady_clock::time_point deadline)
+    {
+        for (auto & workload : workloads)
+        {
+            workload.set_retry_deadline(deadline);
+        }
+    }
 
     std::shared_ptr<Config> config;
     std::shared_ptr<common::Responder> responder;
@@ -288,6 +321,76 @@ TEST_F(ObjectStorageWorkerTest, Window_Bounded)
     const auto peak = max_concurrent();
     EXPECT_LE(peak, window_chunks);
     EXPECT_GT(peak, 0u);
+}
+
+// A terminal backend error marked retryable requeues only that ObjectChunk. Every already-completed chunk
+// stays complete: total backend submissions grow by exactly one, and all public responses remain Success.
+TEST_F(ObjectStorageWorkerTest, RetryableChunkIsRequeuedWithoutRestartingWorkload)
+{
+    auto workloads = build(1, 1);
+    const size_t initial_chunks = count_object_chunks(workloads, config->s3_block_bytesize);
+    set_retry_deadline(workloads, std::chrono::steady_clock::now() + std::chrono::seconds(5));
+    set_read_failures(1, common::ResponseCode::RetryableFileAccessError);
+
+    {
+        auto pool = make_pool(1);
+        push_all(pool, workloads);
+        for (unsigned i = 0; i < submission->total_requests(); ++i)
+        {
+            EXPECT_EQ(responder->pop().ret, common::ResponseCode::Success);
+        }
+    }
+
+    EXPECT_EQ(total_read_requests(), initial_chunks + 1);
+}
+
+// A permanent storage error bypasses the application retry loop even when a retry deadline is configured.
+TEST_F(ObjectStorageWorkerTest, PermanentChunkErrorFailsWithoutRetry)
+{
+    auto workloads = build(1, 1);
+    const size_t initial_chunks = count_object_chunks(workloads, config->s3_block_bytesize);
+    set_retry_deadline(workloads, std::chrono::steady_clock::now() + std::chrono::seconds(5));
+    set_read_failures(1, common::ResponseCode::FileAccessError);
+
+    bool saw_file_access_error = false;
+    {
+        auto pool = make_pool(1);
+        push_all(pool, workloads);
+        for (unsigned i = 0; i < submission->total_requests(); ++i)
+        {
+            const auto ret = responder->pop().ret;
+            saw_file_access_error = saw_file_access_error || ret == common::ResponseCode::FileAccessError;
+            EXPECT_TRUE(ret == common::ResponseCode::Success || ret == common::ResponseCode::FileAccessError);
+        }
+    }
+
+    EXPECT_TRUE(saw_file_access_error);
+    EXPECT_EQ(total_read_requests(), initial_chunks);
+}
+
+// Once the total submission deadline has expired, the internal retryable marker is converted to the public
+// FileAccessError and no new backend attempt is submitted.
+TEST_F(ObjectStorageWorkerTest, ExpiredRetryDeadlineReturnsFileAccessError)
+{
+    auto workloads = build(1, 1);
+    const size_t initial_chunks = count_object_chunks(workloads, config->s3_block_bytesize);
+    set_retry_deadline(workloads, std::chrono::steady_clock::now() - std::chrono::milliseconds(1));
+    set_read_failures(1, common::ResponseCode::RetryableFileAccessError);
+
+    bool saw_file_access_error = false;
+    {
+        auto pool = make_pool(1);
+        push_all(pool, workloads);
+        for (unsigned i = 0; i < submission->total_requests(); ++i)
+        {
+            const auto ret = responder->pop().ret;
+            saw_file_access_error = saw_file_access_error || ret == common::ResponseCode::FileAccessError;
+            EXPECT_NE(ret, common::ResponseCode::RetryableFileAccessError);
+        }
+    }
+
+    EXPECT_TRUE(saw_file_access_error);
+    EXPECT_EQ(total_read_requests(), initial_chunks);
 }
 
 // New submissions pushed WHILE the consumer is draining earlier ones (from a separate thread) all complete:

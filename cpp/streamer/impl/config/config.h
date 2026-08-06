@@ -1,6 +1,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <ostream>
 
 namespace runai::llm::streamer::impl
@@ -22,7 +23,12 @@ namespace runai::llm::streamer::impl
 
 struct Config
 {
-    Config(unsigned concurrency, unsigned s3_concurrency, size_t s3_block_bytesize, size_t fs_block_bytesize, bool enforce_minimum = true);
+    Config(unsigned concurrency,
+           unsigned s3_concurrency,
+           size_t s3_block_bytesize,
+           size_t fs_block_bytesize,
+           bool enforce_minimum = true,
+           unsigned long object_storage_retry_timeout_seconds = 0);
     Config(bool enforce_minimum = true);
 
     unsigned max_concurrency() const;
@@ -33,6 +39,9 @@ struct Config
     unsigned s3_concurrency;
     size_t s3_block_bytesize;
     size_t fs_block_bytesize;
+    // Total application-level retry budget shared by all object chunks in one submission. Zero preserves
+    // fail-fast behavior after the storage plugin's native retry policy is exhausted.
+    std::chrono::seconds object_storage_retry_timeout;
 };
 
 std::ostream & operator<<(std::ostream &, const Config &);

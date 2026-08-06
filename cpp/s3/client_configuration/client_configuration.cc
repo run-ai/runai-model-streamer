@@ -36,6 +36,21 @@ size_t inflight_window_bytes(size_t chunk_bytesize, double target_gbps)
 
 ClientConfiguration::ClientConfiguration()
 {
+    // S3CrtClient retries before invoking the GetObject completion callback. Leave its native default
+    // policy intact unless the user asks for an explicit limit. If RUNAI_STREAMER_TIMEOUT is configured,
+    // ObjectStorageWorker may perform additional bounded chunk attempts after this policy is exhausted.
+    unsigned long max_retries = 0;
+    if (utils::try_getenv("RUNAI_STREAMER_S3_MAX_RETRIES", max_retries))
+    {
+        using RetryStrategyType = Aws::S3Crt::S3CrtClientConfiguration::CrtRetryStrategyConfig::CrtRetryStrategyType;
+        // NO_RETRY prevents the CRT S3 meta-request from obtaining a retry token at all and can fail a
+        // healthy initial request with AWS_IO_RETRY_PERMISSION_DENIED. An exponential strategy with a zero
+        // retry limit allows the initial attempt while still disabling native retry attempts.
+        config.crtRetryStrategyConfig.crtRetryStrategyType = RetryStrategyType::EXPONENTIAL_BACKOFF;
+        config.crtRetryStrategyConfig.config.maxRetries = static_cast<size_t>(max_retries);
+        LOG(INFO) << "S3 maximum retries per request is set to " << max_retries;
+    }
+
     unsigned long max_connections = utils::getenv<unsigned long>("RUNAI_STREAMER_S3_MAX_CONNECTIONS", 0);
     if (max_connections)
     {

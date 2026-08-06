@@ -2,6 +2,8 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
+#include <optional>
 #include <vector>
 #include "streamer/impl/batch/batch.h"
 #include "common/response_code/response_code.h"
@@ -36,6 +38,10 @@ struct Workload
 
     bool is_object_storage() const;
 
+    using RetryDeadline = std::chrono::steady_clock::time_point;
+    void set_retry_deadline(RetryDeadline deadline);
+    const std::optional<RetryDeadline> & retry_deadline() const;
+
     // The batches, in insertion order. There is no index to look one up by: a file whose ranges are not all
     // contiguous yields several ContiguousTransfers, hence several Batches, and two of them can be assigned
     // to the same workload - so position is NOT a file index. Every consumer iterates, and each batch
@@ -55,6 +61,7 @@ struct Workload
 
     std::vector<Batch> _batches;
     bool _is_object_storage = false;
+    std::optional<RetryDeadline> _retry_deadline;
 };
 
 }; // namespace runai::llm::streamer::impl

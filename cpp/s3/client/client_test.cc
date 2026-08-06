@@ -122,6 +122,28 @@ TEST(ParseEndpointScheme, PortWithoutHost)
     EXPECT_EQ(result.scheme.value(), Aws::Http::Scheme::HTTP);
 }
 
+TEST(ApplicationRetryableError, HonorsAwsClassification)
+{
+    EXPECT_TRUE(application_retryable_error(true, -1));   // transport error without an HTTP response
+    EXPECT_TRUE(application_retryable_error(false, -1));  // CRT budget exhaustion clears ShouldRetry
+    EXPECT_TRUE(application_retryable_error(true, 500));
+    EXPECT_TRUE(application_retryable_error(true, 503));
+    EXPECT_TRUE(application_retryable_error(false, 503));
+    EXPECT_FALSE(application_retryable_error(false, 301));
+}
+
+TEST(ApplicationRetryableError, RejectsPermanentClientErrors)
+{
+    for (const int status : {400, 401, 403, 404})
+    {
+        EXPECT_FALSE(application_retryable_error(true, status));
+    }
+
+    // These client-side status codes are explicitly transient.
+    EXPECT_TRUE(application_retryable_error(true, 408));
+    EXPECT_TRUE(application_retryable_error(true, 429));
+}
+
 namespace
 {
 

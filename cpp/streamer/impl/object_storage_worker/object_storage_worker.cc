@@ -1,6 +1,9 @@
 #include "streamer/impl/object_storage_worker/object_storage_worker.h"
 
 #include <algorithm>
+#include <chrono>
+#include <random>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -101,6 +104,8 @@ void ObjectStorageWorker::discard(Workload && workload)
 
 void ObjectStorageWorker::enqueue(Workload && workload)
 {
+    const auto retry_deadline = workload.retry_deadline();
+
     // Count chunks up front so we can reserve one contiguous block of handles and size chunk_task_idx.
     size_t total_chunks = 0;
     for (const auto & batch : workload.batches())
@@ -152,7 +157,8 @@ void ObjectStorageWorker::enqueue(Workload && workload)
 
         Inflight & wl = wlit->second;
         wl.workload = std::move(workload);   // noexcept; the workload now lives in the _inflight entry
-        wl.chunk_task_idx.resize(total_chunks);
+        wl.chunks.resize(total_chunks);
+        wl.retry_deadline = retry_deadline;
 
         size_t next_chunk = 0;
         // &batch below outlives this loop (it is stored in wl.tasks and used to route completions): the
@@ -179,8 +185,9 @@ void ObjectStorageWorker::enqueue(Workload && workload)
                 while (remaining > 0)
                 {
                     const size_t bs = std::min(remaining, _chunk_bytesize);   // last chunk is the remainder
-                    wl.chunk_task_idx[next_chunk] = task_idx;
-                    _queue->enqueue(ObjectChunk{ handle_base + next_chunk, offset, bs, buffer }, 1);   // cost 1
+                    ObjectChunk chunk{ handle_base + next_chunk, offset, bs, buffer };
+                    wl.chunks[next_chunk] = ChunkState{ chunk, task_idx, 0 };
+                    _queue->enqueue(chunk, 1);   // cost 1
                     ++wl.tasks[task_idx].remaining_chunks;
                     ++next_chunk;
                     offset += bs;
@@ -213,25 +220,38 @@ std::pair<ObjectStorageWorker::InflightMap::iterator, size_t> ObjectStorageWorke
     --it;
 
     const auto rel = handle - it->first;
-    if (rel >= it->second.chunk_task_idx.size())
+    if (rel >= it->second.chunks.size())
     {
         return { _inflight.end(), 0 };   // falls in a gap between blocks / past this block
     }
-    return { it, it->second.chunk_task_idx[rel] };
+    return { it, static_cast<size_t>(rel) };
 }
 
 void ObjectStorageWorker::submit(const ObjectChunk & chunk)
 {
-    auto [wlit, task_idx] = locate(chunk.handle);
+    auto [wlit, chunk_idx] = locate(chunk.handle);
     ASSERT(wlit != _inflight.end()) << "submitting a chunk with unknown handle " << chunk.handle;
 
+    ChunkState & cs = wlit->second.chunks[chunk_idx];
+    const size_t task_idx = cs.task_idx;
     TaskState & ts = wlit->second.tasks[task_idx];
 
     // the owning task has already failed a chunk: don't waste a backend read on a doomed task; account for
     // this chunk now. Chunks already issued before the failure still land and complete via drain_batch.
     if (ts.error != common::ResponseCode::Success)
     {
-        complete_chunk(wlit, task_idx, ts.error);
+        complete_chunk(wlit, chunk_idx, ts.error);
+        return;
+    }
+
+    // A delayed retry can become runnable exactly at (or just after) its submission-wide deadline.
+    // Do not start another AWS attempt outside the total budget.
+    if (cs.retry_count > 0 && wlit->second.retry_deadline.has_value() &&
+        std::chrono::steady_clock::now() >= wlit->second.retry_deadline.value())
+    {
+        LOG(WARNING) << "Object chunk " << chunk.handle << " exhausted RUNAI_STREAMER_TIMEOUT after "
+                     << cs.retry_count << " application retries";
+        complete_chunk(wlit, chunk_idx, common::ResponseCode::FileAccessError);
         return;
     }
 
@@ -243,19 +263,20 @@ void ObjectStorageWorker::submit(const ObjectChunk & chunk)
     catch (const common::Exception & e)
     {
         // the read could not be issued: fail this chunk (marks the task, short-circuits its siblings)
-        complete_chunk(wlit, task_idx, e.error());
+        complete_chunk(wlit, chunk_idx, e.error());
     }
     catch (...)
     {
-        complete_chunk(wlit, task_idx, common::ResponseCode::UnknownError);
+        complete_chunk(wlit, chunk_idx, common::ResponseCode::UnknownError);
     }
 }
 
-void ObjectStorageWorker::complete_chunk(InflightMap::iterator wlit, size_t task_idx, common::ResponseCode ret)
+void ObjectStorageWorker::complete_chunk(InflightMap::iterator wlit, size_t chunk_idx, common::ResponseCode ret)
 {
     _queue->complete(1);   // free the window slot so the next chunk can be submitted
 
     Inflight & wl = wlit->second;
+    const size_t task_idx = wl.chunks[chunk_idx].task_idx;
     TaskState & ts = wl.tasks[task_idx];
 
     ASSERT(ts.remaining_chunks > 0) << "chunk completion for a task with no remaining chunks";
@@ -285,6 +306,62 @@ void ObjectStorageWorker::complete_chunk(InflightMap::iterator wlit, size_t task
             finalize(wlit, common::ResponseCode::Success);
         }
     }
+}
+
+std::chrono::milliseconds ObjectStorageWorker::retry_delay(unsigned retry_count)
+{
+    // Full jitter over exponential backoff: [0, min(100ms * 2^(n-1), 1s)]. The submission deadline is
+    // the hard bound; the 1s cap also keeps shutdown latency bounded when a worker is waiting on a retry.
+    constexpr uint64_t base_ms = 100;
+    constexpr uint64_t cap_ms = 1000;
+    const unsigned shift = std::min(retry_count > 0 ? retry_count - 1 : 0, 4u);
+    const uint64_t upper_ms = std::min<uint64_t>(cap_ms, base_ms << shift);
+
+    thread_local std::mt19937_64 generator(std::random_device{}());
+    std::uniform_int_distribution<uint64_t> distribution(0, upper_ms);
+    return std::chrono::milliseconds(distribution(generator));
+}
+
+bool ObjectStorageWorker::schedule_retry(InflightMap::iterator wlit, size_t chunk_idx)
+{
+    Inflight & wl = wlit->second;
+    ChunkState & cs = wl.chunks[chunk_idx];
+    TaskState & ts = wl.tasks[cs.task_idx];
+    const auto now = std::chrono::steady_clock::now();
+
+    if (ts.error != common::ResponseCode::Success || !wl.retry_deadline.has_value() ||
+        now >= wl.retry_deadline.value())
+    {
+        return false;
+    }
+
+    _queue->complete(1);   // this failed attempt is no longer in flight; the logical chunk remains pending
+    ++cs.retry_count;
+
+    const auto delay = retry_delay(cs.retry_count);
+    const auto retry_at = std::min(now + delay, wl.retry_deadline.value());
+    _delayed_retries.emplace(retry_at, cs.chunk);
+
+    LOG(WARNING) << "Retrying object chunk " << cs.chunk.handle << " (offset " << cs.chunk.offset
+                 << ", bytes " << cs.chunk.bytesize << ") after " << delay.count()
+                 << " ms; application retry " << cs.retry_count;
+    return true;
+}
+
+void ObjectStorageWorker::promote_due_retries()
+{
+    const auto now = std::chrono::steady_clock::now();
+    auto it = _delayed_retries.begin();
+    while (it != _delayed_retries.end() && it->first <= now)
+    {
+        _queue->enqueue(it->second, 1);
+        it = _delayed_retries.erase(it);
+    }
+}
+
+bool ObjectStorageWorker::has_deferred_work() const
+{
+    return !_delayed_retries.empty();
 }
 
 void ObjectStorageWorker::report_workload(Inflight & wl, common::ResponseCode code)
@@ -328,6 +405,8 @@ void ObjectStorageWorker::abort_all(common::ResponseCode code)
     // always locates to end(). The cost of the mid-life call is that sibling in-flight workloads on this
     // worker are failed too, and their still-outstanding reads may write to already-reported buffers - the
     // OOM caller is expected to abort on UnknownError and tear the streamer down.
+    _delayed_retries.clear();
+
     for (auto it = _inflight.begin(); it != _inflight.end(); )
     {
         auto next = std::next(it);
@@ -359,6 +438,21 @@ void ObjectStorageWorker::drain_batch(std::atomic<bool> & stopped)
         return;
     }
 
+    promote_due_retries();
+
+    // With no backend attempt in flight, the only reason this non-idle worker is being drained is a
+    // jittered retry. Wait until the earliest retry is due, then put it back into CapacityQueue; the base
+    // class pumps it immediately after drain_batch returns.
+    if (_queue->inflight() == 0)
+    {
+        if (!_delayed_retries.empty())
+        {
+            std::this_thread::sleep_until(_delayed_retries.begin()->first);
+            promote_due_retries();
+        }
+        return;
+    }
+
     std::vector<common::backend_api::Response> responses;
     const auto r = _reader->async_response(responses, _max_responses);
     if (r != common::ResponseCode::Success)
@@ -385,7 +479,7 @@ void ObjectStorageWorker::drain_batch(std::atomic<bool> & stopped)
             break;
         }
 
-        auto [wlit, task_idx] = locate(response.handle);
+        auto [wlit, chunk_idx] = locate(response.handle);
         if (wlit == _inflight.end())
         {
             // A late completion (see abort_all): a chunk whose workload was already erased by an abort_all
@@ -397,9 +491,23 @@ void ObjectStorageWorker::drain_batch(std::atomic<bool> & stopped)
             continue;
         }
 
-        complete_chunk(wlit, task_idx, response.ret);
+        auto ret = response.ret;
+        if (ret == common::ResponseCode::RetryableFileAccessError)
+        {
+            if (schedule_retry(wlit, chunk_idx))
+            {
+                progressed = true;
+                continue;
+            }
+            // The retry budget is disabled/exhausted. The internal marker must never escape to callers.
+            ret = common::ResponseCode::FileAccessError;
+        }
+
+        complete_chunk(wlit, chunk_idx, ret);
         progressed = true;
     }
+
+    promote_due_retries();
 
     // The responder signalled it ran dry (empty round or end-of-round sentinel) while chunks are still in
     // flight: it was stopped or drained early. Abort rather than spin re-reading the same sentinel. Gated

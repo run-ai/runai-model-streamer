@@ -102,6 +102,90 @@ Boolean `0` or `1`
 
 `0`
 
+### RUNAI_STREAMER_S3_MAX_RETRIES
+
+Overrides the AWS S3 CRT retry limit for each ranged read request. Retries use
+exponential backoff with full jitter and are attempted only for failures that the
+AWS CRT classifies as retryable. The initial request is not included in this
+number; for example, `3` permits up to four total attempts.
+
+Set this to `0` to allow the initial AWS request but disable AWS CRT retry
+attempts. If the variable is not set, the AWS S3 CRT client's native retry
+policy is used. Once that policy is exhausted, a
+terminal error that AWS still classifies as retryable can enter Run:ai's
+application-level chunk retry loop when `RUNAI_STREAMER_TIMEOUT` is enabled.
+
+This limit multiplies the time allowed by `RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS`
+inside one application attempt. `RUNAI_STREAMER_TIMEOUT` remains the total
+deadline across any additional Run:ai attempts.
+
+#### Values accepted
+
+Non-negative integer
+
+#### Default value
+
+AWS S3 CRT default retry policy
+
+### RUNAI_STREAMER_TIMEOUT
+
+Controls the total application-level object-storage retry budget for one
+streaming submission. The value is measured in seconds. All chunks in the
+submission share one absolute deadline.
+
+After the storage plugin's native retry policy is exhausted, only the failed
+`ObjectChunk` is requeued with exponential full-jitter backoff. Chunks that have
+already completed are preserved. When the deadline expires, the failed chunk is
+reported as `FileAccessError`.
+
+For S3, application retries are attempted for transport failures (no HTTP
+response), HTTP 5xx, 408 and 429, or another error the AWS SDK still marks
+retryable. Permanent client errors such as HTTP 400, 401, 403 and 404 are failed
+immediately. GCS and Azure do not currently emit the internal retryable
+completion marker, so this setting does not add retries for those plugins.
+
+Set this to `0` or leave it unset to preserve fail-fast behavior after the
+storage plugin's retry policy is exhausted.
+
+#### Values accepted
+
+Non-negative integer, in seconds
+
+#### Default value
+
+`0` (application-level chunk retries disabled)
+
+### RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS
+
+Controls how long an S3 connection may remain below
+`RUNAI_STREAMER_S3_LOW_SPEED_LIMIT` before the current attempt fails. This is a
+low-throughput timeout, not an overall deadline for the complete model download.
+A retry starts a new attempt with a new timeout interval.
+
+The S3 CRT enforces a minimum monitoring interval of 3 seconds.
+
+#### Values accepted
+
+Non-negative integer, in milliseconds. `0` leaves the AWS SDK setting unchanged.
+
+#### Default value
+
+`1000` (the effective S3 CRT monitoring interval is at least 3 seconds)
+
+### RUNAI_STREAMER_S3_LOW_SPEED_LIMIT
+
+Controls the minimum acceptable S3 transfer rate. If the connection remains
+below this rate for `RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS`, the attempt fails and
+the retry policy decides whether to try again.
+
+#### Values accepted
+
+Non-negative integer, in bytes per second. `0` leaves the AWS SDK setting unchanged.
+
+#### Default value
+
+AWS SDK default (`1` byte per second)
+
 ### RUNAI_STREAMER_GCS_CREDENTIAL_FILE
 
 Specifies the path to a credential file to use for GCS authentication.
@@ -209,4 +293,3 @@ String `0` or `1`
 #### Default value
 
 `0`
-
