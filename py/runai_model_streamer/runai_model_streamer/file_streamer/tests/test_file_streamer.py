@@ -174,6 +174,34 @@ class TestRingConcurrency(unittest.TestCase):
             # and the second stream is correct, not just accepted
             self.assertEqual(results, expected)
 
+    @patch.dict(os.environ, {RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME: "64",
+                             RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "8"})
+    def test_a_generator_outliving_its_context_does_not_brick_the_streamer(self):
+        # The drain cannot consume anything once __exit__ has cleared the handle, so it returns with
+        # the counter still raised. stream_files reads that same counter and sets it only AFTER the
+        # guard, so a stale value rejects every later stream on this object - permanently. Zeroing is
+        # safe here precisely because runai_end has already joined the workers: nothing is in flight.
+        path, expected = self.write_ranges("outlived.txt", 8)
+        request = [FileChunks.contiguous(17, path, 0, [self.RANGE_SIZE] * 8)]
+
+        fs = FileStreamer()
+        with fs:
+            fs.stream_files(request)
+            chunks = fs.get_chunks()
+            next(chunks)
+            self.assertGreater(fs.outstanding, 0)
+        # the context is gone and the handle with it; the generator is still alive, and closing it now
+        # runs the finally against a streamer that no longer exists
+        chunks.close()
+        self.assertEqual(fs.outstanding, 0)
+
+        with fs:
+            fs.stream_files(request)       # re-entered, so this must be accepted
+            results = {}
+            for _file_id, range_index, buffer in fs.get_chunks():
+                results[range_index] = buffer.numpy().tobytes().decode("utf-8")
+            self.assertEqual(results, expected)
+
 
 class TestBindings(unittest.TestCase):
     def setUp(self):

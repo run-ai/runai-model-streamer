@@ -103,6 +103,49 @@ class TestSafetensorsStreamer(unittest.TestCase):
         with DistributedStreamer() as streamer:
             self.assertIsNone(streamer.ring_info())
 
+    def test_ring_info_is_none_for_a_rank_whose_partition_is_empty(self):
+        """A rank that read no model data must report no ring - not the metadata read's ring.
+
+        The FileStreamer is shared with the safetensors metadata reads, so requests_iterator is ALWAYS
+        set by the time the model read starts. A rank whose share of the partition is empty returns from
+        _distributedStreamer.stream_files before calling it again, so reading the iterator on demand
+        answers with the 8 byte metadata ring - which printed against the model's byte total looks
+        exactly like a ring clamped to a single buffer, the failure this report exists to expose.
+        """
+        from unittest.mock import patch
+        from runai_model_streamer.distributed_streamer import DistributedStreamer
+        from runai_model_streamer.file_streamer import FileChunks
+
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        file_path = os.path.join(base_dir, "test_files", "test.safetensors")
+        if not os.path.exists(file_path):
+            self.skipTest(f"Original test file not found at {file_path}")
+        requests = [FileChunks.contiguous(0, file_path, 0, [os.path.getsize(file_path)])]
+
+        with DistributedStreamer() as streamer:
+            # A real read first, standing in for the metadata reads: it leaves an iterator behind.
+            streamer.stream_files(requests, None, "cpu", False)
+            for _chunk in streamer.get_chunks():
+                pass
+            self.assertIsNotNone(streamer.ring_info())
+
+            # Now the model read on the empty rank. Both patches reproduce distributed_streamer.py
+            # exactly: is_distributed True (the fallback checks need a real process group otherwise),
+            # and the empty-partition early return, which sets reading_from_storage False and returns
+            # without touching the FileStreamer.
+            def empty_partition(*_args, **_kwargs):
+                streamer.distributed_streamer.reading_from_storage = False
+
+            with patch.object(
+                streamer, "set_is_distributed",
+                side_effect=lambda *_a: setattr(streamer, "is_distributed", True),
+            ), patch.object(
+                streamer.distributed_streamer, "stream_files", side_effect=empty_partition
+            ):
+                streamer.stream_files(requests, None, "cpu", True)
+
+            self.assertIsNone(streamer.ring_info())
+
     def test_valid_file(self):
         # Assuming test_files exists relative to the script location
         base_dir = os.path.dirname(os.path.abspath(__file__))

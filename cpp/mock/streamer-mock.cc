@@ -259,7 +259,12 @@ extern "C" int runai_response(
 {
     StreamerState & state = state_of(streamer);
     if (state.submissions.empty()) {
-        return -1;   // everything drained - not a real response
+        // Unreachable: the caller only asks while it has a live request, and every request owes at least
+        // one response. Deliberately NOT FinishedError - that maps to None in libstreamer.py, so an
+        // accounting bug would look like a clean teardown and silently truncate the stream. -1 is no
+        // ResponseCode, and the out-params are left zeroed, so submission id 0 - never issued, since
+        // SubmissionsMgr::_next_id starts at 1 - makes get_chunks raise on the first iteration.
+        return -1;
     }
 
     // Round robin across the live submissions so responses INTERLEAVE. The real streamer makes no ordering

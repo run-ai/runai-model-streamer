@@ -66,6 +66,7 @@ class DistributedStreamer:
         self.params = _distributedStreamerParams()
         self.distributed_streamer = _distributedStreamer(self.file_streamer)
         self.is_distributed = False
+        self._ring_info: Optional[Tuple[int, int, int]] = None
 
     def __enter__(self) -> DistributedStreamer:
         self.file_streamer.__enter__()
@@ -146,6 +147,10 @@ class DistributedStreamer:
             is_distributed: bool,
     ) -> None:
 
+        # Cleared before dispatch, so a call that builds no ring - or raises before it does - reports
+        # nothing rather than whatever the previous call left behind.
+        self._ring_info = None
+
         self.params.set_params(file_stream_requests)
 
         # check if distributed streaming can be used
@@ -153,29 +158,40 @@ class DistributedStreamer:
 
         if not self.is_distributed:
             self.file_streamer.stream_files(file_stream_requests, credentials, device)
+            built_ring = True
         else:
             self.distributed_streamer.stream_files(file_stream_requests, credentials, device, self.params)
+            # A rank whose share of the partition is empty returns before building anything, leaving the
+            # iterator from the safetensors metadata read in place. Reporting THAT as the model ring is
+            # worse than reporting nothing: `1 x 8 Bytes` against the model's byte total reads exactly
+            # like a ring clamped to a single buffer, which is the failure this report exists to expose.
+            built_ring = self.distributed_streamer.reading_from_storage
+
+        requests_iterator = getattr(self.file_streamer, "requests_iterator", None)
+        if built_ring and requests_iterator is not None:
+            self._ring_info = (
+                self.params.my_global_rank,
+                requests_iterator.num_buffers,
+                requests_iterator.buffer_size,
+            )
 
     def ring_info(self) -> Optional[Tuple[int, int, int]]:
         """(rank, num_buffers, buffer_size) for the ring the last stream_files built, or None if it
         built none.
 
-        An accessor rather than letting callers walk into the streamer, because the ring is two layers
-        down and which layer owns it depends on is_distributed - though both paths share the one
-        FileStreamer created in __init__, so the walk itself is short. The rank belongs here too: it is
-        the piece FileStreamer cannot know, which is why the ring is reported at INFO from the session
-        boundary (SafetensorsStreamer) and only at DEBUG where it is built.
+        Captured during stream_files rather than read from the streamer on demand. The FileStreamer is
+        shared with the safetensors metadata reads, so its requests_iterator outlives the call that
+        created it: asking it later answers "the last ring anyone built", which is a different question
+        and gives a wrong answer on exactly the rank that read no model data.
 
-        None is normal, not an error: a rank whose share of the partition is empty returns from
-        stream_files before building an iterator, and list_files-only use never builds one either."""
-        requests_iterator = getattr(self.file_streamer, "requests_iterator", None)
-        if requests_iterator is None:
-            return None
-        return (
-            self.params.my_global_rank,
-            requests_iterator.num_buffers,
-            requests_iterator.buffer_size,
-        )
+        An accessor rather than letting callers walk into the streamer, because which layer performs the
+        read depends on is_distributed. The rank belongs here too: it is the piece FileStreamer cannot
+        know, which is why the ring is reported at INFO from the session boundary (SafetensorsStreamer)
+        and only at DEBUG where it is built.
+
+        None is normal, not an error: a rank whose share of the partition is empty reads nothing, and
+        list_files-only use never streams at all."""
+        return self._ring_info
 
     def get_chunks(self) -> Iterator:
         if not self.file_streamer:

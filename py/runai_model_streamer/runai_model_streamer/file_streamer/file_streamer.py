@@ -306,5 +306,11 @@ class FileStreamer:
                 if runai_response(self.streamer) is None:
                     break   # teardown: no further responses are coming
                 self.outstanding -= 1
+        # Zero it even when the loop above could not run. Safe, and that needs saying, because this is
+        # the counter stream_files' use-after-free guard reads: both paths that skip the loop mean the
+        # responder is gone (runai_end has joined the workers), so no range can still be writing into
+        # the pool. Leaving a stale count instead makes the guard reject every later stream_files on
+        # this object - a FileStreamer re-entered after a generator outlived its context is bricked.
+        self.outstanding = 0
         self.live_requests = {}
 
