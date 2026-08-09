@@ -157,9 +157,9 @@ class FileStreamer:
         # single slots rather than per submission:
         #
         #   1. self.requests_iterator. Assigning the new one below drops the ONLY reference to the
-        #      previous ring's pool - live_requests, which holds the other handle, is reset on the same
-        #      line - so numpy frees it while the C++ workers still hold raw range_dsts pointers into
-        #      it. That is a use after free into reallocated heap, not merely a lost response.
+        #      previous ring's pool - live_requests, which holds the other handle, is cleared a few
+        #      lines after it - so numpy frees it while the C++ workers still hold raw range_dsts
+        #      pointers into it. A use after free into reallocated heap, not merely a lost response.
         #   2. get_global_file_and_range resolves a response through self.requests_iterator. Even with
         #      the old pool kept alive, an earlier submission's buffer_index would be looked up against
         #      the NEW ring's buffer list: a different buffer, plausible looking bytes, and no error.
@@ -196,9 +196,16 @@ class FileStreamer:
         """Fill the ring: build and submit a request for every free buffer, until the data runs out.
 
         Keeping every buffer busy is the whole point - the C++ layer then always has work queued behind
-        the submission being consumed, so the request boundary stops being a barrier. One submission
-        already spans every worker (Assigner divides its bytes across the whole pool), so this buys
-        pipelining depth, not parallelism.
+        the submission being consumed, so the request boundary stops being a barrier. It is not extra
+        parallelism: one submission already spans every worker (Assigner::assign divides its bytes across
+        _num_workers).
+
+        Removing that barrier is not the whole story, though, and the comment used to claim it was.
+        Depth also helps when there is NO barrier to remove - a model small enough that the ring spans it
+        and never recycles. Measured on Llama-3-8B over S3, 4 buffers beat 1 by 2.06% (n=11/10,
+        permutation p=0.0043). The mechanism is not established; candidates are per-worker work
+        granularity and interleaving at workload boundaries. Keep the depth, do not trust an argument
+        that says it cannot matter here.
 
         The three range arrays are flat and grouped by file, in the order of paths - which is the order
         the request's files are in, and the order range_dsts was built in, so they pass through as is.

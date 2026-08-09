@@ -435,10 +435,12 @@ class _distributedStreamer:
 
         ranks = max(1, self.num_processes_on_node or 1)
         # Floored at the largest range: a rank has to be able to buffer one whole tensor or streaming
-        # cannot progress, and with many ranks on a node the plain share can fall below that. A rank at
-        # that floor gets exactly ONE buffer - the ring never exceeds its budget, so a share that pays
-        # for a single buffer buys a single buffer, i.e. the sequential drain-then-refill path. Ring
-        # depth on such a node needs a larger node total, not a larger floor.
+        # cannot progress, and with many ranks on a node the plain share can fall below that. A rank
+        # driven down to that floor usually gets exactly ONE buffer - its share pays for a single
+        # largest-range buffer and no more, i.e. the sequential drain-then-refill path - so ring depth on
+        # such a node needs a larger node total, not a larger floor. "Usually" because max_chunk is the
+        # largest range across ALL ranks: a rank holding nothing that big, or less data than the floor,
+        # can still get a deeper ring.
         per_rank = max(limit // ranks, self.max_chunk)
 
         if self.original_group_rank == 0:

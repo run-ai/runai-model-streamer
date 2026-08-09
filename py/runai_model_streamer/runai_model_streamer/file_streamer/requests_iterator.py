@@ -312,12 +312,17 @@ def _ring_sizing(
     to do. Depth saturates: measured on a 207 GiB model over object storage at a fixed 10 GiB limit,
     going from 1 buffer to 2 was worth 6.2% and 2 to 4 a further 1.5%, with nothing beyond. A saturating
     quantity has a meaningful default; a good buffer size does not, since it depends on the model and the
-    budget. At a fixed limit the choice costs no memory either way - N x B is pinned to the budget - so
-    depth is a pure shape parameter and the memory limit alone controls how much host RAM the ring uses.
+    budget.
 
     The buffer size is made as large as the depth allows (budget // N), floored by the largest single
     range because a range carries one destination address and so cannot span two buffers. That floor is
-    what caps the reachable depth at budget // largest_range."""
+    what caps the reachable depth at budget // largest_range.
+
+    RAM: N x B never exceeds the limit, but it is NOT pinned to it, so depth is not a free choice. Under
+    a binding limit N x B is the budget and depth really is pure shape. When the stream is SMALLER than
+    the limit the span search below buys buffers slightly larger than budget // N, and the total then
+    varies with the depth target: Llama-3-8B at a 40 GB limit (budget 14.958 GiB) allocates 14.958 GiB at
+    depth 1, 15.06 at depth 4 and 15.66 at depth 8. Raising the depth on a small model costs real RAM."""
     largest = _largest_range(files_chunks)
     total = sum(file_chunks.total_size() for file_chunks in files_chunks)
 
@@ -342,8 +347,9 @@ def _ring_sizing(
     target = _ring_buffers()
 
     # As large as the depth allows, floored by the largest range. Both terms are <= budget (the limit is
-    # validated against largest above, and total >= largest always), so the ring can never exceed the
-    # limit - which is why there is no longer a warning for that case.
+    # validated against largest above, and total >= largest always), so THIS buffer size can never take
+    # the ring past the limit - which is why there is no longer a warning for that case. The span search
+    # below can raise it, and is separately capped at limit // target for the same reason.
     buffer_size = max(largest, budget // target)
 
     # Nothing to read at all (no ranges, or only zero-sized ones): one empty buffer, as before.
@@ -376,11 +382,13 @@ def _ring_sizing(
     # higher. The single-request stream falls out of the same fact - total <= B implies budget <= B
     # implies one buffer - which is what the two safetensors metadata reads are on every model load.
     #
-    # Note N x B is an ALLOCATION, not a bytes-in-flight figure. Requests pack to roughly 80% of a buffer
-    # because tensors are indivisible, so a 40 GB limit buys about 32 GB of read-ahead. That gap is the
-    # cost of fixed-size buffers and is not recoverable by changing N: N is already the maximum over
-    # every legal buffer size, since min(target, budget // B) is non-increasing in B and B is either the
-    # smallest legal size (largest) or large enough that budget // B >= target.
+    # Note N x B is an ALLOCATION, not a bytes-in-flight figure. On THIS path - a binding limit, so the
+    # ring recycles - requests pack to roughly 80% of a buffer because tensors are indivisible, making a
+    # 40 GB limit about 32 GB of read-ahead. (The span path above is different: sizing the buffer to fit
+    # the stream also happens to pack it well, measured at 97-99% on Llama-3-8B.) That gap is the cost of
+    # fixed-size buffers and is not recoverable by changing N: N is already the maximum over every legal
+    # buffer size, since min(target, budget // B) is non-increasing in B and B is either the smallest
+    # legal size (largest) or large enough that budget // B >= target.
     num_buffers = min(target, budget // buffer_size)
 
     return buffer_size, num_buffers

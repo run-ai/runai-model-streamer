@@ -86,12 +86,14 @@ class TestRingSizing(unittest.TestCase):
             _ring_sizing(MemoryCapMode.limited, self.files([10]), None)
 
     def test_the_ring_never_exceeds_the_limit(self):
-        """The property that replaced the floor-exceeded warning.
+        """The ring never allocates more than the caller asked for.
 
-        The old rule had MIN_RING_BUFFERS as a floor that could push N x B past what the caller asked
-        for, so it warned. Depth is now clamped by budget // buffer_size instead of floored, which
-        makes overrunning the limit unrepresentable - asserted here across the shapes that used to
-        produce it (a limit far below the data, a limit equal to one range, awkward divisors)."""
+        This replaced a runtime warning: an earlier draft of the sizing rule had a minimum depth that
+        could push N x B past the limit, so it warned instead of preventing it. Nothing in the code now
+        can produce that, by two separate arguments - depth is clamped by budget // buffer_size on the
+        ordinary path, and the span search is capped at limit // target - which is exactly why it is
+        worth asserting as a property rather than trusting either argument. Covers the shapes that used
+        to trip it: a limit far below the data, a limit equal to one range, awkward divisors."""
         for depth in ("1", "2", "3", "4", "16"):
             for sizes, limit in (
                 ([10] * 20, 60),        # limit far below the data - the old warning case
