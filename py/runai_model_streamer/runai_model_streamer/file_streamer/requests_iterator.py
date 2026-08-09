@@ -1,8 +1,8 @@
 from __future__ import annotations
 from typing import List, Tuple, Optional
 from collections import deque
+import bisect
 import enum
-import math
 import numpy as np
 import os
 import humanize
@@ -107,6 +107,12 @@ class FilesRequestsIteratorWithBuffer:
         self.files_requests_iterator = FilesRequestsIterator(buffer_size, files_chunks)
         self.buffer_size = buffer_size
         self.num_buffers = num_buffers
+        # DEBUG, not INFO: this class cannot know which rank it is on, and every rank builds its own
+        # ring, so at INFO a distributed load emits one unattributable copy of this line per rank. It
+        # also runs once per stream_files, and two of the three per model load describe the safetensors
+        # metadata reads (`1 x 8 Bytes`). SafetensorsStreamer reports the ring at INFO instead - once per
+        # load, with the rank - via DistributedStreamer.ring_info(). Keep this line: it is per file list,
+        # so it is still the way to see an individual request's ring when debugging.
         logger.debug(
             f"[RunAI Streamer] CPU ring: {num_buffers} x {humanize.naturalsize(buffer_size, binary=True)} "
             f"= {humanize.naturalsize(buffer_size * num_buffers, binary=True)} for files: "
@@ -344,19 +350,107 @@ def _ring_sizing(
     if buffer_size == 0:
         return 0, 1
 
-    # budget // buffer_size re-derives the depth the budget can actually pay for, which drops below the
-    # target whenever the largest range lifted the buffer size above budget // target.
+    # A stream smaller than the limit is already meant to be spanned entirely by the ring - budget is
+    # total in that case, so N x B is the whole model and no buffer is ever recycled. It misses, always:
+    # B = total // target leaves not one byte for packing waste, and tensors are indivisible, so every
+    # request stops short of B and a remainder request is arithmetic, not bad luck. Llama-3-8B at a 40 GB
+    # limit packs into 4 x 3.660 GiB of a 3.739 GiB buffer and then needs a 5th request for the last
+    # 336 MiB, which cannot start until the consumer frees one of the four.
     #
-    # ceil(total/buffer_size) then caps it at the number of requests there will be: a buffer that can
-    # never hold a request should not exist, and a stream fitting one buffer produces exactly one request
-    # (ceil == 1 iff total <= B) - which is precisely what the two safetensors metadata reads are on
-    # every model load. It can UNDERCOUNT when ranges pack wastefully (three 6 byte ranges in a 10 byte
-    # buffer take three requests, not two), leaving the ring a buffer shallower than it might be. That is
-    # a depth question, not a correctness one, and it can never collapse a multi-request stream to a
-    # single buffer, since ceil == 1 means the whole stream fits.
-    num_buffers = min(target, budget // buffer_size, math.ceil(total / buffer_size))
+    # So spend the headroom the limit already granted on slightly larger buffers. On Llama-3-8B that is
+    # 108 MiB more (15.06 GiB against a 37.25 GiB limit) to make the intent actually hold.
+    #
+    # Only when there IS headroom, which is also what keeps this off the path where it would cost most:
+    # a 150k tensor model reaches here only if the limit exceeds its entire size. When the limit binds
+    # (every distributed rank, and any model larger than the limit) recycling is the point and there is
+    # nothing to spend.
+    if memory_mode == MemoryCapMode.limited and total < user_memory_limit:
+        spanned = _span_whole_stream(files_chunks, buffer_size, user_memory_limit // target, target)
+        if spanned is not None:
+            return spanned
+
+    # The depth the budget can actually pay for, which drops below the target whenever the largest range
+    # lifted the buffer size above budget // target. There is no separate "no more buffers than there
+    # will be requests" term: budget <= total always (it is total, or min(limit, total)), so
+    # budget // buffer_size is already <= the request count, and packing waste only pushes the real count
+    # higher. The single-request stream falls out of the same fact - total <= B implies budget <= B
+    # implies one buffer - which is what the two safetensors metadata reads are on every model load.
+    #
+    # Note N x B is an ALLOCATION, not a bytes-in-flight figure. Requests pack to roughly 80% of a buffer
+    # because tensors are indivisible, so a 40 GB limit buys about 32 GB of read-ahead. That gap is the
+    # cost of fixed-size buffers and is not recoverable by changing N: N is already the maximum over
+    # every legal buffer size, since min(target, budget // B) is non-increasing in B and B is either the
+    # smallest legal size (largest) or large enough that budget // B >= target.
+    num_buffers = min(target, budget // buffer_size)
 
     return buffer_size, num_buffers
+
+
+def _packing_prefix(files_chunks: List[FileChunks]) -> List[int]:
+    """Running byte totals over every range of every file, in the order requests are packed.
+
+    One flat sequence is faithful to FilesRequestsIterator: it takes files off a FIFO queue and carries
+    a request across a file boundary, so file boundaries never force a new request."""
+    prefix = [0]
+    running = 0
+    for file_chunks in files_chunks:
+        for size in file_chunks.sizes:
+            running += size
+            prefix.append(running)
+    return prefix
+
+
+def _requests_needed(prefix: List[int], buffer_size: int, cap: int) -> Optional[int]:
+    """How many requests greedy packing needs for the whole stream, or None if it needs more than cap.
+
+    Binary searching the prefix sums for each request's extent makes this O(cap x log R) rather than
+    O(R): deciding the shape of a 4 buffer ring must not cost a walk over 150k tensors. Bailing out at
+    cap is the other half of that - an unpackable buffer size is rejected after cap + 1 probes."""
+    index = 0
+    requests = 0
+    last = len(prefix) - 1
+    while index < last:
+        # the furthest range whose end still fits in one buffer starting at this range
+        nxt = bisect.bisect_right(prefix, prefix[index] + buffer_size) - 1
+        if nxt <= index:
+            return None    # a single range exceeds the buffer; unreachable while buffer_size >= largest
+        index = nxt
+        requests += 1
+        if requests > cap:
+            return None
+    return requests
+
+
+def _span_whole_stream(
+    files_chunks: List[FileChunks],
+    buffer_size: int,
+    max_buffer_size: int,
+    target: int,
+) -> Optional[Tuple[int, int]]:
+    """Smallest buffer in [buffer_size, max_buffer_size] that packs the whole stream into at most
+    `target` requests, with the request count it achieves - or None when even the largest cannot.
+
+    The count is returned rather than assuming `target`, so a stream that fits in fewer requests gets
+    fewer buffers: a single request stream still gets exactly one buffer, not four empty ones.
+
+    Binary search is valid because request count is non-increasing in buffer size - a bigger buffer
+    takes a prefix at least as long at every step - so "fits in target requests" is monotone."""
+    if max_buffer_size < buffer_size:
+        return None
+
+    prefix = _packing_prefix(files_chunks)
+    if _requests_needed(prefix, max_buffer_size, target) is None:
+        return None    # the limit does not stretch far enough; recycle as usual
+
+    low, high = buffer_size, max_buffer_size
+    while low < high:
+        middle = (low + high) // 2
+        if _requests_needed(prefix, middle, target) is None:
+            low = middle + 1
+        else:
+            high = middle
+
+    return low, _requests_needed(prefix, low, target)
 
 
 def _ring_buffers() -> int:

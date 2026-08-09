@@ -42,8 +42,12 @@ class TestRingSizing(unittest.TestCase):
         # a range carries one destination and cannot span two buffers, so a 250 byte range forces a 250
         # byte buffer even though budget // 4 is 87 - and a 350 byte budget then pays for only one.
         # This is the mechanism that caps reachable depth at budget // largest_range.
+        #
+        # The limit is the stream size on purpose. A limit ABOVE the stream leaves headroom, and the
+        # sizing spends it on bigger buffers (see test_headroom_grows_the_buffer_...) - which escapes
+        # the very cap this test is about, so the fixture would no longer be testing its own name.
         self.assertEqual(
-            _ring_sizing(MemoryCapMode.limited, self.files([250], [10] * 10), 1000), (250, 1)
+            _ring_sizing(MemoryCapMode.limited, self.files([250], [10] * 10), 350), (250, 1)
         )
 
     @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "4"})
@@ -106,6 +110,96 @@ class TestRingSizing(unittest.TestCase):
                     f"{num_buffers} x {buffer_size}",
                 )
                 self.assertGreaterEqual(num_buffers, 1)
+
+    def requests_to_stream(self, files, buffer_size):
+        """How many requests the real packer needs - the thing the sizing is trying to predict."""
+        iterator = FilesRequestsIterator(buffer_size, files)
+        requests = 0
+        while iterator.next_request() is not None:
+            requests += 1
+        return requests
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "4"})
+    def test_headroom_grows_the_buffer_so_the_ring_spans_the_stream(self):
+        # 7 ranges of 30 against a limit far above the 210 byte stream. budget // 4 is 52, which holds
+        # only ONE range (two would be 60), so the stream needs 7 requests behind a ring of 4 and the
+        # tail waits for a buffer to come back. This is Llama-3-8B in miniature: 4 buffers sized to
+        # exactly total // 4 stranded a 5th request, because tensors are indivisible and B left no room
+        # for the waste. The limit has room, so the buffer grows until the ring spans the whole stream.
+        buffer_size, num_buffers = _ring_sizing(MemoryCapMode.limited, self.files([30] * 7), 1000)
+        self.assertEqual((buffer_size, num_buffers), (60, 4))
+        self.assertLessEqual(buffer_size * num_buffers, 1000)
+        # the point of the exercise: every request has its own buffer, so nothing is ever recycled
+        self.assertEqual(self.requests_to_stream(self.files([30] * 7), buffer_size), num_buffers)
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "4"})
+    def test_a_binding_limit_is_left_alone(self):
+        # The same stream under a limit BELOW it. There is no headroom to spend, recycling is the whole
+        # point, and the sizing must not go walking the ranges - a 150k tensor model would pay for it.
+        self.assertEqual(_ring_sizing(MemoryCapMode.limited, self.files([30] * 7), 120), (30, 4))
+
+    def test_the_span_search_is_skipped_whenever_there_is_no_headroom(self):
+        """The search must not RUN when the stream is not smaller than the limit - not merely return
+        the same answer.
+
+        Asserting the answer is not enough: with a binding limit the search would find nothing and fall
+        back, so every outcome-based test still passes with the guard deleted (verified). The guard is
+        there for COST - a model with 150k tensors would pay for a prefix sum over every one of them to
+        decide the shape of a four buffer ring - so the call itself is what has to be asserted.
+        """
+        cases = [
+            ("limit below the stream",  MemoryCapMode.limited,       210 // 2),
+            ("limit equal to the stream", MemoryCapMode.limited,     210),
+            ("unlimited",               MemoryCapMode.unlimited,     -1),
+            ("largest_chunk",           MemoryCapMode.largest_chunk, 0),
+        ]
+        for name, mode, limit in cases:
+            with self.subTest(name):
+                with patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "4"}):
+                    with patch(
+                        "runai_model_streamer.file_streamer.requests_iterator._span_whole_stream"
+                    ) as span:
+                        _ring_sizing(mode, self.files([30] * 7), limit)
+                span.assert_not_called()
+
+        # ... and it DOES run when there is headroom, so the assertions above cannot pass vacuously
+        with patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "4"}):
+            with patch(
+                "runai_model_streamer.file_streamer.requests_iterator._span_whole_stream"
+            ) as span:
+                span.return_value = None
+                _ring_sizing(MemoryCapMode.limited, self.files([30] * 7), 1000)
+        span.assert_called_once()
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "4"})
+    def test_headroom_too_small_to_help_changes_nothing(self):
+        # A limit only just above the stream: 220 // 4 = 55 still holds one range, so no reachable
+        # buffer size spans the stream in 4 requests. Growing to 55 would cost memory and fix nothing,
+        # so the sizing keeps the ordinary answer and recycles.
+        self.assertEqual(_ring_sizing(MemoryCapMode.limited, self.files([30] * 7), 220), (52, 4))
+
+    def test_growth_never_exceeds_the_limit(self):
+        """The invariant the growth must not break: the ring is still bounded by what was asked for."""
+        for depth in ("1", "2", "4", "8"):
+            for sizes, limit in (
+                ([30] * 7, 1000),          # generous headroom - growth applies
+                ([30] * 7, 220),           # marginal headroom
+                ([7] * 13, 5_000),         # nothing divides evenly
+                ([1000], 1_000_000),       # one range, enormous limit
+                ([3] * 100, 100_000),
+            ):
+                with patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: depth}):
+                    buffer_size, num_buffers = _ring_sizing(
+                        MemoryCapMode.limited, self.files(sizes), limit
+                    )
+                self.assertLessEqual(
+                    buffer_size * num_buffers, limit,
+                    f"depth={depth} sizes={sizes[:3]}... limit={limit} -> {num_buffers} x {buffer_size}",
+                )
+                # and the ring never has more buffers than there are requests to put in them
+                self.assertLessEqual(
+                    num_buffers, self.requests_to_stream(self.files(sizes), buffer_size)
+                )
 
     @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "0"})
     def test_zero_ring_buffers_still_yields_a_ring(self):

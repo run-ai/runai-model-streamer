@@ -153,8 +153,30 @@ class FileStreamer:
             device: Optional[str] = "cpu",
             memory_limit: Optional[int] = None,
 ) -> None:
+        # The previous stream has to be drained before another can start, because two things here are
+        # single slots rather than per submission:
+        #
+        #   1. self.requests_iterator. Assigning the new one below drops the ONLY reference to the
+        #      previous ring's pool - live_requests, which holds the other handle, is reset on the same
+        #      line - so numpy frees it while the C++ workers still hold raw range_dsts pointers into
+        #      it. That is a use after free into reallocated heap, not merely a lost response.
+        #   2. get_global_file_and_range resolves a response through self.requests_iterator. Even with
+        #      the old pool kept alive, an earlier submission's buffer_index would be looked up against
+        #      the NEW ring's buffer list: a different buffer, plausible looking bytes, and no error.
+        #
+        # Submission ids are unique and the responder demuxes by them, so attribution is not what
+        # breaks - lifetime and ownership are. To lift this restriction and allow overlapping streams
+        # (see design_multiple_requests.md): keep live_requests and outstanding across calls, hang the
+        # owning iterator off the FilesRequest instead of off self, release buffers to that owner, and
+        # let each iterator live until its last submission drains. Then delete this check.
+        if self.outstanding > 0:
+            raise ValueError(
+                f"cannot start a new stream while {self.outstanding} response(s) are outstanding from "
+                f"the previous one - consume or close get_chunks() before calling stream_files again"
+            )
+
         if not homogeneous_paths([file_stream_request.path for file_stream_request in file_stream_requests]):
-            raise RunaiStreamerInvalidInputException("Cannot stream files from multiple source types in parallel") 
+            raise RunaiStreamerInvalidInputException("Cannot stream files from multiple source types in parallel")
 
         self.device_str = device
 

@@ -5,6 +5,7 @@ import struct
 import json
 import tempfile
 import shutil
+import humanize
 from safetensors import safe_open
 from runai_model_streamer.safetensors_streamer.safetensors_streamer import (
     SafetensorsStreamer,
@@ -49,6 +50,58 @@ class TestSafetensorsStreamer(unittest.TestCase):
             f.write(tensor_data)
         
         return filepath
+
+    def ring_records(self, logs):
+        return [r for r in logs.records if "CPU ring" in r.getMessage()]
+
+    def test_the_ring_is_reported_once_per_load_with_the_rank(self):
+        """One INFO line per load, carrying the rank.
+
+        Both halves matter. ONCE: stream_files runs three times per load - twice for the safetensors
+        metadata - so reporting where the ring is BUILT gives three lines, two of them describing an
+        8 byte read. WITH THE RANK: every rank builds its own ring, so without it a distributed load
+        emits N indistinguishable copies, which is why the line lives at the session boundary rather
+        than inside FilesRequestsIteratorWithBuffer.
+        """
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        file_path = os.path.join(base_dir, "test_files", "test.safetensors")
+        if not os.path.exists(file_path):
+            self.skipTest(f"Original test file not found at {file_path}")
+
+        with self.assertLogs("runai_model_streamer", level="INFO") as logs:
+            with SafetensorsStreamer() as run_sf:
+                run_sf.stream_file(file_path, None, "cpu")
+                for _name, _tensor in run_sf.get_tensors():
+                    pass
+
+        records = self.ring_records(logs)
+        self.assertEqual(len(records), 1, f"expected one ring line, got {[r.getMessage() for r in records]}")
+        self.assertIn("Rank 0", records[0].getMessage())
+
+        # ...and it describes the MODEL read, not one of the metadata reads: the payload it reports is
+        # the file's tensor bytes. Asserting the size rather than the absence of a metadata-sized string
+        # on purpose - `assertNotIn("8 Bytes", ...)` looks like it says that but is a substring of
+        # "198 Bytes", so it fails on any fixture whose size happens to end in 8.
+        with safe_open(file_path, framework="pt", device="cpu") as f:
+            total = sum(f.get_tensor(name).nbytes for name in f.keys())
+        self.assertIn(humanize.naturalsize(total, binary=True), records[0].getMessage())
+
+        # the per-request line still exists for debugging - it is just below INFO now, so raising the
+        # level brings back one line per stream_files (the two metadata reads plus the model read)
+        with self.assertLogs("runai_model_streamer", level="DEBUG") as logs:
+            with SafetensorsStreamer() as run_sf:
+                run_sf.stream_file(file_path, None, "cpu")
+                for _name, _tensor in run_sf.get_tensors():
+                    pass
+        self.assertGreater(len(self.ring_records(logs)), 1)
+
+    def test_ring_info_is_none_before_streaming(self):
+        # a rank whose share is empty never builds an iterator, and list_files-only use never does
+        # either; the reporter must treat that as normal rather than raising
+        from runai_model_streamer.distributed_streamer import DistributedStreamer
+
+        with DistributedStreamer() as streamer:
+            self.assertIsNone(streamer.ring_info())
 
     def test_valid_file(self):
         # Assuming test_files exists relative to the script location

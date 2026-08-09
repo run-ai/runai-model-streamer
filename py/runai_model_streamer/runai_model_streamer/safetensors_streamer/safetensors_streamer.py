@@ -272,6 +272,33 @@ class SafetensorsStreamer:
             device=device,
             is_distributed=is_distributed,
         )
+        self._log_ring()
+
+    def _log_ring(self) -> None:
+        """Report the ring once per load, at the session boundary.
+
+        Here rather than where the ring is built, for two reasons. The rank: a distributed load builds
+        one ring per rank, and FilesRequestsIteratorWithBuffer cannot know which rank it is, so at INFO
+        it would emit N unattributable copies. And the count: stream_files runs three times per load,
+        twice for the safetensors metadata (`1 x 8 Bytes`), so only this one describes the model read.
+
+        Worth INFO at all because the depth is DERIVED - from the limit, the ranks on the node and the
+        largest tensor - not taken from the setting, so a ring clamped to one buffer is otherwise
+        indistinguishable from the configured four, and they perform very differently. A failure to
+        report must never break a load, hence the broad except."""
+        try:
+            ring = self.file_streamer.ring_info()
+            if ring is None:
+                return
+            rank, num_buffers, buffer_size = ring
+            logger.info(
+                f"[RunAI Streamer] Rank {rank}: CPU ring {num_buffers} x "
+                f"{humanize.naturalsize(buffer_size, binary=True)} = "
+                f"{humanize.naturalsize(num_buffers * buffer_size, binary=True)} "
+                f"for {humanize.naturalsize(self.total_size, binary=True)} in {len(self.files_to_tensors_metadata)} file(s)"
+            )
+        except Exception:
+            logger.debug("[RunAI Streamer] could not report the CPU ring", exc_info=True)
 
     def get_tensors(self) -> Iterator[torch.tensor]:
         for file_index, ready_chunk_index, buffer in self.file_streamer.get_chunks():

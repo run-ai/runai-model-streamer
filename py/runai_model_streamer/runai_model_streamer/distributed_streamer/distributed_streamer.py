@@ -156,6 +156,27 @@ class DistributedStreamer:
         else:
             self.distributed_streamer.stream_files(file_stream_requests, credentials, device, self.params)
 
+    def ring_info(self) -> Optional[Tuple[int, int, int]]:
+        """(rank, num_buffers, buffer_size) for the ring the last stream_files built, or None if it
+        built none.
+
+        An accessor rather than letting callers walk into the streamer, because the ring is two layers
+        down and which layer owns it depends on is_distributed - though both paths share the one
+        FileStreamer created in __init__, so the walk itself is short. The rank belongs here too: it is
+        the piece FileStreamer cannot know, which is why the ring is reported at INFO from the session
+        boundary (SafetensorsStreamer) and only at DEBUG where it is built.
+
+        None is normal, not an error: a rank whose share of the partition is empty returns from
+        stream_files before building an iterator, and list_files-only use never builds one either."""
+        requests_iterator = getattr(self.file_streamer, "requests_iterator", None)
+        if requests_iterator is None:
+            return None
+        return (
+            self.params.my_global_rank,
+            requests_iterator.num_buffers,
+            requests_iterator.buffer_size,
+        )
+
     def get_chunks(self) -> Iterator:
         if not self.file_streamer:
             raise ValueError("Streamer not initialized")
