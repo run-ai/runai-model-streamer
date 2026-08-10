@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <cstring>
 #include <filesystem>
+#include <map>
 #include <vector>
 #include "utils/fd/fd.h"
 #include "utils/logging/logging.h"
@@ -33,15 +34,39 @@ struct State {
     int error = 0;
 };
 
-State __state;
-std::vector<State> __multi_state;
-unsigned __multi_file_count = 0;
-unsigned __current_multi_file = 0;
+// One submission in flight. The caller may have several at once, so each owns its files, its cursor and
+// its response counters - sharing any of them attributes one submission's progress to another, and a
+// shared file list means a second request destroys the first one's pending work.
+struct Submission {
+    std::vector<State> files;
+    unsigned current_file = 0;
+    unsigned response_total = 0;
+    unsigned response_given = 0;
 
-// multi-request bookkeeping: the mock serves one submission at a time, so a single id/counter suffices.
-SubmissionId __submission_id = 0;
-unsigned __response_total = 0;   // total sub-range responses expected for the current submission
-unsigned __response_given = 0;   // responses handed out so far
+    bool drained() const { return response_given >= response_total; }
+};
+
+// ONE STREAMER's state, owned by the handle. The real library makes runai_start `new impl::Streamer`
+// and runai_end `delete` it (streamer/streamer.cc:22-56), so submissions and ids belong to a handle,
+// not to the process. Holding them in globals instead let a second runai_start wipe the submissions a
+// live streamer was still draining - and that is reachable, not hypothetical: FileStreamer.list_files
+// starts a temporary streamer when used outside its context manager, so listing during a stream would
+// corrupt it here while working in production. A mock that disagrees with the product about this
+// certifies nothing either way.
+struct StreamerState {
+    // Live submissions, keyed by the id responses are attributed to and erased once drained. A map
+    // (rather than a list walked per response) because the id is the lookup key and ids are ordered.
+    std::map<SubmissionId, Submission> submissions;
+    SubmissionId next_id = 1;              // 0 is reserved, matching impl SubmissionsMgr::_next_id
+    SubmissionId round_robin_cursor = 0;   // id served last, so the next response comes from another submission
+};
+
+// The handle IS the state. Every entry point casts it back, so a stale handle faults here exactly as it
+// would in the real library, rather than quietly working against shared globals.
+StreamerState & state_of(void * streamer)
+{
+    return *static_cast<StreamerState *>(streamer);
+}
 
 
 // Record one file's ranges. The seek is deliberately NOT done here: each range seeks to its own offset
@@ -125,32 +150,44 @@ int response(void * streamer, unsigned * index, State * state)
 
 extern "C" int runai_start(void ** streamer)
 {
-    __state = State{};
-    *streamer = reinterpret_cast<void*>(0x123456789ABCDEF0);
+    // A fresh state per streamer, so a new one cannot disturb another that is still draining. No reset of
+    // anything shared is needed (or possible) any more - there is nothing shared.
+    try
+    {
+        *streamer = new StreamerState;
+    }
+    catch (...)
+    {
+        // Literal rather than the enum, following this file's convention: mock/BUILD deps are only
+        // //utils/fd and //common/submission, so common/response_code is not on the include path.
+        return 11;   // common::ResponseCode::UnknownError
+    }
     return 0;
 }
 
 extern "C" void runai_end(void * streamer)
 {
+    // Really free it, like the real runai_end. A leaked state would be harmless in a test process, but
+    // then a handle used after runai_end would keep working here and fault in production - which is the
+    // bug FileStreamer.__exit__ clears self.streamer to avoid.
+    delete static_cast<StreamerState *>(streamer);
 }
 
-// Pull the next ready sub-range across the multi-file state (shared by runai_response). Returns -1 when
-// every file is drained.
-static int mock_next_response(void * streamer, unsigned * file_index, unsigned * index)
+// Serve the next range of ONE submission. Returns -1 when that submission has no range left.
+static int submission_next_response(void * streamer, Submission & submission, unsigned * file_index, unsigned * index)
 {
-    if (__current_multi_file >= __multi_state.size()) {
-        return -1; // All files processed
+    while (submission.current_file < submission.files.size())
+    {
+        State & state = submission.files[submission.current_file];
+        if (state.current_item >= state.total_items)
+        {
+            ++submission.current_file;
+            continue;
+        }
+        *file_index = submission.current_file;
+        return response(streamer, index, &state);
     }
-
-    State& state = __multi_state[__current_multi_file];
-
-    if (state.current_item >= state.total_items) {
-        ++__current_multi_file;
-        return mock_next_response(streamer, file_index, index); // recurse to next file
-    }
-
-    *file_index = __current_multi_file;
-    return response(streamer, index, &state);
+    return -1;
 }
 
 extern "C" int runai_set_credentials(
@@ -173,11 +210,7 @@ extern "C" int runai_request(
     void ** range_dsts
 )
 {
-    __multi_state.clear();
-    __current_multi_file = 0;
-    __multi_file_count = num_files;
-    __response_total = 0;
-    __response_given = 0;
+    Submission submission;
 
     // The range arrays are flat and grouped by file in the order of paths; base walks that grouping.
     // Each file's ranges are handed over as they were submitted - every range keeps its own offset,
@@ -196,14 +229,21 @@ extern "C" int runai_request(
                 range_dsts + base,
                 &state);
 
-        __response_total += n;
-        __multi_state.push_back(std::move(state));
+        submission.response_total += n;
+        submission.files.push_back(std::move(state));
         base += n;
     }
 
-    __submission_id += 1;
+    StreamerState & state = state_of(streamer);
+    const SubmissionId id = state.next_id++;
     if (out_submission_id != nullptr) {
-        *out_submission_id = __submission_id;
+        *out_submission_id = id;
+    }
+
+    // A submission owing no responses is never made live: it can never be drained, so it would stall the
+    // round robin forever. It is simply complete on arrival, which is what no responses means.
+    if (submission.response_total > 0) {
+        state.submissions.emplace(id, std::move(submission));
     }
     return 0;
 }
@@ -217,19 +257,47 @@ extern "C" int runai_response(
     unsigned timeout_ms
 )
 {
-    int r = mock_next_response(streamer, file_index, index);
-    if (r < 0) {
-        return r;   // no more sub-ranges (drained) - not a real response
+    StreamerState & state = state_of(streamer);
+    if (state.submissions.empty()) {
+        // Unreachable: the caller only asks while it has a live request, and every request owes at least
+        // one response. Deliberately NOT FinishedError - that maps to None in libstreamer.py, so an
+        // accounting bug would look like a clean teardown and silently truncate the stream. -1 is no
+        // ResponseCode, and the out-params are left zeroed, so submission id 0 - never issued, since
+        // SubmissionsMgr::_next_id starts at 1 - makes get_chunks raise on the first iteration.
+        return -1;
     }
+
+    // Round robin across the live submissions so responses INTERLEAVE. The real streamer makes no ordering
+    // promise across submissions - its responder is demuxed by submission id for exactly that reason - so a
+    // mock that drained them in order would certify a caller that wrongly assumes ordering. Deterministic,
+    // and with one submission in flight it is the previous file-by-file order.
+    auto it = state.submissions.upper_bound(state.round_robin_cursor);
+    if (it == state.submissions.end()) {
+        it = state.submissions.begin();
+    }
+
+    const SubmissionId id = it->first;
+    Submission & submission = it->second;
+
+    int r = submission_next_response(streamer, submission, file_index, index);
+    if (r < 0) {
+        return r;   // a live submission always has a range left; defensive
+    }
+
+    state.round_robin_cursor = id;
+    submission.response_given += 1;
 
     // r is a real sub-range result: 0 (Success) or a per-range error code. Set the out-params in both cases
     // (like the real C API), so a per-range error still carries its submission id and submission_done.
     if (out_submission_id != nullptr) {
-        *out_submission_id = __submission_id;
+        *out_submission_id = id;
     }
-    __response_given += 1;
+    const bool done = submission.drained();
     if (submission_done != nullptr) {
-        *submission_done = (__response_given >= __response_total) ? 1 : 0;
+        *submission_done = done ? 1 : 0;
+    }
+    if (done) {
+        state.submissions.erase(it);
     }
     return r;
 }

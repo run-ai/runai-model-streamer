@@ -4,7 +4,203 @@ import shutil
 import os
 from unittest.mock import patch
 from runai_model_streamer.file_streamer.file_streamer import FileStreamer
-from runai_model_streamer.file_streamer.requests_iterator import (MemoryCapMode, FileChunks)
+from runai_model_streamer.file_streamer.requests_iterator import (
+    MemoryCapMode,
+    FileChunks,
+    RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME,
+    RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME,
+)
+
+
+class TestRingConcurrency(unittest.TestCase):
+    """Several submissions in flight at once. Each range carries a distinct, position-encoding payload,
+    so a response attributed to the wrong submission or the wrong buffer produces the wrong text rather
+    than passing by luck."""
+
+    RANGE_SIZE = 8
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def write_ranges(self, name: str, count: int):
+        """A file of `count` ranges, range i holding exactly "rng{i:05d}"."""
+        expected = {i: f"rng{i:05d}" for i in range(count)}
+        path = os.path.join(self.temp_dir, name)
+        with open(path, "w") as handle:
+            handle.write("".join(expected[i] for i in range(count)))
+        return path, expected
+
+    def stream(self, path: str, count: int):
+        """Stream the file one range at a time, returning (results, max concurrently live submissions)."""
+        results = {}
+        max_live = 0
+        with FileStreamer() as fs:
+            fs.stream_files([FileChunks.contiguous(17, path, 0, [self.RANGE_SIZE] * count)])
+            for file_id, range_index, buffer in fs.get_chunks():
+                self.assertEqual(file_id, 17)
+                # read the payload BEFORE resuming the generator: once we resume, the submission may
+                # complete and its buffer be recycled under us
+                results[range_index] = buffer.numpy().tobytes().decode("utf-8")
+                max_live = max(max_live, len(fs.live_requests))
+        return results, max_live
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME: "64",
+                             RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "8"})
+    def test_many_submissions_in_flight_deliver_every_range(self):
+        # 8 ranges of 8 bytes and a 64 byte budget over 8 buffers: 8 bytes each, so all 8 requests are
+        # submitted up front and every response has to be attributed to its own submission.
+        path, expected = self.write_ranges("concurrent.txt", 8)
+        results, max_live = self.stream(path, 8)
+        self.assertEqual(results, expected)
+        self.assertGreater(max_live, 1, "expected several submissions in flight at once")
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME: "16",
+                             RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "2"})
+    def test_ring_recycles_buffers_across_many_requests(self):
+        # a ring of 2 serving 10 ranges: buffers must be released and refilled 5 times over, and a range
+        # must never be read out of a buffer that a later request has already overwritten
+        path, expected = self.write_ranges("recycled.txt", 10)
+        results, max_live = self.stream(path, 10)
+        self.assertEqual(results, expected)
+        self.assertEqual(max_live, 2)
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME: "32",
+                             RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "4"})
+    def test_deep_ring_recycles_while_other_submissions_are_still_in_flight(self):
+        # The steady state of a real load, which neither of the tests above reaches: a ring of 4 serving
+        # 20 ranges, so buffers are handed back and immediately re-submitted while three other
+        # submissions are still filling. Covers depth AND recycling at once - a refill that stops
+        # keeping the ring full stays correct, so only the max_live assertion catches it.
+        path, expected = self.write_ranges("deep.txt", 20)
+        results, max_live = self.stream(path, 20)
+        self.assertEqual(results, expected)
+        self.assertEqual(max_live, 4)
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME: "64",
+                             RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "8"})
+    def test_a_second_streamer_does_not_disturb_one_still_streaming(self):
+        # Streamer state belongs to the HANDLE, not the process: starting a second streamer must not
+        # touch the submissions a live one is still draining. Reachable in the product, not just here -
+        # FileStreamer.list_files starts a temporary streamer when used outside its context manager, so
+        # listing during a stream takes this path.
+        #
+        # This is a MOCK-FIDELITY test as much as a product one. The mock used to keep submissions in
+        # process-wide globals that runai_start cleared, so this failed against the mock ("response for
+        # unknown submission 0") while passing against the real library - the direction that makes a
+        # green suite meaningless.
+        path, expected = self.write_ranges("two_streamers.txt", 8)
+        with FileStreamer() as first:
+            first.stream_files([FileChunks.contiguous(17, path, 0, [self.RANGE_SIZE] * 8)])
+            chunks = first.get_chunks()
+            results = {}
+            file_id, range_index, buffer = next(chunks)
+            results[range_index] = buffer.numpy().tobytes().decode("utf-8")
+            self.assertGreater(len(first.live_requests), 1)
+
+            with FileStreamer() as second:
+                # a whole independent stream on the second streamer, start to finish
+                second.stream_files([FileChunks.contiguous(18, path, 0, [self.RANGE_SIZE] * 8)])
+                second_results = {}
+                for _file_id, index, second_buffer in second.get_chunks():
+                    second_results[index] = second_buffer.numpy().tobytes().decode("utf-8")
+                self.assertEqual(second_results, expected)
+
+            # the first streamer must still deliver every remaining range, correctly
+            for _file_id, index, buffer in chunks:
+                results[index] = buffer.numpy().tobytes().decode("utf-8")
+            self.assertEqual(results, expected)
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME: "64",
+                             RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "8"})
+    def test_abandoning_the_generator_drains_every_live_submission(self):
+        # the consumer walks away with several submissions still in flight. Every one of them must be
+        # drained before the streamer is torn down, or a late write lands in freed memory.
+        path, _ = self.write_ranges("abandoned.txt", 8)
+        with FileStreamer() as fs:
+            fs.stream_files([FileChunks.contiguous(17, path, 0, [self.RANGE_SIZE] * 8)])
+            chunks = fs.get_chunks()
+            next(chunks)
+            self.assertGreater(len(fs.live_requests), 1)
+            chunks.close()     # resumes the generator at its yield, running the finally
+            self.assertEqual(fs.outstanding, 0)
+            self.assertEqual(fs.live_requests, {})
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME: "64",
+                             RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "8"})
+    def test_streaming_again_before_draining_is_rejected(self):
+        # stream_files replaces the requests iterator, which drops the only reference to the previous
+        # ring's pool while the C++ layer still holds raw destination pointers into it. Left unguarded
+        # that is a use after free, and it surfaces (if at all) as a confusing unknown-submission error
+        # much later, so it has to fail here instead - see the comment on stream_files.
+        path, _ = self.write_ranges("undrained.txt", 8)
+        request = [FileChunks.contiguous(17, path, 0, [self.RANGE_SIZE] * 8)]
+        with FileStreamer() as fs:
+            fs.stream_files(request)
+            # bind the generator: an unreferenced one is collected as soon as next() returns, and
+            # closing it runs the drain - which would leave nothing for the guard to catch
+            chunks = fs.get_chunks()
+            next(chunks)                   # submissions live, nothing drained
+            self.assertGreater(fs.outstanding, 0)
+
+            with self.assertRaises(ValueError) as caught:
+                fs.stream_files(request)
+            self.assertIn("outstanding", str(caught.exception))
+
+            # the rejected call must leave the streamer exactly as it was, or the guard would turn a
+            # recoverable mistake into the corruption it exists to prevent
+            self.assertGreater(fs.outstanding, 0)
+            self.assertGreater(len(fs.live_requests), 0)
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME: "64",
+                             RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "8"})
+    def test_streaming_again_after_draining_is_allowed(self):
+        # The other half of the guard: abandoning a stream is legitimate, because closing the generator
+        # runs the drain. A guard that also blocked THIS would make an abandoned stream unrecoverable.
+        path, expected = self.write_ranges("redrained.txt", 8)
+        request = [FileChunks.contiguous(17, path, 0, [self.RANGE_SIZE] * 8)]
+        with FileStreamer() as fs:
+            fs.stream_files(request)
+            chunks = fs.get_chunks()
+            next(chunks)
+            chunks.close()
+
+            fs.stream_files(request)       # drained, so this is fine
+            results = {}
+            for _file_id, range_index, buffer in fs.get_chunks():
+                results[range_index] = buffer.numpy().tobytes().decode("utf-8")
+            # and the second stream is correct, not just accepted
+            self.assertEqual(results, expected)
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME: "64",
+                             RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "8"})
+    def test_a_generator_outliving_its_context_does_not_brick_the_streamer(self):
+        # The drain cannot consume anything once __exit__ has cleared the handle, so it returns with
+        # the counter still raised. stream_files reads that same counter and sets it only AFTER the
+        # guard, so a stale value rejects every later stream on this object - permanently. Zeroing is
+        # safe here precisely because runai_end has already joined the workers: nothing is in flight.
+        path, expected = self.write_ranges("outlived.txt", 8)
+        request = [FileChunks.contiguous(17, path, 0, [self.RANGE_SIZE] * 8)]
+
+        fs = FileStreamer()
+        with fs:
+            fs.stream_files(request)
+            chunks = fs.get_chunks()
+            next(chunks)
+            self.assertGreater(fs.outstanding, 0)
+        # the context is gone and the handle with it; the generator is still alive, and closing it now
+        # runs the finally against a streamer that no longer exists
+        chunks.close()
+        self.assertEqual(fs.outstanding, 0)
+
+        with fs:
+            fs.stream_files(request)       # re-entered, so this must be accepted
+            results = {}
+            for _file_id, range_index, buffer in fs.get_chunks():
+                results[range_index] = buffer.numpy().tobytes().decode("utf-8")
+            self.assertEqual(results, expected)
 
 
 class TestBindings(unittest.TestCase):
@@ -67,12 +263,12 @@ class TestBindings(unittest.TestCase):
             # every range produced exactly one response (full drain)
             self.assertEqual(seen, set(id_to_results))
 
-    @patch("os.getenv")
-    @patch("runai_model_streamer.file_streamer.requests_iterator._get_memory_mode")
-    def test_limited_memory_cap(self, mock_get_memory_mode, mock_getenv):
-        mock_get_memory_mode.return_value = MemoryCapMode.limited
-        mock_getenv.return_value = 6
-
+    # Patch the ENVIRONMENT, not os.getenv itself. Patching the lookup function makes every variable
+    # answer the same value, so this test used to set the ring's buffer size and buffer-count floor to 6
+    # as well as the memory limit - silently, and only because requests_iterator grew more variables.
+    # The real _get_memory_mode derives `limited` from 6 on its own, so it needs no patch either.
+    @patch.dict(os.environ, {RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME: "6"})
+    def test_limited_memory_cap(self):
         file_content = "XABBCCCDDDDEEEEEFFFFGGGHHI"
         file_id = 17
         file_path = os.path.join(self.temp_dir, "limited_test_file.txt")

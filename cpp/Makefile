@@ -22,8 +22,13 @@ build_azure_test:
 		"--config=${ARCH}" \
 		--config=azurite
 
+# --config=${ARCH} matches the `build` target above. Without it this lands in a DIFFERENT output tree and
+# repoints the bazel-bin symlink there, where libstreamer.so and the backend plugins are stale or absent -
+# every later run then fails with `OSError: ... cannot open shared object file`, which reads like a
+# product regression and is not one.
 build_mock:
-	bazel build mock:libstreamer-mock.so
+	bazel build mock:libstreamer-mock.so \
+		"--config=${ARCH}"
 
 test:
 	bazel test //...:all

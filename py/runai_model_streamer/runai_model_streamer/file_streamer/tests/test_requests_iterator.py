@@ -1,11 +1,215 @@
+import logging
+import os
 import unittest
+from unittest.mock import patch
 from runai_model_streamer.file_streamer.requests_iterator import (
     FileChunksIterator,
     FilesRequestsIterator,
     FilesRequestsIteratorWithBuffer,
     FileChunks,
-    MemoryCapMode
+    MemoryCapMode,
+    RunaiStreamerMemoryLimitException,
+    RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME,
+    _ring_sizing,
 )
+
+
+class TestRingSizing(unittest.TestCase):
+    """The ring's (buffer_size, num_buffers). The DEPTH is configured and the buffer size follows from
+    it: B = max(largest_range, budget // N), then N is clamped by what the budget affords and by how
+    many requests there will be. Ranges are sized in bytes and the depth is overridden per test so the
+    fixtures stay small and readable."""
+
+    def files(self, *sizes_per_file):
+        return [
+            FileChunks.contiguous(i, f"{i}.txt", 0, list(sizes))
+            for i, sizes in enumerate(sizes_per_file)
+        ]
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "4"})
+    def test_depth_is_the_target_and_the_buffer_follows(self):
+        # budget 400 over 4 buffers -> 100 each, and 500 bytes of data means all 4 get used
+        self.assertEqual(_ring_sizing(MemoryCapMode.limited, self.files([100] * 5), 400), (100, 4))
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "2"})
+    def test_the_depth_target_is_honoured(self):
+        # same data and budget as above, but asking for 2 buffers gives 2 twice the size - the whole
+        # point of the knob is that it decides the shape while the limit decides the memory
+        self.assertEqual(_ring_sizing(MemoryCapMode.limited, self.files([100] * 5), 400), (200, 2))
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "4"})
+    def test_largest_range_floors_the_buffer_and_so_caps_the_depth(self):
+        # a range carries one destination and cannot span two buffers, so a 250 byte range forces a 250
+        # byte buffer even though budget // 4 is 87 - and a 350 byte budget then pays for only one.
+        # This is the mechanism that caps reachable depth at budget // largest_range.
+        #
+        # The limit is the stream size on purpose. A limit ABOVE the stream leaves headroom, and the
+        # sizing spends it on bigger buffers (see test_headroom_grows_the_buffer_...) - which escapes
+        # the very cap this test is about, so the fixture would no longer be testing its own name.
+        self.assertEqual(
+            _ring_sizing(MemoryCapMode.limited, self.files([250], [10] * 10), 350), (250, 1)
+        )
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "4"})
+    def test_depth_never_exceeds_the_number_of_requests(self):
+        # 150 bytes in 50 byte buffers is 3 requests, so the 4th buffer could never hold one
+        self.assertEqual(_ring_sizing(MemoryCapMode.limited, self.files([50] * 3), 10_000), (50, 3))
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "4"})
+    def test_a_single_request_stream_gets_a_single_buffer(self):
+        # one range, so one request: a ring here would be buffers with nothing to pipeline against.
+        # This is what the safetensors metadata reads look like - a handful of bytes, twice per load.
+        self.assertEqual(_ring_sizing(MemoryCapMode.limited, self.files([8]), 10_000_000_000), (8, 1))
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "4"})
+    def test_unlimited_budgets_the_whole_stream(self):
+        # -1 keeps its documented meaning: the budget is the data, so the ring spans it at the target
+        # depth - 700 bytes over 4 buffers of 175
+        self.assertEqual(_ring_sizing(MemoryCapMode.unlimited, self.files([100] * 7), None), (175, 4))
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "4"})
+    def test_largest_chunk_mode_stays_a_single_buffer(self):
+        # mode 0 exists to mean minimal memory; a ring would defeat the only reason to ask for it
+        self.assertEqual(_ring_sizing(MemoryCapMode.largest_chunk, self.files([10, 40], [25]), None), (40, 1))
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "4"})
+    def test_nothing_to_read_gives_one_empty_buffer(self):
+        self.assertEqual(_ring_sizing(MemoryCapMode.unlimited, self.files([], []), None), (0, 1))
+        self.assertEqual(_ring_sizing(MemoryCapMode.unlimited, self.files([0, 0]), None), (0, 1))
+
+    def test_limit_below_largest_range_is_rejected(self):
+        with self.assertRaises(RunaiStreamerMemoryLimitException):
+            _ring_sizing(MemoryCapMode.limited, self.files([250]), 100)
+
+    def test_limited_without_a_limit_is_rejected(self):
+        with self.assertRaises(RunaiStreamerMemoryLimitException):
+            _ring_sizing(MemoryCapMode.limited, self.files([10]), None)
+
+    def test_the_ring_never_exceeds_the_limit(self):
+        """The ring never allocates more than the caller asked for.
+
+        This replaced a runtime warning: an earlier draft of the sizing rule had a minimum depth that
+        could push N x B past the limit, so it warned instead of preventing it. Nothing in the code now
+        can produce that, by two separate arguments - depth is clamped by budget // buffer_size on the
+        ordinary path, and the span search is capped at limit // target - which is exactly why it is
+        worth asserting as a property rather than trusting either argument. Covers the shapes that used
+        to trip it: a limit far below the data, a limit equal to one range, awkward divisors."""
+        for depth in ("1", "2", "3", "4", "16"):
+            for sizes, limit in (
+                ([10] * 20, 60),        # limit far below the data - the old warning case
+                ([10] * 20, 10),        # limit exactly one range: one buffer, no more
+                ([7] * 13, 100),        # nothing divides evenly
+                ([250], 250),           # a single range exactly filling the limit
+                ([1] * 100, 999_999),   # limit far above the data
+            ):
+                with patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: depth}):
+                    buffer_size, num_buffers = _ring_sizing(
+                        MemoryCapMode.limited, self.files(sizes), limit
+                    )
+                self.assertLessEqual(
+                    buffer_size * num_buffers, limit,
+                    f"depth={depth} sizes={sizes[:3]}... limit={limit} -> "
+                    f"{num_buffers} x {buffer_size}",
+                )
+                self.assertGreaterEqual(num_buffers, 1)
+
+    def requests_to_stream(self, files, buffer_size):
+        """How many requests the real packer needs - the thing the sizing is trying to predict."""
+        iterator = FilesRequestsIterator(buffer_size, files)
+        requests = 0
+        while iterator.next_request() is not None:
+            requests += 1
+        return requests
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "4"})
+    def test_headroom_grows_the_buffer_so_the_ring_spans_the_stream(self):
+        # 7 ranges of 30 against a limit far above the 210 byte stream. budget // 4 is 52, which holds
+        # only ONE range (two would be 60), so the stream needs 7 requests behind a ring of 4 and the
+        # tail waits for a buffer to come back. This is Llama-3-8B in miniature: 4 buffers sized to
+        # exactly total // 4 stranded a 5th request, because tensors are indivisible and B left no room
+        # for the waste. The limit has room, so the buffer grows until the ring spans the whole stream.
+        buffer_size, num_buffers = _ring_sizing(MemoryCapMode.limited, self.files([30] * 7), 1000)
+        self.assertEqual((buffer_size, num_buffers), (60, 4))
+        self.assertLessEqual(buffer_size * num_buffers, 1000)
+        # the point of the exercise: every request has its own buffer, so nothing is ever recycled
+        self.assertEqual(self.requests_to_stream(self.files([30] * 7), buffer_size), num_buffers)
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "4"})
+    def test_a_binding_limit_is_left_alone(self):
+        # The same stream under a limit BELOW it. There is no headroom to spend, recycling is the whole
+        # point, and the sizing must not go walking the ranges - a 150k tensor model would pay for it.
+        self.assertEqual(_ring_sizing(MemoryCapMode.limited, self.files([30] * 7), 120), (30, 4))
+
+    def test_the_span_search_is_skipped_whenever_there_is_no_headroom(self):
+        """The search must not RUN when the stream is not smaller than the limit - not merely return
+        the same answer.
+
+        Asserting the answer is not enough: with a binding limit the search would find nothing and fall
+        back, so every outcome-based test still passes with the guard deleted (verified). The guard is
+        there for COST - a model with 150k tensors would pay for a prefix sum over every one of them to
+        decide the shape of a four buffer ring - so the call itself is what has to be asserted.
+        """
+        cases = [
+            ("limit below the stream",  MemoryCapMode.limited,       210 // 2),
+            ("limit equal to the stream", MemoryCapMode.limited,     210),
+            ("unlimited",               MemoryCapMode.unlimited,     -1),
+            ("largest_chunk",           MemoryCapMode.largest_chunk, 0),
+        ]
+        for name, mode, limit in cases:
+            with self.subTest(name):
+                with patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "4"}):
+                    with patch(
+                        "runai_model_streamer.file_streamer.requests_iterator._span_whole_stream"
+                    ) as span:
+                        _ring_sizing(mode, self.files([30] * 7), limit)
+                span.assert_not_called()
+
+        # ... and it DOES run when there is headroom, so the assertions above cannot pass vacuously
+        with patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "4"}):
+            with patch(
+                "runai_model_streamer.file_streamer.requests_iterator._span_whole_stream"
+            ) as span:
+                span.return_value = None
+                _ring_sizing(MemoryCapMode.limited, self.files([30] * 7), 1000)
+        span.assert_called_once()
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "4"})
+    def test_headroom_too_small_to_help_changes_nothing(self):
+        # A limit only just above the stream: 220 // 4 = 55 still holds one range, so no reachable
+        # buffer size spans the stream in 4 requests. Growing to 55 would cost memory and fix nothing,
+        # so the sizing keeps the ordinary answer and recycles.
+        self.assertEqual(_ring_sizing(MemoryCapMode.limited, self.files([30] * 7), 220), (52, 4))
+
+    def test_growth_never_exceeds_the_limit(self):
+        """The invariant the growth must not break: the ring is still bounded by what was asked for."""
+        for depth in ("1", "2", "4", "8"):
+            for sizes, limit in (
+                ([30] * 7, 1000),          # generous headroom - growth applies
+                ([30] * 7, 220),           # marginal headroom
+                ([7] * 13, 5_000),         # nothing divides evenly
+                ([1000], 1_000_000),       # one range, enormous limit
+                ([3] * 100, 100_000),
+            ):
+                with patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: depth}):
+                    buffer_size, num_buffers = _ring_sizing(
+                        MemoryCapMode.limited, self.files(sizes), limit
+                    )
+                self.assertLessEqual(
+                    buffer_size * num_buffers, limit,
+                    f"depth={depth} sizes={sizes[:3]}... limit={limit} -> {num_buffers} x {buffer_size}",
+                )
+                # and the ring never has more buffers than there are requests to put in them
+                self.assertLessEqual(
+                    num_buffers, self.requests_to_stream(self.files(sizes), buffer_size)
+                )
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "0"})
+    def test_zero_ring_buffers_still_yields_a_ring(self):
+        # a hostile 0 must not produce a pool with no buffers to hand out
+        _, num_buffers = _ring_sizing(MemoryCapMode.largest_chunk, self.files([10]), None)
+        self.assertEqual(num_buffers, 1)
+        _, num_buffers = _ring_sizing(MemoryCapMode.unlimited, self.files([10] * 5), None)
+        self.assertGreaterEqual(num_buffers, 1)
 
 
 class TestFileChunks(unittest.TestCase):
@@ -193,24 +397,29 @@ class TestFilesRequestsIterator(unittest.TestCase):
         self.assertEqual(files_requests.files[0].id, 17)
         self.assertEqual(files_requests.files[0].sizes, [3])
 
-    def test_get_global_file_and_chunk(self):
+    def test_get_global_file_and_range(self):
         files_requests_iterator = FilesRequestsIterator(3, [FileChunks.contiguous(17, "a.txt", 10, [1, 2, 3, 4])])
 
-        files_requests_iterator.next_request()
+        first = files_requests_iterator.next_request()
 
-        file_id, chunk_index = files_requests_iterator.get_global_file_and_chunk(0, 0)
+        file_id, range_index = files_requests_iterator.get_global_file_and_range(first, 0, 0)
         self.assertEqual(file_id, 17)
-        self.assertEqual(chunk_index, 0)
+        self.assertEqual(range_index, 0)
 
-        file_id, chunk_index = files_requests_iterator.get_global_file_and_chunk(0, 1)
+        file_id, range_index = files_requests_iterator.get_global_file_and_range(first, 0, 1)
         self.assertEqual(file_id, 17)
-        self.assertEqual(chunk_index, 1)
+        self.assertEqual(range_index, 1)
 
-        files_requests_iterator.next_request()
+        second = files_requests_iterator.next_request()
 
-        file_id, chunk_index = files_requests_iterator.get_global_file_and_chunk(0, 0)
+        file_id, range_index = files_requests_iterator.get_global_file_and_range(second, 0, 0)
         self.assertEqual(file_id, 17)
-        self.assertEqual(chunk_index, 2)
+        self.assertEqual(range_index, 2)
+
+        # The earlier request is still resolvable now that a later one has been built - each request
+        # carries its own range_base rather than reading iterator state that has moved on. This is what
+        # allows a response to arrive while a subsequent submission is already in flight.
+        self.assertEqual(files_requests_iterator.get_global_file_and_range(first, 0, 1), (17, 1))
 
     def test_file_chunks_zero_chunks(self):
         requests_iterator = FilesRequestsIterator(10, [FileChunks(17, "a.txt", [], [])])
@@ -289,23 +498,25 @@ class TestFilesRequestsIterator(unittest.TestCase):
 
 
 class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "1"})
     def test_memory_cap_unlimited(self):
         requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
             MemoryCapMode.unlimited, [FileChunks.contiguous(17, "a.txt", 10, [1, 2, 3, 4])], 100
         )
-        self.assertEqual(len(requests_iterator.buffer), 10)
+        self.assertEqual(requests_iterator.buffer_size, 10)
 
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "1"})
     def test_memory_cap_limited(self):
         requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
             MemoryCapMode.limited, [FileChunks.contiguous(17, "a.txt", 10, [1, 2, 3, 4])], 5
         )
-        self.assertEqual(len(requests_iterator.buffer), 5)
+        self.assertEqual(requests_iterator.buffer_size, 5)
 
     def test_memory_cap_largest_chunk(self):
         requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
             MemoryCapMode.largest_chunk, [FileChunks.contiguous(17, "a.txt", 10, [1, 2, 3, 4])], 5
         )
-        self.assertEqual(len(requests_iterator.buffer), 4)
+        self.assertEqual(requests_iterator.buffer_size, 4)
 
     def test_memory_cap_largest_chunk_multi_file(self):
         requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
@@ -314,7 +525,7 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
              FileChunks.contiguous(18, "b.txt", 10, [1, 2, 7, 4])],
             5,
         )
-        self.assertEqual(len(requests_iterator.buffer), 7)
+        self.assertEqual(requests_iterator.buffer_size, 7)
 
     def test_memory_cap_largest_chunk_no_files(self):
         # the largest_chunk branch used to call a bare max() and raise on an empty sequence, while the
@@ -322,7 +533,7 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
         requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
             MemoryCapMode.largest_chunk, [], None
         )
-        self.assertEqual(len(requests_iterator.buffer), 0)
+        self.assertEqual(requests_iterator.buffer_size, 0)
         self.assertIsNone(requests_iterator.next_request())
 
     def test_memory_cap_largest_chunk_empty_shard(self):
@@ -331,25 +542,26 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
             [FileChunks(17, "empty.txt", [], []), FileChunks.contiguous(18, "a.txt", 10, [4])],
             None,
         )
-        self.assertEqual(len(requests_iterator.buffer), 4)
+        self.assertEqual(requests_iterator.buffer_size, 4)
 
     def test_memory_cap_largest_chunk_only_zero_sized_ranges(self):
         requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
             MemoryCapMode.largest_chunk, [FileChunks.contiguous(17, "zeros.txt", 10, [0, 0])], None
         )
-        self.assertEqual(len(requests_iterator.buffer), 0)
+        self.assertEqual(requests_iterator.buffer_size, 0)
 
         files_requests = requests_iterator.next_request()
         self.assertIsNotNone(files_requests)
         self.assertEqual(files_requests.num_ranges, 2)
 
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "1"})
     def test_limited_memory_cap_and_smaller_chunks(self):
         requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
             MemoryCapMode.limited,
             [FileChunks.contiguous(17, "a.txt", 10, [1, 2]), FileChunks.contiguous(18, "b.txt", 10, [3, 4])],
             50,
         )
-        self.assertEqual(len(requests_iterator.buffer), 10)
+        self.assertEqual(requests_iterator.buffer_size, 10)
 
     def test_range_dsts_pack_the_request(self):
         # replaces the old per-file file_buffers: destinations are per range now, packed back to back
@@ -360,53 +572,122 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
              FileChunks.contiguous(18, "b.txt", 10, [1, 2, 7, 4])],
             5,
         )
-        self.assertEqual(len(requests_iterator.buffer), 7)
-        base = requests_iterator.buffer_address
+        self.assertEqual(requests_iterator.buffer_size, 7)
+        base = requests_iterator.buffer_addresses[0]
 
         files_requests = requests_iterator.next_request()
         self.assertEqual([f.id for f in files_requests.files], [17])
         self.assertEqual(files_requests.range_dsts, [base, base + 1, base + 3])
 
+        # largest_chunk mode is a ring of one, so the single buffer has to come back before the next
+        # request can be built - and the next request then packs from that same base.
+        requests_iterator.release(files_requests)
+
         files_requests = requests_iterator.next_request()
         self.assertEqual([f.id for f in files_requests.files], [17, 18])
-        # a.txt's remaining 4 bytes, then b.txt's 1 and 2 - one destination per range, and the buffer
-        # is reused from its start for every request
+        # a.txt's remaining 4 bytes, then b.txt's 1 and 2 - one destination per range, packed from the
+        # start of the buffer this request was given
         self.assertEqual(files_requests.range_dsts, [base, base + 4, base + 5])
         self.assertEqual(files_requests.file_base, [0, 1])
 
-    def test_get_global_file_and_chunk_aliases_the_buffer(self):
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "1"})
+    def test_get_global_file_and_range_aliases_the_buffer(self):
         requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
             MemoryCapMode.unlimited,
             [FileChunks.contiguous(17, "a.txt", 10, [1, 2]), FileChunks.contiguous(18, "b.txt", 10, [3, 4])],
             5,
         )
-        self.assertEqual(len(requests_iterator.buffer), 10)
+        self.assertEqual(requests_iterator.buffer_size, 10)
 
-        requests_iterator.next_request()
-        requests_iterator.buffer[0] = 9
-        requests_iterator.buffer[3] = 8
+        request = requests_iterator.next_request()
+        requests_iterator.buffers[0][0] = 9
+        requests_iterator.buffers[0][3] = 8
 
-        file_id, chunk_index, view = requests_iterator.get_global_file_and_chunk(0, 0)
-        self.assertEqual((file_id, chunk_index), (17, 0))
+        file_id, range_index, view = requests_iterator.get_global_file_and_range(request, 0, 0)
+        self.assertEqual((file_id, range_index), (17, 0))
         self.assertEqual(len(view), 1)
         self.assertEqual(view[0], 9)
 
-        file_id, chunk_index, view = requests_iterator.get_global_file_and_chunk(1, 0)
-        self.assertEqual((file_id, chunk_index), (18, 0))
+        file_id, range_index, view = requests_iterator.get_global_file_and_range(request, 1, 0)
+        self.assertEqual((file_id, range_index), (18, 0))
         self.assertEqual(len(view), 3)
         self.assertEqual(view[0], 8)
 
-    def test_get_global_file_and_chunk_zero_sized_range(self):
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "2"})
+    def test_consecutive_requests_get_distinct_buffers(self):
+        # 3 ranges of 4 bytes and an 8 byte budget over 2 buffers: 4 bytes each, one range per request,
+        # and the second request must NOT land in the first one's buffer - that is the whole point of
+        # the pool.
+        requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
+            MemoryCapMode.limited, [FileChunks.contiguous(17, "a.txt", 10, [4, 4, 4])], 8
+        )
+        self.assertEqual((requests_iterator.buffer_size, requests_iterator.num_buffers), (4, 2))
+
+        first = requests_iterator.next_request()
+        first_index = first.buffer_index
+        second = requests_iterator.next_request()
+        self.assertNotEqual(first_index, second.buffer_index)
+        self.assertNotEqual(first.range_dsts, second.range_dsts)
+
+        # exhausted: a third request has nowhere to go until one comes back
+        self.assertFalse(requests_iterator.has_free_buffer())
+        with self.assertRaises(RuntimeError):
+            requests_iterator.next_request()
+
+        # released, so the third request reuses the first one's buffer and packs from its base
+        requests_iterator.release(first)
+        third = requests_iterator.next_request()
+        self.assertEqual(third.buffer_index, first_index)
+        self.assertEqual(third.range_dsts, [requests_iterator.buffer_addresses[first_index]])
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "2"})
+    def test_releasing_twice_is_rejected(self):
+        # a double release would put the same buffer in the free list twice, so two live requests would
+        # silently share it and overwrite each other's data
+        requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
+            MemoryCapMode.limited, [FileChunks.contiguous(17, "a.txt", 10, [4, 4])], 8
+        )
+        request = requests_iterator.next_request()
+        requests_iterator.release(request)
+        with self.assertRaises(ValueError):
+            requests_iterator.release(request)
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "3"})
+    def test_buffers_are_distinct_slices_of_one_allocation(self):
+        requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
+            MemoryCapMode.limited, [FileChunks.contiguous(17, "a.txt", 10, [4, 4, 4])], 12
+        )
+        self.assertEqual(len(requests_iterator.buffers), 3)
+        self.assertEqual(len(requests_iterator.pool), 12)
+
+        # writing through one buffer must not disturb another, and each view must alias the pool
+        for index, buffer in enumerate(requests_iterator.buffers):
+            buffer[:] = index
+        self.assertEqual(list(requests_iterator.pool), [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2])
+        self.assertEqual(
+            requests_iterator.buffer_addresses,
+            [requests_iterator.pool.ctypes.data + 4 * i for i in range(3)],
+        )
+
+    def test_end_of_stream_does_not_consume_a_buffer(self):
+        requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
+            MemoryCapMode.largest_chunk, [], None
+        )
+        self.assertIsNone(requests_iterator.next_request())
+        self.assertTrue(requests_iterator.has_free_buffer())
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "1"})
+    def test_get_global_file_and_range_zero_sized_range(self):
         requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
             MemoryCapMode.unlimited, [FileChunks.contiguous(17, "a.txt", 10, [5, 0, 3])], None
         )
 
-        requests_iterator.next_request()
+        request = requests_iterator.next_request()
 
-        file_id, chunk_index, view = requests_iterator.get_global_file_and_chunk(0, 1)
-        self.assertEqual((file_id, chunk_index), (17, 1))
+        file_id, range_index, view = requests_iterator.get_global_file_and_range(request, 0, 1)
+        self.assertEqual((file_id, range_index), (17, 1))
         self.assertEqual(len(view), 0)
 
         # the zero sized range consumes no buffer, so the range after it starts where it did
-        _, _, view = requests_iterator.get_global_file_and_chunk(0, 2)
+        _, _, view = requests_iterator.get_global_file_and_range(request, 0, 2)
         self.assertEqual(len(view), 3)
