@@ -54,12 +54,6 @@ EndpointParseResult parse_endpoint_scheme(const Aws::String & endpoint)
 
 bool application_retryable_error(bool aws_should_retry, int http_status)
 {
-    // After the CRT exhausts a configured retry budget, AWSError::ShouldRetry() can be false even for an
-    // unambiguously transient terminal error (observed for AWS_IO_SOCKET_CLOSED). Preserve the SDK flag,
-    // but also classify the transport/HTTP result itself:
-    //   * no HTTP response means a transport failure and is retryable within our bounded deadline;
-    //   * 5xx, 408 and 429 are transient;
-    //   * every other 4xx is permanent (notably authentication/authorization and missing objects).
     if (http_status < 0 || http_status >= 500)
     {
         return true;
@@ -321,10 +315,6 @@ common::backend_api::ResponseCode_t S3Client::async_read(const char* path,
         }
         else
         {
-            // The S3 CRT client's retry strategy has already handled retryable failures before
-            // invoking this callback. Reaching this branch means the configured retry policy was
-            // exhausted (or the error was not retryable), so this is the chunk's one terminal
-            // completion. The worker then fails the owning read while leaving unrelated reads alone.
             const auto & err = outcome.GetError();
             const int http_status = static_cast<int>(err.GetResponseCode());
             const bool retryable = application_retryable_error(err.ShouldRetry(), http_status);
