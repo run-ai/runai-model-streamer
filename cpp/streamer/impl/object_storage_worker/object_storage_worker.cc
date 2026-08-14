@@ -339,11 +339,16 @@ bool ObjectStorageWorker::schedule_retry(InflightMap::iterator wlit, size_t chun
         return false;
     }
 
-    _queue->complete(1);   // this failed attempt is no longer in flight; the logical chunk remains pending
-    ++cs.retry_count;
+    const unsigned next_retry_count = cs.retry_count + 1;
+    const auto delay = retry_delay(next_retry_count);
+    const auto retry_at = now + delay;
+    if (retry_at >= cs.retry_deadline.value())
+    {
+        return false;
+    }
 
-    const auto delay = retry_delay(cs.retry_count);
-    const auto retry_at = std::min(now + delay, cs.retry_deadline.value());
+    _queue->complete(1);   // this failed attempt is no longer in flight; the logical chunk remains pending
+    cs.retry_count = next_retry_count;
     _delayed_retries.emplace(retry_at, cs.chunk);
 
     LOG(WARNING) << "Retrying object chunk " << cs.chunk.handle << " (offset " << cs.chunk.offset
