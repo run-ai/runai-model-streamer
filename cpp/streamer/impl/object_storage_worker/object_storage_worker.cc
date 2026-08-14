@@ -315,7 +315,7 @@ void ObjectStorageWorker::complete_chunk(InflightMap::iterator wlit, size_t chun
 std::chrono::milliseconds ObjectStorageWorker::retry_delay(unsigned retry_count)
 {
     // Full jitter over exponential backoff: [0, min(100ms * 2^(n-1), 1s)]. The per-chunk deadline is
-    // the hard bound; the 1s cap also keeps shutdown latency bounded when a worker is waiting on a retry.
+    // the hard bound; the 1s cap prevents application retries from backing off indefinitely.
     constexpr uint64_t base_ms = 100;
     constexpr uint64_t cap_ms = 1000;
     const unsigned shift = std::min(retry_count > 0 ? retry_count - 1 : 0, 4u);
@@ -444,14 +444,15 @@ void ObjectStorageWorker::drain_batch(std::atomic<bool> & stopped)
 
     promote_due_retries();
 
-    // With no backend attempt in flight, the only reason this non-idle worker is being drained is a
-    // jittered retry. Wait until the earliest retry is due, then put it back into CapacityQueue; the base
-    // class pumps it immediately after drain_batch returns.
+    // With no backend attempt in flight, do not wait if a chunk is already ready for the base to pump.
+    // Otherwise wait for the earliest jittered retry in short slices.
     if (_queue->inflight() == 0)
     {
-        if (!_delayed_retries.empty())
+        if (_queue->empty() && !_delayed_retries.empty())
         {
-            std::this_thread::sleep_until(_delayed_retries.begin()->first);
+            const auto until = std::min(_delayed_retries.begin()->first,
+                                        std::chrono::steady_clock::now() + std::chrono::milliseconds(20));
+            std::this_thread::sleep_until(until);
             promote_due_retries();
         }
         return;
