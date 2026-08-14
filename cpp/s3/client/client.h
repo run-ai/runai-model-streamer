@@ -31,8 +31,8 @@ struct EndpointParseResult
 EndpointParseResult parse_endpoint_scheme(const Aws::String & endpoint);
 
 // Preserve AWS's retryability classification after the CRT retry policy is exhausted, while never
-// retrying permanent client-side HTTP failures. Exposed for focused classification tests.
-bool application_retryable_error(bool aws_should_retry, int http_status);
+// retrying permanent client-side failures. Exposed for focused classification tests.
+bool application_retryable_error(bool aws_should_retry, int http_status, int error_type);
 
 struct S3ClientBase : common::IClient
 {

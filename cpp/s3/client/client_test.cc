@@ -1,5 +1,6 @@
 #include "s3/client/client.h"
 
+#include <aws/core/client/CoreErrors.h>
 #include <aws/core/config/ConfigAndCredentialsCacheManager.h>
 
 #include <gtest/gtest.h>
@@ -124,24 +125,38 @@ TEST(ParseEndpointScheme, PortWithoutHost)
 
 TEST(ApplicationRetryableError, HonorsAwsClassification)
 {
-    EXPECT_TRUE(application_retryable_error(true, -1));   // transport error without an HTTP response
-    EXPECT_TRUE(application_retryable_error(false, -1));  // CRT budget exhaustion clears ShouldRetry
-    EXPECT_TRUE(application_retryable_error(true, 500));
-    EXPECT_TRUE(application_retryable_error(true, 503));
-    EXPECT_TRUE(application_retryable_error(false, 503));
-    EXPECT_FALSE(application_retryable_error(false, 301));
+    const int internal_failure = static_cast<int>(Aws::Client::CoreErrors::INTERNAL_FAILURE);
+    EXPECT_TRUE(application_retryable_error(true, -1, internal_failure));   // transport error without an HTTP response
+    EXPECT_TRUE(application_retryable_error(false, -1, internal_failure));  // CRT budget exhaustion clears ShouldRetry
+    EXPECT_TRUE(application_retryable_error(true, 500, internal_failure));
+    EXPECT_TRUE(application_retryable_error(true, 503, internal_failure));
+    EXPECT_TRUE(application_retryable_error(false, 503, internal_failure));
+    EXPECT_FALSE(application_retryable_error(false, 301, internal_failure));
 }
 
 TEST(ApplicationRetryableError, RejectsPermanentClientErrors)
 {
     for (const int status : {400, 401, 403, 404})
     {
-        EXPECT_FALSE(application_retryable_error(true, status));
+        EXPECT_FALSE(application_retryable_error(true, status, 0));
     }
 
     // These client-side status codes are explicitly transient.
-    EXPECT_TRUE(application_retryable_error(true, 408));
-    EXPECT_TRUE(application_retryable_error(true, 429));
+    EXPECT_TRUE(application_retryable_error(true, 408, 0));
+    EXPECT_TRUE(application_retryable_error(true, 429, 0));
+}
+
+TEST(ApplicationRetryableError, RejectsPermanentErrorsWithoutHttpResponse)
+{
+    using Aws::Client::CoreErrors;
+    for (const auto error_type : {CoreErrors::INVALID_PARAMETER_VALUE,
+                                  CoreErrors::MISSING_PARAMETER,
+                                  CoreErrors::REQUEST_TIME_TOO_SKEWED,
+                                  CoreErrors::CLIENT_SIGNING_FAILURE,
+                                  CoreErrors::USER_CANCELLED})
+    {
+        EXPECT_FALSE(application_retryable_error(false, -1, static_cast<int>(error_type)));
+    }
 }
 
 namespace

@@ -1,6 +1,7 @@
 
 #include <aws/core/auth/AWSCredentials.h>
 #include <aws/core/auth/AWSCredentialsProvider.h>
+#include <aws/core/client/CoreErrors.h>
 #include <aws/core/config/ConfigAndCredentialsCacheManager.h>
 #include <aws/core/http/Scheme.h>
 #include <aws/s3-crt/model/GetObjectRequest.h>
@@ -52,9 +53,24 @@ EndpointParseResult parse_endpoint_scheme(const Aws::String & endpoint)
     return { endpoint, std::nullopt };
 }
 
-bool application_retryable_error(bool aws_should_retry, int http_status)
+bool application_retryable_error(bool aws_should_retry, int http_status, int error_type)
 {
-    if (http_status < 0 || http_status >= 500)
+    if (http_status < 0)
+    {
+        using Aws::Client::CoreErrors;
+        switch (error_type)
+        {
+        case static_cast<int>(CoreErrors::INVALID_PARAMETER_VALUE):
+        case static_cast<int>(CoreErrors::MISSING_PARAMETER):
+        case static_cast<int>(CoreErrors::REQUEST_TIME_TOO_SKEWED):
+        case static_cast<int>(CoreErrors::CLIENT_SIGNING_FAILURE):
+        case static_cast<int>(CoreErrors::USER_CANCELLED):
+            return false;
+        default:
+            return true;
+        }
+    }
+    if (http_status >= 500)
     {
         return true;
     }
@@ -317,7 +333,8 @@ common::backend_api::ResponseCode_t S3Client::async_read(const char* path,
         {
             const auto & err = outcome.GetError();
             const int http_status = static_cast<int>(err.GetResponseCode());
-            const bool retryable = application_retryable_error(err.ShouldRetry(), http_status);
+            const int error_type = static_cast<int>(err.GetErrorType());
+            const bool retryable = application_retryable_error(err.ShouldRetry(), http_status, error_type);
             LOG(ERROR) << "Failed to download s3 object of request " << request_id << " "
                        << err.GetExceptionName() << ": " << err.GetMessage()
                        << " (http_status=" << http_status
