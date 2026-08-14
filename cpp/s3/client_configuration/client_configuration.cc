@@ -42,7 +42,14 @@ ClientConfiguration::ClientConfiguration()
         using RetryStrategyType = Aws::S3Crt::S3CrtClientConfiguration::CrtRetryStrategyConfig::CrtRetryStrategyType;
         config.crtRetryStrategyConfig.crtRetryStrategyType = RetryStrategyType::EXPONENTIAL_BACKOFF;
         config.crtRetryStrategyConfig.config.maxRetries = static_cast<size_t>(max_retries);
-        LOG(INFO) << "S3 maximum retries per request is set to " << max_retries;
+        if (max_retries == 0)
+        {
+            LOG(DEBUG) << "S3 maximum retries per request uses the AWS CRT default";
+        }
+        else
+        {
+            LOG(DEBUG) << "S3 maximum retries per request is set to " << max_retries;
+        }
     }
 
     unsigned long max_connections = utils::getenv<unsigned long>("RUNAI_STREAMER_S3_MAX_CONNECTIONS", 0);
