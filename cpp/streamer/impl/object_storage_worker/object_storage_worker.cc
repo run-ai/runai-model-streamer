@@ -104,8 +104,6 @@ void ObjectStorageWorker::discard(Workload && workload)
 
 void ObjectStorageWorker::enqueue(Workload && workload)
 {
-    const auto retry_deadline = workload.retry_deadline();
-
     // Count chunks up front so we can reserve one contiguous block of handles and size chunk_task_idx.
     size_t total_chunks = 0;
     for (const auto & batch : workload.batches())
@@ -158,7 +156,6 @@ void ObjectStorageWorker::enqueue(Workload && workload)
         Inflight & wl = wlit->second;
         wl.workload = std::move(workload);   // noexcept; the workload now lives in the _inflight entry
         wl.chunks.resize(total_chunks);
-        wl.retry_deadline = retry_deadline;
 
         size_t next_chunk = 0;
         // &batch below outlives this loop (it is stored in wl.tasks and used to route completions): the
@@ -244,10 +241,17 @@ void ObjectStorageWorker::submit(const ObjectChunk & chunk)
         return;
     }
 
-    // A delayed retry can become runnable exactly at (or just after) its submission-wide deadline.
-    // Do not start another AWS attempt outside the total budget.
-    if (cs.retry_count > 0 && wlit->second.retry_deadline.has_value() &&
-        std::chrono::steady_clock::now() >= wlit->second.retry_deadline.value())
+    if (!cs.retry_deadline.has_value() && _config->object_storage_retry_timeout.count() > 0)
+    {
+        // Queueing time is not part of the retry budget: each chunk gets its full timeout when its first
+        // backend attempt is submitted.
+        cs.retry_deadline = std::chrono::steady_clock::now() + _config->object_storage_retry_timeout;
+    }
+
+    // A delayed retry can become runnable exactly at (or just after) this chunk's deadline.
+    // Do not start another backend attempt outside its retry budget.
+    if (cs.retry_count > 0 && cs.retry_deadline.has_value() &&
+        std::chrono::steady_clock::now() >= cs.retry_deadline.value())
     {
         LOG(WARNING) << "Object chunk " << chunk.handle << " exhausted RUNAI_STREAMER_S3_TIMEOUT after "
                      << cs.retry_count << " application retries";
@@ -310,7 +314,7 @@ void ObjectStorageWorker::complete_chunk(InflightMap::iterator wlit, size_t chun
 
 std::chrono::milliseconds ObjectStorageWorker::retry_delay(unsigned retry_count)
 {
-    // Full jitter over exponential backoff: [0, min(100ms * 2^(n-1), 1s)]. The submission deadline is
+    // Full jitter over exponential backoff: [0, min(100ms * 2^(n-1), 1s)]. The per-chunk deadline is
     // the hard bound; the 1s cap also keeps shutdown latency bounded when a worker is waiting on a retry.
     constexpr uint64_t base_ms = 100;
     constexpr uint64_t cap_ms = 1000;
@@ -329,8 +333,8 @@ bool ObjectStorageWorker::schedule_retry(InflightMap::iterator wlit, size_t chun
     TaskState & ts = wl.tasks[cs.task_idx];
     const auto now = std::chrono::steady_clock::now();
 
-    if (ts.error != common::ResponseCode::Success || !wl.retry_deadline.has_value() ||
-        now >= wl.retry_deadline.value())
+    if (ts.error != common::ResponseCode::Success || !cs.retry_deadline.has_value() ||
+        now >= cs.retry_deadline.value())
     {
         return false;
     }
@@ -339,7 +343,7 @@ bool ObjectStorageWorker::schedule_retry(InflightMap::iterator wlit, size_t chun
     ++cs.retry_count;
 
     const auto delay = retry_delay(cs.retry_count);
-    const auto retry_at = std::min(now + delay, wl.retry_deadline.value());
+    const auto retry_at = std::min(now + delay, cs.retry_deadline.value());
     _delayed_retries.emplace(retry_at, cs.chunk);
 
     LOG(WARNING) << "Retrying object chunk " << cs.chunk.handle << " (offset " << cs.chunk.offset

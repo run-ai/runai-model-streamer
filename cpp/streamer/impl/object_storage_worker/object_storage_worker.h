@@ -82,6 +82,8 @@ class ObjectStorageWorker : public utils::CapacityWorker<Workload, ObjectChunk>
     bool has_deferred_work() const override;
 
  private:
+    using RetryDeadline = std::chrono::steady_clock::time_point;
+
     // Per-task runtime state, indexed by local task index (assigned 0..N-1 in enqueue order). Touched only
     // by this worker thread.
     struct TaskState
@@ -96,7 +98,8 @@ class ObjectStorageWorker : public utils::CapacityWorker<Workload, ObjectChunk>
     {
         ObjectChunk chunk;
         size_t task_idx;
-        unsigned retry_count = 0;   // application-level retries already scheduled for this chunk
+        unsigned retry_count = 0;                         // application-level retries already scheduled
+        std::optional<RetryDeadline> retry_deadline;      // starts when this chunk is first submitted
     };
 
     // Per-in-flight-workload state, owned here and kept alive until the workload's last task finalizes.
@@ -107,7 +110,6 @@ class ObjectStorageWorker : public utils::CapacityWorker<Workload, ObjectChunk>
         std::vector<TaskState> tasks;                              // per task (only non-zero-size tasks)
         std::map<unsigned, common::ResponseCode> error_by_file_index;   // first error per file (finalize)
         size_t remaining_tasks = 0;                                // tasks not yet completed; 0 -> finalize
-        std::optional<Workload::RetryDeadline> retry_deadline;     // one absolute deadline per submission
     };
 
     // In-flight workloads keyed by their handle block base. The blocks are contiguous and disjoint, so a
@@ -125,7 +127,7 @@ class ObjectStorageWorker : public utils::CapacityWorker<Workload, ObjectChunk>
     void complete_chunk(InflightMap::iterator wlit, size_t chunk_idx, common::ResponseCode ret);
 
     // Release the failed attempt's window credit and schedule the same chunk after full-jitter backoff.
-    // Returns false when no retry budget exists or the submission deadline has expired.
+    // Returns false when no retry budget exists or this chunk's deadline has expired.
     bool schedule_retry(InflightMap::iterator wlit, size_t chunk_idx);
 
     // Move retry entries whose jitter delay elapsed back into the normal capacity queue.
@@ -152,7 +154,7 @@ class ObjectStorageWorker : public utils::CapacityWorker<Workload, ObjectChunk>
     unsigned _max_responses = 1;
 
     InflightMap _inflight;
-    std::multimap<Workload::RetryDeadline, ObjectChunk> _delayed_retries;
+    std::multimap<RetryDeadline, ObjectChunk> _delayed_retries;
 
     // Next async chunk handle. The backend requires a unique handle per in-flight request on a client, and
     // each worker has its own client - so a completion only ever returns to the worker that submitted it and

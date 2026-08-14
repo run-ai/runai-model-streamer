@@ -3,7 +3,6 @@
 #include <fnmatch.h>
 
 #include <atomic>
-#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <limits>
@@ -295,21 +294,6 @@ common::ResponseCode Streamer::async_request(
             {
                 LOG(ERROR) << "Submission " << submission_id << " failed to add batch to workload " << workload_index << " error: " << result;
                 return result; // nothing committed yet
-            }
-        }
-    }
-
-    // One absolute deadline per submission bounds all application-level object-chunk retries together.
-    // Native plugin/AWS retries happen inside each attempt; only terminal errors explicitly marked
-    // retryable by the plugin are requeued by ObjectStorageWorker before this deadline.
-    if (_config->object_storage_retry_timeout.count() > 0)
-    {
-        const auto retry_deadline = std::chrono::steady_clock::now() + _config->object_storage_retry_timeout;
-        for (auto & workload : workloads)
-        {
-            if (workload.is_object_storage())
-            {
-                workload.set_retry_deadline(retry_deadline);
             }
         }
     }

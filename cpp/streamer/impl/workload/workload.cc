@@ -48,16 +48,6 @@ bool Workload::is_object_storage() const
     return _is_object_storage;
 }
 
-void Workload::set_retry_deadline(RetryDeadline deadline)
-{
-    _retry_deadline = deadline;
-}
-
-const std::optional<Workload::RetryDeadline> & Workload::retry_deadline() const
-{
-    return _retry_deadline;
-}
-
 void Workload::fail(common::ResponseCode code)
 {
     for (auto & batch : _batches)

@@ -9,6 +9,7 @@
 #include <numeric>
 #include <set>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -35,7 +36,11 @@ namespace
 // test can wait on the responder and assert per-file, per-request completion.
 struct Submission
 {
-    Submission(SubmissionId submission_id, unsigned num_files, std::shared_ptr<Config> config, std::shared_ptr<common::Responder> responder) :
+    Submission(SubmissionId submission_id,
+               unsigned num_files,
+               std::shared_ptr<Config> config,
+               std::shared_ptr<common::Responder> responder,
+               unsigned ranges_per_file = 0) :
         submission_id(submission_id),
         config(config),
         responder(responder),
@@ -48,7 +53,7 @@ struct Submission
         for (unsigned i = 0; i < num_files; ++i)
         {
             const auto size = utils::random::number(1000, 100000);
-            num_chunks[i] = utils::random::number(1, 20);
+            num_chunks[i] = ranges_per_file == 0 ? utils::random::number(1, 20) : ranges_per_file;
             EXPECT_LT(num_chunks[i], size);
             responder->increment(num_chunks[i]);
             total_bytes += size;
@@ -151,10 +156,10 @@ class ObjectStorageWorkerTest : public ::testing::Test
 
     // create a Config/Responder and a (num_files) submission; returns the workloads ready to dispatch. Stores
     // the config/responder/submission as members so the test can build a pool and wait on the responder.
-    std::vector<Workload> build(unsigned num_files, unsigned s3_concurrency)
+    std::vector<Workload> build(unsigned num_files, unsigned s3_concurrency, unsigned ranges_per_file = 0)
     {
         make_context(s3_concurrency);
-        submission = std::make_unique<Submission>(utils::random::number(), num_files, config, responder);
+        submission = std::make_unique<Submission>(utils::random::number(), num_files, config, responder, ranges_per_file);
         return submission->build();
     }
 
@@ -216,14 +221,6 @@ class ObjectStorageWorkerTest : public ::testing::Test
             }
         }
         return result;
-    }
-
-    static void set_retry_deadline(std::vector<Workload> & workloads, std::chrono::steady_clock::time_point deadline)
-    {
-        for (auto & workload : workloads)
-        {
-            workload.set_retry_deadline(deadline);
-        }
     }
 
     std::shared_ptr<Config> config;
@@ -329,7 +326,7 @@ TEST_F(ObjectStorageWorkerTest, RetryableChunkIsRequeuedWithoutRestartingWorkloa
 {
     auto workloads = build(1, 1);
     const size_t initial_chunks = count_object_chunks(workloads, config->s3_block_bytesize);
-    set_retry_deadline(workloads, std::chrono::steady_clock::now() + std::chrono::seconds(5));
+    config->object_storage_retry_timeout = std::chrono::seconds(5);
     set_read_failures(1, common::ResponseCode::RetryableFileAccessError);
 
     {
@@ -349,7 +346,7 @@ TEST_F(ObjectStorageWorkerTest, PermanentChunkErrorFailsWithoutRetry)
 {
     auto workloads = build(1, 1);
     const size_t initial_chunks = count_object_chunks(workloads, config->s3_block_bytesize);
-    set_retry_deadline(workloads, std::chrono::steady_clock::now() + std::chrono::seconds(5));
+    config->object_storage_retry_timeout = std::chrono::seconds(5);
     set_read_failures(1, common::ResponseCode::FileAccessError);
 
     bool saw_file_access_error = false;
@@ -368,13 +365,16 @@ TEST_F(ObjectStorageWorkerTest, PermanentChunkErrorFailsWithoutRetry)
     EXPECT_EQ(total_read_requests(), initial_chunks);
 }
 
-// Once the total submission deadline has expired, the internal retryable marker is converted to the public
-// FileAccessError and no new backend attempt is submitted.
-TEST_F(ObjectStorageWorkerTest, ExpiredRetryDeadlineReturnsFileAccessError)
+// Once a chunk's retry deadline (started at its first backend submission) has expired, the internal
+// retryable marker is converted to the public FileAccessError and no new backend attempt is submitted.
+TEST_F(ObjectStorageWorkerTest, ExpiredChunkRetryDeadlineReturnsFileAccessError)
 {
-    auto workloads = build(1, 1);
+    auto workloads = build(1, 1, 1);
+    config->s3_block_bytesize = submission->total_bytes + 1;   // exactly one backend chunk
+    config->object_storage_retry_timeout = std::chrono::seconds(1);
     const size_t initial_chunks = count_object_chunks(workloads, config->s3_block_bytesize);
-    set_retry_deadline(workloads, std::chrono::steady_clock::now() - std::chrono::milliseconds(1));
+    ASSERT_EQ(initial_chunks, 1u);
+    set_response_time(1100);   // the first attempt completes after its per-chunk deadline
     set_read_failures(1, common::ResponseCode::RetryableFileAccessError);
 
     bool saw_file_access_error = false;
@@ -391,6 +391,31 @@ TEST_F(ObjectStorageWorkerTest, ExpiredRetryDeadlineReturnsFileAccessError)
 
     EXPECT_TRUE(saw_file_access_error);
     EXPECT_EQ(total_read_requests(), initial_chunks);
+}
+
+// Time spent before ObjectStorageWorker first submits a chunk does not consume its retry budget. Even after
+// waiting longer than the configured timeout, the first retryable completion is requeued and succeeds.
+TEST_F(ObjectStorageWorkerTest, RetryDeadlineStartsAtFirstChunkSubmission)
+{
+    auto workloads = build(1, 1, 1);
+    config->s3_block_bytesize = submission->total_bytes + 1;   // exactly one backend chunk
+    config->object_storage_retry_timeout = std::chrono::seconds(1);
+    const size_t initial_chunks = count_object_chunks(workloads, config->s3_block_bytesize);
+    ASSERT_EQ(initial_chunks, 1u);
+    set_read_failures(1, common::ResponseCode::RetryableFileAccessError);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+
+    {
+        auto pool = make_pool(1);
+        push_all(pool, workloads);
+        for (unsigned i = 0; i < submission->total_requests(); ++i)
+        {
+            EXPECT_EQ(responder->pop().ret, common::ResponseCode::Success);
+        }
+    }
+
+    EXPECT_EQ(total_read_requests(), initial_chunks + 1);
 }
 
 // New submissions pushed WHILE the consumer is draining earlier ones (from a separate thread) all complete:

@@ -39,8 +39,8 @@ struct Config
     unsigned s3_concurrency;
     size_t s3_block_bytesize;
     size_t fs_block_bytesize;
-    // Total application-level retry budget shared by all object chunks in one submission. Zero preserves
-    // fail-fast behavior after the storage plugin's native retry policy is exhausted.
+    // Application-level retry budget for each object chunk, starting when that chunk is first submitted to
+    // the backend. Zero preserves fail-fast behavior after the storage plugin's native retry policy expires.
     std::chrono::seconds object_storage_retry_timeout;
 };
 
