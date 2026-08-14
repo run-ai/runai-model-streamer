@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <random>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -42,6 +41,7 @@ std::size_t ObjectStorageWorker::capacity(const Workload & first)
         const auto & batch = first.batches().front();
         _config = batch.config;
         _chunk_bytesize = std::max(static_cast<size_t>(1), _config->s3_block_bytesize);
+        _retry = ObjectStorageRetry(_config->object_storage_retry_timeout);
 
         // Request one completion at a time by default for prompt, per-completion window refill;
         // RUNAI_STREAMER_INTERNAL_MAX_RESPONSES can raise it (internal tuning / test knob).
@@ -183,7 +183,7 @@ void ObjectStorageWorker::enqueue(Workload && workload)
                 {
                     const size_t bs = std::min(remaining, _chunk_bytesize);   // last chunk is the remainder
                     ObjectChunk chunk{ handle_base + next_chunk, offset, bs, buffer };
-                    wl.chunks[next_chunk] = ChunkState{ chunk, task_idx, 0 };
+                    wl.chunks[next_chunk] = ChunkState{ chunk, task_idx };
                     _queue->enqueue(chunk, 1);   // cost 1
                     ++wl.tasks[task_idx].remaining_chunks;
                     ++next_chunk;
@@ -241,20 +241,12 @@ void ObjectStorageWorker::submit(const ObjectChunk & chunk)
         return;
     }
 
-    if (!cs.retry_deadline.has_value() && _config->object_storage_retry_timeout.count() > 0)
-    {
-        // Queueing time is not part of the retry budget: each chunk gets its full timeout when its first
-        // backend attempt is submitted.
-        cs.retry_deadline = std::chrono::steady_clock::now() + _config->object_storage_retry_timeout;
-    }
-
-    // A delayed retry can become runnable exactly at (or just after) this chunk's deadline.
-    // Do not start another backend attempt outside its retry budget.
-    if (cs.retry_count > 0 && cs.retry_deadline.has_value() &&
-        std::chrono::steady_clock::now() >= cs.retry_deadline.value())
+    // ObjectStorageRetry starts the deadline here, so queueing before the first backend attempt does not
+    // consume the chunk's retry budget. A delayed retry promoted after its deadline is rejected here.
+    if (!_retry.begin_attempt(cs.retry))
     {
         LOG(WARNING) << "Object chunk " << chunk.handle << " exhausted RUNAI_STREAMER_S3_TIMEOUT after "
-                     << cs.retry_count << " application retries";
+                     << _retry.retry_count(cs.retry) << " application retries";
         complete_chunk(wlit, chunk_idx, common::ResponseCode::FileAccessError);
         return;
     }
@@ -312,67 +304,20 @@ void ObjectStorageWorker::complete_chunk(InflightMap::iterator wlit, size_t chun
     }
 }
 
-std::chrono::milliseconds ObjectStorageWorker::retry_delay(unsigned retry_count)
-{
-    // Full jitter over exponential backoff: [0, min(100ms * 2^(n-1), 1s)]. This is the earliest retry
-    // time, not an exact schedule: while other chunks are in flight, the worker may be blocked in
-    // async_response() until another completion arrives, so the actual delay can be longer. The per-chunk
-    // deadline is the hard bound; the 1s cap prevents application retries from backing off indefinitely.
-    constexpr uint64_t base_ms = 100;
-    constexpr uint64_t cap_ms = 1000;
-    const unsigned shift = std::min(retry_count > 0 ? retry_count - 1 : 0, 4u);
-    const uint64_t upper_ms = std::min<uint64_t>(cap_ms, base_ms << shift);
-
-    thread_local std::mt19937_64 generator(std::random_device{}());
-    std::uniform_int_distribution<uint64_t> distribution(0, upper_ms);
-    return std::chrono::milliseconds(distribution(generator));
-}
-
-bool ObjectStorageWorker::schedule_retry(InflightMap::iterator wlit, size_t chunk_idx)
-{
-    Inflight & wl = wlit->second;
-    ChunkState & cs = wl.chunks[chunk_idx];
-    TaskState & ts = wl.tasks[cs.task_idx];
-    const auto now = std::chrono::steady_clock::now();
-
-    if (ts.error != common::ResponseCode::Success || !cs.retry_deadline.has_value() ||
-        now >= cs.retry_deadline.value())
-    {
-        return false;
-    }
-
-    const unsigned next_retry_count = cs.retry_count + 1;
-    const auto delay = retry_delay(next_retry_count);
-    const auto retry_at = now + delay;
-    if (retry_at >= cs.retry_deadline.value())
-    {
-        return false;
-    }
-
-    _queue->complete(1);   // this failed attempt is no longer in flight; the logical chunk remains pending
-    cs.retry_count = next_retry_count;
-    _delayed_retries.emplace(retry_at, cs.chunk);
-
-    LOG(WARNING) << "Retrying object chunk " << cs.chunk.handle << " (offset " << cs.chunk.offset
-                 << ", bytes " << cs.chunk.bytesize << ") after " << delay.count()
-                 << " ms; application retry " << cs.retry_count;
-    return true;
-}
-
 void ObjectStorageWorker::promote_due_retries()
 {
-    const auto now = std::chrono::steady_clock::now();
-    auto it = _delayed_retries.begin();
-    while (it != _delayed_retries.end() && it->first <= now)
+    const auto now = ObjectStorageRetry::Clock::now();
+    while (const auto handle = _retry.pop_due(now))
     {
-        _queue->enqueue(it->second, 1);
-        it = _delayed_retries.erase(it);
+        auto [wlit, chunk_idx] = locate(handle.value());
+        ASSERT(wlit != _inflight.end()) << "retrying a chunk with unknown handle " << handle.value();
+        _queue->enqueue(wlit->second.chunks[chunk_idx].chunk, 1);
     }
 }
 
 bool ObjectStorageWorker::has_deferred_work() const
 {
-    return !_delayed_retries.empty();
+    return _retry.has_pending();
 }
 
 void ObjectStorageWorker::report_workload(Inflight & wl, common::ResponseCode code)
@@ -416,7 +361,7 @@ void ObjectStorageWorker::abort_all(common::ResponseCode code)
     // always locates to end(). The cost of the mid-life call is that sibling in-flight workloads on this
     // worker are failed too, and their still-outstanding reads may write to already-reported buffers - the
     // OOM caller is expected to abort on UnknownError and tear the streamer down.
-    _delayed_retries.clear();
+    _retry.clear();
 
     for (auto it = _inflight.begin(); it != _inflight.end(); )
     {
@@ -455,12 +400,15 @@ void ObjectStorageWorker::drain_batch(std::atomic<bool> & stopped)
     // Otherwise wait for the earliest jittered retry in short slices.
     if (_queue->inflight() == 0)
     {
-        if (_queue->empty() && !_delayed_retries.empty())
+        if (_queue->empty())
         {
-            const auto until = std::min(_delayed_retries.begin()->first,
-                                        std::chrono::steady_clock::now() + std::chrono::milliseconds(20));
-            std::this_thread::sleep_until(until);
-            promote_due_retries();
+            const auto now = ObjectStorageRetry::Clock::now();
+            if (const auto retry_at = _retry.next_due())
+            {
+                const auto until = std::min(retry_at.value(), now + std::chrono::milliseconds(20));
+                std::this_thread::sleep_until(until);
+                promote_due_retries();
+            }
         }
         return;
     }
@@ -506,8 +454,18 @@ void ObjectStorageWorker::drain_batch(std::atomic<bool> & stopped)
         auto ret = response.ret;
         if (ret == common::ResponseCode::RetryableFileAccessError)
         {
-            if (schedule_retry(wlit, chunk_idx))
+            ChunkState & cs = wlit->second.chunks[chunk_idx];
+            TaskState & ts = wlit->second.tasks[cs.task_idx];
+            const auto retry = ts.error == common::ResponseCode::Success
+                ? _retry.schedule(cs.retry, cs.chunk.handle)
+                : std::nullopt;
+            if (retry.has_value())
             {
+                // The failed attempt is no longer in flight; the logical chunk remains pending in _retry.
+                _queue->complete(1);
+                LOG(WARNING) << "Retrying object chunk " << cs.chunk.handle << " (offset " << cs.chunk.offset
+                             << ", bytes " << cs.chunk.bytesize << ") after " << retry->delay.count()
+                             << " ms; application retry " << retry->retry_count;
                 progressed = true;
                 continue;
             }

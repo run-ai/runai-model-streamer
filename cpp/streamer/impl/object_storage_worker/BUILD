@@ -1,8 +1,20 @@
 load("//:rules.bzl", "runai_cc_auto_library", "runai_cc_test")
 
 runai_cc_auto_library(
-    name = "object_storage_worker",
+    name = "object_storage_retry",
+    hdrs = ["object_storage_retry.h"],
+    srcs = ["object_storage_retry.cc"],
     deps = [
+        "//common/backend_api/response",
+    ],
+)
+
+runai_cc_auto_library(
+    name = "object_storage_worker",
+    hdrs = ["object_storage_worker.h"],
+    srcs = ["object_storage_worker.cc"],
+    deps = [
+        ":object_storage_retry",
         "//utils/capacity_worker",
         "//utils/env",
         "//utils/logging",
@@ -19,6 +31,12 @@ runai_cc_auto_library(
         "//streamer/impl/reader",
         "//streamer/impl/s3",
     ],
+)
+
+runai_cc_test(
+    name = "object_storage_retry_test",
+    srcs = ["object_storage_retry_test.cc"],
+    deps = [":object_storage_retry"],
 )
 
 runai_cc_test(
