@@ -249,7 +249,7 @@ void ObjectStorageWorker::submit(const ObjectChunk & chunk)
     if (cs.retry_count > 0 && wlit->second.retry_deadline.has_value() &&
         std::chrono::steady_clock::now() >= wlit->second.retry_deadline.value())
     {
-        LOG(WARNING) << "Object chunk " << chunk.handle << " exhausted RUNAI_STREAMER_TIMEOUT after "
+        LOG(WARNING) << "Object chunk " << chunk.handle << " exhausted RUNAI_STREAMER_S3_TIMEOUT after "
                      << cs.retry_count << " application retries";
         complete_chunk(wlit, chunk_idx, common::ResponseCode::FileAccessError);
         return;

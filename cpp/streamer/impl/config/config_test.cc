@@ -24,7 +24,7 @@ TEST(Creation, Default)
 TEST(Creation, ObjectStorageRetryTimeout)
 {
     const auto expected = utils::random::number<unsigned long>(1, 3600);
-    utils::temp::Env timeout("RUNAI_STREAMER_TIMEOUT", expected);
+    utils::temp::Env timeout("RUNAI_STREAMER_S3_TIMEOUT", expected);
 
     Config config;
     EXPECT_EQ(config.object_storage_retry_timeout, std::chrono::seconds(expected));
