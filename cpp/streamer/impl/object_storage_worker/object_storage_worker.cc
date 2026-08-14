@@ -314,8 +314,10 @@ void ObjectStorageWorker::complete_chunk(InflightMap::iterator wlit, size_t chun
 
 std::chrono::milliseconds ObjectStorageWorker::retry_delay(unsigned retry_count)
 {
-    // Full jitter over exponential backoff: [0, min(100ms * 2^(n-1), 1s)]. The per-chunk deadline is
-    // the hard bound; the 1s cap prevents application retries from backing off indefinitely.
+    // Full jitter over exponential backoff: [0, min(100ms * 2^(n-1), 1s)]. This is the earliest retry
+    // time, not an exact schedule: while other chunks are in flight, the worker may be blocked in
+    // async_response() until another completion arrives, so the actual delay can be longer. The per-chunk
+    // deadline is the hard bound; the 1s cap prevents application retries from backing off indefinitely.
     constexpr uint64_t base_ms = 100;
     constexpr uint64_t cap_ms = 1000;
     const unsigned shift = std::min(retry_count > 0 ? retry_count - 1 : 0, 4u);
