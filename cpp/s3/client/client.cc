@@ -335,10 +335,20 @@ common::backend_api::ResponseCode_t S3Client::async_read(const char* path,
             const int http_status = static_cast<int>(err.GetResponseCode());
             const int error_type = static_cast<int>(err.GetErrorType());
             const bool retryable = application_retryable_error(err.ShouldRetry(), http_status, error_type);
-            LOG(ERROR) << "Failed to download s3 object of request " << request_id << " "
-                       << err.GetExceptionName() << ": " << err.GetMessage()
-                       << " (http_status=" << http_status
-                       << ", retryable=" << (retryable ? "true" : "false") << ")";
+            if (retryable)
+            {
+                LOG(DEBUG) << "Failed to download s3 object of request " << request_id << " "
+                           << err.GetExceptionName() << ": " << err.GetMessage()
+                           << " (http_status=" << http_status << ", error_type=" << error_type
+                           << ", retryable=true)";
+            }
+            else
+            {
+                LOG(ERROR) << "Failed to download s3 object of request " << request_id << " "
+                           << err.GetExceptionName() << ": " << err.GetMessage()
+                           << " (http_status=" << http_status << ", error_type=" << error_type
+                           << ", retryable=false)";
+            }
             responder->push(common::backend_api::Response(
                 request_id,
                 retryable ? common::ResponseCode::RetryableFileAccessError
