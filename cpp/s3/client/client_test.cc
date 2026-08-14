@@ -126,24 +126,24 @@ TEST(ParseEndpointScheme, PortWithoutHost)
 TEST(ApplicationRetryableError, HonorsAwsClassification)
 {
     const int internal_failure = static_cast<int>(Aws::Client::CoreErrors::INTERNAL_FAILURE);
-    EXPECT_TRUE(application_retryable_error(true, -1, internal_failure));   // transport error without an HTTP response
-    EXPECT_TRUE(application_retryable_error(false, -1, internal_failure));  // CRT budget exhaustion clears ShouldRetry
-    EXPECT_TRUE(application_retryable_error(true, 500, internal_failure));
-    EXPECT_TRUE(application_retryable_error(true, 503, internal_failure));
-    EXPECT_TRUE(application_retryable_error(false, 503, internal_failure));
-    EXPECT_FALSE(application_retryable_error(false, 301, internal_failure));
+    EXPECT_TRUE(application_retryable_error(true, true, -1, internal_failure));   // transport error without HTTP
+    EXPECT_TRUE(application_retryable_error(true, false, -1, internal_failure));  // CRT exhaustion clears ShouldRetry
+    EXPECT_TRUE(application_retryable_error(true, true, 500, internal_failure));
+    EXPECT_TRUE(application_retryable_error(true, true, 503, internal_failure));
+    EXPECT_TRUE(application_retryable_error(true, false, 503, internal_failure));
+    EXPECT_FALSE(application_retryable_error(true, false, 301, internal_failure));
 }
 
 TEST(ApplicationRetryableError, RejectsPermanentClientErrors)
 {
     for (const int status : {400, 401, 403, 404})
     {
-        EXPECT_FALSE(application_retryable_error(true, status, 0));
+        EXPECT_FALSE(application_retryable_error(true, true, status, 0));
     }
 
     // These client-side status codes are explicitly transient.
-    EXPECT_TRUE(application_retryable_error(true, 408, 0));
-    EXPECT_TRUE(application_retryable_error(true, 429, 0));
+    EXPECT_TRUE(application_retryable_error(true, true, 408, 0));
+    EXPECT_TRUE(application_retryable_error(true, true, 429, 0));
 }
 
 TEST(ApplicationRetryableError, RejectsPermanentErrorsWithoutHttpResponse)
@@ -155,8 +155,17 @@ TEST(ApplicationRetryableError, RejectsPermanentErrorsWithoutHttpResponse)
                                   CoreErrors::CLIENT_SIGNING_FAILURE,
                                   CoreErrors::USER_CANCELLED})
     {
-        EXPECT_FALSE(application_retryable_error(false, -1, static_cast<int>(error_type)));
+        EXPECT_FALSE(application_retryable_error(true, false, -1, static_cast<int>(error_type)));
     }
+}
+
+TEST(ApplicationRetryableError, DisabledPreservesFileAccessErrorPath)
+{
+    const int internal_failure = static_cast<int>(Aws::Client::CoreErrors::INTERNAL_FAILURE);
+
+    EXPECT_FALSE(application_retryable_error(false, true, -1, internal_failure));
+    EXPECT_FALSE(application_retryable_error(false, true, 500, internal_failure));
+    EXPECT_FALSE(application_retryable_error(false, true, 408, internal_failure));
 }
 
 namespace

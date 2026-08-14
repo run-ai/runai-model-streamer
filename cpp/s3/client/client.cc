@@ -53,8 +53,16 @@ EndpointParseResult parse_endpoint_scheme(const Aws::String & endpoint)
     return { endpoint, std::nullopt };
 }
 
-bool application_retryable_error(bool aws_should_retry, int http_status, int error_type)
+bool application_retryable_error(bool application_retries_enabled,
+                                 bool aws_should_retry,
+                                 int http_status,
+                                 int error_type)
 {
+    if (!application_retries_enabled)
+    {
+        return false;
+    }
+
     if (http_status < 0)
     {
         using Aws::Client::CoreErrors;
@@ -174,6 +182,7 @@ bool S3ClientBase::verify_credentials(const common::backend_api::ObjectClientCon
 S3Client::S3Client(const common::backend_api::ObjectClientConfig_t & config) :
     S3ClientBase(config),
     _stop(false),
+    _application_retries_enabled(utils::getenv<unsigned long>("RUNAI_STREAMER_S3_TIMEOUT", 0UL) > 0),
     _responder(nullptr)
 {
     if (_endpoint.has_value()) // endpoint passed as parameter by user application (in credentials)
@@ -309,7 +318,8 @@ common::backend_api::ResponseCode_t S3Client::async_read(const char* path,
             return stream.release();
         });
 
-    _client->GetObjectAsync(*request, [request, responder = _responder, request_id, bytesize](const Aws::S3Crt::S3CrtClient*, const Aws::S3Crt::Model::GetObjectRequest&,
+    _client->GetObjectAsync(*request, [request, responder = _responder, request_id, bytesize,
+                                      application_retries_enabled = _application_retries_enabled](const Aws::S3Crt::S3CrtClient*, const Aws::S3Crt::Model::GetObjectRequest&,
                                                                     const Aws::S3Crt::Model::GetObjectOutcome& outcome,
                                                                     const std::shared_ptr<const Aws::Client::AsyncCallerContext>&) {
         if (outcome.IsSuccess())
@@ -334,7 +344,8 @@ common::backend_api::ResponseCode_t S3Client::async_read(const char* path,
             const auto & err = outcome.GetError();
             const int http_status = static_cast<int>(err.GetResponseCode());
             const int error_type = static_cast<int>(err.GetErrorType());
-            const bool retryable = application_retryable_error(err.ShouldRetry(), http_status, error_type);
+            const bool retryable = application_retryable_error(
+                application_retries_enabled, err.ShouldRetry(), http_status, error_type);
             if (retryable)
             {
                 LOG(DEBUG) << "Failed to download s3 object of request " << request_id << " "

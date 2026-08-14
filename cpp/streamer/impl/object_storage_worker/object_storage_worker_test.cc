@@ -341,6 +341,26 @@ TEST_F(ObjectStorageWorkerTest, RetryableChunkIsRequeuedWithoutRestartingWorkloa
     EXPECT_EQ(total_read_requests(), initial_chunks + 1);
 }
 
+// With the application retry timeout disabled, even an internal retryable marker is converted to the
+// original public FileAccessError and the worker does not submit another backend request.
+TEST_F(ObjectStorageWorkerTest, RetryableChunkFailsWithoutRetryWhenTimeoutDisabled)
+{
+    auto workloads = build(1, 1, 1);
+    config->s3_block_bytesize = submission->total_bytes + 1;   // exactly one backend chunk
+    const size_t initial_chunks = count_object_chunks(workloads, config->s3_block_bytesize);
+    ASSERT_EQ(initial_chunks, 1u);
+    ASSERT_EQ(config->object_storage_retry_timeout.count(), 0);
+    set_read_failures(1, common::ResponseCode::RetryableFileAccessError);
+
+    {
+        auto pool = make_pool(1);
+        push_all(pool, workloads);
+        EXPECT_EQ(responder->pop().ret, common::ResponseCode::FileAccessError);
+    }
+
+    EXPECT_EQ(total_read_requests(), initial_chunks);
+}
+
 // A permanent storage error bypasses the application retry loop even when a retry deadline is configured.
 TEST_F(ObjectStorageWorkerTest, PermanentChunkErrorFailsWithoutRetry)
 {
