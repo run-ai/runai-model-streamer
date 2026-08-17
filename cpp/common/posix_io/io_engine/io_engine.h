@@ -5,7 +5,7 @@
 #include <memory>
 #include <ostream>
 
-#include "common/posix_io/strategy.h"
+#include "common/posix_io/strategy/strategy.h"
 #include "common/response_code/response_code.h"
 
 namespace runai::llm::streamer::common::posix_io

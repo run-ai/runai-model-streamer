@@ -5,15 +5,15 @@
 #include <map>
 #include <vector>
 
-#include "common/posix_io/io_engine.h"
+#include "common/posix_io/io_engine/io_engine.h"
 
 namespace runai::llm::streamer::common::posix_io
 {
 
 // A test double for IoEngine: no kernel, no threads, and the test decides what completes and when.
 //
-// Its own Bazel package so //common/posix_io's source glob cannot reach it - glob() does not cross
-// package boundaries - because a mock in the shipped library is a defect.
+// Its own target, marked testonly, so Bazel refuses to link it into anything shipped - a mock in the
+// product is a defect, not a convenience.
 //
 // Three things are otherwise reachable only against a real kernel under load, where they are
 // non-deterministic: out-of-order completion, a partial flush(), and a wait that times out.

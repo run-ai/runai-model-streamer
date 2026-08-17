@@ -1,4 +1,4 @@
-#include "common/posix_io/strategy.h"
+#include "common/posix_io/strategy/strategy.h"
 
 #include <gtest/gtest.h>
 

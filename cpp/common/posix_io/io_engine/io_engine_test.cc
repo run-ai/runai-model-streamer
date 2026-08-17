@@ -1,11 +1,11 @@
-#include "common/posix_io/io_engine.h"
+#include "common/posix_io/io_engine/io_engine.h"
 
 #include <gtest/gtest.h>
 #include <unistd.h>
 
 #include <climits>
 
-#include "common/posix_io/strategy.h"
+#include "common/posix_io/strategy/strategy.h"
 
 namespace runai::llm::streamer::common::posix_io
 {
