@@ -5,11 +5,13 @@
 #include <numeric>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "streamer/impl/assigner/assigner.h"
 
 #include "utils/random/random.h"
+#include "utils/temp/env/env.h"
 #include "utils/temp/file/file.h"
 
 #include "common/exception/exception.h"
@@ -155,6 +157,113 @@ TEST(Batches, Sanity)
             EXPECT_EQ(byte, 1);
         }
     }
+}
+
+// Tasks must be cut at chunk boundaries as well as at worker boundaries, so a completed chunk always
+// covers a whole number of tasks.
+//
+// Nothing above asserts this: the other tests use the default 8 MiB chunk against fixtures of a few
+// hundred KB, so no cut ever happens and they pass whether or not the code cuts at all.
+//
+// The chunk size arrives through the environment, so this also covers the plumbing from
+// RUNAI_STREAMER_FS_CHUNK_BYTESIZE to the field. Passing it to the constructor instead would pass
+// even if nothing ever read the variable.
+TEST(Batches, Tasks_Are_Cut_At_Chunk_Boundaries)
+{
+    constexpr size_t chunk = 4096;
+
+    // One worker, so the only cuts are the chunk ones and the expected shape is exact.
+    utils::temp::Env concurrency(std::string("RUNAI_STREAMER_CONCURRENCY"), 1UL);
+    utils::temp::Env chunk_bytesize(std::string("RUNAI_STREAMER_FS_CHUNK_BYTESIZE"), static_cast<unsigned long>(chunk));
+
+    auto config = std::make_shared<Config>(false /* do not force minimum */);
+    ASSERT_EQ(config->fs_async_chunk_bytesize, chunk);
+    ASSERT_EQ(config->concurrency, 1);
+
+    auto responder = std::make_shared<common::Responder>(0);
+    common::s3::S3ClientWrapper::Params s3_params;
+
+    // The second range does NOT start on a chunk boundary, which is the case that matters: boundaries
+    // are absolute file offsets, so its first task is short and the rest are whole chunks.
+    const std::vector<size_t> sizes = { 1000, 20000 };
+    const size_t total = 21000;
+
+    auto data = utils::random::buffer(total);
+    utils::temp::File file(data);
+    std::vector<char> buffer(total);
+
+    std::vector<FileRanges> request = { contiguous_file(file.path, sizes, buffer.data()) };
+
+    Assigner assigner(request, config);
+    ASSERT_EQ(assigner.transfers().size(), 1);
+
+    const auto & transfer = assigner.transfers().front();
+    Batches batches(utils::random::number(), transfer.file_index, transfer.tasks, config, responder,
+                    request[0].path, s3_params, transfer.range_sizes, transfer.first_range_index);
+
+    ASSERT_EQ(batches.size(), 1);
+
+    std::vector<std::pair<size_t, size_t>> seen;   // offset, bytesize - in task order
+    for (const auto & task : batches[0].tasks)
+    {
+        seen.emplace_back(task.info.offset, task.info.bytesize);
+    }
+
+    // No task straddles a chunk boundary: its first and last byte fall in the same chunk.
+    for (const auto & entry : seen)
+    {
+        ASSERT_GT(entry.second, 0);
+        EXPECT_EQ(entry.first / chunk, (entry.first + entry.second - 1) / chunk)
+            << "task [" << entry.first << ", " << entry.first + entry.second << ") crosses a "
+            << chunk << " boundary";
+    }
+
+    // The exact cut, not only the property - a wrong cut can still satisfy "no straddle".
+    const std::vector<std::pair<size_t, size_t>> expected = {
+        { 0, 1000 },        // range 0, entirely inside chunk 0
+        { 1000, 3096 },     // range 1 starts mid-chunk, so its first task ends at 4096
+        { 4096, 4096 },
+        { 8192, 4096 },
+        { 12288, 4096 },
+        { 16384, 4096 },
+        { 20480, 520 },     // and its last task is whatever is left
+    };
+    EXPECT_EQ(seen, expected);
+
+    // Cutting must not lose or duplicate bytes: the tasks still tile the file exactly once.
+    size_t covered = 0;
+    for (const auto & entry : seen)
+    {
+        EXPECT_EQ(entry.first, covered);
+        covered += entry.second;
+    }
+    EXPECT_EQ(covered, total);
+}
+
+// A range that fits inside one chunk is one task, so the cut costs nothing when it is not needed.
+TEST(Batches, Small_Ranges_Are_Not_Cut)
+{
+    utils::temp::Env concurrency(std::string("RUNAI_STREAMER_CONCURRENCY"), 1UL);
+    utils::temp::Env chunk_bytesize(std::string("RUNAI_STREAMER_FS_CHUNK_BYTESIZE"), 1UL << 20);
+
+    auto config = std::make_shared<Config>(false);
+    auto responder = std::make_shared<common::Responder>(0);
+    common::s3::S3ClientWrapper::Params s3_params;
+
+    const std::vector<size_t> sizes = { 100, 200, 300 };
+    auto data = utils::random::buffer(600);
+    utils::temp::File file(data);
+    std::vector<char> buffer(600);
+
+    std::vector<FileRanges> request = { contiguous_file(file.path, sizes, buffer.data()) };
+
+    Assigner assigner(request, config);
+    const auto & transfer = assigner.transfers().front();
+    Batches batches(utils::random::number(), transfer.file_index, transfer.tasks, config, responder,
+                    request[0].path, s3_params, transfer.range_sizes, transfer.first_range_index);
+
+    ASSERT_EQ(batches.size(), 1);
+    EXPECT_EQ(batches[0].tasks.size(), sizes.size());
 }
 
 TEST(Batches, Failed_Reader)

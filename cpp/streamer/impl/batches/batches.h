@@ -73,8 +73,9 @@ struct Batches
     // create all the tasks
     void build_tasks(std::shared_ptr<const Config> config, const std::string & path, const common::s3::S3ClientWrapper::Params & params, const std::vector<size_t> & range_sizes);
 
-    // create tasks of a given range; range_index is the index within the FILE, not within this transfer
-    void handle_request(std::vector<Tasks> & v_tasks, unsigned range_index, size_t request_file_offset, size_t request_size, char * destination);
+    // create tasks of a given range; range_index is the index within the FILE, not within this transfer.
+    // Tasks are cut at worker boundaries and at multiples of chunk_bytesize, so none straddles a chunk.
+    void handle_request(std::vector<Tasks> & v_tasks, unsigned range_index, size_t request_file_offset, size_t request_size, char * destination, size_t chunk_bytesize);
 
     SubmissionId _submission_id;
 

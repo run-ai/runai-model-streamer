@@ -7,7 +7,6 @@
 #include <memory>
 #include <string>
 #include <utility>
-#include <map>
 #include <vector>
 
 #include "utils/logging/logging.h"
@@ -142,7 +141,7 @@ void Batches::build_tasks(std::shared_ptr<const Config> config, const std::strin
         // the response carries the index within the FILE, so offset by this transfer's first range
         const unsigned range_index = _first_range_index + i;
 
-        handle_request(v_tasks, range_index, request_file_offset, request_size, current_request_destination);
+        handle_request(v_tasks, range_index, request_file_offset, request_size, current_request_destination, config->fs_async_chunk_bytesize);
         LOG(DEBUG) << "created request index " << range_index << " dst " << static_cast<void *>(current_request_destination);
 
         current_request_destination += request_size;
@@ -169,24 +168,35 @@ void Batches::build_tasks(std::shared_ptr<const Config> config, const std::strin
     }
 }
 
-void Batches::handle_request(std::vector<Tasks> & v_tasks, unsigned range_index, size_t request_file_offset, size_t request_size, char * destination)
+void Batches::handle_request(std::vector<Tasks> & v_tasks, unsigned range_index, size_t request_file_offset, size_t request_size, char * destination, size_t chunk_bytesize)
 {
     LOG(DEBUG) << "request file offset " << request_file_offset << " size " << request_size;
 
-    // create tasks info
-
-    // map batch index (index into this file's read-task/batch list) to its task info
-    std::map<unsigned, Task::Info> infos;
+    // Task infos in file order, each paired with the batch it belongs to.
+    //
+    // A vector rather than a map keyed by batch index: cutting at chunk boundaries puts SEVERAL tasks
+    // in the same batch, which a map keyed that way cannot hold - it kept only the first and lost the
+    // rest.
+    std::vector<std::pair<unsigned, Task::Info>> infos;
 
     auto bytes_to_request = request_size;
     size_t task_offset = request_file_offset;
     size_t destination_offset = 0;
     do
     {
-        auto to_read = _itr.consume(bytes_to_request);
-        Task::Info info(task_offset, to_read, destination_offset);
-        auto batch_index = _itr.current_index();
-        infos.try_emplace(batch_index, std::move(info));
+        // Cut at the next chunk boundary as well as at the worker boundary consume() applies, so no
+        // task ever straddles one. That is what lets a completed chunk account for a whole number of
+        // tasks, which is how responses are emitted once completions arrive out of order.
+        //
+        // Boundaries are ABSOLUTE file offsets, not relative to the range: under O_DIRECT the chunks
+        // have to be block aligned, and a range starts wherever the caller put it. So the first task
+        // of a range is short and the rest are whole chunks.
+        const size_t to_chunk_boundary = chunk_bytesize - (task_offset % chunk_bytesize);
+        const size_t want = std::min(bytes_to_request, to_chunk_boundary);
+
+        auto to_read = _itr.consume(want);
+        infos.emplace_back(_itr.current_index(), Task::Info(task_offset, to_read, destination_offset));
+
         task_offset += to_read;
         bytes_to_request -= to_read;
         destination_offset += to_read;

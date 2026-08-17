@@ -245,7 +245,7 @@ unsigned Assigner::get_num_workers() const
 
 size_t Assigner::bytes_per_worker(size_t total_bytes_to_read, size_t & remainder_bytesize)
 {
-    size_t block_bytesize = _is_object_storage ? _config->s3_block_bytesize : _config->fs_block_bytesize;
+    size_t block_bytesize = _is_object_storage ? _config->s3_block_bytesize : _config->fs_sync_read_block_bytesize;
     size_t num_blocks = total_bytes_to_read / block_bytesize;
 
     // zero size files are assigned to one worker

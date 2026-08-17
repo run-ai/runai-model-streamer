@@ -22,6 +22,7 @@ runai_cc_test(
     deps = [
         ":batches",
         "//utils/random",
+        "//utils/temp/env",
         "//utils/temp/file",
         "//streamer/impl/assigner",
     ],

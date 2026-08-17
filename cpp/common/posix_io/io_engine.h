@@ -62,8 +62,8 @@ struct AsyncIoConfig
     // with one worker per process, n processes on a node make the device see n x depth.
     unsigned depth = 0;
 
-    // Bytes per request. Any large power of two satisfies offset_alignment. Not fs_block_bytesize:
-    // that 2 MiB floor suits a synchronous reader, which wants fewer, larger reads.
+    // Bytes per request. Any large power of two satisfies offset_alignment. Not the synchronous
+    // reader's block size: that 2 MiB floor suits a reader wanting fewer, larger reads.
     size_t chunk_bytesize = 0;
 };
 

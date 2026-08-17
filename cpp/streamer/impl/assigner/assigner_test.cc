@@ -213,7 +213,7 @@ TEST_F(AssignerTest, Transfer_Split_Across_Workers)
     config->concurrency = 8;
 
     char * const base = fake_base();
-    const size_t size = config->fs_block_bytesize * 64;
+    const size_t size = config->fs_sync_read_block_bytesize * 64;
 
     std::vector<FileRanges> request;
     request.push_back(contiguous_file(utils::random::string(), 0, { size }, base));
@@ -319,7 +319,7 @@ TEST_F(AssignerTest, Valid_Inputs)
         EXPECT_EQ(assigner.get_num_workers(), (is_object_storage ? config->s3_concurrency : config->concurrency));
 
         const auto concurrency = is_object_storage ? config->s3_concurrency : config->concurrency;
-        const auto block_bytesize = is_object_storage ? config->s3_block_bytesize : config->fs_block_bytesize;
+        const auto block_bytesize = is_object_storage ? config->s3_block_bytesize : config->fs_sync_read_block_bytesize;
         const size_t expected_workers = std::max(std::min(total_size / block_bytesize, static_cast<size_t>(concurrency)), 1UL);
         ASSERT_EQ(worker_indices.size(), static_cast<unsigned>(expected_workers));
         ASSERT_EQ(assigner.num_workloads(), static_cast<unsigned>(expected_workers));
@@ -390,7 +390,7 @@ TEST_F(AssignerTest, Zero_Size_Ranges)
 
     EXPECT_EQ(assigner.get_num_workers(), config->concurrency);
 
-    const size_t expected_workers = std::max(std::min(total_size / config->fs_block_bytesize, static_cast<size_t>(config->concurrency)), 1UL);
+    const size_t expected_workers = std::max(std::min(total_size / config->fs_sync_read_block_bytesize, static_cast<size_t>(config->concurrency)), 1UL);
     ASSERT_EQ(worker_indices.size(), static_cast<unsigned>(expected_workers));
     ASSERT_EQ(assigner.num_workloads(), static_cast<unsigned>(expected_workers));
 }

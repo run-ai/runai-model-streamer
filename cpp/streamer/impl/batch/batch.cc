@@ -113,7 +113,7 @@ void Batch::read(const Config & config, std::atomic<bool> & stopped)
     // destination. Both cursors advance in lockstep below.
     char * buffer = tasks[0].destination();
 
-    size_t num_chunks = range.size / config.fs_block_bytesize;
+    size_t num_chunks = range.size / config.fs_sync_read_block_bytesize;
 
     // seek just once because tasks are consecutive within the range
     _reader->seek(file_offset);
@@ -122,10 +122,10 @@ void Batch::read(const Config & config, std::atomic<bool> & stopped)
     size_t i = 0;
     for (; i < num_chunks && !stopped; ++i)
     {
-        _reader->read(config.fs_block_bytesize, buffer);
+        _reader->read(config.fs_sync_read_block_bytesize, buffer);
 
-        file_offset += config.fs_block_bytesize;
-        buffer += config.fs_block_bytesize;
+        file_offset += config.fs_sync_read_block_bytesize;
+        buffer += config.fs_sync_read_block_bytesize;
 
         finished_until(file_offset, common::ResponseCode::Success);
     }

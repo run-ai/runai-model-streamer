@@ -13,7 +13,7 @@ namespace runai::llm::streamer::impl
 File::File(const std::string & path, const Config & config) :
     Reader(Reader::Mode::Sync),
     _fd(::open(path.c_str(), O_RDONLY)),
-    _block_size(config.fs_block_bytesize)
+    _block_size(config.fs_sync_read_block_bytesize)
 {
     if (_fd.fd() == -1)
     {

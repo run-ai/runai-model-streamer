@@ -17,7 +17,7 @@ TEST(Creation, Default)
     EXPECT_EQ(config.concurrency, 16UL);
     EXPECT_EQ(config.s3_concurrency, 8UL);
     EXPECT_EQ(config.s3_block_bytesize, 8 * 1024 * 1024);
-    EXPECT_EQ(config.fs_block_bytesize, 2 * 1024 * 1024);
+    EXPECT_EQ(config.fs_sync_read_block_bytesize, 2 * 1024 * 1024);
 }
 
 TEST(Creation, Concurrency)
@@ -29,7 +29,7 @@ TEST(Creation, Concurrency)
     EXPECT_EQ(config.concurrency, expected);
     EXPECT_EQ(config.s3_concurrency, expected);
     EXPECT_EQ(config.s3_block_bytesize, 8 * 1024 * 1024);
-    EXPECT_EQ(config.fs_block_bytesize, 2 * 1024 * 1024);
+    EXPECT_EQ(config.fs_sync_read_block_bytesize, 2 * 1024 * 1024);
 }
 
 TEST(Creation, Chunk_Size)
@@ -43,7 +43,7 @@ TEST(Creation, Chunk_Size)
         EXPECT_EQ(config.concurrency, 16UL);
         EXPECT_EQ(config.s3_concurrency, 8UL);
         EXPECT_EQ(config.s3_block_bytesize, std::max(expected, min_));
-        EXPECT_EQ(config.fs_block_bytesize, std::max(expected, Config::min_fs_block_bytesize));
+        EXPECT_EQ(config.fs_sync_read_block_bytesize, std::max(expected, Config::min_fs_sync_read_block_bytesize));
     }
 }
 
