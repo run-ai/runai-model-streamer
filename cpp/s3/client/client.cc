@@ -53,16 +53,8 @@ EndpointParseResult parse_endpoint_scheme(const Aws::String & endpoint)
     return { endpoint, std::nullopt };
 }
 
-bool application_retryable_error(bool application_retries_enabled,
-                                 bool aws_should_retry,
-                                 int http_status,
-                                 int error_type)
+bool application_retryable_error(bool aws_should_retry, int http_status, int error_type)
 {
-    if (!application_retries_enabled)
-    {
-        return false;
-    }
-
     if (http_status < 0)
     {
         using Aws::Client::CoreErrors;
@@ -344,8 +336,8 @@ common::backend_api::ResponseCode_t S3Client::async_read(const char* path,
             const auto & err = outcome.GetError();
             const int http_status = static_cast<int>(err.GetResponseCode());
             const int error_type = static_cast<int>(err.GetErrorType());
-            const bool retryable = application_retryable_error(
-                application_retries_enabled, err.ShouldRetry(), http_status, error_type);
+            const bool retryable = application_retries_enabled &&
+                application_retryable_error(err.ShouldRetry(), http_status, error_type);
             if (retryable)
             {
                 LOG(DEBUG) << "Failed to download s3 object of request " << request_id << " "
