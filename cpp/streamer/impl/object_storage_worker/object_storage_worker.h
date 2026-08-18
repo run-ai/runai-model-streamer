@@ -84,15 +84,25 @@ class ObjectStorageWorker : public utils::CapacityWorker<Workload, ObjectChunk>
     {
         Batch * batch;                                              // owning batch: handle_response + file_index
         const Task * task;                                         // the task itself: handle_response arg
-        unsigned remaining_chunks = 0;                             // when 0, the task is fully read
-        common::ResponseCode error = common::ResponseCode::Success;   // first failing chunk's code
+        common::ResponseCode error = common::ResponseCode::Success;
+    };
+
+    // The tasks one chunk covers, as indices into Inflight::tasks.
+    //
+    // A chunk is read once and completes every task in its span at that moment, so there is no
+    // per-task chunk counter: a task belongs to exactly one chunk, because Batch::chunks are built
+    // from the same cut that produced the tasks.
+    struct ChunkTasks
+    {
+        size_t   first = 0;
+        unsigned count = 0;
     };
 
     // Per-in-flight-workload state, owned here and kept alive until the workload's last task finalizes.
     struct Inflight
     {
         Workload workload;                                         // owns the batches/responder/config
-        std::vector<size_t> chunk_task_idx;                        // handle - handle_base -> task index
+        std::vector<ChunkTasks> chunk_tasks;                       // handle - handle_base -> the tasks it covers
         std::vector<TaskState> tasks;                              // per task (only non-zero-size tasks)
         std::map<unsigned, common::ResponseCode> error_by_file_index;   // first error per file (finalize)
         size_t remaining_tasks = 0;                                // tasks not yet completed; 0 -> finalize
@@ -103,14 +113,13 @@ class ObjectStorageWorker : public utils::CapacityWorker<Workload, ObjectChunk>
     // lookups/erase go by key - the number in flight on one worker can be large.
     using InflightMap = std::map<common::backend_api::ObjectRequestId_t, Inflight>;
 
-    // Find the workload owning `handle` (the block whose [base, base+size) contains it) and the local task
-    // index of that chunk. Returns {end(), 0} if no block contains it (stale / out-of-range).
+    // Find the workload owning `handle` (the block whose [base, base+size) contains it) and that chunk's
+    // index within the block. Returns {end(), 0} if no block contains it (stale / out-of-range).
     std::pair<InflightMap::iterator, size_t> locate(common::backend_api::ObjectRequestId_t handle);
 
-    // Account one completed chunk of a task (from the backend or a short-circuit): free the window slot,
-    // record the task's first error, report the task once its last chunk lands, and finalize the workload
-    // once its last task lands.
-    void complete_chunk(InflightMap::iterator wlit, size_t task_idx, common::ResponseCode ret);
+    // Account one completed chunk: free the window slot and report EVERY task it covered - one read
+    // carries them all, so they succeed or fail together. Finalizes the workload once its last task lands.
+    void complete_chunk(InflightMap::iterator wlit, size_t chunk_index, common::ResponseCode ret);
 
     // Push each batch's aggregate result: the whole-workload `code` if non-Success, else the batch's own
     // per-file error (Success for files whose tasks all succeeded).

@@ -191,6 +191,7 @@ class ObjectStorageWorkerTest : public ::testing::Test
     void set_sentinel(bool on)          { _dylib.dlsym<void(*)(bool)>("runai_mock_s3_set_append_finished_sentinel")(on); }
     void set_window(size_t bytes)       { _dylib.dlsym<void(*)(size_t)>("runai_mock_s3_set_inflight_window")(bytes); }
     size_t max_concurrent()             { return _dylib.dlsym<size_t(*)()>("runai_mock_s3_max_concurrent")(); }
+    size_t requests()                   { return _dylib.dlsym<size_t(*)()>("runai_mock_s3_requests")(); }
     int clients()                       { return _dylib.dlsym<int(*)()>("runai_mock_s3_clients")(); }
 
     std::shared_ptr<Config> config;
@@ -229,6 +230,65 @@ TEST_F(ObjectStorageWorkerTest, Happy_Path)
     {
         EXPECT_TRUE(e.empty());
     }
+}
+
+// Small ranges that share a chunk become ONE backend read, not one each.
+//
+// Chunks come from Batch::chunks, built at s3_block_bytesize where the tasks were cut, so consecutive
+// small tensors inside one chunk are fetched together. Before that, every task was chunked on its own
+// and a 100-byte tensor meant a 100-byte GET - which is what this asserts is no longer true.
+TEST_F(ObjectStorageWorkerTest, Small_Ranges_Are_Packed_Into_One_Read)
+{
+    constexpr size_t s3_chunk = 64 * 1024;
+    constexpr unsigned num_ranges = 40;
+    constexpr size_t range_size = 100;
+
+    // s3_block_bytesize is the 4th argument; enforce_minimum=false keeps it from being floored at 5 MiB.
+    config = std::make_shared<Config>(1, 1, s3_chunk, 1024, false);
+    responder = std::make_shared<common::Responder>(0);
+
+    const std::string path = "s3://" + utils::random::string() + "/" + utils::random::string();
+    std::vector<char> buffer(num_ranges * range_size);
+
+    FileRanges ranges;
+    ranges.path = path;
+    for (unsigned i = 0; i < num_ranges; ++i)
+    {
+        ranges.ranges.push_back(ReadRange{ i * range_size, range_size, buffer.data() + i * range_size });
+    }
+    responder->increment(num_ranges);
+
+    std::vector<FileRanges> request = { ranges };
+    Assigner assigner(request, config);
+
+    std::vector<Workload> workloads(assigner.num_workloads());
+    const common::s3::Credentials credentials;
+    for (const auto & transfer : assigner.transfers())
+    {
+        auto uri = std::make_shared<common::s3::StorageUri>(path);
+        common::s3::S3ClientWrapper::Params params(uri, credentials, config->s3_block_bytesize);
+
+        Batches batches(utils::random::number(), transfer.file_index, transfer.tasks, config, responder,
+                        path, params, transfer.range_sizes, transfer.first_range_index);
+        for (size_t j = 0; j < batches.size(); ++j)
+        {
+            workloads[batches[j].workload_index].add_batch(std::move(batches[j]));
+        }
+    }
+
+    {
+        auto pool = make_pool(1);
+        push_all(pool, workloads);
+
+        // every range still owes exactly one response, however few reads served them
+        for (unsigned i = 0; i < num_ranges; ++i)
+        {
+            EXPECT_EQ(responder->pop().ret, common::ResponseCode::Success);
+        }
+    }
+
+    // 40 x 100 bytes all sit inside one 64 KiB chunk.
+    EXPECT_EQ(requests(), 1u) << num_ranges << " small ranges should be one read, not one each";
 }
 
 // Tearing the pool down while reads are in flight: every request still gets exactly one response (Success
