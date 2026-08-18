@@ -5,6 +5,7 @@
 #include <numeric>
 #include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -264,6 +265,127 @@ TEST(Batches, Small_Ranges_Are_Not_Cut)
 
     ASSERT_EQ(batches.size(), 1);
     EXPECT_EQ(batches[0].tasks.size(), sizes.size());
+}
+
+// Object storage slices each task by s3_block_bytesize, so its tasks must be cut at THAT size.
+// Cutting them at the file system chunk size would let RUNAI_STREAMER_FS_CHUNK_BYTESIZE change
+// object-storage task granularity - a variable silently affecting a backend it does not name.
+TEST(Batches, Object_Storage_Cuts_At_Its_Own_Chunk_Size)
+{
+    constexpr size_t s3_chunk = 8192;
+    constexpr size_t fs_chunk = 4096;
+
+    utils::temp::Env concurrency(std::string("RUNAI_STREAMER_CONCURRENCY"), 1UL);
+    utils::temp::Env fs(std::string("RUNAI_STREAMER_FS_CHUNK_BYTESIZE"), static_cast<unsigned long>(fs_chunk));
+
+    // s3_block_bytesize is positional, and enforce_minimum would otherwise floor it at 5 MiB.
+    auto config = std::make_shared<Config>(1, 1, s3_chunk, 1024, false, fs_chunk);
+    ASSERT_EQ(config->s3_block_bytesize, s3_chunk);
+    ASSERT_EQ(config->fs_async_chunk_bytesize, fs_chunk);
+
+    auto responder = std::make_shared<common::Responder>(0);
+
+    const std::string uri = "s3://bucket/key";
+    common::s3::S3ClientWrapper::Params s3_params(std::make_shared<common::s3::StorageUri>(uri), s3_chunk);
+    ASSERT_TRUE(s3_params.valid());
+
+    const std::vector<size_t> sizes = { 20000 };
+    std::vector<char> buffer(20000);
+
+    std::vector<FileRanges> request = { contiguous_file(uri, sizes, buffer.data()) };
+    Assigner assigner(request, config);
+
+    const auto & transfer = assigner.transfers().front();
+    Batches batches(utils::random::number(), transfer.file_index, transfer.tasks, config, responder,
+                    uri, s3_params, transfer.range_sizes, transfer.first_range_index);
+
+    ASSERT_EQ(batches.size(), 1);
+
+    std::vector<size_t> seen;
+    for (const auto & task : batches[0].tasks)
+    {
+        seen.push_back(task.info.bytesize);
+    }
+
+    // 20000 at 8192 is three tasks; at the file system's 4096 it would be five.
+    EXPECT_EQ(seen, (std::vector<size_t>{ 8192, 8192, 3616 }));
+}
+
+// The batch carries its own chunks, built at the same cut. Nothing re-derives them per backend -
+// that is how one rule ends up with two implementations that drift.
+TEST(Batches, Batch_Carries_Chunks_Covering_Whole_Tasks)
+{
+    constexpr size_t chunk = 4096;
+
+    utils::temp::Env concurrency(std::string("RUNAI_STREAMER_CONCURRENCY"), 1UL);
+    utils::temp::Env chunk_bytesize(std::string("RUNAI_STREAMER_FS_CHUNK_BYTESIZE"), static_cast<unsigned long>(chunk));
+
+    auto config = std::make_shared<Config>(false);
+    auto responder = std::make_shared<common::Responder>(0);
+    common::s3::S3ClientWrapper::Params s3_params;
+
+    const std::vector<size_t> sizes = { 1000, 20000 };
+    auto data = utils::random::buffer(21000);
+    utils::temp::File file(data);
+    std::vector<char> buffer(21000);
+
+    std::vector<FileRanges> request = { contiguous_file(file.path, sizes, buffer.data()) };
+    Assigner assigner(request, config);
+
+    const auto & transfer = assigner.transfers().front();
+    Batches batches(utils::random::number(), transfer.file_index, transfer.tasks, config, responder,
+                    request[0].path, s3_params, transfer.range_sizes, transfer.first_range_index);
+
+    ASSERT_EQ(batches.size(), 1);
+    const auto & batch = batches[0];
+
+    // The first chunk packs two tasks - a 1000-byte range and the 3096 bytes of the next one that fit
+    // before the boundary. That packing is the point: one read completes both.
+    std::vector<std::tuple<size_t, size_t, unsigned>> seen;
+    for (const auto & c : batch.chunks)
+    {
+        seen.emplace_back(c.offset, c.bytesize, c.task_count);
+    }
+
+    const std::vector<std::tuple<size_t, size_t, unsigned>> expected = {
+        { 0, 4096, 2 }, { 4096, 4096, 1 }, { 8192, 4096, 1 },
+        { 12288, 4096, 1 }, { 16384, 4096, 1 }, { 20480, 520, 1 },
+    };
+    EXPECT_EQ(seen, expected);
+
+    // No task crosses a chunk, and every byte of the batch is covered exactly once.
+    size_t covered = 0;
+    for (const auto & c : batch.chunks)
+    {
+        covered += c.bytesize;
+    }
+    EXPECT_EQ(covered, batch.total_bytes());
+}
+
+// A zero-sized range owes a response but reads nothing, so it must appear in NO chunk - the worker
+// completes it at enqueue instead of waiting for I/O that is never issued.
+TEST(Batches, Zero_Sized_Batch_Has_No_Chunks)
+{
+    utils::temp::Env concurrency(std::string("RUNAI_STREAMER_CONCURRENCY"), 1UL);
+
+    auto config = std::make_shared<Config>(false);
+    auto responder = std::make_shared<common::Responder>(0);
+    common::s3::S3ClientWrapper::Params s3_params;
+
+    auto data = utils::random::buffer(16);
+    utils::temp::File file(data);
+    std::vector<char> buffer(16);
+
+    std::vector<FileRanges> request = { contiguous_file(file.path, { 0, 0 }, buffer.data()) };
+    Assigner assigner(request, config);
+
+    const auto & transfer = assigner.transfers().front();
+    Batches batches(utils::random::number(), transfer.file_index, transfer.tasks, config, responder,
+                    request[0].path, s3_params, transfer.range_sizes, transfer.first_range_index);
+
+    ASSERT_EQ(batches.size(), 1);
+    EXPECT_GT(batches[0].tasks.size(), 0) << "the ranges still owe a response each";
+    EXPECT_TRUE(batches[0].chunks.empty()) << "but there is nothing to read";
 }
 
 TEST(Batches, Failed_Reader)

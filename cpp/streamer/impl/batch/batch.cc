@@ -19,18 +19,20 @@
 namespace runai::llm::streamer::impl
 {
 
-Batch::Batch(SubmissionId submission_id, unsigned workload_index, unsigned file_index, const std::string & path, const common::s3::S3ClientWrapper::Params & params, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config) :
+Batch::Batch(SubmissionId submission_id, unsigned workload_index, unsigned file_index, const std::string & path, const common::s3::S3ClientWrapper::Params & params, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config, size_t chunk_bytesize) :
     submission_id(submission_id),
     workload_index(workload_index),
     file_index(file_index),
     path(path),
     object_storage_params(params),
     tasks(tasks),
+    chunks(split_into_chunks(this->tasks, chunk_bytesize)),
     range(tasks),
     responder(responder),
     config(config)
 {
-    LOG(DEBUG) << "Batch " << path << " range " << range << " ; " << this->tasks.size() << " tasks";
+    LOG(DEBUG) << "Batch " << path << " range " << range << " ; " << this->tasks.size() << " tasks in "
+               << chunks.size() << " chunks";
 }
 
 size_t Batch::total_bytes() const

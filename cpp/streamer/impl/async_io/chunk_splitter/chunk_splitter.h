@@ -35,12 +35,21 @@ std::ostream & operator<<(std::ostream &, const Chunk &);
 // apart - and if they did drift, a chunk would cover part of a task and its completion would report
 // bytes that had not arrived.
 //
-// Every task belongs to exactly one chunk, so the spans tile [0, tasks.size()). Zero-sized tasks -
-// which a zero-sized range produces - carry no bytes and so belong to no chunk of their own; they are
-// absorbed into the neighbouring chunk and accounted when it lands.
+// Chunks cover the NON-EMPTY tasks. Every task with bytes belongs to exactly one chunk, and reading
+// that chunk is what accounts it.
 //
-// A batch with no bytes at all yields NO chunks. Its tasks still owe one response each, so the caller
-// must complete them itself rather than waiting for I/O that will never be issued.
+// Zero-sized tasks - which a zero-sized range produces - are NOT covered. They read nothing, so no
+// completion will ever arrive for them, and the caller must complete them AT ENQUEUE. That rule is
+// unconditional: a zero-sized range owes a response like any other, and waiting for I/O that is never
+// issued strands the caller's buffers forever. Object storage already does exactly this.
+//
+// Spans stay contiguous for simplicity, so a zero-sized task sitting between two non-empty ones falls
+// inside a span. Accounting it a second time is harmless - Task::finished_request is idempotent behind
+// its _finished guard - but a worker should skip zero-sized tasks when accounting a span rather than
+// rely on that.
+//
+// A batch with no bytes at all therefore yields NO chunks, and all of its tasks are completed at
+// enqueue.
 //
 // Takes std::vector<Task> rather than the Tasks alias, which lives in batch.h - the splitter has no
 // business pulling in Batch, the responder and the object-storage wrapper just to name a vector.

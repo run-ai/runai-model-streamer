@@ -170,6 +170,15 @@ void ObjectStorageWorker::enqueue(Workload && workload)
                     continue;
                 }
 
+                // Batches cuts object-storage tasks at s3_block_bytesize, which is the same value this
+                // worker chunks by - so a task never exceeds one chunk and the loop below runs once.
+                // Asserted because nothing enforces it: the two read the size independently, and if
+                // they ever diverged an over-long task would become one queue entry worth far more
+                // bytes than the window assumes, silently inflating what is in flight.
+                ASSERT(task.info.bytesize <= _chunk_bytesize)
+                    << "task of " << task.info.bytesize << " bytes exceeds the chunk size "
+                    << _chunk_bytesize << " - the task cut and the chunk size have diverged";
+
                 const size_t task_idx = wl.tasks.size();
                 wl.tasks.push_back(TaskState{ &batch, &task, 0, common::ResponseCode::Success });
 

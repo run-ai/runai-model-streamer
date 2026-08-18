@@ -120,6 +120,12 @@ void Batches::build_tasks(std::shared_ptr<const Config> config, const std::strin
 {
     const auto num_workers = _itr.workers();
     LOG(DEBUG) << "Building tasks for " <<num_workers << " workers";
+
+    // Cut at the size the BACKEND will request, not always the file system one: object storage slices
+    // each task by s3_block_bytesize, so cutting tasks at the file system chunk size would make
+    // RUNAI_STREAMER_FS_CHUNK_BYTESIZE change object-storage task granularity - a variable affecting a
+    // backend it does not name.
+    const size_t chunk_bytesize = params.valid() ? config->s3_block_bytesize : config->fs_async_chunk_bytesize;
     std::vector<Tasks> v_tasks(num_workers);
 
     auto num_sizes = range_sizes.size();
@@ -141,7 +147,7 @@ void Batches::build_tasks(std::shared_ptr<const Config> config, const std::strin
         // the response carries the index within the FILE, so offset by this transfer's first range
         const unsigned range_index = _first_range_index + i;
 
-        handle_request(v_tasks, range_index, request_file_offset, request_size, current_request_destination, config->fs_async_chunk_bytesize);
+        handle_request(v_tasks, range_index, request_file_offset, request_size, current_request_destination, chunk_bytesize);
         LOG(DEBUG) << "created request index " << range_index << " dst " << static_cast<void *>(current_request_destination);
 
         current_request_destination += request_size;
@@ -159,7 +165,8 @@ void Batches::build_tasks(std::shared_ptr<const Config> config, const std::strin
             continue;
         }
 
-        _batches.emplace_back(_submission_id, workload_index, _file_index, path, params, std::move(tasks), _responder, config);
+        // The same chunk size the tasks were cut with, so the chunks cover whole tasks.
+        _batches.emplace_back(_submission_id, workload_index, _file_index, path, params, std::move(tasks), _responder, config, chunk_bytesize);
     }
 
     for (auto & batch : _batches)
