@@ -105,7 +105,10 @@ class ObjectStorageWorker : public utils::CapacityWorker<Workload, ObjectChunk>
         std::vector<ChunkTasks> chunk_tasks;                       // handle - handle_base -> the tasks it covers
         std::vector<TaskState> tasks;                              // per task (only non-zero-size tasks)
         std::map<unsigned, common::ResponseCode> error_by_file_index;   // first error per file (finalize)
-        size_t remaining_tasks = 0;                                // tasks not yet completed; 0 -> finalize
+        // Chunks, not tasks. Every chunk completes exactly once, and every task belongs to exactly one
+        // chunk, so all chunks done already means all tasks answered - and the zero-sized ones, which
+        // are answered at enqueue and can sit inside a span, never enter the arithmetic.
+        size_t remaining_chunks = 0;                               // 0 -> finalize
     };
 
     // In-flight workloads keyed by their handle block base. The blocks are contiguous and disjoint, so a

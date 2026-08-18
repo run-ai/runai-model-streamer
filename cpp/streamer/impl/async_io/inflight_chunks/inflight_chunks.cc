@@ -5,7 +5,7 @@
 namespace runai::llm::streamer::impl
 {
 
-common::posix_io::RequestId InflightChunks::add(const Chunk & chunk)
+common::posix_io::RequestId InflightChunks::add(const Chunk & chunk, uint64_t workload_id, unsigned batch_index)
 {
     const auto id = _next_id++;
 
@@ -14,7 +14,7 @@ common::posix_io::RequestId InflightChunks::add(const Chunk & chunk)
     // which is the aliasing this class exists to avoid - so it is asserted rather than assumed.
     ASSERT(_chunks.count(id) == 0) << "request id " << id << " wrapped onto a live request";
 
-    _chunks[id] = InflightChunk{ chunk, chunk.offset, chunk.bytesize };
+    _chunks[id] = InflightChunk{ chunk, chunk.offset, chunk.bytesize, workload_id, batch_index };
     return id;
 }
 
@@ -78,6 +78,11 @@ Chunk InflightChunks::release(common::posix_io::RequestId id)
     const Chunk chunk = it->second.chunk;
     _chunks.erase(it);
     return chunk;
+}
+
+void InflightChunks::clear()
+{
+    _chunks.clear();   // _next_id is deliberately not reset
 }
 
 size_t InflightChunks::size() const

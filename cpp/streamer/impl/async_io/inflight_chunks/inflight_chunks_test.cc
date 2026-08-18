@@ -32,7 +32,7 @@ TEST(InflightChunks, Add_And_Release)
 
     EXPECT_EQ(chunks.size(), 0);
 
-    const auto id = chunks.add(chunk_at(4096, 512, buffer.data()));
+    const auto id = chunks.add(chunk_at(4096, 512, buffer.data()), 1 /* workload */, 0 /* batch */);
     EXPECT_EQ(chunks.size(), 1);
 
     const auto * entry = chunks.find(id);
@@ -54,10 +54,10 @@ TEST(InflightChunks, Ids_Are_Never_Reused)
     std::vector<char> buffer(1024);
     InflightChunks chunks;
 
-    const auto first = chunks.add(chunk_at(0, 100, buffer.data()));
+    const auto first = chunks.add(chunk_at(0, 100, buffer.data()), 1 /* workload */, 0 /* batch */);
     chunks.release(first);
 
-    const auto second = chunks.add(chunk_at(100, 100, buffer.data()));
+    const auto second = chunks.add(chunk_at(100, 100, buffer.data()), 1 /* workload */, 0 /* batch */);
 
     EXPECT_NE(first, second);
     EXPECT_EQ(chunks.find(first), nullptr) << "a late completion for the released id must find nothing";
@@ -70,7 +70,7 @@ TEST(InflightChunks, Zero_Is_Never_A_Live_Id)
     InflightChunks chunks;
 
     EXPECT_EQ(chunks.find(0), nullptr);
-    EXPECT_NE(chunks.add(chunk_at(0, 16, buffer.data())), 0u);
+    EXPECT_NE(chunks.add(chunk_at(0, 16, buffer.data()), 1 /* workload */, 0 /* batch */), 0u);
 }
 
 TEST(InflightChunks, Full_Completion_Is_Complete)
@@ -78,7 +78,7 @@ TEST(InflightChunks, Full_Completion_Is_Complete)
     std::vector<char> buffer(1024);
     InflightChunks chunks;
 
-    const auto id = chunks.add(chunk_at(0, 512, buffer.data()));
+    const auto id = chunks.add(chunk_at(0, 512, buffer.data()), 1 /* workload */, 0 /* batch */);
     EXPECT_EQ(chunks.record(id, 512), Progress::Complete);
 }
 
@@ -89,7 +89,7 @@ TEST(InflightChunks, Short_Read_Resumes_Where_It_Stopped)
     std::vector<char> buffer(1024);
     InflightChunks chunks;
 
-    const auto id = chunks.add(chunk_at(4096, 512, buffer.data()));
+    const auto id = chunks.add(chunk_at(4096, 512, buffer.data()), 1 /* workload */, 0 /* batch */);
 
     ASSERT_EQ(chunks.record(id, 200), Progress::Partial);
 
@@ -107,7 +107,7 @@ TEST(InflightChunks, Several_Short_Reads_In_A_Row)
     std::vector<char> buffer(1024);
     InflightChunks chunks;
 
-    const auto id = chunks.add(chunk_at(0, 1000, buffer.data()));
+    const auto id = chunks.add(chunk_at(0, 1000, buffer.data()), 1 /* workload */, 0 /* batch */);
 
     ASSERT_EQ(chunks.record(id, 400), Progress::Partial);
     ASSERT_EQ(chunks.record(id, 300), Progress::Partial);
@@ -127,10 +127,10 @@ TEST(InflightChunks, Zero_Further_Bytes_Is_Eof)
     std::vector<char> buffer(1024);
     InflightChunks chunks;
 
-    const auto id = chunks.add(chunk_at(0, 512, buffer.data()));
+    const auto id = chunks.add(chunk_at(0, 512, buffer.data()), 1 /* workload */, 0 /* batch */);
     EXPECT_EQ(chunks.record(id, 0), Progress::Eof);
 
-    const auto after_partial = chunks.add(chunk_at(512, 512, buffer.data()));
+    const auto after_partial = chunks.add(chunk_at(512, 512, buffer.data()), 1 /* workload */, 0 /* batch */);
     ASSERT_EQ(chunks.record(after_partial, 100), Progress::Partial);
     EXPECT_EQ(chunks.record(after_partial, 0), Progress::Eof) << "even after progress, zero more is EOF";
 }
@@ -142,8 +142,28 @@ TEST(InflightChunks, Over_Long_Completion_Is_Complete)
     std::vector<char> buffer(1024);
     InflightChunks chunks;
 
-    const auto id = chunks.add(chunk_at(0, 512, buffer.data()));
+    const auto id = chunks.add(chunk_at(0, 512, buffer.data()), 1 /* workload */, 0 /* batch */);
     EXPECT_EQ(chunks.record(id, 4096), Progress::Complete);
+}
+
+// Routing travels with the entry, so a completion can find the tasks its chunk covered without the
+// caller having to remember anything about it.
+TEST(InflightChunks, Carries_Its_Routing)
+{
+    std::vector<char> buffer(1024);
+    InflightChunks chunks;
+
+    const auto id = chunks.add(chunk_at(0, 100, buffer.data()), 7 /* workload */, 3 /* batch */);
+
+    const auto * entry = chunks.find(id);
+    ASSERT_NE(entry, nullptr);
+    EXPECT_EQ(entry->workload_id, 7u);
+    EXPECT_EQ(entry->batch_index, 3u);
+
+    // Indices, not pointers: a chunk can outlive its workload on an abort path, and resolving through
+    // the worker's map means a late completion for an erased workload simply fails to resolve.
+    ASSERT_EQ(chunks.record(id, 40), Progress::Partial);
+    EXPECT_EQ(chunks.find(id)->workload_id, 7u) << "routing survives a re-stage";
 }
 
 TEST(InflightChunks, Unknown_Id_Asserts)
@@ -160,8 +180,8 @@ TEST(InflightChunks, Several_Chunks_Are_Independent)
     std::vector<char> buffer(4096);
     InflightChunks chunks;
 
-    const auto a = chunks.add(chunk_at(0, 100, buffer.data()));
-    const auto b = chunks.add(chunk_at(100, 200, buffer.data() + 100));
+    const auto a = chunks.add(chunk_at(0, 100, buffer.data()), 1 /* workload */, 0 /* batch */);
+    const auto b = chunks.add(chunk_at(100, 200, buffer.data() + 100), 1 /* workload */, 0 /* batch */);
 
     ASSERT_EQ(chunks.record(a, 50), Progress::Partial);
 

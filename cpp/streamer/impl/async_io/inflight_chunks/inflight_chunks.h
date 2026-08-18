@@ -26,6 +26,14 @@ struct InflightChunk
     Chunk  chunk;
     size_t cursor = 0;
     size_t remaining = 0;
+
+    // Where to route the completion. Indices rather than pointers on purpose: a chunk can still be in
+    // flight when its workload is erased (abort_all on stop, a drained responder, an OOM), and a
+    // Batch * would then dangle. Resolving through the worker's workload map means the lookup that
+    // finds the batch is also the check that the workload is still there - a late completion for an
+    // erased workload simply fails to resolve and is dropped.
+    uint64_t workload_id = 0;
+    unsigned batch_index = 0;   // into the workload's batches; chunk.first_task is batch-local
 };
 
 // What a completion meant for the chunk it belongs to.
@@ -52,8 +60,9 @@ enum class Progress
 class InflightChunks
 {
  public:
-    // Record a chunk about to be staged, and return the id to stage it under.
-    common::posix_io::RequestId add(const Chunk & chunk);
+    // Record a chunk about to be staged, and return the id to stage it under. workload_id and
+    // batch_index are how its completion finds the tasks it covers.
+    common::posix_io::RequestId add(const Chunk & chunk, uint64_t workload_id, unsigned batch_index);
 
     // The entry for `id`, or nullptr if there is none - which is exactly how a late completion from an
     // abandoned request is recognised. Callers must check rather than assume.
@@ -74,6 +83,10 @@ class InflightChunks
 
     // Remove `id` and return the chunk it was reading, so the caller can account its tasks.
     Chunk release(common::posix_io::RequestId id);
+
+    // Forget everything, for teardown. Ids are not rewound, so a completion for a dropped request
+    // still finds nothing rather than colliding with a later one.
+    void clear();
 
     size_t size() const;
 

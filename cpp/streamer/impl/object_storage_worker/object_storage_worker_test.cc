@@ -140,6 +140,7 @@ class ObjectStorageWorkerTest : public ::testing::Test
     {
         set_response_time(0);
         set_sentinel(false);
+        fail_paths_containing("");   // no failures unless a test asks for them
     }
 
     void TearDown() override
@@ -190,6 +191,7 @@ class ObjectStorageWorkerTest : public ::testing::Test
     void set_response_time(unsigned ms) { _dylib.dlsym<void(*)(unsigned)>("runai_mock_s3_set_response_time_ms")(ms); }
     void set_sentinel(bool on)          { _dylib.dlsym<void(*)(bool)>("runai_mock_s3_set_append_finished_sentinel")(on); }
     void set_window(size_t bytes)       { _dylib.dlsym<void(*)(size_t)>("runai_mock_s3_set_inflight_window")(bytes); }
+    void fail_paths_containing(const char * substr) { _dylib.dlsym<void(*)(const char*)>("runai_mock_s3_set_failing_path")(substr); }
     size_t max_concurrent()             { return _dylib.dlsym<size_t(*)()>("runai_mock_s3_max_concurrent")(); }
     size_t requests()                   { return _dylib.dlsym<size_t(*)()>("runai_mock_s3_requests")(); }
     int clients()                       { return _dylib.dlsym<int(*)()>("runai_mock_s3_clients")(); }
@@ -289,6 +291,69 @@ TEST_F(ObjectStorageWorkerTest, Small_Ranges_Are_Packed_Into_One_Read)
 
     // 40 x 100 bytes all sit inside one 64 KiB chunk.
     EXPECT_EQ(requests(), 1u) << num_ranges << " small ranges should be one read, not one each";
+}
+
+// A failing file still owes a response for every one of its ranges, and must not take the others
+// with it.
+//
+// This is the path where a response can be lost without anything looking wrong: a failed chunk does
+// NOT answer its tasks - complete_chunk only records the code in error_by_file_index - so the response
+// is pushed later, by finalize -> report_workload -> handle_error. A workload that failed to finalize
+// would deliver every successful range and silently drop every failed one, and the caller would wait
+// forever for responses that never come.
+TEST_F(ObjectStorageWorkerTest, Failing_File_Still_Answers_Every_Range)
+{
+    // Several files, so the failure has neighbours it must not affect.
+    auto workloads = build(4 /* files */, 2 /* s3_concurrency */);
+
+    // Fail exactly one of them, by a substring of its path.
+    const auto & doomed = submission->paths[utils::random::number<unsigned>(0, 3)];
+    const auto key = doomed.substr(doomed.rfind('/') + 1);
+    fail_paths_containing(key.c_str());
+
+    unsigned failed = 0;
+    unsigned succeeded = 0;
+
+    {
+        auto pool = make_pool(config->s3_concurrency);
+        push_all(pool, workloads);
+
+        // EVERY range of EVERY file, failing or not, owes exactly one response.
+        for (unsigned file_idx = 0; file_idx < submission->paths.size(); ++file_idx)
+        {
+            for (unsigned i = 0; i < submission->num_chunks[file_idx]; ++i)
+            {
+                const auto r = responder->pop();
+
+                // identity, not a count: the right range of the right file, exactly once
+                EXPECT_EQ(submission->expected[r.file_index].count(r.index), 1)
+                    << "response for file " << r.file_index << " range " << r.index
+                    << " was unexpected or already seen";
+                submission->expected[r.file_index].erase(r.index);
+
+                const bool is_doomed = submission->paths[r.file_index] == doomed;
+                if (is_doomed)
+                {
+                    EXPECT_NE(r.ret, common::ResponseCode::Success) << "the failing file must not report success";
+                    ++failed;
+                }
+                else
+                {
+                    EXPECT_EQ(r.ret, common::ResponseCode::Success) << "one file's failure must not touch another";
+                    ++succeeded;
+                }
+            }
+        }
+    }
+
+    // Nothing left owing - which is what a lost response would show up as.
+    for (const auto & e : submission->expected)
+    {
+        EXPECT_TRUE(e.empty());
+    }
+
+    EXPECT_GT(failed, 0u) << "the failure never fired, so this asserted nothing";
+    EXPECT_GT(succeeded, 0u) << "every file failed, so the isolation was not tested";
 }
 
 // Tearing the pool down while reads are in flight: every request still gets exactly one response (Success

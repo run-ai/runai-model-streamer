@@ -190,16 +190,7 @@ void ObjectStorageWorker::enqueue(Workload && workload)
             }
         }
 
-        // Only what a chunk will complete. The zero-size tasks were finished above and are covered by
-        // no chunk, so counting them here would leave the workload permanently one short.
-        wl.remaining_tasks = 0;
-        for (const auto & batch : wl.workload.batches())
-        {
-            for (const auto & chunk : batch.chunks)
-            {
-                wl.remaining_tasks += chunk.task_count;
-            }
-        }
+        wl.remaining_chunks = total_chunks;
     }
     catch (...)
     {
@@ -268,12 +259,19 @@ void ObjectStorageWorker::complete_chunk(InflightMap::iterator wlit, size_t chun
     Inflight & wl = wlit->second;
     const auto span = wl.chunk_tasks[chunk_index];
 
-    // One read carried all of these, so they share its outcome. Finalize inside the loop rather than
-    // after it: the last task of the last chunk is what completes the workload, and wlit is erased
-    // there - so nothing may touch wl afterwards.
+    // One read carried all of these, so they share its outcome.
     for (unsigned i = 0; i < span.count; ++i)
     {
         TaskState & ts = wl.tasks[span.first + i];
+
+        // Zero-sized tasks were answered at enqueue and read nothing. They can fall inside a span,
+        // and answering one again would be harmless - finished_request is idempotent - but skipping
+        // says so rather than relying on it.
+        if (ts.task->info.bytesize == 0)
+        {
+            continue;
+        }
+
         ts.error = ret;
 
         if (ret == common::ResponseCode::Success)
@@ -285,12 +283,14 @@ void ObjectStorageWorker::complete_chunk(InflightMap::iterator wlit, size_t chun
         {
             wl.error_by_file_index.emplace(ts.batch->file_index, ret);   // first error per file
         }
+    }
 
-        if (--wl.remaining_tasks == 0)
-        {
-            finalize(wlit, common::ResponseCode::Success);
-            return;
-        }
+    // Once per chunk, after its tasks are answered - so this is independent of which tasks the span
+    // happened to contain. wl is gone after finalize, so nothing may touch it below.
+    ASSERT(wl.remaining_chunks > 0) << "completing a chunk of a workload with none outstanding";
+    if (--wl.remaining_chunks == 0)
+    {
+        finalize(wlit, common::ResponseCode::Success);
     }
 }
 
