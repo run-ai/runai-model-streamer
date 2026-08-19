@@ -107,11 +107,13 @@ ResponseCode MockIoEngine::flush(unsigned & out_issued)
 ResponseCode MockIoEngine::wait_for_completions(Completion * out, unsigned max, unsigned & out_count,
                                                 WaitMode mode, unsigned timeout_ms)
 {
-    // Neither is used: this never blocks, so both wait modes return whatever is ready. An expired
+    // Neither is acted on: this never blocks, so both wait modes return whatever is ready. An expired
     // timeout is Success with zero completions anyway, so a test gets that case for free - no clock,
-    // no flakiness.
-    (void)mode;
-    (void)timeout_ms;
+    // no flakiness. They are RECORDED, because whether the caller blocks with nothing issued is
+    // exactly the thing worth asserting.
+    _last_wait_mode = mode;
+    _last_wait_timeout_ms = timeout_ms;
+    ++_waits;
 
     out_count = 0;
 
@@ -239,6 +241,21 @@ void MockIoEngine::complete_all()
 void MockIoEngine::set_fill(bool fill)
 {
     _fill = fill;
+}
+
+WaitMode MockIoEngine::last_wait_mode() const
+{
+    return _last_wait_mode;
+}
+
+unsigned MockIoEngine::last_wait_timeout_ms() const
+{
+    return _last_wait_timeout_ms;
+}
+
+unsigned MockIoEngine::waits() const
+{
+    return _waits;
 }
 
 char MockIoEngine::pattern(size_t file_offset)

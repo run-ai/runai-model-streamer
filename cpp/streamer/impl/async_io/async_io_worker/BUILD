@@ -14,3 +14,17 @@ runai_cc_auto_library(
         "//utils/logging",
     ],
 )
+
+runai_cc_test(
+    name = "async_io_worker_test",
+    srcs = ["async_io_worker_test.cc"],
+    deps = [
+        ":async_io_worker",
+        "//common/posix_io/mock",
+        "//streamer/impl/assigner",
+        "//streamer/impl/batches",
+        "//utils/random",
+        "//utils/temp/env",
+        "//utils/temp/file",
+    ],
+)

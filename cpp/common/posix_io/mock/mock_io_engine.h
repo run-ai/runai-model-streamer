@@ -110,6 +110,16 @@ class MockIoEngine : public IoEngine
     // Deriving the bytes from the offset makes both visible.
     void set_fill(bool fill);
 
+    // ---- what the caller asked of the wait ----
+    //
+    // Recorded rather than acted on, so the rule that matters is assertable without a clock: pass
+    // NonBlocking when nothing is issued, or a worker waits on an empty ring for a completion that
+    // will never arrive. Making the mock actually sleep would buy no coverage and make the suite
+    // timing-dependent.
+    WaitMode last_wait_mode() const;
+    unsigned last_wait_timeout_ms() const;
+    unsigned waits() const;
+
     // The byte written for `file_offset`, so a test can build what it expects.
     static char pattern(size_t file_offset);
 
@@ -128,6 +138,10 @@ class MockIoEngine : public IoEngine
     std::deque<Completion> _ready;           // the order the test completed them
 
     std::vector<Request> _history;
+
+    WaitMode _last_wait_mode = WaitMode::NonBlocking;
+    unsigned _last_wait_timeout_ms = 0;
+    unsigned _waits = 0;
 
     unsigned _flush_limit = 0;               // 0 = no limit
     bool _flush_stalled = false;
