@@ -23,18 +23,4 @@ size_t max_read_bytesize()
     return max_read_bytesize(static_cast<size_t>(::sysconf(_SC_PAGESIZE)));
 }
 
-std::unique_ptr<IoEngine> make_io_engine(Strategy strategy, const AsyncIoConfig & config)
-{
-    ASSERT(is_async(strategy)) << "Cannot build an engine for " << strategy
-                               << " - it is served by the synchronous pool, not by an IoEngine";
-
-    // No engine is implemented yet, so every strategy is unavailable - which is a state the
-    // dispatcher must handle anyway (a blocked io_uring_setup produces it), so it can be built and
-    // tested against this now.
-    LOG(DEBUG) << "Read strategy " << strategy << " is not available: no engine is implemented yet"
-               << " (depth " << config.depth << ", chunk " << config.chunk_bytesize << ")";
-
-    return nullptr;
-}
-
 }; // namespace runai::llm::streamer::common::posix_io

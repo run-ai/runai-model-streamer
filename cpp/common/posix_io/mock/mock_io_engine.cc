@@ -107,6 +107,13 @@ ResponseCode MockIoEngine::flush(unsigned & out_issued)
 ResponseCode MockIoEngine::wait_for_completions(Completion * out, unsigned max, unsigned & out_count,
                                                 WaitMode mode, unsigned timeout_ms)
 {
+    // Before anything is harvested: a wait is when the kernel hands over what it has finished.
+    for (unsigned i = 0; i < _auto_complete_on_wait && !_in_flight.empty(); ++i)
+    {
+        const auto id = _in_flight.front();
+        ready(id, ResponseCode::Success, _live.at(id).bytesize);
+    }
+
     // Neither is acted on: this never blocks, so both wait modes return whatever is ready. An expired
     // timeout is Success with zero completions anyway, so a test gets that case for free - no clock,
     // no flakiness. They are RECORDED, because whether the caller blocks with nothing issued is
@@ -125,19 +132,6 @@ ResponseCode MockIoEngine::wait_for_completions(Completion * out, unsigned max, 
     }
 
     return ResponseCode::Success;
-}
-
-void MockIoEngine::cancel_all()
-{
-    // Modelled on io_uring: cancelled work still produces completions, so the caller must drain.
-    // Staged requests are left alone - nothing will ever complete for them, and failing their tasks
-    // is the caller's job.
-    // ready() removes the request, so do NOT pop first: that left its "was this issued?" assert with
-    // nothing to find, and every cancel threw.
-    while (!_in_flight.empty())
-    {
-        ready(_in_flight.front(), ResponseCode::FinishedError, 0);
-    }
 }
 
 void MockIoEngine::register_memory(char * base, size_t size)
@@ -180,6 +174,11 @@ size_t MockIoEngine::in_flight_count() const
 const std::vector<MockIoEngine::Request> & MockIoEngine::history() const
 {
     return _history;
+}
+
+void MockIoEngine::set_auto_complete_on_wait(unsigned per_wait)
+{
+    _auto_complete_on_wait = per_wait;
 }
 
 void MockIoEngine::set_flush_limit(unsigned n)

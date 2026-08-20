@@ -8,6 +8,7 @@
 #include <optional>
 #include <vector>
 
+#include "common/posix_io/engine_factory/engine_factory.h"
 #include "common/posix_io/io_engine/io_engine.h"
 #include "common/posix_io/strategy/strategy.h"
 #include "common/response_code/response_code.h"
@@ -146,6 +147,11 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     int fd_for(Inflight & wl, unsigned batch_index, common::ResponseCode & out_error);
 
     void finalize(InflightMap::iterator it, common::ResponseCode code);
+
+    // Wait until no read is still in flight, so no destination can be written after its range is
+    // reported. Unbounded on purpose - see the definition.
+    void quiesce();
+
     void abort_all(common::ResponseCode code);
 
     const common::posix_io::Strategy _strategy;

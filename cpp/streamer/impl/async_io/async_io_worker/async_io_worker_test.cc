@@ -367,6 +367,36 @@ TEST(AsyncIoWorker, Stop_Answers_Every_Range)
     }
 }
 
+// Teardown must not report a range while the kernel still holds its destination: a response promises
+// nothing will write there again, and under the Python ring that buffer goes straight to the next
+// submission. So stopping with reads ISSUED has to wait for them, not abandon them.
+TEST(AsyncIoWorker, Stop_Waits_For_Reads_In_Flight)
+{
+    Fixture fixture({ ChunkSize, ChunkSize, ChunkSize });
+    Driver driver;
+
+    driver.execute(fixture.workload());
+    driver.issue();
+    ASSERT_EQ(driver.engine->in_flight_count(), 3u) << "three reads the kernel now owns";
+
+    // One completion per wait, as a kernel would hand them over - so the drain has to go round more
+    // than once and cannot succeed by accident.
+    driver.engine->set_auto_complete_on_wait(1);
+
+    driver.stopped = true;
+    driver.route();
+
+    // The assertion that matters. Reporting with reads outstanding would leave these non-zero.
+    EXPECT_EQ(driver.engine->in_flight_count(), 0u)
+        << "teardown returned while the kernel still held destinations";
+
+    const auto responses = drain_responses(*fixture.responder, 3);
+    for (const auto & r : responses)
+    {
+        EXPECT_EQ(r.ret, common::ResponseCode::FinishedError);
+    }
+}
+
 // One descriptor per batch however many chunks it has, released when the workload ends.
 TEST(AsyncIoWorker, Fd_Opened_Once_And_Closed_At_Finalize)
 {

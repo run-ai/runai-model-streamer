@@ -123,6 +123,67 @@ RUN curl -fsSL -o zlib-1.3.1.tar.gz https://github.com/madler/zlib/releases/down
     cd - && \
     rm -rf zlib-1.3.1 zlib-1.3.1.tar.gz
 
+# liburing, for the io_uring engine. Static only: it is linked into libstreamer.so, which exports an
+# explicit allowlist via streamer.ldscript, so these symbols stay hidden.
+#   --use-libc    route syscalls through libc wrappers instead of raw syscall instructions, so
+#                 sanitizers and interposition can see them
+#   ENABLE_SHARED=0  liburing has no ./configure --disable-shared; the switch is a make variable
+RUN curl -fsSL -o liburing-2.6.tar.gz https://github.com/axboe/liburing/archive/refs/tags/liburing-2.6.tar.gz && \
+    tar zxf liburing-2.6.tar.gz && \
+    cd liburing-liburing-2.6 && \
+
+    CC=/usr/bin/x86_64-linux-gnu-gcc \
+    ./configure --use-libc --prefix=/opt/x86_64-uring --libdir=/opt/x86_64-uring/lib && \
+        AR=/usr/bin/x86_64-linux-gnu-ar \
+        RANLIB=/usr/bin/x86_64-linux-gnu-ranlib \
+        CC=/usr/bin/x86_64-linux-gnu-gcc \
+        make -C src -j4 ENABLE_SHARED=0 CFLAGS="-fPIC -O2" > /dev/null && \
+        make install ENABLE_SHARED=0 > /dev/null && \
+        make clean > /dev/null && \
+
+    CC=/usr/bin/aarch64-linux-gnu-gcc \
+    ./configure --use-libc --prefix=/opt/aarch64-uring --libdir=/opt/aarch64-uring/lib && \
+        AR=/usr/bin/aarch64-linux-gnu-ar \
+        RANLIB=/usr/bin/aarch64-linux-gnu-ranlib \
+        CC=/usr/bin/aarch64-linux-gnu-gcc \
+        make -C src -j4 ENABLE_SHARED=0 CFLAGS="-fPIC -O2" > /dev/null && \
+        make install ENABLE_SHARED=0 > /dev/null && \
+        make clean > /dev/null && \
+
+    cd - && \
+    rm -rf liburing-liburing-2.6 liburing-2.6.tar.gz
+
+# libaio, for the fallback engine where io_uring is unavailable. Static only, same reasoning as
+# liburing. Its symbols carry .symver directives, which need no version nodes here because
+# streamer.ldscript ends "local: *" and localizes them.
+#   CFLAGS -I.       libaio has no ./configure, and its sources include <libaio.h> from src/
+#   copy, not make install   its install target also lays down libaio.so and its sonames; we want
+#                            only the archive
+RUN curl -fsSL -o libaio-0.3.113.tar.gz https://pagure.io/libaio/archive/libaio-0.3.113/libaio-libaio-0.3.113.tar.gz && \
+    tar zxf libaio-0.3.113.tar.gz && \
+    cd libaio-libaio-0.3.113 && \
+
+    AR=/usr/bin/x86_64-linux-gnu-ar \
+    RANLIB=/usr/bin/x86_64-linux-gnu-ranlib \
+    CC=/usr/bin/x86_64-linux-gnu-gcc \
+    make -C src CFLAGS="-fPIC -O2 -I." > /dev/null && \
+        mkdir -p /opt/x86_64-aio/lib /opt/x86_64-aio/include && \
+        cp src/libaio.a /opt/x86_64-aio/lib/ && \
+        cp src/libaio.h /opt/x86_64-aio/include/ && \
+        make -C src clean > /dev/null && \
+
+    AR=/usr/bin/aarch64-linux-gnu-ar \
+    RANLIB=/usr/bin/aarch64-linux-gnu-ranlib \
+    CC=/usr/bin/aarch64-linux-gnu-gcc \
+    make -C src CFLAGS="-fPIC -O2 -I." > /dev/null && \
+        mkdir -p /opt/aarch64-aio/lib /opt/aarch64-aio/include && \
+        cp src/libaio.a /opt/aarch64-aio/lib/ && \
+        cp src/libaio.h /opt/aarch64-aio/include/ && \
+        make -C src clean > /dev/null && \
+
+    cd - && \
+    rm -rf libaio-libaio-0.3.113 libaio-0.3.113.tar.gz
+
 ADD aarch64-linux-gnu.cmake /opt/toolchains/aarch64-linux-gnu.cmake
 ADD x86_64-linux-gnu.cmake /opt/toolchains/x86_64-linux-gnu.cmake
 RUN git clone --recurse-submodules --depth 1 --branch "1.11.584" https://github.com/aws/aws-sdk-cpp /opt/aws-sdk-cpp && \

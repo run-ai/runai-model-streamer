@@ -55,19 +55,6 @@ TEST(MaxReadBytesize, IsALargeCeilingNotALimit)
     EXPECT_GT(max_read_bytesize(), static_cast<size_t>(1) << 30);
 }
 
-// No engine exists yet, so every async strategy is unavailable - which the dispatcher must handle
-// anyway (a blocked io_uring_setup produces it), so it can be built against this now.
-TEST(MakeIoEngine, NoEngineIsAvailableYet)
-{
-    AsyncIoConfig config;
-    config.depth = 64;
-    config.chunk_bytesize = 8ul << 20;
-
-    EXPECT_EQ(make_io_engine(Strategy::IoUringDirect, config), nullptr);
-    EXPECT_EQ(make_io_engine(Strategy::IoUringBuffered, config), nullptr);
-    EXPECT_EQ(make_io_engine(Strategy::LibaioDirect, config), nullptr);
-}
-
 // A half-filled config should fail loudly: depth 0 admits nothing and chunk 0 reads nothing.
 TEST(AsyncIoConfig, DefaultsAreInert)
 {

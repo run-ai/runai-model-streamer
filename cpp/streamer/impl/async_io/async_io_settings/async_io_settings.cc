@@ -11,13 +11,30 @@ namespace runai::llm::streamer::impl
 
 AsyncIoSettings::AsyncIoSettings(const Config & config, size_t max_read_bytesize) :
     _process_group_size(std::max(1UL, utils::getenv<unsigned long>("RUNAI_STREAMER_PROCESS_GROUP_SIZE", 1UL))),
-    _depth(std::max(1U, config.fs_async_queue_depth / _process_group_size)),
+    _depth(std::min(std::max(config.fs_async_queue_depth / _process_group_size, MinDepth), MaxDepth)),
     _chunk_bytesize(std::min(config.fs_async_chunk_bytesize, max_read_bytesize))
 {
+    const auto divided = config.fs_async_queue_depth / _process_group_size;
+
     if (_process_group_size > 1)
     {
         LOG(INFO) << "Queue depth " << config.fs_async_queue_depth << " over " << _process_group_size
                   << " processes on this node gives " << _depth << " per process";
+    }
+
+    // Logged rather than applied silently: a configured number that never materialises is worse than
+    // one that is rejected.
+    if (divided < MinDepth)
+    {
+        LOG(WARNING) << "Queue depth resolves to " << divided << " per process ("
+                     << config.fs_async_queue_depth << " over " << _process_group_size
+                     << "); raised to " << MinDepth << ", below which reads are effectively serial";
+    }
+    else if (divided > MaxDepth)
+    {
+        LOG(WARNING) << "Queue depth " << divided << " per process exceeds the " << MaxDepth
+                     << " cap; clamped. Depth beyond this cannot add throughput - bytes in flight is"
+                     << " what saturates a device, and this is already far past it";
     }
 
     if (_chunk_bytesize != config.fs_async_chunk_bytesize)
@@ -50,7 +67,11 @@ std::ostream & operator<<(std::ostream & os, const AsyncIoSettings & settings)
 {
     return os << "async io: depth " << settings.depth()
               << " (of " << settings.process_group_size() << " processes on this node)"
-              << ", chunk " << settings.chunk_bytesize() << " bytes";
+              << ", chunk " << settings.chunk_bytesize() << " bytes"
+              // The product, not just the factors: bytes in flight is what saturates a device, and it
+              // is the only way a small chunk with a large depth reads as what it is.
+              << ", up to " << (static_cast<size_t>(settings.depth()) * settings.chunk_bytesize())
+              << " bytes in flight";
 }
 
 }; // namespace runai::llm::streamer::impl

@@ -257,6 +257,11 @@ void AsyncIoWorker::drain_batch(std::atomic<bool> & stopped)
     {
         const auto & completion = _completions[i];
 
+        // Decremented HERE, before any path that might drop this completion. quiesce() waits on
+        // _issued reaching zero, so a completion that is dropped without decrementing would leave
+        // the count permanently high and hang teardown - the trap
+        // design_object_storage_quiesce.md names, where the fix produces the very hang it exists to
+        // prevent. Every completion counts, whether or not it can be routed.
         ASSERT(_issued > 0) << "more completions than were issued";
         --_issued;
 
@@ -306,7 +311,15 @@ void AsyncIoWorker::complete_chunk(common::posix_io::RequestId id, common::Respo
     const auto batch_index = entry->batch_index;
     const auto chunk = _chunks.release(id);
 
-    _queue->complete(1);   // free the window slot - once per chunk, never on a re-stage
+    // Free the window slot - once per chunk, never on a re-stage.
+    //
+    // THIS RELEASE POINT MOVES when pinned staging buffers arrive (5.2.4). Reads land directly in the
+    // caller's destination today, so the read completing IS the chunk being done. Once a chunk lands
+    // in a staging buffer and is copied to the device, the buffer is held until the COPY retires -
+    // cuMemcpyHtoDAsync being asynchronous does not release it - and releasing here would hand the
+    // buffer to the next chunk while the DMA is still reading out of it. The window is then sized by
+    // the pinned pool rather than by the ring depth.
+    _queue->complete(1);
 
     const auto wlit = _inflight.find(workload_id);
     if (wlit == _inflight.end())
@@ -379,14 +392,62 @@ void AsyncIoWorker::finalize(InflightMap::iterator it, common::ResponseCode code
     _inflight.erase(it);
 }
 
+void AsyncIoWorker::quiesce()
+{
+    // Wait until the kernel holds none of our destinations.
+    //
+    // A response promises that nothing will write to that range again
+    // (design_object_storage_quiesce.md). An ISSUED read has its destination inside the kernel, so
+    // reporting its range before the completion arrives hands a live write target to whoever gets
+    // the buffer next - under the Python ring, the next submission. Reads that were only staged, or
+    // still queued, never reached the kernel and need no wait.
+    //
+    // UNBOUNDED, terminating only on _issued reaching zero. A timeout here would re-open the exact
+    // invariant this exists to protect. A wedged mount therefore hangs its own teardown - which is
+    // what one engine per mount (5.2.3) is for: it hangs that engine, not every engine.
+    if (_engine == nullptr || _issued == 0)
+    {
+        return;
+    }
+
+    LOG(INFO) << "Waiting for " << _issued << " reads in flight before reporting";
+
+    while (_issued > 0)
+    {
+        unsigned count = 0;
+        const auto ret = _engine->wait_for_completions(_completions.data(), _completions.size(),
+                                                       count, common::posix_io::WaitMode::Block,
+                                                       WaitTimeoutMs);
+        if (ret != common::ResponseCode::Success)
+        {
+            // The engine cannot tell us any more. Waiting longer cannot make it, and looping here
+            // would spin - so stop, and accept that the guarantee is only as good as the engine.
+            LOG(ERROR) << "Failed to drain " << _issued << " reads in flight: " << ret
+                       << ". Reporting anyway; their destinations may still be written";
+            break;
+        }
+
+        // Reaped, so the kernel is done with these destinations - which is the whole point. NOT
+        // routed: the workload is about to be reported with the abort code, so routing would answer
+        // its ranges twice, and a short read must not be re-staged or the drain never ends.
+        ASSERT(_issued >= count) << "drained " << count << " completions with " << _issued << " issued";
+        _issued -= count;
+    }
+}
+
 void AsyncIoWorker::abort_all(common::ResponseCode code)
 {
-    // Best effort on the engine; completions may still arrive and are dropped, since their requests
-    // are gone from _chunks.
-    if (_engine != nullptr)
+    // Drops pending entries and releases their credit in one step - draining through
+    // try_take()/complete() would stop at the full-window boundary. First, so nothing new is staged
+    // while we wait.
+    if (_queue != nullptr)
     {
-        _engine->cancel_all();
+        _queue->clear();
     }
+
+    // Then wait, and only then report. The order is the whole fix: report-then-abandon declares
+    // buffers free while the kernel may still write to them.
+    quiesce();
 
     while (!_inflight.empty())
     {
@@ -395,13 +456,6 @@ void AsyncIoWorker::abort_all(common::ResponseCode code)
 
     _chunks.clear();
     _issued = 0;
-
-    // Drops pending entries and releases their credit in one step - draining through
-    // try_take()/complete() would stop at the full-window boundary.
-    if (_queue != nullptr)
-    {
-        _queue->clear();
-    }
 }
 
 }; // namespace runai::llm::streamer::impl

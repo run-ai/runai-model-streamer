@@ -47,13 +47,38 @@ TEST(AsyncIoSettings, Depth_Is_Divided_By_The_Process_Group)
 
 // A depth of zero admits nothing, so a small node-wide value over many processes must floor at one
 // rather than silently disabling the engine.
-TEST(AsyncIoSettings, Depth_Never_Falls_To_Zero)
+// The division can round to zero, and a depth of 1 or 2 is a serial reader paying for the whole
+// asynchronous apparatus. Floored rather than left to degenerate - InstantTensor floors the same
+// formula at the same value.
+TEST(AsyncIoSettings, Depth_Is_Floored)
 {
     utils::temp::Env group(std::string("RUNAI_STREAMER_PROCESS_GROUP_SIZE"), 64UL);
 
-    const AsyncIoSettings settings(config_with(8 << 20, 8));
+    const AsyncIoSettings settings(config_with(8 << 20, 8));   // 8 / 64 rounds to 0
 
-    EXPECT_EQ(settings.depth(), 1);
+    EXPECT_EQ(settings.depth(), AsyncIoSettings::MinDepth);
+}
+
+// A mis-set variable must not produce a ring far larger than anything that can help. The cap is a
+// safety bound, not a target: bytes in flight is what saturates a device, and this is already well
+// past it.
+TEST(AsyncIoSettings, Depth_Is_Capped)
+{
+    utils::temp::Env group(std::string("RUNAI_STREAMER_PROCESS_GROUP_SIZE"), 1UL);
+
+    const AsyncIoSettings settings(config_with(8 << 20, 65536));
+
+    EXPECT_EQ(settings.depth(), AsyncIoSettings::MaxDepth);
+}
+
+// Between the bounds the configured value survives division untouched - the case that actually runs.
+TEST(AsyncIoSettings, Depth_Is_Divided_Within_The_Bounds)
+{
+    utils::temp::Env group(std::string("RUNAI_STREAMER_PROCESS_GROUP_SIZE"), 8UL);
+
+    const AsyncIoSettings settings(config_with(8 << 20, 512));
+
+    EXPECT_EQ(settings.depth(), 64u) << "512 node-wide over 8 processes";
 }
 
 // Above the kernel's per-read ceiling the bytes in flight become depth x the cap, not depth x the

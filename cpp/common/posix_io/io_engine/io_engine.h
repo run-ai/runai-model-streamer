@@ -11,9 +11,14 @@
 namespace runai::llm::streamer::common::posix_io
 {
 
-// Caller-assigned id, and also the in-flight slot index: one worker submits and reaps, so ids can
-// index a flat table of `depth` entries instead of needing a map. An index, not a handle - so 32 bits.
-using RequestId = uint32_t;
+// Caller-assigned id, echoed back on the completion. Opaque to the engine: it is carried in
+// sqe->user_data / iocb->aio_data and never interpreted, so the engine imposes no range on it.
+//
+// 64 bits because the caller's ids only ever increase - they are never reused, so that a completion
+// arriving after its request was abandoned finds nothing rather than landing on whatever now holds
+// that id (InflightChunks). A narrower counter would eventually wrap and re-create exactly that
+// aliasing. Object storage types its request id the same way (ObjectRequestId_t).
+using RequestId = uint64_t;
 
 // The file, as the engine sees it. A plain value: the fd belongs to whoever opened it, never to the
 // engine.
@@ -88,8 +93,9 @@ class IoEngine
     // Stage one read of [offset, offset + bytesize) from `file` into `buffer`. May not issue a
     // syscall - see flush().
     //
-    // `file.fd` must stay open and `buffer` valid until this id's completion is seen. `id` must be a
-    // free slot in [0, depth).
+    // `file.fd` must stay open and `buffer` valid until this id's completion is seen. `id` must not
+    // be one already in flight; nothing else is required of it - the in-flight bound is the caller's,
+    // enforced by its window rather than by any table sized here.
     //
     // `bytesize` is both "bytes wanted" and "bytes you may write": never write past
     // buffer + bytesize. An unaligned length is bounced, not rounded up, or the kernel writes a whole
@@ -119,12 +125,18 @@ class IoEngine
     virtual ResponseCode wait_for_completions(Completion * out, unsigned max, unsigned & out_count,
                                               WaitMode mode, unsigned timeout_ms = 0) = 0;
 
-    // Best-effort cancel of everything in flight. Completions still arrive and must still be drained.
+    // NO CANCELLATION, deliberately - there is no cancel_all() here.
     //
-    // io_uring really cancels (IORING_OP_ASYNC_CANCEL, completions come back as -ECANCELED). libaio
-    // mostly cannot - io_cancel returns EINVAL once the request is with the driver - so there this
-    // means "stop staging and wait". Either way the caller drains; only the latency differs.
-    virtual void cancel_all() = 0;
+    // A response promises that nothing will write to that range's destination again
+    // (design_object_storage_quiesce.md). An issued read has that destination inside the kernel, so
+    // abandoning it and reporting the range hands a live write target to whoever gets the buffer
+    // next - and under the Python ring that is the next submission.
+    //
+    // So teardown is quiesce-then-report: abort what was never issued, WAIT for what was, report
+    // last. The caller does that; it needs nothing from the engine, which is why cancellation buys
+    // nothing. IORING_OP_ASYNC_CANCEL would only shorten the wait, and libaio cannot cancel at all
+    // once a request is with the driver - so having it would mean two engines with different
+    // teardown semantics, for no change in what the caller must do.
 
     // Optional: pin a long-lived region once instead of per I/O (io_uring registered buffers).
     // libaio has no equivalent, hence the no-op default.
@@ -149,17 +161,5 @@ size_t max_read_bytesize(size_t page_size);
 
 // This host's ceiling: max_read_bytesize(sysconf(_SC_PAGESIZE)).
 size_t max_read_bytesize();
-
-// Build the engine for this strategy, or return nullptr if the host cannot provide it - a blocked
-// io_uring_setup, a missing opcode, an aio context that cannot be sized.
-//
-// Takes one resolved strategy, not the candidate list: walking the list and recording why each was
-// rejected is the dispatcher's job. That way nullptr means one thing only - "not available here" -
-// rather than also meaning "no engine was wanted". is_async(strategy) must be true.
-//
-// Called on the FIRST WORKLOAD, not at streamer construction: depth depends on
-// RUNAI_STREAMER_PROCESS_GROUP_SIZE, which Python does not set until stream_files(), long after
-// runai_start() returned. Building earlier would read the default of 1 and skip the division.
-std::unique_ptr<IoEngine> make_io_engine(Strategy strategy, const AsyncIoConfig & config);
 
 }; // namespace runai::llm::streamer::common::posix_io

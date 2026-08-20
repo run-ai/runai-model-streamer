@@ -52,11 +52,6 @@ class MockIoEngine : public IoEngine
     ResponseCode wait_for_completions(Completion * out, unsigned max, unsigned & out_count,
                                       WaitMode mode, unsigned timeout_ms = 0) override;
 
-    // Completes everything in flight as FinishedError, like io_uring's -ECANCELED. Staged requests
-    // are left alone on purpose: no completion ever arrives for them, and discarding them is the
-    // caller's teardown job.
-    void cancel_all() override;
-
     void register_memory(char * base, size_t size) override;
     void unregister_memory(char * base) override;
 
@@ -110,6 +105,14 @@ class MockIoEngine : public IoEngine
     // Deriving the bytes from the offset makes both visible.
     void set_fill(bool fill);
 
+    // Complete up to `per_wait` in-flight requests, oldest first, on each wait_for_completions().
+    // 0 (the default) is off.
+    //
+    // Models a kernel delivering completions to a waiter, which is what a teardown drain waits on.
+    // Without it a caller that loops until nothing is in flight spins forever against this mock, and
+    // completing from a second thread is not an option - this class is not thread safe.
+    void set_auto_complete_on_wait(unsigned per_wait);
+
     // ---- what the caller asked of the wait ----
     //
     // Recorded rather than acted on, so the rule that matters is assertable without a clock: pass
@@ -143,6 +146,7 @@ class MockIoEngine : public IoEngine
     unsigned _last_wait_timeout_ms = 0;
     unsigned _waits = 0;
 
+    unsigned _auto_complete_on_wait = 0;     // 0 = off
     unsigned _flush_limit = 0;               // 0 = no limit
     bool _flush_stalled = false;
     bool _fill = true;

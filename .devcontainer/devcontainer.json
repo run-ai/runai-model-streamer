@@ -3,6 +3,12 @@
     "build": {
         "dockerfile": "Dockerfile"
     },
+    // io_uring_setup/enter/register are not in Docker's default seccomp allowlist, so io_uring
+    // returns EPERM in a container even where the kernel permits it - measured here: the same binary
+    // gives EPERM under the default profile and succeeds with this flag, while the host reports
+    // kernel.io_uring_disabled=0. Without this the io_uring engine cannot be exercised at all.
+    // libaio needs nothing; io_setup is already permitted.
+    "runArgs": ["--security-opt", "seccomp=unconfined"],
     "features": {
         "ghcr.io/rocker-org/devcontainer-features/apt-packages:1": {
             "packages": "less,ssh,vim"

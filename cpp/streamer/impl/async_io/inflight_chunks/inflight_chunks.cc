@@ -9,10 +9,9 @@ common::posix_io::RequestId InflightChunks::add(const Chunk & chunk, uint64_t wo
 {
     const auto id = _next_id++;
 
-    // 32 bits at ~1,280 requests/s wraps after about a month of continuous streaming, and a streamer
-    // does not outlive a model load. If it ever could, a wrapped id could collide with a live one -
-    // which is the aliasing this class exists to avoid - so it is asserted rather than assumed.
-    ASSERT(_chunks.count(id) == 0) << "request id " << id << " wrapped onto a live request";
+    // 64 bits at ~1,280 requests/s takes longer to wrap than the hardware will exist, so this asserts
+    // the counter's own integrity rather than guarding a reachable case.
+    ASSERT(_chunks.count(id) == 0) << "request id " << id << " collided with a live request";
 
     _chunks[id] = InflightChunk{ chunk, chunk.offset, chunk.bytesize, workload_id, batch_index };
     return id;

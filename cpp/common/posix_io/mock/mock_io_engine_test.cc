@@ -272,36 +272,6 @@ TEST(MockIoEngine, FailureTransfersNothing)
     }
 }
 
-// Best effort, like io_uring: cancelled work still completes and must be drained. Staged requests
-// are deliberately not completed - walking that set is the caller's teardown job.
-TEST(MockIoEngine, CancelAllCompletesInFlightAndLeavesStaged)
-{
-    MockIoEngine engine(Depth);
-    std::vector<Destination> dsts(4);
-
-    for (unsigned i = 0; i < 4; ++i)
-    {
-        engine.stage(i, FileRef{ 1, false }, i * Bytes, Bytes, dsts[i].buffer());
-    }
-
-    engine.set_flush_limit(2);
-    unsigned issued = 0;
-    engine.flush(issued);
-
-    engine.cancel_all();
-
-    const auto completions = drain(engine);
-    ASSERT_EQ(completions.size(), 2);
-    for (const auto & completion : completions)
-    {
-        // FinishedError, not FileAccessError - a cancelled read is teardown, not a storage fault.
-        EXPECT_EQ(completion.ret, ResponseCode::FinishedError);
-    }
-
-    EXPECT_EQ(engine.staged(), (std::vector<RequestId>{ 2, 3 }));
-    EXPECT_EQ(engine.in_flight_count(), 0);
-}
-
 // A refused stage records nothing - otherwise a test could not tell it from a staged request.
 TEST(MockIoEngine, RefusedStageIsNotRecorded)
 {
