@@ -53,7 +53,8 @@ std::optional<ObjectStorageRetry::Schedule> ObjectStorageRetry::schedule(
 
 std::optional<ObjectStorageRetry::Handle> ObjectStorageRetry::pop_due(TimePoint now)
 {
-    if (_delayed.empty() || _delayed.begin()->first > now)
+    const auto due = next_due();
+    if (!due.has_value() || due.value() > now)
     {
         return std::nullopt;
     }

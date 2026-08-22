@@ -469,9 +469,9 @@ void ObjectStorageWorker::drain_batch(std::atomic<bool> & stopped)
             {
                 // The failed attempt is no longer in flight; the logical chunk remains pending in _retry.
                 _queue->complete(1);
-                LOG(WARNING) << "Retrying object chunk " << cs.chunk.handle << " (offset " << cs.chunk.offset
-                             << ", bytes " << cs.chunk.bytesize << ") after " << retry->delay.count()
-                             << " ms; application retry " << retry->retry_count;
+                LOG(DEBUG) << "Retrying object chunk " << cs.chunk.handle << " (offset " << cs.chunk.offset
+                           << ", bytes " << cs.chunk.bytesize << ") after " << retry->delay.count()
+                           << " ms; application retry " << retry->retry_count;
                 progressed = true;
                 continue;
             }
