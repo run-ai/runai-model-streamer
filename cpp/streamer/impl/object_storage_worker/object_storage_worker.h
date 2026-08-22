@@ -74,6 +74,9 @@ class ObjectStorageWorker : public utils::CapacityWorker<Workload, ObjectChunk>
     // Fire one chunk's async read (or short-circuit a chunk whose task has already failed).
     void submit(const ObjectChunk & chunk) override;
 
+    // Promote due retries to the front of the capacity queue before the base selects chunks to submit.
+    void pre_pump() override;
+
     // Process one batch of completions: route each to its task, free its window slot, and finalize a
     // workload once its last task lands. On stop / a drained responder, fail every in-flight workload.
     void drain_batch(std::atomic<bool> & stopped) override;
@@ -122,7 +125,7 @@ class ObjectStorageWorker : public utils::CapacityWorker<Workload, ObjectChunk>
     // once its last task lands.
     void complete_chunk(InflightMap::iterator wlit, size_t chunk_idx, common::ResponseCode ret);
 
-    // Move retry entries whose jitter delay elapsed back into the normal capacity queue.
+    // Move retry entries whose jitter delay elapsed to the front of the capacity queue.
     void promote_due_retries();
 
     // Push each batch's aggregate result: the whole-workload `code` if non-Success, else the batch's own

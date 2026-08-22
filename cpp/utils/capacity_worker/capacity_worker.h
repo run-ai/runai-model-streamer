@@ -105,6 +105,10 @@ class CapacityWorker : public Worker<Request>
     // Submit one chunk to the backend (fire the async read).
     virtual void submit(const Chunk & chunk) = 0;
 
+    // Let workers move deferred work into the capacity queue immediately before selecting the next chunks.
+    // A worker can combine this with enqueue_front() to prioritize ready retries over new work.
+    virtual void pre_pump() {}
+
     // Process the completions ready now: for each, _queue->complete(cost), route it to its owning request,
     // and finalize+drop the request once its last chunk lands. Blocks for at least one completion when the
     // window is full (nothing else to do); otherwise takes whatever is ready.
@@ -119,6 +123,7 @@ class CapacityWorker : public Worker<Request>
  private:
     void pump()
     {
+        pre_pump();
         while (auto chunk = _queue->try_take())
         {
             submit(*chunk);

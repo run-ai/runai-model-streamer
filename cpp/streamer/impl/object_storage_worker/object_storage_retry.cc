@@ -70,6 +70,11 @@ std::optional<ObjectStorageRetry::TimePoint> ObjectStorageRetry::next_due() cons
         : std::optional<TimePoint>(_delayed.begin()->first);
 }
 
+bool ObjectStorageRetry::enabled() const
+{
+    return _timeout > Duration::zero();
+}
+
 bool ObjectStorageRetry::has_pending() const
 {
     return !_delayed.empty();

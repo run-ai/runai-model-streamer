@@ -100,6 +100,26 @@ TEST(CapacityQueue, PreservesFifoOrder)
     EXPECT_TRUE(q.empty());
 }
 
+TEST(CapacityQueue, EnqueueFrontTakesPriorityOverPendingItems)
+{
+    CapacityQueue<int> q(1000);
+    q.enqueue(1, 1);
+    q.enqueue(2, 1);
+    q.enqueue_front(9, 1);
+
+    auto priority = q.try_take();
+    ASSERT_TRUE(priority.has_value());
+    EXPECT_EQ(*priority, 9);
+
+    auto first = q.try_take();
+    ASSERT_TRUE(first.has_value());
+    EXPECT_EQ(*first, 1);
+
+    auto second = q.try_take();
+    ASSERT_TRUE(second.has_value());
+    EXPECT_EQ(*second, 2);
+}
+
 TEST(CapacityQueue, CompleteClampsAtZero)
 {
     CapacityQueue<int> q(100);

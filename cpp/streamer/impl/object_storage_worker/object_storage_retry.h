@@ -60,6 +60,7 @@ class ObjectStorageRetry
 
     std::optional<TimePoint> next_due() const;
 
+    bool enabled() const;
     bool has_pending() const;
     void clear();
     unsigned retry_count(const State & state) const;

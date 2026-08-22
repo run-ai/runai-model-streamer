@@ -311,7 +311,15 @@ void ObjectStorageWorker::promote_due_retries()
     {
         auto [wlit, chunk_idx] = locate(handle.value());
         ASSERT(wlit != _inflight.end()) << "retrying a chunk with unknown handle " << handle.value();
-        _queue->enqueue(wlit->second.chunks[chunk_idx].chunk, 1);
+        _queue->enqueue_front(wlit->second.chunks[chunk_idx].chunk, 1);
+    }
+}
+
+void ObjectStorageWorker::pre_pump()
+{
+    if (_retry.enabled())
+    {
+        promote_due_retries();
     }
 }
 
@@ -394,20 +402,18 @@ void ObjectStorageWorker::drain_batch(std::atomic<bool> & stopped)
         return;
     }
 
-    promote_due_retries();
-
-    // With no backend attempt in flight, do not wait if a chunk is already ready for the base to pump.
-    // Otherwise wait for the earliest jittered retry in short slices.
+    // With no backend attempt in flight, sleep in short slices while a retry is deferred so the thread does
+    // not busy-wait. CapacityWorker calls pump() immediately after this returns; pre_pump() then promotes a
+    // due retry to the front of the queue before any newly queued chunks are selected.
     if (_queue->inflight() == 0)
     {
-        if (_queue->empty())
+        if (_retry.enabled() && _retry.has_pending() && _queue->empty())
         {
-            const auto now = ObjectStorageRetry::Clock::now();
             if (const auto retry_at = _retry.next_due())
             {
+                const auto now = ObjectStorageRetry::Clock::now();
                 const auto until = std::min(retry_at.value(), now + std::chrono::milliseconds(20));
                 std::this_thread::sleep_until(until);
-                promote_due_retries();
             }
         }
         return;
@@ -476,8 +482,6 @@ void ObjectStorageWorker::drain_batch(std::atomic<bool> & stopped)
         complete_chunk(wlit, chunk_idx, ret);
         progressed = true;
     }
-
-    promote_due_retries();
 
     // The responder signalled it ran dry (empty round or end-of-round sentinel) while chunks are still in
     // flight: it was stopped or drained early. Abort rather than spin re-reading the same sentinel. Gated

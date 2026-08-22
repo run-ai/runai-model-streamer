@@ -23,6 +23,7 @@ TEST(ObjectStorageRetryTest, DisabledAllowsInitialAttemptButDoesNotScheduleRetry
     ObjectStorageRetry::State state;
     const ObjectStorageRetry::TimePoint now;
 
+    EXPECT_FALSE(retry.enabled());
     EXPECT_TRUE(retry.begin_attempt(state, now));
     EXPECT_FALSE(retry.schedule(state, 1, now).has_value());
     EXPECT_EQ(retry.retry_count(state), 0u);
@@ -36,6 +37,7 @@ TEST(ObjectStorageRetryTest, SchedulesAndPromotesRetryWhenItBecomesDue)
     ObjectStorageRetry retry(1s, fixed_delay);
     ObjectStorageRetry::State state;
     const ObjectStorageRetry::TimePoint started;
+    EXPECT_TRUE(retry.enabled());
     ASSERT_TRUE(retry.begin_attempt(state, started));
 
     const auto failed_at = started + 10ms;
