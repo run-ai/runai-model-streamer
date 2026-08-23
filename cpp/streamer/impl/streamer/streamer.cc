@@ -17,6 +17,7 @@
 #include "utils/scope_guard/scope_guard.h"
 
 #include "streamer/impl/workload/workload.h"
+#include "streamer/impl/async_io/async_io_worker/async_io_worker.h"
 #include "streamer/impl/object_storage_worker/object_storage_worker.h"
 #include "streamer/impl/assigner/assigner.h"
 #include "streamer/impl/batches/batches.h"
@@ -31,6 +32,9 @@ Streamer::Streamer() : Streamer(Config())
 
 Streamer::Streamer(Config config) :
     _config(std::make_shared<Config>(config)),
+    // Built here, resolved on the first submission - so RUNAI_STREAMER_FS_STRATEGY is only the
+    // DEFAULT, and anything set between runai_start() and the first request still takes effect.
+    _strategy_resolver(std::make_shared<StrategyResolver>(config.fs_strategy_candidates)),
     // Filesystem reads are synchronous (concurrency threads, stateless handler); object-storage reads are
     // asynchronous (s3_concurrency ObjectStorageWorkers, each owning a client + in-flight capacity window).
     // Pools are created lazily on first use of each kind.
@@ -38,6 +42,13 @@ Streamer::Streamer(Config config) :
         [](Workload&& workload, std::atomic<bool> & stopped)
         {
             workload.execute(stopped);
+        },
+        // the async worker owns an IoEngine built for the resolved strategy. Reading the strategy
+        // here is safe: this factory runs when the pool is created, which is the first push, which is
+        // after resolution. Captures the resolver by value, never `this`.
+        [resolver = _strategy_resolver]() -> std::unique_ptr<utils::Worker<Workload>>
+        {
+            return std::make_unique<AsyncIoWorker>(resolver->resolved());
         },
         // each object-storage worker reads the streamer's credentials once, at client creation, via this
         // provider. It captures the shared credentials state by value, so the state outlives the worker
@@ -152,6 +163,16 @@ common::s3::Credentials Streamer::credentials() const
     return _credentials_state->get();
 }
 
+common::posix_io::Strategy Streamer::fs_strategy() const
+{
+    return _strategy_resolver->resolved();
+}
+
+bool Streamer::async_pool_used() const
+{
+    return _pools.async_pool_used();
+}
+
 common::Response Streamer::response(unsigned timeout_ms, bool & submission_done)
 {
     submission_done = false;
@@ -186,6 +207,14 @@ common::ResponseCode Streamer::async_request(
     // or differs from the locked plugin. Nothing is committed yet, so returning is clean. Credentials are
     // streamer-scoped and read only at client creation (in the worker), so they are not touched here.
     if (const auto ret = lock_object_plugin(request); ret != common::ResponseCode::Success)
+    {
+        return ret;
+    }
+
+    // Settle which filesystem strategy this streamer uses - once, here, for the same reasons as the
+    // plugin lock above: nothing is committed yet, so returning is clean, and every setter has had
+    // its chance to run. Idempotent, so every later submission takes a fast path through it.
+    if (const auto ret = _strategy_resolver->resolve(); ret != common::ResponseCode::Success)
     {
         return ret;
     }
@@ -325,11 +354,17 @@ common::ResponseCode Streamer::async_request(
             {
                 LOG(DEBUG) << "Submission " << submission_id << " sending workload to worker with batches " << workloads[next].size();
 
-                // route to the pool for this workload's backend kind (a workload is homogeneous)
-                const auto kind = workloads[next].is_object_storage()
-                    ? BackendPools::Kind::ObjectStorage
-                    : BackendPools::Kind::FileSystem;
-                _pools.push(kind, std::move(workloads[next]));
+                // Route to this workload's pool - a workload is homogeneous.
+                //
+                // The filesystem choice is the strategy resolved above, which is streamer-scoped, so
+                // it is the same for every workload of every submission. S6b makes it per file, for
+                // tmpfs and for the caller's cache mode; nothing here moves between pools afterwards.
+                const auto pool = workloads[next].is_object_storage()
+                    ? BackendPools::Pool::ObjectStorage
+                    : (common::posix_io::is_async(_strategy_resolver->resolved())
+                          ? BackendPools::Pool::FileSystemAsync
+                          : BackendPools::Pool::FileSystem);
+                _pools.push(pool, std::move(workloads[next]));
             }
         }
     }

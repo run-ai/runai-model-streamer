@@ -1,5 +1,7 @@
 #include "streamer/impl/config/config.h"
 
+#include <utility>
+
 #include <algorithm>
 
 #include "common/s3_wrapper/s3_wrapper.h"
@@ -11,12 +13,14 @@ namespace runai::llm::streamer::impl
 {
 
 Config::Config(unsigned concurrency, unsigned s3_concurrency, size_t s3_block_bytesize, size_t fs_sync_read_block_bytesize,
-               bool enforce_minimum, size_t fs_async_chunk_bytesize, unsigned fs_async_queue_depth) :
+               bool enforce_minimum, size_t fs_async_chunk_bytesize, unsigned fs_async_queue_depth,
+               std::string fs_strategy_candidates) :
     concurrency(concurrency),
     s3_concurrency(s3_concurrency),
     s3_block_bytesize(s3_block_bytesize),
     fs_sync_read_block_bytesize(fs_sync_read_block_bytesize),
     fs_async_chunk_bytesize(fs_async_chunk_bytesize),
+    fs_strategy_candidates(std::move(fs_strategy_candidates)),
     fs_async_queue_depth(fs_async_queue_depth)
 {
     ASSERT(concurrency) << " threadpool size must be a positive number";
@@ -50,7 +54,8 @@ Config::Config(bool enforce_minimum /* = true */) :
            utils::getenv<size_t>("RUNAI_STREAMER_CHUNK_BYTESIZE", min_fs_sync_read_block_bytesize),
            enforce_minimum,
            utils::getenv<size_t>("RUNAI_STREAMER_FS_CHUNK_BYTESIZE", default_fs_async_chunk_bytesize),
-           utils::getenv<unsigned long>("RUNAI_STREAMER_FS_QUEUE_DEPTH", default_fs_async_queue_depth))
+           utils::getenv<unsigned long>("RUNAI_STREAMER_FS_QUEUE_DEPTH", default_fs_async_queue_depth),
+           utils::getenv<std::string>("RUNAI_STREAMER_FS_STRATEGY", default_fs_strategy_candidates))
 {}
 
 unsigned Config::max_concurrency() const
@@ -60,7 +65,7 @@ unsigned Config::max_concurrency() const
 
 std::ostream & operator<<(std::ostream & os, const Config & config)
 {
-    return os << "Streamer concurrency " << config.concurrency << " ; s3 concurrency " << config.s3_concurrency << " ; s3 block size " << config.s3_block_bytesize << " bytes; " << " ; file system block size " << config.fs_sync_read_block_bytesize << " bytes; " << " ; file system chunk size " << config.fs_async_chunk_bytesize << " bytes; " << " ; file system queue depth " << config.fs_async_queue_depth << " (node-wide); ";
+    return os << "Streamer concurrency " << config.concurrency << " ; s3 concurrency " << config.s3_concurrency << " ; s3 block size " << config.s3_block_bytesize << " bytes; " << " ; file system block size " << config.fs_sync_read_block_bytesize << " bytes; " << " ; file system chunk size " << config.fs_async_chunk_bytesize << " bytes; " << " ; file system queue depth " << config.fs_async_queue_depth << " (node-wide); " << " ; file system strategy " << config.fs_strategy_candidates << "; ";
 }
 
 }; // namespace runai::llm::streamer::impl

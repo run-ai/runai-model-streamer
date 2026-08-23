@@ -10,7 +10,7 @@
 namespace runai::llm::streamer::impl
 {
 
-using Kind = BackendPools::Kind;
+using Pool = BackendPools::Pool;
 
 namespace
 {
@@ -39,21 +39,21 @@ std::unique_ptr<utils::Worker<Workload>> noop_factory()
 
 TEST(BackendPools, FilesystemPoolCreatedLazilyOnPush)
 {
-    BackendPools pools(run, noop_factory, /*filesystem_size=*/2, /*object_storage_size=*/3);
+    BackendPools pools(run, noop_factory, noop_factory, /*filesystem_size=*/2, /*object_storage_size=*/3);
 
     EXPECT_EQ(pools.pools_created(), 0u);
 
-    pools.push(Kind::FileSystem, Workload{});
+    pools.push(Pool::FileSystem, Workload{});
     EXPECT_EQ(pools.pools_created(), 1u);
 
     // reusing the filesystem pool does not create another
-    pools.push(Kind::FileSystem, Workload{});
+    pools.push(Pool::FileSystem, Workload{});
     EXPECT_EQ(pools.pools_created(), 1u);
 }
 
 TEST(BackendPools, ObjectStoragePoolCreatedByPluginLock)
 {
-    BackendPools pools(run, noop_factory, 2, 3);
+    BackendPools pools(run, noop_factory, noop_factory, 2, 3);
 
     EXPECT_EQ(pools.pools_created(), 0u);
 
@@ -63,22 +63,22 @@ TEST(BackendPools, ObjectStoragePoolCreatedByPluginLock)
 
     // a repeated lock of the same plugin does not create another, and the pool now accepts workloads
     EXPECT_EQ(pools.lock_object_plugin(BackendPools::Plugin::S3), common::ResponseCode::Success);
-    pools.push(Kind::ObjectStorage, Workload{});
+    pools.push(Pool::ObjectStorage, Workload{});
     EXPECT_EQ(pools.pools_created(), 1u);
 }
 
 TEST(BackendPools, BothKindsCreateTwoPools)
 {
-    BackendPools pools(run, noop_factory, 2, 3);
+    BackendPools pools(run, noop_factory, noop_factory, 2, 3);
 
-    pools.push(Kind::FileSystem, Workload{});
+    pools.push(Pool::FileSystem, Workload{});
     EXPECT_EQ(pools.lock_object_plugin(BackendPools::Plugin::Azure), common::ResponseCode::Success);
     EXPECT_EQ(pools.pools_created(), 2u);
 }
 
 TEST(BackendPools, ObjectPluginLockedToOne)
 {
-    BackendPools pools(run, noop_factory, 2, 3);
+    BackendPools pools(run, noop_factory, noop_factory, 2, 3);
 
     // first object-storage plugin wins; the same plugin is accepted; a different one is rejected
     EXPECT_EQ(pools.lock_object_plugin(BackendPools::Plugin::GCS), common::ResponseCode::Success);

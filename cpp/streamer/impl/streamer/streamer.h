@@ -20,6 +20,7 @@
 #include "streamer/impl/request/request.h"
 #include "streamer/impl/submissions/submissions_mgr.h"
 #include "streamer/impl/pools/backend_pools.h"
+#include "streamer/impl/strategy_resolver/strategy_resolver.h"
 
 namespace runai::llm::streamer::impl
 {
@@ -64,6 +65,19 @@ struct Streamer
     // submission_done to true iff it was that submission's last response (see consume_submission_response).
     // The response carries the submission_id.
     common::Response response(unsigned timeout_ms, bool & submission_done);
+
+    // Which filesystem strategy this streamer resolved to. Valid only after the first submission -
+    // resolution happens there, not at construction.
+    //
+    // Exposed because "which path served this read" is otherwise invisible: the pools are internal
+    // and the two paths return identical data, so a test asserting only the bytes cannot tell an
+    // io_uring read from a synchronous one.
+    common::posix_io::Strategy fs_strategy() const;
+
+    // Whether any workload was actually routed to the async pool. fs_strategy() says what was
+    // CHOSEN; this says what was USED, and only the second catches a dispatch that ignores the
+    // choice.
+    bool async_pool_used() const;
 
     // For testing only. Credentials are streamer-scoped: call set_credentials first (these use whatever
     // was set there).
@@ -142,6 +156,14 @@ struct Streamer
         std::optional<common::s3::Credentials> _credentials;
     };
     std::shared_ptr<CredentialsState> _credentials_state = std::make_shared<CredentialsState>();
+
+    // Which filesystem strategy this streamer uses. Settled on the first submission, beside the
+    // object-storage plugin lock, and never revisited.
+    //
+    // shared_ptr and declared BEFORE _pools, for the same reason as the credentials above: the async
+    // pool's factory reads the resolved strategy when it builds its worker, and holding the state by
+    // value keeps it alive regardless of destruction order. Neither factory captures `this`.
+    std::shared_ptr<StrategyResolver> _strategy_resolver;
 
     std::unique_ptr<S3Cleanup> _s3;
     // Lazily-created worker pools, one per backend kind. Occupies the slot the single ThreadPool used

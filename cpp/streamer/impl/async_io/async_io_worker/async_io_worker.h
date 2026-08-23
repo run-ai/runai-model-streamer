@@ -66,9 +66,16 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
  protected:
     // Builds the engine and returns the window size, on the FIRST workload.
     //
-    // Not at construction: depth is divided by RUNAI_STREAMER_PROCESS_GROUP_SIZE, which the Python
-    // layer does not publish until stream_files() - long after runai_start() returned. Building
-    // earlier reads 1, skips the division, and the device sees the full depth per process.
+    // Here because CapacityWorker asks for the window size here, and the window size IS the engine's
+    // depth - so one place decides both, and they cannot disagree.
+    //
+    // The timing constraint is weaker than it looks, and worth stating so nobody moves this on a
+    // wrong premise: depth is divided by RUNAI_STREAMER_PROCESS_GROUP_SIZE, which Python writes in
+    // stream_files() (distributed_streamer.py:154) just before the first runai_request. That rules
+    // out building at STREAMER construction - runai_start() returns before stream_files() runs, so it
+    // would read the unset default of 1, skip the division, and give the device the full depth per
+    // process. It does NOT rule out building at this worker's construction: the async pool is created
+    // lazily on first push, which is already inside that first request.
     //
     // The returned capacity IS the in-flight bound, and the only one: ids are monotonic rather than
     // indices into a fixed table (5.3), so nothing else can disagree about how many may be outstanding.

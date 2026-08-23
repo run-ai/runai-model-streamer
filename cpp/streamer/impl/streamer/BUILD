@@ -11,6 +11,8 @@ runai_cc_auto_library(
         "//streamer/impl/request",
         "//streamer/impl/submissions:submissions_mgr",
         "//streamer/impl/pools:backend_pools",
+        "//streamer/impl/strategy_resolver",
+        "//streamer/impl/async_io/async_io_worker",
         "//common/responder",
         "//utils/threadpool",
         "//utils/fdlimit",
@@ -24,6 +26,7 @@ runai_cc_test(
         ":streamer",
         "//utils/random",
         "//utils/fd",
+        "//utils/temp/env",
         "//utils/temp/file",
     ],
 )

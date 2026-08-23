@@ -8,21 +8,44 @@
 namespace runai::llm::streamer::impl
 {
 
-BackendPools::BackendPools(Handler filesystem_handler, WorkerFactory object_storage_factory, unsigned filesystem_size, unsigned object_storage_size) :
+BackendPools::BackendPools(Handler filesystem_handler,
+                           WorkerFactory filesystem_async_factory,
+                           WorkerFactory object_storage_factory,
+                           unsigned filesystem_size,
+                           unsigned object_storage_size) :
     _filesystem_handler(std::move(filesystem_handler)),
+    _filesystem_async_factory(std::move(filesystem_async_factory)),
     _object_storage_factory(std::move(object_storage_factory)),
     _filesystem_size(filesystem_size),
     _object_storage_size(object_storage_size)
 {}
 
-void BackendPools::push(Kind kind, Workload && workload)
+void BackendPools::push(Pool pool, Workload && workload)
 {
-    if (kind == Kind::ObjectStorage)
+    if (pool == Pool::ObjectStorage)
     {
         // Created by lock_object_plugin (once the plugin is known), which async_request always calls
         // before dispatching object-storage workloads - so no per-workload creation check on this path.
         ASSERT(_object_storage_pool != nullptr) << "object-storage workload dispatched before its plugin was locked";
         _object_storage_pool->push(std::move(workload));
+        return;
+    }
+
+    if (pool == Pool::FileSystemAsync)
+    {
+        // ONE thread: the worker owns an IoEngine, which is not thread safe, and ThreadPool's workers
+        // pull from a shared deque - so a second thread here would be a second engine serving the
+        // same queue, with no way to keep a workload on one of them.
+        //
+        // Lazy like the synchronous pool and for the same reason: a streamer that never resolves to
+        // an async strategy never builds a ring or a thread. Nothing needs locking first, unlike
+        // object storage, because there is no plugin to agree on - the strategy was already settled
+        // by StrategyResolver before dispatch.
+        std::call_once(_filesystem_async_once, [this]()
+        {
+            _filesystem_async_pool = std::make_unique<utils::ThreadPool<Workload>>(_filesystem_async_factory, 1);
+        });
+        _filesystem_async_pool->push(std::move(workload));
         return;
     }
 
@@ -83,9 +106,16 @@ common::ResponseCode BackendPools::lock_object_plugin(Plugin plugin)
     return common::ResponseCode::Success;
 }
 
+bool BackendPools::async_pool_used() const
+{
+    return _filesystem_async_pool != nullptr;
+}
+
 unsigned BackendPools::pools_created() const
 {
-    return (_filesystem_pool != nullptr ? 1u : 0u) + (_object_storage_pool != nullptr ? 1u : 0u);
+    return (_filesystem_pool != nullptr ? 1u : 0u)
+         + (_filesystem_async_pool != nullptr ? 1u : 0u)
+         + (_object_storage_pool != nullptr ? 1u : 0u);
 }
 
 }; // namespace runai::llm::streamer::impl

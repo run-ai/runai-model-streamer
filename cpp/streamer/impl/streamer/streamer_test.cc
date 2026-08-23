@@ -3,6 +3,11 @@
 #include <unistd.h>
 
 #include <gtest/gtest.h>
+
+#include <sys/syscall.h>
+#include <unistd.h>
+
+#include <cstring>
 #include <atomic>
 #include <string>
 #include <utility>
@@ -15,6 +20,7 @@
 #include "utils/random/random.h"
 #include "utils/fd/fd.h"
 #include "utils/thread/thread.h"
+#include "utils/temp/env/env.h"
 #include "utils/temp/file/file.h"
 
 namespace runai::llm::streamer::impl
@@ -54,6 +60,23 @@ std::set<unsigned> range_indices(unsigned n)
     return indices;
 }
 
+
+// The kernel directly - not IoUringProbe and not StrategyResolver, both of which are on the path
+// under test here.
+bool ring_works()
+{
+    struct params_stub { char opaque[512]; } params;
+    std::memset(&params, 0, sizeof(params));
+
+    const int fd = ::syscall(425 /* __NR_io_uring_setup */, 8, &params);
+    if (fd < 0)
+    {
+        return false;
+    }
+    ::close(fd);
+    return true;
+}
+
 // short wait used to assert a fresh/empty responder delivers nothing (it times out rather than blocking)
 constexpr unsigned EMPTY_WAIT_MS = 50;
 
@@ -86,6 +109,117 @@ TEST(Creation, Sanity)
 //
 // A directory is the cheapest real read failure available: open(O_RDONLY) succeeds on it, and the read
 // then fails with EISDIR - no fault injection needed.
+// S6a's whole point: a real submission served by the io_uring engine rather than the synchronous
+// reader, with the same bytes out.
+//
+// The strategy assertion is what makes this test mean anything. Both paths return identical data, so
+// checking only the bytes would pass just as well if the request quietly went to the threadpool.
+TEST(Async, ReadsThroughIoUringWhenResolvedToIt)
+{
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("io_uring_buffered,sync_buffered"));
+
+    const auto data = utils::random::buffer(1 << 20);
+    utils::temp::File file(data);
+
+    const unsigned ranges = 8;
+    const size_t range_size = data.size() / ranges;
+
+    std::vector<char> dst(data.size());
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    for (unsigned i = 0; i < ranges; ++i)
+    {
+        request[0].ranges.push_back(ReadRange{ i * range_size, range_size, dst.data() + i * range_size });
+    }
+
+    Streamer streamer;   // reads RUNAI_STREAMER_FS_STRATEGY through Config
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+
+    std::set<unsigned> seen;
+    for (unsigned i = 0; i < ranges; ++i)
+    {
+        const auto received = recv(streamer);
+        EXPECT_EQ(received.response.ret, common::ResponseCode::Success);
+        EXPECT_EQ(received.response.submission_id, submission_id);
+        seen.insert(received.response.index);
+    }
+    EXPECT_EQ(seen, range_indices(ranges));
+
+    // Which path actually served it. On a host without a ring the list falls through to
+    // sync_buffered, and this test then covers the fallback instead - still a real assertion.
+    const bool expect_async = ring_works();
+
+    EXPECT_EQ(streamer.fs_strategy(),
+              expect_async ? common::posix_io::Strategy::IoUringBuffered
+                           : common::posix_io::Strategy::SyncBuffered);
+
+    // What was CHOSEN above; what was USED here. Without this, a dispatch that ignored the resolved
+    // strategy and sent everything to the threadpool would pass every assertion in this test.
+    EXPECT_EQ(streamer.async_pool_used(), expect_async);
+
+    EXPECT_EQ(std::vector<char>(dst.begin(), dst.end()),
+              std::vector<char>(data.begin(), data.end()));
+}
+
+// The default must stay the synchronous reader until the A/B says otherwise. A default that drifted
+// to io_uring would decide by omission what the measurement is meant to decide.
+TEST(Async, DefaultStrategyIsSynchronous)
+{
+    utils::temp::UnsetEnv strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"));
+
+    const auto data = utils::random::buffer(4096);
+    utils::temp::File file(data);
+
+    std::vector<char> dst(data.size());
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), dst.data() });
+
+    Streamer streamer;
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+    EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+
+    EXPECT_EQ(streamer.fs_strategy(), common::posix_io::Strategy::SyncBuffered);
+    EXPECT_FALSE(streamer.async_pool_used()) << "the default must not build a ring or a thread";
+}
+
+// An unservable list is an error, not a quiet fall-through to the synchronous reader - and it must
+// fail the REQUEST, since that is the only place the caller can see it.
+TEST(Async, UnservableStrategyFailsTheRequest)
+{
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("libaio_direct"));
+
+    const auto data = utils::random::buffer(4096);
+    utils::temp::File file(data);
+
+    std::vector<char> dst(data.size());
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), dst.data() });
+
+    Streamer streamer;
+
+    SubmissionId submission_id = 123;   // must be cleared, so a stale id cannot be mistaken for a real one
+
+    // NOT merely "!= Success". Ignoring the resolution failure also produces a non-Success code -
+    // dispatch asserts on the unresolved strategy and the catch block reports UnknownError - but that
+    // happens AFTER the submission is registered and its responses counted, and UnknownError tells
+    // the caller to abort everything rather than just this request. The specific code is what
+    // separates a clean refusal from a late collapse.
+    EXPECT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::UnsupportedBackendMix);
+
+    // Nothing was committed: no id was minted, so the caller owes nothing and nothing owes it.
+    EXPECT_EQ(submission_id, 0u);
+
+    // And no response is waiting - a submission that was never accepted must not have produced one.
+    bool done = false;
+    EXPECT_EQ(streamer.response(EMPTY_WAIT_MS, done).ret, common::ResponseCode::TimedOut);
+}
+
 TEST(Async, ReadFailureIsAttributableNotUnknown)
 {
     utils::temp::Dir dir;
