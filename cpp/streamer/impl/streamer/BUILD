@@ -14,6 +14,7 @@ runai_cc_auto_library(
         "//streamer/impl/strategy_resolver",
         "//common/posix_io/mount_capabilities",
         "//streamer/impl/async_io/async_io_worker",
+        "//streamer/impl/async_io/async_io_stats",
         "//common/responder",
         "//utils/threadpool",
         "//utils/fdlimit",

@@ -165,6 +165,11 @@ common::s3::Credentials Streamer::credentials() const
     return _credentials_state->get();
 }
 
+const AsyncIoStats & Streamer::stats() const
+{
+    return _stats;
+}
+
 unsigned Streamer::async_engines() const
 {
     return _pools.async_engines();
@@ -298,8 +303,9 @@ common::ResponseCode Streamer::async_request(
     // The devices are kept alongside: a workload's group is an index into this, and the st_dev it
     // names is the key its engine is chosen by.
     std::vector<dev_t> group_devices;
-    Assigner assigner(request, _config,
-                      object_storage ? std::vector<int>{} : file_groups(request, group_devices));
+    const std::vector<int> group_by_file = object_storage ? std::vector<int>{}
+                                                          : file_groups(request, group_devices);
+    Assigner assigner(request, _config, group_by_file);
 
     std::vector<Workload> workloads(assigner.num_workloads());
 
@@ -428,6 +434,30 @@ common::ResponseCode Streamer::async_request(
     }
 
     drain_guard.cancel(); // all workloads dispatched
+
+    // Recorded only once every workload is dispatched. A submission that failed before this point was
+    // never read by anything, so recording it would say a run happened that did not.
+    {
+        SubmissionStats stats;
+        stats.submission_id = submission_id;
+        stats.shared_engine_mounts = _pools.shared_engine_mounts();
+
+        // Object-storage files are left out rather than labelled: the strategy names a filesystem
+        // reader, and none of it applies to them.
+        if (!object_storage)
+        {
+            stats.files.reserve(request.size());
+            for (size_t i = 0; i < request.size(); ++i)
+            {
+                const int group = i < group_by_file.size() ? group_by_file[i] : -1;
+                stats.files.push_back({ request[i].path,
+                                        group < 0 ? common::posix_io::Strategy::SyncBuffered
+                                                  : _strategy_resolver->resolved() });
+            }
+        }
+
+        _stats.record(stats);
+    }
 
     return common::ResponseCode::Success;
 }

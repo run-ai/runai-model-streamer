@@ -22,6 +22,7 @@
 #include "streamer/impl/submissions/submissions_mgr.h"
 #include "streamer/impl/pools/backend_pools.h"
 #include "common/posix_io/mount_capabilities/mount_capabilities.h"
+#include "streamer/impl/async_io/async_io_stats/async_io_stats.h"
 #include "streamer/impl/strategy_resolver/strategy_resolver.h"
 
 namespace runai::llm::streamer::impl
@@ -100,6 +101,10 @@ struct Streamer
     // How many async engines exist. One per mount, up to RUNAI_STREAMER_FS_MAX_ENGINES. Above that
     // limit mounts share an engine, so this can be smaller than the number of mounts read.
     unsigned async_engines() const;
+
+    // What each submission did, and which reader served each of its files. Kept for the last few
+    // submissions - see AsyncIoStats.
+    const AsyncIoStats & stats() const;
 
     // For testing only. Credentials are streamer-scoped: call set_credentials first (these use whatever
     // was set there).
@@ -210,6 +215,8 @@ struct Streamer
     // Mount capabilities, probed once per mount and cached. Consulted per submission to decide which
     // files the async pool serves - tmpfs goes to the synchronous pool however the strategy resolved.
     common::posix_io::MountCapabilities _mounts;
+
+    AsyncIoStats _stats;
 
     // Null in production, where _mounts answers directly.
     MountProbe _mount_probe;

@@ -166,6 +166,82 @@ TEST(Async, ReadsThroughIoUringWhenResolvedToIt)
               std::vector<char>(data.begin(), data.end()));
 }
 
+// The record answers "which reader served which file" for a submission that used two of them. That
+// question only exists because a submission can now be split, and nothing else answers it.
+TEST(Async, StatsRecordTheStrategyPerFile)
+{
+    if (!ring_works())
+    {
+        GTEST_SKIP() << "io_uring unavailable, so every file would report the same reader";
+    }
+
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("io_uring_buffered,sync_buffered"));
+
+    const auto data = utils::random::buffer(4096);
+
+    utils::temp::Dir disk_dir;
+    utils::temp::File on_disk(disk_dir.path, utils::random::string(), data);
+    utils::temp::File in_memory("/dev/shm", utils::random::string(), data);
+
+    // One directory is memory backed, so it goes to the synchronous reader whatever the strategy says.
+    const std::string memory_dir = "/dev/shm";
+    Streamer streamer(Config(),
+                      [memory_dir](const std::string & directory) -> common::posix_io::MountCapability
+                      {
+                          return common::posix_io::MountCapability{ makedev(8, 1), directory == memory_dir };
+                      });
+
+    std::vector<char> dst1(data.size());
+    std::vector<char> dst2(data.size());
+
+    std::vector<FileRanges> request(2);
+    request[0].path = on_disk.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), dst1.data() });
+    request[1].path = in_memory.path;
+    request[1].ranges.push_back(ReadRange{ 0, data.size(), dst2.data() });
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+
+    for (unsigned i = 0; i < 2; ++i)
+    {
+        EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+    }
+
+    SubmissionStats stats;
+    ASSERT_TRUE(streamer.stats().find(submission_id, stats));
+    ASSERT_EQ(stats.files.size(), 2u);
+
+    EXPECT_EQ(stats.files[0].path, on_disk.path);
+    EXPECT_EQ(stats.files[0].strategy, common::posix_io::Strategy::IoUringBuffered);
+
+    EXPECT_EQ(stats.files[1].path, in_memory.path);
+    EXPECT_EQ(stats.files[1].strategy, common::posix_io::Strategy::SyncBuffered)
+        << "a memory-backed file must be recorded as read by the synchronous reader";
+}
+
+// A submission that never ran must not appear. Otherwise the record would claim work that never
+// happened.
+TEST(Async, StatsSkipARejectedSubmission)
+{
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("libaio_direct"));
+
+    const auto data = utils::random::buffer(4096);
+    utils::temp::File file(data);
+
+    std::vector<char> dst(data.size());
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), dst.data() });
+
+    Streamer streamer;
+
+    SubmissionId submission_id = 0;
+    ASSERT_NE(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+
+    EXPECT_TRUE(streamer.stats().submissions().empty());
+}
+
 // A submission spanning two mounts: the path from st_dev, through the per-mount group, to a separate
 // engine each. Unreachable on a real host without two filesystems - this container has one non-tmpfs
 // mount and no CAP_SYS_ADMIN to make another - so the mount probe is injected.

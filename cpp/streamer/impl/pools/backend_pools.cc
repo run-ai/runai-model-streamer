@@ -82,6 +82,7 @@ void BackendPools::push_async(dev_t device, Workload && workload)
             // free engine, because that would only move the delay to another place.
             pool = least_loaded_async();
             _async_by_device.emplace(device, pool);
+            ++_shared_mounts;
 
             // A warning, not a debug line, and it names the variable. Mounts are separated only up
             // to the limit. Above it, a mount that stops responding also stops the mounts sharing its
@@ -176,6 +177,12 @@ bool BackendPools::async_pool_used() const
 {
     const auto guard = std::unique_lock<std::mutex>(_async_mutex);
     return !_async_pools.empty();
+}
+
+unsigned BackendPools::shared_engine_mounts() const
+{
+    const auto guard = std::unique_lock<std::mutex>(_async_mutex);
+    return _shared_mounts;
 }
 
 unsigned BackendPools::async_engines() const

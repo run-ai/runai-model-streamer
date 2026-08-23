@@ -100,6 +100,10 @@ class BackendPools
     // How many async engines exist. For tests: nothing in production reads it.
     unsigned async_engines() const;
 
+    // How many mounts had to share an engine because the limit was reached. Zero when every mount got
+    // its own. Counted here because only this class knows which mounts were refused an engine.
+    unsigned shared_engine_mounts() const;
+
     // Whether the async pool exists. Pools are created lazily on first push, so non-null means at
     // least one workload was actually routed here - which is the only externally visible difference
     // between an io_uring read and a synchronous one, since both return identical bytes.
@@ -128,6 +132,10 @@ class BackendPools
     // The largest number of engines. 1 puts every mount on one engine. That is the default, and it
     // is also how an operator turns the feature off, because we have not measured the speed gain.
     const unsigned _max_async_engines;
+
+    // Mounts that were given an engine already in use. Not the same as (mounts - engines): a mount
+    // that arrives after the limit is reached is counted here even if it is the only one sharing.
+    unsigned _shared_mounts = 0;
 
     // The engine with the least queued work. Called under _async_mutex.
     utils::ThreadPool<Workload> * least_loaded_async() const;
