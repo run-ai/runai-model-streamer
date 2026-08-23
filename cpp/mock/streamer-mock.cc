@@ -199,6 +199,17 @@ extern "C" int runai_set_credentials(
     return 0;
 }
 
+// The Python suite loads this mock and ctypes binds EVERY symbol at import, so a new runai_* entry
+// point must appear here as well as in streamer.ldscript or the whole suite fails to import.
+//
+// Accepts anything: the mock reads no files, so it has no strategy to choose between.
+extern "C" int runai_set_fs_strategy(
+    void * streamer,
+    const char * candidates)
+{
+    return 0;
+}
+
 extern "C" int runai_request(
     void * streamer,
     SubmissionId * out_submission_id,

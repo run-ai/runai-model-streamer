@@ -164,6 +164,11 @@ common::s3::Credentials Streamer::credentials() const
     return _credentials_state->get();
 }
 
+common::ResponseCode Streamer::set_fs_strategy(const std::string & candidates)
+{
+    return _strategy_resolver->set_candidates(candidates);
+}
+
 common::posix_io::Strategy Streamer::fs_strategy() const
 {
     return _strategy_resolver->resolved();

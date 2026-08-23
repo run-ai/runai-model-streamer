@@ -3,6 +3,7 @@
         runai_start;
         runai_end;
         runai_set_credentials;
+        runai_set_fs_strategy;
         runai_request;
         runai_response;
         runai_response_str;

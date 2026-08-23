@@ -73,6 +73,11 @@ struct Streamer
     // Exposed because "which path served this read" is otherwise invisible: the pools are internal
     // and the two paths return identical data, so a test asserting only the bytes cannot tell an
     // io_uring read from a synchronous one.
+    // Set the filesystem strategy candidates. Set-once, and rejected once resolution has happened -
+    // see StrategyResolver::set_candidates for why one rule is not enough.
+    common::ResponseCode set_fs_strategy(const std::string & candidates);
+
+    // Valid only after a FILESYSTEM submission: an object-storage one never resolves a strategy.
     common::posix_io::Strategy fs_strategy() const;
 
     // Whether any workload was actually routed to the async pool. fs_strategy() says what was

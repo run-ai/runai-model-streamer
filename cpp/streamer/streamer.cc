@@ -149,6 +149,31 @@ _RUNAI_EXTERN_C int runai_set_credentials(
     return static_cast<int>(common::ResponseCode::UnknownError);
 }
 
+_RUNAI_EXTERN_C int runai_set_fs_strategy(
+    void * streamer,
+    const char * candidates)
+{
+    try
+    {
+        auto s = static_cast<impl::Streamer *>(streamer);
+        if (s == nullptr || candidates == nullptr)
+        {
+            return static_cast<int>(common::ResponseCode::InvalidParameterError);
+        }
+
+        return static_cast<int>(s->set_fs_strategy(candidates));
+    }
+    catch (const common::Exception & e)
+    {
+        // report the specific code (see runai_request for why this matters)
+        return static_cast<int>(e.error());
+    }
+    catch(...)
+    {
+    }
+    return static_cast<int>(common::ResponseCode::UnknownError);
+}
+
 _RUNAI_EXTERN_C int runai_request(
     void * streamer,
     SubmissionId * out_submission_id,

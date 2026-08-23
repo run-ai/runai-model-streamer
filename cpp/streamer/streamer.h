@@ -47,6 +47,28 @@ _RUNAI_EXTERN_C int runai_set_credentials(
     unsigned num_params
 );
 
+// Choose how filesystem reads are served: an ORDERED PREFERENCE LIST of strategy names, best first,
+// e.g. "io_uring_buffered,sync_buffered". The first the host can provide wins; the rest are rejected
+// with a logged reason.
+//
+// Names: io_uring_direct, io_uring_buffered, libaio_direct, sync_buffered. An unknown name, a
+// duplicate or an empty entry returns InvalidParameterError - a typo must not silently become a
+// fallback nobody asked for. A list the host cannot serve is an error too, not a quiet fall-through
+// to the synchronous reader; include sync_buffered to allow that explicitly.
+//
+// Streamer-scoped and SET ONCE, like runai_set_credentials: the same value again returns Success, a
+// different value returns UnsupportedBackendMix. The list is resolved on the first filesystem
+// submission, and any different value after that is rejected too - by then an engine has been built
+// for the resolved answer. Create a new streamer to use a different strategy.
+//
+// Optional. Without it the streamer reads RUNAI_STREAMER_FS_STRATEGY, defaulting to the synchronous
+// reader. Object-storage reads are unaffected: the strategy names a filesystem engine, and a
+// submission that reads object storage never consults it.
+_RUNAI_EXTERN_C int runai_set_fs_strategy(
+    void * streamer,
+    const char * candidates
+);
+
 // Multi-request submit: read multiple files concurrently.
 //
 // A submission is a list of files; each file carries a list of RANGES to read. A range is an

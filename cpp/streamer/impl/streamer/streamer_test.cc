@@ -164,6 +164,75 @@ TEST(Async, ReadsThroughIoUringWhenResolvedToIt)
               std::vector<char>(data.begin(), data.end()));
 }
 
+// The setter is what makes the strategy controllable without an environment variable. It must take
+// effect on the submission that follows it - resolution happens on the first request, not at
+// construction, precisely so a setter has its chance.
+TEST(Async, SetFsStrategyTakesEffect)
+{
+    utils::temp::UnsetEnv strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"));
+
+    const auto data = utils::random::buffer(1 << 20);
+    utils::temp::File file(data);
+
+    std::vector<char> dst(data.size());
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), dst.data() });
+
+    Streamer streamer;   // the environment says nothing, so the default is the synchronous reader
+
+    ASSERT_EQ(streamer.set_fs_strategy("io_uring_buffered,sync_buffered"), common::ResponseCode::Success);
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+    EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+
+    const bool expect_async = ring_works();
+    EXPECT_EQ(streamer.fs_strategy(),
+              expect_async ? common::posix_io::Strategy::IoUringBuffered
+                           : common::posix_io::Strategy::SyncBuffered);
+    EXPECT_EQ(streamer.async_pool_used(), expect_async);
+
+    EXPECT_EQ(std::vector<char>(dst.begin(), dst.end()),
+              std::vector<char>(data.begin(), data.end()));
+}
+
+// Set once, like credentials - and rejected after resolution even for a FIRST call, because by then an
+// engine exists for the resolved answer. A setter that reported success and changed nothing would be
+// worse than one that refuses.
+TEST(Async, SetFsStrategyIsRejectedAfterTheFirstRequest)
+{
+    utils::temp::UnsetEnv strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"));
+
+    const auto data = utils::random::buffer(4096);
+    utils::temp::File file(data);
+
+    std::vector<char> dst(data.size());
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), dst.data() });
+
+    Streamer streamer;
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+    EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+
+    // Nothing was ever set, so there is no earlier value to conflict with - only the resolution.
+    EXPECT_NE(streamer.set_fs_strategy("io_uring_buffered,sync_buffered"), common::ResponseCode::Success);
+    EXPECT_EQ(streamer.fs_strategy(), common::posix_io::Strategy::SyncBuffered);
+
+    // The value already in force is still accepted, since it changes nothing.
+    EXPECT_EQ(streamer.set_fs_strategy("sync_buffered"), common::ResponseCode::Success);
+}
+
+// A typo must not become a fallback nobody asked for.
+TEST(Async, SetFsStrategyRejectsAnUnknownName)
+{
+    Streamer streamer;
+    EXPECT_EQ(streamer.set_fs_strategy("io_uring_bufferd"), common::ResponseCode::InvalidParameterError);
+}
+
 // tmpfs is pure memcpy: there is no device to overlap, so depth buys nothing and parallelism does.
 // It goes to the 16-thread pool however the strategy resolved - which is the routing rule that needs
 // the mount probe at all.
