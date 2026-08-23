@@ -99,32 +99,4 @@ TEST(CompletionMapper, Eintr_Has_No_Special_Row)
     EXPECT_EQ(map_completion(-EINTR, buffered()), ResponseCode::UnknownError);
 }
 
-// The message must name WHICH constraint failed. A bare EINVAL sends someone to the filesystem when
-// the fault is ours.
-TEST(CompletionMapper, Alignment_Diagnosis_Names_The_Broken_Constraint)
-{
-    Limits limits;
-    limits.offset_alignment = 512;
-    limits.buffer_alignment = 512;
-
-    alignas(512) char aligned[1024] = {};
-
-    // Offset and length both aligned, buffer aligned - nothing marked bad.
-    const auto clean = alignment_diagnosis(Requested{ 1024, 512, aligned }, limits);
-    EXPECT_EQ(clean.find("BAD"), std::string::npos) << clean;
-
-    // A length that is not a multiple of the block size. offset_alignment governs LENGTH as well as
-    // offset, so this must be caught by it rather than silently passing.
-    const auto bad_length = alignment_diagnosis(Requested{ 1024, 100, aligned }, limits);
-    EXPECT_NE(bad_length.find("length=100"), std::string::npos) << bad_length;
-    EXPECT_NE(bad_length.find("BAD"), std::string::npos) << bad_length;
-
-    const auto bad_offset = alignment_diagnosis(Requested{ 1000, 512, aligned }, limits);
-    EXPECT_NE(bad_offset.find("offset=1000"), std::string::npos) << bad_offset;
-    EXPECT_NE(bad_offset.find("BAD"), std::string::npos) << bad_offset;
-
-    const auto bad_buffer = alignment_diagnosis(Requested{ 1024, 512, aligned + 1 }, limits);
-    EXPECT_NE(bad_buffer.find("BAD"), std::string::npos) << bad_buffer;
-}
-
 }; // namespace runai::llm::streamer::common::posix_io

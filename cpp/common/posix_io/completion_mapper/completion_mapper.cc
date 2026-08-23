@@ -93,26 +93,4 @@ ResponseCode map_completion(long res, const FileRef & file)
     return ResponseCode::UnknownError;
 }
 
-std::string alignment_diagnosis(const Requested & requested, const Limits & limits)
-{
-    const auto address = reinterpret_cast<uintptr_t>(requested.buffer);
-
-    const bool offset_ok = limits.offset_alignment == 0 || requested.offset % limits.offset_alignment == 0;
-    const bool length_ok = limits.offset_alignment == 0 || requested.bytesize % limits.offset_alignment == 0;
-    const bool buffer_ok = limits.buffer_alignment == 0 || address % limits.buffer_alignment == 0;
-
-    std::stringstream ss;
-    ss << "direct read rejected:"
-       << " offset=" << requested.offset << " (align " << limits.offset_alignment << (offset_ok ? " ok" : " BAD") << ")"
-       << ", buffer=" << static_cast<const void *>(requested.buffer)
-       << " (align " << limits.buffer_alignment << (buffer_ok ? " ok" : " BAD") << ")"
-       << ", length=" << requested.bytesize
-       << " (align " << limits.offset_alignment << (length_ok ? " ok" : " BAD") << ")";
-
-    // offset_alignment governs transfer LENGTH as well as file offset, so length is checked against it
-    // rather than against buffer_alignment - a detail worth spelling out in the message, because
-    // getting it the other way round produces a diagnosis that clears every field and explains nothing.
-    return ss.str();
-}
-
 }; // namespace runai::llm::streamer::common::posix_io
