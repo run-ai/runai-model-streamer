@@ -4,6 +4,7 @@ runai_cc_auto_library(
     name = "async_io_worker",
     deps = [
         "//common/posix_io/engine_factory",
+        "//common/posix_io/alignment",
         "//common/posix_io/io_engine",
         "//common/posix_io/strategy",
         "//common/exception",

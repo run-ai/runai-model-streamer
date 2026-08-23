@@ -118,6 +118,13 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     struct BatchFd
     {
         int fd = -1;
+
+        // What the file WAS opened as, not what we wanted. A direct open can fail on a mount that
+        // does not support it, and then this file is buffered while others stay direct. Every read
+        // must carry this rather than the strategy's wish, or the engine would set IOSQE_ASYNC on a
+        // direct read, or skip it on a buffered one.
+        bool direct = false;
+
         common::ResponseCode error = common::ResponseCode::Success;
     };
 
@@ -151,7 +158,26 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
 
     // The batch's descriptor, opening it on first use. Returns -1 and sets out_error if it cannot be
     // opened - that is this file's failure, not the storage's.
-    int fd_for(Inflight & wl, unsigned batch_index, common::ResponseCode & out_error);
+    //
+    // Takes the FIRST CHUNK's file offset and destination, because the open needs them. Whether a
+    // direct read is possible at all depends on congruence - the address and the file offset having
+    // the same remainder - and that cannot be known until there is a destination. Opening lazily on
+    // the first staged chunk is what makes the answer available in time.
+    //
+    // A file is opened once and keeps that mode. Congruence is a property of the whole region, not of
+    // one chunk: the ranges of a region are contiguous, so if the first chunk is congruent the rest
+    // are too.
+    int fd_for(Inflight & wl, unsigned batch_index, size_t file_offset, const char * buffer,
+               common::ResponseCode & out_error);
+
+    // Whether this file should be opened with O_DIRECT.
+    //
+    // Two things must both hold: the strategy asked for it, and a direct read is possible at all. The
+    // second is congruence. Without it no part of the region can be read directly, so O_DIRECT would
+    // copy every byte through a scratch buffer - on our one worker - while buffered I/O copies too
+    // and gets readahead as well. So a non-congruent file is opened buffered on purpose, not as a
+    // failure.
+    bool wants_direct(size_t file_offset, const char * buffer) const;
 
     void finalize(InflightMap::iterator it, common::ResponseCode code);
 

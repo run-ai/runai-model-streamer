@@ -30,14 +30,11 @@ common::ResponseCode availability_of(Strategy strategy)
         return common::ResponseCode::Success;
 
     case Strategy::IoUringBuffered:
-        return common::posix_io::IoUringProbe::instance().capability().error == common::ResponseCode::Success
-             ? common::ResponseCode::Success
-             : common::posix_io::IoUringProbe::instance().capability().error;
-
     case Strategy::IoUringDirect:
-        // The ring is available but the direct path is not written yet. Reported as unavailable
-        // rather than served buffered under a direct name, which would look like it worked.
-        return common::ResponseCode::UnsupportedBackendMix;
+        // Both use the same ring. What differs is how each FILE is opened, and that is decided when it
+        // is opened - it depends on the mount, and on whether the destination is congruent with the
+        // file offset. So availability here asks only whether this host has io_uring at all.
+        return common::posix_io::IoUringProbe::instance().capability().error;
 
     case Strategy::LibaioDirect:
         return common::ResponseCode::UnsupportedBackendMix;   // no libaio engine yet

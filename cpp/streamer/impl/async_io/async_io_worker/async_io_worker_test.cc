@@ -116,11 +116,19 @@ struct Fixture
 // Drives a worker with a MockIoEngine the test controls.
 struct Driver
 {
-    Driver() :
-        worker(Strategy::IoUringBuffered,
-               [this](Strategy, const common::posix_io::AsyncIoConfig & config)
+    // `block` is what the engine advertises as its direct-read alignment. It matters because the
+    // worker tests congruence against it: at 1, everything is congruent and the decision is vacuous.
+    // The real engine reports 4096.
+    explicit Driver(Strategy strategy = Strategy::IoUringBuffered, size_t block = 4096) :
+        worker(strategy,
+               [this, block](Strategy, const common::posix_io::AsyncIoConfig & config)
                {
-                   auto owned = std::make_unique<MockIoEngine>(config.depth);
+                   common::posix_io::Limits limits;
+                   limits.max_read_bytesize = common::posix_io::max_read_bytesize();
+                   limits.offset_alignment = block;
+                   limits.buffer_alignment = block;
+
+                   auto owned = std::make_unique<MockIoEngine>(config.depth, limits);
                    engine = owned.get();
                    return owned;
                })
@@ -365,6 +373,68 @@ TEST(AsyncIoWorker, Stop_Answers_Every_Range)
     {
         EXPECT_EQ(r.ret, common::ResponseCode::FinishedError);
     }
+}
+
+// Whether a file is opened with O_DIRECT is decided per file, from congruence - the address and the
+// file offset having the same remainder. Aligning the buffer alone is not enough, and this is the
+// case that proves it: the same aligned buffer, shifted by one byte, must fall back to buffered.
+//
+// The mock records what each request was staged with, which is the only way to see the decision: both
+// modes return the same bytes.
+TEST(AsyncIoWorker, Direct_Only_When_Congruent)
+{
+    // The destination must be page aligned AND in step with the file offset. Reading from offset 0
+    // into an aligned address gives both.
+    std::vector<char> raw(2 * ChunkSize + 4096);
+    char * const aligned = raw.data() + ((-reinterpret_cast<uintptr_t>(raw.data())) % 4096);
+
+    {
+        Fixture fixture({ ChunkSize });
+        Driver driver(Strategy::IoUringDirect);
+
+        // Point the range at the aligned address, reading from file offset 0.
+        fixture.request[0].ranges[0].dst = aligned;
+
+        driver.execute(fixture.workload());
+        ASSERT_EQ(driver.engine->staged_count(), 1u);
+
+        const auto id = driver.engine->staged().front();
+        EXPECT_TRUE(driver.engine->request(id).file.direct)
+            << "offset 0 into an aligned address is congruent, so this must be direct";
+    }
+
+    {
+        Fixture fixture({ ChunkSize });
+        Driver driver(Strategy::IoUringDirect);
+
+        // One byte along. Still a perfectly good address, and now out of step with the file.
+        fixture.request[0].ranges[0].dst = aligned + 1;
+
+        driver.execute(fixture.workload());
+        ASSERT_EQ(driver.engine->staged_count(), 1u);
+
+        const auto id = driver.engine->staged().front();
+        EXPECT_FALSE(driver.engine->request(id).file.direct)
+            << "not congruent, so no part of the file could be read directly - buffered instead";
+    }
+}
+
+// A buffered strategy never opens direct, whatever the addresses happen to be.
+TEST(AsyncIoWorker, Buffered_Strategy_Never_Opens_Direct)
+{
+    std::vector<char> raw(2 * ChunkSize + 4096);
+    char * const aligned = raw.data() + ((-reinterpret_cast<uintptr_t>(raw.data())) % 4096);
+
+    Fixture fixture({ ChunkSize });
+    Driver driver(Strategy::IoUringBuffered);
+
+    fixture.request[0].ranges[0].dst = aligned;   // congruent, and still must be buffered
+
+    driver.execute(fixture.workload());
+    ASSERT_EQ(driver.engine->staged_count(), 1u);
+
+    const auto id = driver.engine->staged().front();
+    EXPECT_FALSE(driver.engine->request(id).file.direct);
 }
 
 // Teardown must not report a range while the kernel still holds its destination: a response promises

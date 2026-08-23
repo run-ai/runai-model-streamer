@@ -1,3 +1,8 @@
+// O_DIRECT is a GNU extension, so this must come before any libc header.
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include "streamer/impl/async_io/async_io_worker/async_io_worker.h"
 
 #include <fcntl.h>
@@ -7,6 +12,7 @@
 #include <cstring>
 #include <utility>
 
+#include "common/posix_io/alignment/alignment.h"
 #include "common/exception/exception.h"
 #include "utils/logging/logging.h"
 
@@ -148,7 +154,32 @@ void AsyncIoWorker::enqueue(Workload && workload)
     }
 }
 
-int AsyncIoWorker::fd_for(Inflight & wl, unsigned batch_index, common::ResponseCode & out_error)
+bool AsyncIoWorker::wants_direct(size_t file_offset, const char * buffer) const
+{
+    if (!common::posix_io::is_direct(_strategy))
+    {
+        return false;
+    }
+
+    // Congruence, not alignment. A caller can align its buffer and still be out of step with the file,
+    // because the file offset is fixed by the file's own layout. When that happens no part of the
+    // region can be read directly, so O_DIRECT would copy every byte on this one thread. Buffered I/O
+    // copies too, and the kernel does it, and adds readahead - so buffered wins.
+    const auto block = common::posix_io::block_size(_engine->limits());
+
+    if (!common::posix_io::is_congruent(file_offset, buffer, block))
+    {
+        LOG(DEBUG) << "Reading buffered: offset " << file_offset << " and destination are not"
+                   << " congruent for block " << block << ", so no part of this file could be read"
+                   << " directly";
+        return false;
+    }
+
+    return true;
+}
+
+int AsyncIoWorker::fd_for(Inflight & wl, unsigned batch_index, size_t file_offset, const char * buffer,
+                          common::ResponseCode & out_error)
 {
     BatchFd & entry = wl.fds[batch_index];
 
@@ -165,7 +196,22 @@ int AsyncIoWorker::fd_for(Inflight & wl, unsigned batch_index, common::ResponseC
 
     const auto & path = wl.workload.batches()[batch_index].path;
 
-    // Buffered for now; the direct flag arrives with the O_DIRECT work.
+    if (wants_direct(file_offset, buffer))
+    {
+        entry.fd = ::open(path.c_str(), O_RDONLY | O_DIRECT);
+        if (entry.fd >= 0)
+        {
+            entry.direct = true;
+            return entry.fd;
+        }
+
+        // The mount refused it. Some filesystems have no O_DIRECT at all, and tmpfs accepts the open
+        // and fails later. Falling back for THIS FILE only: another file on another mount is
+        // unaffected, which is the whole reason the mode is per file rather than per engine.
+        LOG(WARNING) << "Cannot open " << path << " with O_DIRECT (" << std::strerror(errno)
+                     << "); reading it buffered";
+    }
+
     entry.fd = ::open(path.c_str(), O_RDONLY);
     if (entry.fd < 0)
     {
@@ -175,6 +221,7 @@ int AsyncIoWorker::fd_for(Inflight & wl, unsigned batch_index, common::ResponseC
         return -1;
     }
 
+    entry.direct = false;
     return entry.fd;
 }
 
@@ -193,18 +240,24 @@ void AsyncIoWorker::stage_pending(common::posix_io::RequestId id)
         return;
     }
 
+    // pending(), not the chunk's own extent: after a short read this is the remainder, resumed where
+    // the last pass stopped. On the first pass they are the same.
+    //
+    // Read BEFORE the open, because the open needs it: whether a direct read is possible depends on
+    // this chunk's offset and destination, and the file is opened lazily on the first chunk exactly so
+    // that the answer is available in time.
+    const auto pending = _chunks.pending(id);
+
     auto error = common::ResponseCode::Success;
-    const int fd = fd_for(wlit->second, entry->batch_index, error);
+    const int fd = fd_for(wlit->second, entry->batch_index, pending.offset, pending.buffer, error);
     if (fd < 0)
     {
         complete_chunk(id, error);
         return;
     }
 
-    // pending(), not the chunk's own extent: after a short read this is the remainder, resumed where
-    // the last pass stopped. On the first pass they are the same.
-    const auto pending = _chunks.pending(id);
-    const common::posix_io::FileRef file{ fd, common::posix_io::is_direct(_strategy) };
+    // What the file WAS opened as, not what the strategy wanted. A direct open can fall back per file.
+    const common::posix_io::FileRef file{ fd, wlit->second.fds[entry->batch_index].direct };
 
     const auto ret = _engine->stage(id, file, pending.offset, pending.bytesize, pending.buffer);
     if (ret != common::ResponseCode::Success)

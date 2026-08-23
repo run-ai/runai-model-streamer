@@ -53,20 +53,41 @@ TEST(StrategyResolver, Sync_Buffered_Always_Resolves)
 // rather than failing the whole list.
 TEST(StrategyResolver, Takes_The_First_Available_Candidate)
 {
-    StrategyResolver resolver("io_uring_direct,io_uring_buffered,sync_buffered");
+    // libaio has no engine, so the first candidate can never be served and the walk must go on.
+    StrategyResolver resolver("libaio_direct,io_uring_buffered,sync_buffered");
 
     ASSERT_EQ(resolver.resolve(), common::ResponseCode::Success);
 
-    // io_uring_direct is never available yet - the direct path is S7 - so the answer depends only on
-    // whether this host has a ring.
     EXPECT_EQ(resolver.resolved(), ring_works() ? Strategy::IoUringBuffered : Strategy::SyncBuffered);
+}
+
+// Both io_uring strategies use the same ring, so both are available wherever the ring is. Whether a
+// FILE is really opened with O_DIRECT is decided later, per file, from the mount and from congruence.
+TEST(StrategyResolver, Direct_And_Buffered_Are_Equally_Available)
+{
+    StrategyResolver direct("io_uring_direct,sync_buffered");
+    StrategyResolver buffered("io_uring_buffered,sync_buffered");
+
+    ASSERT_EQ(direct.resolve(), common::ResponseCode::Success);
+    ASSERT_EQ(buffered.resolve(), common::ResponseCode::Success);
+
+    if (ring_works())
+    {
+        EXPECT_EQ(direct.resolved(), Strategy::IoUringDirect);
+        EXPECT_EQ(buffered.resolved(), Strategy::IoUringBuffered);
+    }
+    else
+    {
+        EXPECT_EQ(direct.resolved(), Strategy::SyncBuffered);
+        EXPECT_EQ(buffered.resolved(), Strategy::SyncBuffered);
+    }
 }
 
 // Exhaustion is an error, never a silent fall-through. An operator who asked for io_uring and got
 // the synchronous reader without being told has no way to discover it.
 TEST(StrategyResolver, Exhausted_List_Is_An_Error)
 {
-    StrategyResolver resolver("io_uring_direct");   // not implemented yet, and nothing follows it
+    StrategyResolver resolver("libaio_direct");   // no engine for it, and nothing follows it
 
     EXPECT_NE(resolver.resolve(), common::ResponseCode::Success);
     EXPECT_FALSE(resolver.is_resolved());
@@ -103,7 +124,7 @@ TEST(StrategyResolver, Resolve_Is_Idempotent)
 // Set before use: the caller's list replaces the default.
 TEST(StrategyResolver, Set_Candidates_Overrides_The_Default)
 {
-    StrategyResolver resolver("io_uring_direct");   // a default that would fail
+    StrategyResolver resolver("libaio_direct");   // a default that cannot be served
 
     ASSERT_EQ(resolver.set_candidates("sync_buffered"), common::ResponseCode::Success);
     ASSERT_EQ(resolver.resolve(), common::ResponseCode::Success);
@@ -154,12 +175,12 @@ TEST(StrategyResolver, Set_After_Resolution_With_The_Same_List_Is_Accepted)
 // streamer that has already reported an error to its caller.
 TEST(StrategyResolver, Set_After_Failed_Resolution_Is_Rejected)
 {
-    StrategyResolver resolver("io_uring_direct");
+    StrategyResolver resolver("libaio_direct");
 
     ASSERT_NE(resolver.resolve(), common::ResponseCode::Success);
 
     EXPECT_NE(resolver.set_candidates("sync_buffered"), common::ResponseCode::Success);
-    EXPECT_EQ(resolver.resolved_from(), "io_uring_direct");
+    EXPECT_EQ(resolver.resolved_from(), "libaio_direct");
 }
 
 }; // namespace runai::llm::streamer::impl

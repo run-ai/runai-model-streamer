@@ -42,8 +42,21 @@ IoUringEngine::IoUringEngine(const AsyncIoConfig & config, size_t max_read_bytes
     _depth = _ring.sq.ring_entries;
 
     _limits.max_read_bytesize = max_read_bytesize;
-    _limits.offset_alignment = 1;   // buffered; the direct path tightens these
-    _limits.buffer_alignment = 1;
+
+    // What a DIRECT read on this host requires. Buffered reads need none of it, but Limits describes
+    // the engine, not one request, and the caller only consults these when it is considering a direct
+    // read.
+    //
+    // 4096, not 1 and not measured. `statx` reports the real numbers through STATX_DIOALIGN, which
+    // landed in kernel 6.1 while our floor is 5.15 - so on some hosts there is nothing to ask. 4096 is
+    // a safe superset of every block size in use (512 and 4096), and over-aligning is always correct:
+    // it can only waste, never fail.
+    //
+    // Reporting 1 here would be much worse than wasteful. The caller tests congruence against this
+    // number, and everything is congruent modulo 1 - so every file would be opened with O_DIRECT and
+    // every unaligned read would then fail with EINVAL.
+    _limits.offset_alignment = 4096;
+    _limits.buffer_alignment = 4096;
 
     LOG(INFO) << "io_uring ready: " << _depth << " submission entries"
               << (_depth == config.depth ? "" : " (rounded up from the configured depth)")
