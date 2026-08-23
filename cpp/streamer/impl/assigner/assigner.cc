@@ -1,5 +1,8 @@
 #include "streamer/impl/assigner/assigner.h"
 
+#include <map>
+#include <string>
+
 #include <algorithm>
 #include <limits>
 #include <memory>
@@ -15,12 +18,12 @@ namespace runai::llm::streamer::impl
 {
 
 Assigner::Assigner(const std::vector<FileRanges> & request, std::shared_ptr<const Config> config,
-                   std::vector<bool> async_by_file) :
+                   std::vector<int> group_by_file) :
 _config(config),
 _is_object_storage(check_object_storage(request)),
 _num_workers(_is_object_storage ? _config->s3_concurrency : _config->concurrency),
 _num_workloads(0),
-_async_by_file(std::move(async_by_file))
+_group_by_file(std::move(group_by_file))
 {
     LOG(DEBUG) << "Assigning " << request.size() << " files to " << _num_workers << " workers";
 
@@ -131,46 +134,58 @@ size_t Assigner::coalesce(const std::vector<FileRanges> & request)
 // the window spans workloads - but each slice would leave a partial chunk at its edges.
 void Assigner::assign(size_t total_bytes_to_read)
 {
-    // Split the transfers by the pool that will serve them, preserving order within each group so the
+    // Split the transfers by the group that will serve them, preserving order within each group so the
     // division below still walks a file's transfers in offset order.
+    //
+    // Group -1 is the synchronous pool; 0..N-1 are the async groups, one per distinct mount.
     std::vector<size_t> sync_indices;
-    std::vector<size_t> async_indices;
     size_t sync_bytes = 0;
-    size_t async_bytes = 0;
+
+    std::map<int, std::vector<size_t>> async_indices;
+    std::map<int, size_t> async_bytes;
 
     for (size_t i = 0; i < _transfers.size(); ++i)
     {
-        if (is_async_file(_transfers[i].file_index))
-        {
-            async_indices.push_back(i);
-            async_bytes += _transfers[i].size;
-        }
-        else
+        const int group = group_of_file(_transfers[i].file_index);
+
+        if (group < 0)
         {
             sync_indices.push_back(i);
             sync_bytes += _transfers[i].size;
         }
+        else
+        {
+            async_indices[group].push_back(i);
+            async_bytes[group] += _transfers[i].size;
+        }
     }
 
+    _num_async_groups = static_cast<unsigned>(async_indices.size());
+
     // Sized for the ceiling, then shrunk to what was used: the synchronous group can take up to
-    // _num_workers workloads and the async group exactly one, so _num_workers + 1 is the most any
-    // submission can need. Workload indices index into this.
+    // _num_workers workloads and each async group exactly one, so this is the most any submission can
+    // need. Workload indices index into these.
+    const unsigned ceiling = _num_workers + _num_async_groups + 1;
     _worker_assignments.clear();
-    _worker_assignments.resize(_num_workers + 1);
-    _async_by_workload.assign(_num_workers + 1, false);
+    _worker_assignments.resize(ceiling);
+    _group_by_workload.assign(ceiling, -1);
 
     unsigned used = 0;
 
     // The synchronous group first, so that with no async files the workload numbering is identical to
-    // what it was before this stage - which is what keeps every existing test meaningful.
-    used += assign_group(sync_indices, _num_workers, used, sync_bytes, false);
+    // what it was before grouping existed - which is what keeps every existing test meaningful.
+    used += assign_group(sync_indices, _num_workers, used, sync_bytes, -1);
 
-    // One worker, so one workload, however many bytes it holds.
-    used += assign_group(async_indices, 1, used, async_bytes, true);
+    // One worker per mount, so one workload each, however many bytes they hold. Walked in group order
+    // (std::map) so numbering is deterministic.
+    for (const auto & [group, indices] : async_indices)
+    {
+        used += assign_group(indices, 1, used, async_bytes[group], group);
+    }
 
     _num_workloads = std::max(used, 1u);
     _worker_assignments.resize(_num_workloads);
-    _async_by_workload.resize(_num_workloads);
+    _group_by_workload.resize(_num_workloads);
 
     // Verification - every byte assigned exactly once, and every transfer fully covered by its tasks
     size_t assigned_total = 0;
@@ -200,7 +215,7 @@ unsigned Assigner::assign_group(const std::vector<size_t> & indices,
                                 unsigned workers,
                                 unsigned first_workload,
                                 size_t group_bytes,
-                                bool is_async)
+                                int group)
 {
     if (indices.empty())
     {
@@ -222,7 +237,7 @@ unsigned Assigner::assign_group(const std::vector<size_t> & indices,
         size_t assigned = 0;
 
         LOG(DEBUG) << "Assigning work to worker " << workload_idx << ", target bytes: " << target
-                   << (is_async ? " (async)" : " (synchronous)");
+                   << (group < 0 ? " (synchronous)" : " (async group " + std::to_string(group) + ")");
 
         while (position < indices.size())
         {
@@ -258,7 +273,7 @@ unsigned Assigner::assign_group(const std::vector<size_t> & indices,
             }
         }
 
-        _async_by_workload[workload_idx] = is_async;
+        _group_by_workload[workload_idx] = group;
         used = slot + 1;
 
         LOG(DEBUG) << "Finished assignment for worker " << workload_idx << ", total bytes assigned: " << assigned;
@@ -267,14 +282,19 @@ unsigned Assigner::assign_group(const std::vector<size_t> & indices,
     return used;
 }
 
-bool Assigner::is_async_file(unsigned file_index) const
+int Assigner::group_of_file(unsigned file_index) const
 {
-    return file_index < _async_by_file.size() && _async_by_file[file_index];
+    return file_index < _group_by_file.size() ? _group_by_file[file_index] : -1;
 }
 
-bool Assigner::is_async_workload(unsigned workload_index) const
+int Assigner::group_of_workload(unsigned workload_index) const
 {
-    return workload_index < _async_by_workload.size() && _async_by_workload[workload_index];
+    return workload_index < _group_by_workload.size() ? _group_by_workload[workload_index] : -1;
+}
+
+unsigned Assigner::num_async_groups() const
+{
+    return _num_async_groups;
 }
 
 // The submission's backend kind. Reading it from the first file alone is sound because a submission is

@@ -1,6 +1,7 @@
 
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -40,8 +41,19 @@ namespace runai::llm::streamer::impl
 
 struct Streamer
 {
+    // How the mount of a path is found. A test can replace it, for the same reason AsyncIoWorker
+    // takes an EngineFactory and ObjectStorageWorker takes a credentials provider: the real answer
+    // comes from the kernel, and a test cannot create a second mount without CAP_SYS_ADMIN.
+    //
+    // Production passes nothing. A test passes its own map. It can then run a submission that covers
+    // several mounts, and check the path from st_dev to group to engine. Without this seam that path
+    // can only be tested on a machine that already has two filesystems.
+    //
+    // It must throw when a path cannot be read, as MountCapabilities::of_path does.
+    using MountProbe = std::function<common::posix_io::MountCapability(const std::string &)>;
+
     Streamer();
-    Streamer(Config config);
+    explicit Streamer(Config config, MountProbe mount_probe = nullptr);
     ~Streamer();
 
     // Set the streamer's object-storage credentials (a general key->value dictionary; see
@@ -85,6 +97,10 @@ struct Streamer
     // choice.
     bool async_pool_used() const;
 
+    // How many async engines exist. One per mount, up to RUNAI_STREAMER_FS_MAX_ENGINES. Above that
+    // limit mounts share an engine, so this can be smaller than the number of mounts read.
+    unsigned async_engines() const;
+
     // For testing only. Credentials are streamer-scoped: call set_credentials first (these use whatever
     // was set there).
 
@@ -118,13 +134,20 @@ struct Streamer
     // Success.
     common::ResponseCode lock_object_plugin(const std::vector<FileRanges> & request);
 
-    // Which files the async pool will serve, by file index. Decided BEFORE batches are built, from
-    // one stat per distinct directory rather than one per file - a 200-shard model shares a
-    // directory, so that is one syscall rather than 200.
+    // Which pool group serves each file, indexed by file index: -1 for the synchronous pool, or an
+    // async group. There is one async group per mount, because each engine serves one mount and a
+    // workload goes to one engine.
     //
-    // Never fails a submission: a directory that cannot be probed falls back to the synchronous
-    // reader for that file, which is where it would have gone before this stage anyway.
-    std::vector<bool> async_files(const std::vector<FileRanges> & request);
+    // This runs BEFORE the batches are built. It calls stat once per directory, not once per file. A
+    // model with 200 shards keeps them in one directory, so that is one system call instead of 200.
+    //
+    // out_devices receives the st_dev of each async group, indexed by group id. That value is how the
+    // engine is chosen when the workload is sent.
+    //
+    // This never fails a submission. If a directory cannot be read, that file goes to the synchronous
+    // reader, which is where it would have gone anyway.
+    std::vector<int> file_groups(const std::vector<FileRanges> & request,
+                                 std::vector<dev_t> & out_devices);
 
     // Whether this submission reads object storage. The first file WITH RANGES decides, as everywhere
     // else: lock_object_plugin has already rejected a submission that mixes the two, so it is
@@ -187,6 +210,9 @@ struct Streamer
     // Mount capabilities, probed once per mount and cached. Consulted per submission to decide which
     // files the async pool serves - tmpfs goes to the synchronous pool however the strategy resolved.
     common::posix_io::MountCapabilities _mounts;
+
+    // Null in production, where _mounts answers directly.
+    MountProbe _mount_probe;
 
     std::unique_ptr<S3Cleanup> _s3;
     // Lazily-created worker pools, one per backend kind. Occupies the slot the single ThreadPool used

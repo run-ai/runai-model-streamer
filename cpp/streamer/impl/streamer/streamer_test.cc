@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <sys/syscall.h>
+#include <sys/sysmacros.h>
 #include <unistd.h>
 
 #include <cstring>
@@ -13,6 +14,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <map>
 #include <set>
 
 #include "common/exception/exception.h"
@@ -162,6 +164,105 @@ TEST(Async, ReadsThroughIoUringWhenResolvedToIt)
 
     EXPECT_EQ(std::vector<char>(dst.begin(), dst.end()),
               std::vector<char>(data.begin(), data.end()));
+}
+
+// A submission spanning two mounts: the path from st_dev, through the per-mount group, to a separate
+// engine each. Unreachable on a real host without two filesystems - this container has one non-tmpfs
+// mount and no CAP_SYS_ADMIN to make another - so the mount probe is injected.
+TEST(Async, TwoMountsGetTwoEngines)
+{
+    if (!ring_works())
+    {
+        GTEST_SKIP() << "io_uring unavailable, so nothing reaches the async pools";
+    }
+
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("io_uring_buffered,sync_buffered"));
+    utils::temp::Env engines(std::string("RUNAI_STREAMER_FS_MAX_ENGINES"), 4UL);
+
+    const auto data = utils::random::buffer(1 << 20);
+
+    // Two DIRECTORIES, because the probe answers per directory. Both files in one directory would
+    // share a mount, and this test would pass while proving nothing.
+    utils::temp::Dir dir_one;
+    utils::temp::Dir dir_two;
+    utils::temp::File one(dir_one.path, utils::random::string(), data);
+    utils::temp::File two(dir_two.path, utils::random::string(), data);
+
+    // Both files really live on one filesystem; the probe says otherwise, which is the point.
+    const std::string first = dir_one.path;
+    Streamer streamer(Config(),
+                      [first](const std::string & directory) -> common::posix_io::MountCapability
+                      {
+                          return common::posix_io::MountCapability{ directory == first ? makedev(8, 1) : makedev(8, 2), false };
+                      });
+
+    std::vector<char> dst1(data.size());
+    std::vector<char> dst2(data.size());
+
+    std::vector<FileRanges> request(2);
+    request[0].path = one.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), dst1.data() });
+    request[1].path = two.path;
+    request[1].ranges.push_back(ReadRange{ 0, data.size(), dst2.data() });
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+
+    for (unsigned i = 0; i < 2; ++i)
+    {
+        EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+    }
+
+    // What makes this test mean anything. Without per-mount engines both files share one.
+    EXPECT_EQ(streamer.async_engines(), 2u);
+
+    EXPECT_EQ(std::vector<char>(dst1.begin(), dst1.end()), std::vector<char>(data.begin(), data.end()));
+    EXPECT_EQ(std::vector<char>(dst2.begin(), dst2.end()), std::vector<char>(data.begin(), data.end()));
+}
+
+// Two directories on the SAME mount share one engine - groups are keyed on st_dev, not on the path.
+TEST(Async, TwoDirectoriesOnOneMountShareAnEngine)
+{
+    if (!ring_works())
+    {
+        GTEST_SKIP() << "io_uring unavailable, so nothing reaches the async pools";
+    }
+
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("io_uring_buffered,sync_buffered"));
+    utils::temp::Env engines(std::string("RUNAI_STREAMER_FS_MAX_ENGINES"), 4UL);
+
+    const auto data = utils::random::buffer(4096);
+
+    utils::temp::Dir dir_one;
+    utils::temp::Dir dir_two;
+    utils::temp::File one(dir_one.path, utils::random::string(), data);
+    utils::temp::File two(dir_two.path, utils::random::string(), data);
+
+    // Different directories, one device.
+    Streamer streamer(Config(),
+                      [](const std::string &) -> common::posix_io::MountCapability
+                      {
+                          return common::posix_io::MountCapability{ makedev(8, 1), false };
+                      });
+
+    std::vector<char> dst1(data.size());
+    std::vector<char> dst2(data.size());
+
+    std::vector<FileRanges> request(2);
+    request[0].path = one.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), dst1.data() });
+    request[1].path = two.path;
+    request[1].ranges.push_back(ReadRange{ 0, data.size(), dst2.data() });
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+
+    for (unsigned i = 0; i < 2; ++i)
+    {
+        EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+    }
+
+    EXPECT_EQ(streamer.async_engines(), 1u) << "one filesystem must not get two engines";
 }
 
 // The setter is what makes the strategy controllable without an environment variable. It must take

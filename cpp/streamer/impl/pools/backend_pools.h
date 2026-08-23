@@ -3,7 +3,10 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
+#include <map>
 #include <optional>
+
+#include <sys/types.h>
 
 #include "common/response_code/response_code.h"
 #include "utils/threadpool/threadpool.h"
@@ -18,9 +21,11 @@ namespace runai::llm::streamer::impl
 //   FileSystem       synchronous pread on `concurrency` threads. EXACTLY ONE POOL, always - the
 //                    synchronous reader is not modified by the async work, and it has no shared
 //                    submission point to wedge, so there is nothing to isolate by splitting it.
-//   FileSystemAsync  ONE thread owning an AsyncIoWorker and its IoEngine. One thread because the
-//                    engine is not thread safe and the ring's state is per-owner (5.2); a second
-//                    thread would need locks around everything the worker touches.
+//   FileSystemAsync  ONE POOL PER MOUNT. Each pool has one thread, which owns an AsyncIoWorker and
+//                    its IoEngine. One thread per pool, because the engine is not thread safe (5.2).
+//                    A separate pool per mount, not one pool with several workers: all workers in a
+//                    pool take work from the same queue, so one pool could not keep a mount's work
+//                    on one engine.
 //   ObjectStorage    `s3_concurrency` threads, each worker owning a plugin client and its own
 //                    in-flight window.
 //
@@ -54,11 +59,31 @@ class BackendPools
                  unsigned filesystem_size,
                  unsigned object_storage_size);
 
-    // Hand the workload to its kind's pool. The FileSystem pool is created lazily here on first use.
-    // The ObjectStorage pool is NOT created here - it is created by lock_object_plugin, which async_request
-    // always calls before dispatching object-storage workloads; pushing an object-storage workload before
-    // then is a programming error (asserted). Thread-safe.
+    // Hand the workload to its pool. FileSystem and ObjectStorage only - Pool::FileSystemAsync is
+    // REJECTED here (asserted), because an async workload is routed by its mount and there is no
+    // device to route by in this signature. Use push_async.
+    //
+    // The FileSystem pool is created lazily here on first use. The ObjectStorage pool is NOT created
+    // here - it is created by lock_object_plugin, which async_request always calls before dispatching
+    // object-storage workloads; pushing an object-storage workload before then is a programming error
+    // (asserted). Thread-safe.
     void push(Pool pool, Workload && workload);
+
+    // Hand an async filesystem workload to the engine for its mount, creating that engine on first
+    // use. `device` is the mount's st_dev.
+    //
+    // Above RUNAI_STREAMER_FS_MAX_ENGINES, mounts SHARE the engine that has the least work waiting.
+    // They do not wait for a free engine. Waiting would only move the delay to another place.
+    //
+    // Sharing is logged as a warning, once per mount, and the log names the variable. Without that
+    // warning the cost is invisible: mounts are separated only up to the limit. Above it, a mount
+    // that stops responding also stops the mounts that share its engine.
+    //
+    // A mount keeps the SAME engine for as long as the streamer lives. The engine holds the state
+    // that routes completions and counts free slots, so a mount cannot move while it still has reads
+    // running. A stuck mount therefore keeps its engine forever. That is the separation working, not
+    // a leak.
+    void push_async(dev_t device, Workload && workload);
 
     // Lock object storage to a single plugin and create the ObjectStorage pool (once). The first
     // object-storage submission records the plugin and builds the pool; a later submission with a different
@@ -71,6 +96,9 @@ class BackendPools
 
     // For testing: number of pools created so far.
     unsigned pools_created() const;
+
+    // How many async engines exist. For tests: nothing in production reads it.
+    unsigned async_engines() const;
 
     // Whether the async pool exists. Pools are created lazily on first push, so non-null means at
     // least one workload was actually routed here - which is the only externally visible difference
@@ -87,10 +115,22 @@ class BackendPools
     std::once_flag _filesystem_once;
     std::unique_ptr<utils::ThreadPool<Workload>> _filesystem_pool;
 
-    // One worker, so one engine per streamer. Intended to become one engine per mount, keyed on
-    // st_dev - which is why the member is named for the pool rather than for the engine inside it.
-    std::once_flag _filesystem_async_once;
-    std::unique_ptr<utils::ThreadPool<Workload>> _filesystem_async_pool;
+    // One pool per mount, keyed on st_dev. Each is created on first use and lives as long as the
+    // streamer. The mutex guards the two maps below. Several threads can submit at the same time, so
+    // the first workload for a mount can arrive on more than one thread at once.
+    mutable std::mutex _async_mutex;
+    std::map<dev_t, std::unique_ptr<utils::ThreadPool<Workload>>> _async_pools;
+
+    // Which engine each mount uses. This is separate from _async_pools because above the limit
+    // several mounts point at the same pool, and because a mount must keep the engine it was given.
+    std::map<dev_t, utils::ThreadPool<Workload> *> _async_by_device;
+
+    // The largest number of engines. 1 puts every mount on one engine. That is the default, and it
+    // is also how an operator turns the feature off, because we have not measured the speed gain.
+    const unsigned _max_async_engines;
+
+    // The engine with the least queued work. Called under _async_mutex.
+    utils::ThreadPool<Workload> * least_loaded_async() const;
 
     std::unique_ptr<utils::ThreadPool<Workload>> _object_storage_pool;
 

@@ -2,10 +2,13 @@
 
 #include <gtest/gtest.h>
 
+#include <sys/sysmacros.h>   // makedev
+
 #include <atomic>
 #include <memory>
 
 #include "common/response_code/response_code.h"
+#include "utils/temp/env/env.h"
 
 namespace runai::llm::streamer::impl
 {
@@ -36,6 +39,89 @@ std::unique_ptr<utils::Worker<Workload>> noop_factory()
     return std::make_unique<NoopWorker>();
 }
 } // namespace
+
+// The default is ONE engine for everything: the throughput case for splitting is unmeasured, and
+// io_uring itself is off by default for the same reason. So a streamer that reads three mounts still
+// builds one engine unless someone raises the variable.
+TEST(BackendPools, DefaultsToOneEngineForAllMounts)
+{
+    utils::temp::UnsetEnv max_engines(std::string("RUNAI_STREAMER_FS_MAX_ENGINES"));
+
+    BackendPools pools(run, noop_factory, noop_factory, 2, 3);
+
+    pools.push_async(makedev(8, 1), Workload{});
+    pools.push_async(makedev(8, 2), Workload{});
+    pools.push_async(makedev(259, 0), Workload{});
+
+    EXPECT_EQ(pools.async_engines(), 1u) << "the default cap is 1";
+}
+
+// Raised, each mount gets its own engine - which is the isolation the split exists for.
+TEST(BackendPools, EnginePerMountUpToTheCap)
+{
+    utils::temp::Env max_engines(std::string("RUNAI_STREAMER_FS_MAX_ENGINES"), 4UL);
+
+    BackendPools pools(run, noop_factory, noop_factory, 2, 3);
+
+    pools.push_async(makedev(8, 1), Workload{});
+    EXPECT_EQ(pools.async_engines(), 1u);
+
+    pools.push_async(makedev(8, 2), Workload{});
+    EXPECT_EQ(pools.async_engines(), 2u);
+
+    pools.push_async(makedev(259, 0), Workload{});
+    EXPECT_EQ(pools.async_engines(), 3u);
+}
+
+// The same mount keeps the same engine however often it is pushed to - assignment is stable, because
+// completion routing and window credit live with the engine.
+TEST(BackendPools, SameMountReusesItsEngine)
+{
+    utils::temp::Env max_engines(std::string("RUNAI_STREAMER_FS_MAX_ENGINES"), 4UL);
+
+    BackendPools pools(run, noop_factory, noop_factory, 2, 3);
+
+    for (int i = 0; i < 5; ++i)
+    {
+        pools.push_async(makedev(8, 1), Workload{});
+    }
+
+    EXPECT_EQ(pools.async_engines(), 1u) << "one mount must never build a second engine";
+}
+
+// Past the cap, mounts SHARE rather than queueing for a free engine - queueing would put a second
+// head-of-line problem at the assignment layer.
+TEST(BackendPools, PastTheCapMountsShare)
+{
+    utils::temp::Env max_engines(std::string("RUNAI_STREAMER_FS_MAX_ENGINES"), 2UL);
+
+    BackendPools pools(run, noop_factory, noop_factory, 2, 3);
+
+    pools.push_async(makedev(8, 1), Workload{});
+    pools.push_async(makedev(8, 2), Workload{});
+    EXPECT_EQ(pools.async_engines(), 2u);
+
+    // The third and fourth mounts must not create engines, and must not be refused either.
+    pools.push_async(makedev(8, 3), Workload{});
+    pools.push_async(makedev(8, 4), Workload{});
+    EXPECT_EQ(pools.async_engines(), 2u) << "the cap must bound engines, not reject work";
+}
+
+// Engines are lazy like the synchronous pool: a streamer that never reads a mount never builds a ring
+// or a thread for it.
+TEST(BackendPools, AsyncEnginesAreLazy)
+{
+    utils::temp::Env max_engines(std::string("RUNAI_STREAMER_FS_MAX_ENGINES"), 4UL);
+
+    BackendPools pools(run, noop_factory, noop_factory, 2, 3);
+
+    EXPECT_EQ(pools.async_engines(), 0u);
+    EXPECT_EQ(pools.pools_created(), 0u);
+
+    pools.push_async(makedev(8, 1), Workload{});
+    EXPECT_EQ(pools.async_engines(), 1u);
+    EXPECT_EQ(pools.pools_created(), 1u) << "and it counts among the pools";
+}
 
 TEST(BackendPools, FilesystemPoolCreatedLazilyOnPush)
 {

@@ -64,8 +64,18 @@ struct WorkerTasks
 
 struct Assigner
 {
-    // `async_by_file` marks, per ORIGINAL file index, which files the async pool will serve. Empty
-    // means none, which is what every caller but the streamer wants.
+    // `group_by_file` says which pool group serves each file. It is indexed by the ORIGINAL file
+    // index:
+    //
+    //   -1        the synchronous pool
+    //   0, 1, 2   an async group - one per MOUNT in this submission
+    //
+    // An empty list means every file is synchronous. That is what every caller except the streamer
+    // wants.
+    //
+    // There is one group per mount, not one group for all async files. A workload goes to exactly one
+    // engine, and each engine serves one mount. If a workload held files from two mounts, the two
+    // mounts would no longer be separated.
     //
     // A submission may now be heterogeneous, which it never was before: object storage and filesystem
     // still cannot mix (Streamer::lock_object_plugin rejects that), but the filesystem side can split
@@ -78,7 +88,7 @@ struct Assigner
     // align to chunk boundaries, so each one leaves a partial chunk at its edges.
     Assigner(const std::vector<FileRanges> & request,
              std::shared_ptr<const Config> config,
-             std::vector<bool> async_by_file = {});
+             std::vector<int> group_by_file = {});
 
     // The coalesced transfers, each carrying the worker slices it was divided into. Batches is built
     // per transfer: within a transfer the ranges tile one contiguous span of file and buffer, which is
@@ -92,9 +102,18 @@ struct Assigner
 
     unsigned num_workloads() const;
 
-    // Whether this workload's files are served by the async pool. Workload indices are global across
-    // the groups, so this is how the dispatcher routes without Workload or Batch carrying a tag.
-    bool is_async_workload(unsigned workload_index) const;
+    // The group this workload belongs to: -1 for the synchronous pool, or the async group id from
+    // group_by_file. Workload numbers continue across the groups, so the caller can route on this
+    // without adding a field to Workload or Batch.
+    //
+    // The caller turns the id back into a mount. Assigner never sees an st_dev. It only sees the ids
+    // it was given.
+    int group_of_workload(unsigned workload_index) const;
+
+    // How many async groups this submission produced. It counts the different group ids among files
+    // that produced a transfer. A file with no ranges produces none, so this can be smaller than the
+    // number of mounts in group_by_file.
+    unsigned num_async_groups() const;
 
  private:
     // Bytes per workload for one group, and how many workloads it needs. Deliberately pure: writing
@@ -117,17 +136,16 @@ struct Assigner
     void assign(size_t total_bytes_to_read);
 
     // One group's share of step 2. `indices` are positions in _transfers; `workers` is how many
-    // workloads this group may use; `first_workload` is where its workload numbering starts. Returns
-    // how many workloads it actually used.
+    // workloads this group may use; `first_workload` is where its workload numbering starts; `group`
+    // is what group_of_workload() will report for them. Returns how many workloads it used.
     unsigned assign_group(const std::vector<size_t> & indices,
                           unsigned workers,
                           unsigned first_workload,
                           size_t group_bytes,
-                          bool is_async);
+                          int group);
 
-    // Whether this file's ranges go to the async pool. False when async_by_file is empty, which is
-    // every caller but the streamer.
-    bool is_async_file(unsigned file_index) const;
+    // This file's group: -1 when group_by_file is empty, which is every caller but the streamer.
+    int group_of_file(unsigned file_index) const;
 
  private:
     std::shared_ptr<const Config> _config;
@@ -137,11 +155,13 @@ struct Assigner
     std::vector<WorkerTasks> _worker_assignments; // ordered by worker index
     unsigned _num_workloads;
 
-    // Which files the async pool serves, by original file index. Empty means none.
-    std::vector<bool> _async_by_file;
+    // Each file's group, by original file index. Empty means all synchronous.
+    std::vector<int> _group_by_file;
 
-    // Per workload index, whether it belongs to the async group. Sized _num_workloads.
-    std::vector<bool> _async_by_workload;
+    // Per workload index, its group. Sized _num_workloads.
+    std::vector<int> _group_by_workload;
+
+    unsigned _num_async_groups = 0;
 };
 
 } // namespace runai::llm::streamer::impl

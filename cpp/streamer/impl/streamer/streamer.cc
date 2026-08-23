@@ -31,7 +31,7 @@ namespace runai::llm::streamer::impl
 Streamer::Streamer() : Streamer(Config())
 {}
 
-Streamer::Streamer(Config config) :
+Streamer::Streamer(Config config, MountProbe mount_probe) :
     _config(std::make_shared<Config>(config)),
     // Built here, resolved on the first submission - so RUNAI_STREAMER_FS_STRATEGY is only the
     // DEFAULT, and anything set between runai_start() and the first request still takes effect.
@@ -61,7 +61,8 @@ Streamer::Streamer(Config config) :
         _config->concurrency, _config->s3_concurrency),
     // One PERSISTENT responder for the streamer's lifetime, shared by all submissions and
     // demuxed by submission_id. increment() grows its expected count per accepted submission.
-    _responder(std::make_shared<common::Responder>(0, common::QueueMode::PERSISTENT))
+    _responder(std::make_shared<common::Responder>(0, common::QueueMode::PERSISTENT)),
+    _mount_probe(std::move(mount_probe))
 {
     LOG(DEBUG) << config;
 }
@@ -162,6 +163,11 @@ common::ResponseCode Streamer::set_credentials(const common::s3::Credentials & c
 common::s3::Credentials Streamer::credentials() const
 {
     return _credentials_state->get();
+}
+
+unsigned Streamer::async_engines() const
+{
+    return _pools.async_engines();
 }
 
 common::ResponseCode Streamer::set_fs_strategy(const std::string & candidates)
@@ -288,7 +294,12 @@ common::ResponseCode Streamer::async_request(
 
     // divide reading between workers
     // Object storage has no mount to probe and no strategy to consult, so it is not asked.
-    Assigner assigner(request, _config, object_storage ? std::vector<bool>{} : async_files(request));
+    //
+    // The devices are kept alongside: a workload's group is an index into this, and the st_dev it
+    // names is the key its engine is chosen by.
+    std::vector<dev_t> group_devices;
+    Assigner assigner(request, _config,
+                      object_storage ? std::vector<int>{} : file_groups(request, group_devices));
 
     std::vector<Workload> workloads(assigner.num_workloads());
 
@@ -376,12 +387,26 @@ common::ResponseCode Streamer::async_request(
                 // The filesystem choice is the strategy resolved above, which is streamer-scoped, so
                 // The pool was decided per file before the batches were built, and nothing moves
                 // between pools afterwards - so this only reads the answer.
-                const auto pool = workloads[next].is_object_storage()
-                    ? BackendPools::Pool::ObjectStorage
-                    : (assigner.is_async_workload(next)
-                          ? BackendPools::Pool::FileSystemAsync
-                          : BackendPools::Pool::FileSystem);
-                _pools.push(pool, std::move(workloads[next]));
+                const int group = workloads[next].is_object_storage() ? -1 : assigner.group_of_workload(next);
+
+                if (workloads[next].is_object_storage())
+                {
+                    _pools.push(BackendPools::Pool::ObjectStorage, std::move(workloads[next]));
+                }
+                else if (group < 0)
+                {
+                    _pools.push(BackendPools::Pool::FileSystem, std::move(workloads[next]));
+                }
+                else
+                {
+                    // The mount picks the engine. Every task in this workload is on one mount, which
+                    // is why the group exists - see Assigner's group_by_file.
+                    ASSERT(static_cast<size_t>(group) < group_devices.size())
+                        << "async workload " << next << " has group " << group
+                        << " but only " << group_devices.size() << " mounts were probed";
+
+                    _pools.push_async(group_devices[group], std::move(workloads[next]));
+                }
             }
         }
     }
@@ -486,21 +511,25 @@ bool Streamer::is_object_storage_submission(const std::vector<FileRanges> & requ
     return false;
 }
 
-std::vector<bool> Streamer::async_files(const std::vector<FileRanges> & request)
+std::vector<int> Streamer::file_groups(const std::vector<FileRanges> & request,
+                                       std::vector<dev_t> & out_devices)
 {
-    std::vector<bool> async_by_file(request.size(), false);
+    std::vector<int> group_by_file(request.size(), -1);
+    out_devices.clear();
 
     if (!common::posix_io::is_async(_strategy_resolver->resolved()))
     {
-        return async_by_file;   // the synchronous reader serves everything
+        return group_by_file;   // the synchronous reader serves everything
     }
 
 
-    // Directory -> whether the async pool serves it. MountCapabilities caches by st_dev, which saves
-    // the statfs but NOT the stat that finds st_dev in the first place - so without this a 200-shard
-    // model in one directory would stat that directory 200 times. Per submission, because it is only
-    // ever read inside this loop.
-    std::map<std::string, bool> by_directory;
+    // Directory -> its group. MountCapabilities caches by st_dev, which saves the statfs but NOT the
+    // stat that finds st_dev in the first place - so without this a 200-shard model in one directory
+    // would stat that directory 200 times. Per submission, because it is only read inside this loop.
+    std::map<std::string, int> by_directory;
+
+    // st_dev -> group id, so two directories on the same mount share a group and therefore an engine.
+    std::map<dev_t, int> by_device;
 
     for (size_t i = 0; i < request.size(); ++i)
     {
@@ -523,23 +552,43 @@ std::vector<bool> Streamer::async_files(const std::vector<FileRanges> & request)
         const auto seen = by_directory.find(directory);
         if (seen != by_directory.end())
         {
-            async_by_file[i] = seen->second;
+            group_by_file[i] = seen->second;
             continue;
         }
 
         try
         {
-            const auto capability = _mounts.of_path(directory);
+            const auto capability = _mount_probe ? _mount_probe(directory)
+                                                 : _mounts.of_path(directory);
 
             // tmpfs and ramfs are pure memcpy with no device to overlap, so depth buys nothing and
             // parallelism does - the 16-thread pool is the right reader for them (5.12).
-            async_by_file[i] = !capability.memory_backed;
-            by_directory.emplace(directory, async_by_file[i]);
+            if (capability.memory_backed)
+            {
+                by_directory.emplace(directory, -1);
+                continue;
+            }
+
+            // One group per MOUNT, so directories sharing a mount share an engine. Groups are numbered
+            // in first-seen order, which is what makes them dense indices into out_devices.
+            const auto device = by_device.find(capability.dev);
+            if (device != by_device.end())
+            {
+                group_by_file[i] = device->second;
+            }
+            else
+            {
+                group_by_file[i] = static_cast<int>(out_devices.size());
+                by_device.emplace(capability.dev, group_by_file[i]);
+                out_devices.push_back(capability.dev);
+            }
+
+            by_directory.emplace(directory, group_by_file[i]);
         }
         catch (const common::Exception & e)
         {
             // Remembered too, so an unprobeable directory is not retried once per file.
-            by_directory.emplace(directory, false);
+            by_directory.emplace(directory, -1);
 
             // Deliberately NOT fatal. A directory we cannot stat means we cannot tell what serves it
             // best, not that the read must fail - and failing here would turn a per-file problem into
@@ -550,7 +599,7 @@ std::vector<bool> Streamer::async_files(const std::vector<FileRanges> & request)
         }
     }
 
-    return async_by_file;
+    return group_by_file;
 }
 
 common::ResponseCode Streamer::lock_object_plugin(const std::vector<FileRanges> & request)
