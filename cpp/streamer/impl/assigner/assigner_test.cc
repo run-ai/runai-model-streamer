@@ -84,6 +84,125 @@ TEST_F(AssignerTest, File_Without_Ranges)
 }
 
 // ---------------------------------------------------------------------------------------------
+// Grouping by pool - a submission's filesystem files can be served by two pools (S6b)
+// ---------------------------------------------------------------------------------------------
+
+// Every byte assigned exactly once, whatever the grouping. The internal asserts check this too, but
+// they only fire in the Assigner's own terms - this checks it from outside, per workload.
+static size_t bytes_in_workload(const Assigner & assigner, unsigned workload_index)
+{
+    size_t total = 0;
+    for (const auto & transfer : assigner.transfers())
+    {
+        for (const auto & task : transfer.tasks)
+        {
+            if (task.workload_index == workload_index)
+            {
+                total += task.size;
+            }
+        }
+    }
+    return total;
+}
+
+// The default is what every caller but the streamer passes, and it must divide exactly as before -
+// otherwise the existing tests around it stop meaning anything.
+TEST_F(AssignerTest, No_Async_Files_Divides_As_Before)
+{
+    char * const base = fake_base();
+    std::vector<FileRanges> request;
+    request.push_back(contiguous_file("/a", 0, { 4 << 20, 4 << 20 }, base));
+
+    const Assigner with_default(request, config);
+    const Assigner with_empty(request, config, {});
+
+    EXPECT_EQ(with_default.num_workloads(), with_empty.num_workloads());
+    for (unsigned i = 0; i < with_default.num_workloads(); ++i)
+    {
+        EXPECT_FALSE(with_default.is_async_workload(i));
+    }
+}
+
+// The async pool has one worker, so its files need exactly one workload however many bytes they hold.
+TEST_F(AssignerTest, Async_Files_Get_One_Workload)
+{
+    config->concurrency = 16;
+
+    char * const base = fake_base();
+    std::vector<FileRanges> request;
+    request.push_back(contiguous_file("/a", 0, std::vector<size_t>(64, 4 << 20), base));   // 256 MiB
+
+    const Assigner assigner(request, config, { true });
+
+    EXPECT_EQ(assigner.num_workloads(), 1u) << "one worker cannot use more than one workload";
+    EXPECT_TRUE(assigner.is_async_workload(0));
+}
+
+// The two groups are divided separately, and their workload indices must not collide - the dispatcher
+// routes by index, so a collision would send a file to the wrong pool.
+TEST_F(AssignerTest, Mixed_Submission_Splits_Into_Two_Groups)
+{
+    config->concurrency = 4;
+
+    char * const base = fake_base();
+    std::vector<FileRanges> request;
+    request.push_back(contiguous_file("/sync", 0, std::vector<size_t>(8, 4 << 20), base));            // file 0
+    request.push_back(contiguous_file("/async", 0, std::vector<size_t>(8, 4 << 20), base + (1 << 30)));  // file 1
+
+    const Assigner assigner(request, config, { false, true });
+
+    ASSERT_GT(assigner.num_workloads(), 1u);
+
+    unsigned sync_workloads = 0;
+    unsigned async_workloads = 0;
+    for (unsigned i = 0; i < assigner.num_workloads(); ++i)
+    {
+        (assigner.is_async_workload(i) ? async_workloads : sync_workloads) += 1;
+    }
+
+    EXPECT_EQ(async_workloads, 1u) << "the async pool has one worker";
+    EXPECT_GT(sync_workloads, 1u) << "the synchronous group should still spread";
+
+    // Every task of a workload must belong to the group that workload was assigned to - a task of the
+    // wrong file in an async workload would be read by the wrong pool.
+    for (const auto & transfer : assigner.transfers())
+    {
+        for (const auto & task : transfer.tasks)
+        {
+            EXPECT_EQ(assigner.is_async_workload(task.workload_index), transfer.file_index == 1)
+                << "file " << transfer.file_index << " landed in the wrong group";
+        }
+    }
+
+    // And nothing was lost between the groups.
+    size_t total = 0;
+    for (unsigned i = 0; i < assigner.num_workloads(); ++i)
+    {
+        total += bytes_in_workload(assigner, i);
+    }
+    EXPECT_EQ(total, static_cast<size_t>(16) * (4 << 20));
+}
+
+// A file's original index is what response attribution uses, so grouping must not renumber files.
+TEST_F(AssignerTest, Grouping_Preserves_File_Indices)
+{
+    char * const base = fake_base();
+    std::vector<FileRanges> request;
+    request.push_back(contiguous_file("/a", 0, { 1 << 20 }, base));
+    request.push_back(contiguous_file("/b", 0, { 1 << 20 }, base + (1 << 30)));
+    request.push_back(contiguous_file("/c", 0, { 1 << 20 }, base + (2 << 30)));
+
+    const Assigner assigner(request, config, { false, true, false });
+
+    std::set<unsigned> file_indices;
+    for (const auto & transfer : assigner.transfers())
+    {
+        file_indices.insert(transfer.file_index);
+    }
+    EXPECT_EQ(file_indices, (std::set<unsigned>{ 0, 1, 2 }));
+}
+
+// ---------------------------------------------------------------------------------------------
 // Coalescing - runs before any work is divided between workers
 // ---------------------------------------------------------------------------------------------
 

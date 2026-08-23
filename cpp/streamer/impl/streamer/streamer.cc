@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <limits>
 #include <numeric>
@@ -214,9 +215,19 @@ common::ResponseCode Streamer::async_request(
     // Settle which filesystem strategy this streamer uses - once, here, for the same reasons as the
     // plugin lock above: nothing is committed yet, so returning is clean, and every setter has had
     // its chance to run. Idempotent, so every later submission takes a fast path through it.
-    if (const auto ret = _strategy_resolver->resolve(); ret != common::ResponseCode::Success)
+    //
+    // ONLY for a filesystem submission. The strategy names a filesystem engine and has nothing to say
+    // about object storage, so resolving it here would let an unservable filesystem strategy reject an
+    // S3 read - failing a submission for a reason that cannot apply to it. It also means a streamer
+    // that only ever touches object storage never probes io_uring at all.
+    const bool object_storage = is_object_storage_submission(request);
+
+    if (!object_storage)
     {
-        return ret;
+        if (const auto ret = _strategy_resolver->resolve(); ret != common::ResponseCode::Success)
+        {
+            return ret;
+        }
     }
 
     // One response per range whatever its size, so total_ranges counts every range - a zero-sized one is
@@ -271,7 +282,8 @@ common::ResponseCode Streamer::async_request(
     }
 
     // divide reading between workers
-    Assigner assigner(request, _config);
+    // Object storage has no mount to probe and no strategy to consult, so it is not asked.
+    Assigner assigner(request, _config, object_storage ? std::vector<bool>{} : async_files(request));
 
     std::vector<Workload> workloads(assigner.num_workloads());
 
@@ -357,11 +369,11 @@ common::ResponseCode Streamer::async_request(
                 // Route to this workload's pool - a workload is homogeneous.
                 //
                 // The filesystem choice is the strategy resolved above, which is streamer-scoped, so
-                // it is the same for every workload of every submission. S6b makes it per file, for
-                // tmpfs and for the caller's cache mode; nothing here moves between pools afterwards.
+                // The pool was decided per file before the batches were built, and nothing moves
+                // between pools afterwards - so this only reads the answer.
                 const auto pool = workloads[next].is_object_storage()
                     ? BackendPools::Pool::ObjectStorage
-                    : (common::posix_io::is_async(_strategy_resolver->resolved())
+                    : (assigner.is_async_workload(next)
                           ? BackendPools::Pool::FileSystemAsync
                           : BackendPools::Pool::FileSystem);
                 _pools.push(pool, std::move(workloads[next]));
@@ -450,6 +462,90 @@ void Streamer::verify_requests(std::vector<FileRanges> & request)
             }
         }
     }
+}
+
+bool Streamer::is_object_storage_submission(const std::vector<FileRanges> & request)
+{
+    for (const auto & file : request)
+    {
+        // A file with no ranges reaches no storage, so it must not decide the backend - the same rule
+        // lock_object_plugin and Assigner::check_object_storage already follow.
+        if (file.ranges.empty())
+        {
+            continue;
+        }
+
+        return try_parse_uri(file.path) != nullptr;
+    }
+
+    return false;
+}
+
+std::vector<bool> Streamer::async_files(const std::vector<FileRanges> & request)
+{
+    std::vector<bool> async_by_file(request.size(), false);
+
+    if (!common::posix_io::is_async(_strategy_resolver->resolved()))
+    {
+        return async_by_file;   // the synchronous reader serves everything
+    }
+
+
+    // Directory -> whether the async pool serves it. MountCapabilities caches by st_dev, which saves
+    // the statfs but NOT the stat that finds st_dev in the first place - so without this a 200-shard
+    // model in one directory would stat that directory 200 times. Per submission, because it is only
+    // ever read inside this loop.
+    std::map<std::string, bool> by_directory;
+
+    for (size_t i = 0; i < request.size(); ++i)
+    {
+        const auto & path = request[i].path;
+
+        // A file with no ranges reaches no storage, so probing its mount would be a syscall for
+        // nothing - and would fail the probe on a path that was never going to be read.
+        if (request[i].ranges.empty())
+        {
+            continue;
+        }
+
+        // The DIRECTORY, not the file: capability belongs to the mount, so the answer is the same for
+        // every shard beside it. It also works for a file that does not exist yet, where stat'ing the
+        // file itself would fail.
+        const auto slash = path.find_last_of('/');
+        const std::string directory = (slash == std::string::npos) ? std::string(".")
+                                    : (slash == 0 ? std::string("/") : path.substr(0, slash));
+
+        const auto seen = by_directory.find(directory);
+        if (seen != by_directory.end())
+        {
+            async_by_file[i] = seen->second;
+            continue;
+        }
+
+        try
+        {
+            const auto capability = _mounts.of_path(directory);
+
+            // tmpfs and ramfs are pure memcpy with no device to overlap, so depth buys nothing and
+            // parallelism does - the 16-thread pool is the right reader for them (5.12).
+            async_by_file[i] = !capability.memory_backed;
+            by_directory.emplace(directory, async_by_file[i]);
+        }
+        catch (const common::Exception & e)
+        {
+            // Remembered too, so an unprobeable directory is not retried once per file.
+            by_directory.emplace(directory, false);
+
+            // Deliberately NOT fatal. A directory we cannot stat means we cannot tell what serves it
+            // best, not that the read must fail - and failing here would turn a per-file problem into
+            // a whole-submission one, which is exactly what the missing file itself will report
+            // later, attributably.
+            LOG(WARNING) << "Cannot probe the mount of " << directory << " (" << e.error()
+                         << "); reading " << path << " with the synchronous reader";
+        }
+    }
+
+    return async_by_file;
 }
 
 common::ResponseCode Streamer::lock_object_plugin(const std::vector<FileRanges> & request)

@@ -14,11 +14,13 @@
 namespace runai::llm::streamer::impl
 {
 
-Assigner::Assigner(const std::vector<FileRanges> & request, std::shared_ptr<const Config> config) :
+Assigner::Assigner(const std::vector<FileRanges> & request, std::shared_ptr<const Config> config,
+                   std::vector<bool> async_by_file) :
 _config(config),
 _is_object_storage(check_object_storage(request)),
 _num_workers(_is_object_storage ? _config->s3_concurrency : _config->concurrency),
-_num_workloads(0)
+_num_workloads(0),
+_async_by_file(std::move(async_by_file))
 {
     LOG(DEBUG) << "Assigning " << request.size() << " files to " << _num_workers << " workers";
 
@@ -122,26 +124,109 @@ size_t Assigner::coalesce(const std::vector<FileRanges> & request)
 
 // Divide the transfers between the workers by total bytes. A transfer larger than a worker's remaining
 // target is split, with offset and destination advancing together so every slice stays contiguous.
+//
+// Done per GROUP. A submission's filesystem files can be served by two different pools, and a group
+// must be divided for the pool that will serve it: the async pool has one worker, so one workload, while
+// the synchronous pool has `concurrency` of them. Dividing the async group 16 ways would not be wrong -
+// the window spans workloads - but each slice would leave a partial chunk at its edges.
 void Assigner::assign(size_t total_bytes_to_read)
 {
-    size_t base_bytes_remainder = 0;
-    const size_t base_bytes_per_worker = bytes_per_worker(total_bytes_to_read, base_bytes_remainder);
+    // Split the transfers by the pool that will serve them, preserving order within each group so the
+    // division below still walks a file's transfers in offset order.
+    std::vector<size_t> sync_indices;
+    std::vector<size_t> async_indices;
+    size_t sync_bytes = 0;
+    size_t async_bytes = 0;
 
-    _worker_assignments.resize(_num_workers);
-
-    size_t index = 0;     // the transfer being assigned
-    size_t consumed = 0;  // how many of its bytes are already assigned
-
-    for (unsigned workload_idx = 0; workload_idx < _num_workers && index < _transfers.size(); ++workload_idx)
+    for (size_t i = 0; i < _transfers.size(); ++i)
     {
-        const size_t target = (workload_idx == 0 ? base_bytes_per_worker + base_bytes_remainder : base_bytes_per_worker);
+        if (is_async_file(_transfers[i].file_index))
+        {
+            async_indices.push_back(i);
+            async_bytes += _transfers[i].size;
+        }
+        else
+        {
+            sync_indices.push_back(i);
+            sync_bytes += _transfers[i].size;
+        }
+    }
+
+    // Sized for the ceiling, then shrunk to what was used: the synchronous group can take up to
+    // _num_workers workloads and the async group exactly one, so _num_workers + 1 is the most any
+    // submission can need. Workload indices index into this.
+    _worker_assignments.clear();
+    _worker_assignments.resize(_num_workers + 1);
+    _async_by_workload.assign(_num_workers + 1, false);
+
+    unsigned used = 0;
+
+    // The synchronous group first, so that with no async files the workload numbering is identical to
+    // what it was before this stage - which is what keeps every existing test meaningful.
+    used += assign_group(sync_indices, _num_workers, used, sync_bytes, false);
+
+    // One worker, so one workload, however many bytes it holds.
+    used += assign_group(async_indices, 1, used, async_bytes, true);
+
+    _num_workloads = std::max(used, 1u);
+    _worker_assignments.resize(_num_workloads);
+    _async_by_workload.resize(_num_workloads);
+
+    // Verification - every byte assigned exactly once, and every transfer fully covered by its tasks
+    size_t assigned_total = 0;
+    for (const auto & assignment : _worker_assignments)
+    {
+        assigned_total += assignment.total_bytes;
+    }
+
+    ASSERT(assigned_total == total_bytes_to_read) << "Verification failed: Total bytes assigned (" << assigned_total
+        << ") does not match total bytes requested (" << total_bytes_to_read << ")";
+
+    for (size_t i = 0; i < _transfers.size(); ++i)
+    {
+        size_t transfer_total = 0;
+        for (const auto & task : _transfers[i].tasks)
+        {
+            transfer_total += task.size;
+        }
+        ASSERT(transfer_total == _transfers[i].size) << "Transfer " << i << " of file " << _transfers[i].file_index
+            << " assigned " << transfer_total << " bytes but covers " << _transfers[i].size;
+    }
+
+    LOG(DEBUG) << "Workload assignment verification successful. Total bytes assigned: " << assigned_total;
+}
+
+unsigned Assigner::assign_group(const std::vector<size_t> & indices,
+                                unsigned workers,
+                                unsigned first_workload,
+                                size_t group_bytes,
+                                bool is_async)
+{
+    if (indices.empty())
+    {
+        return 0;
+    }
+
+    size_t base_bytes_remainder = 0;
+    unsigned workloads = 0;
+    const size_t base_bytes_per_worker = bytes_per_worker_for(group_bytes, workers, base_bytes_remainder, workloads);
+
+    size_t position = 0;   // which entry of `indices` is being assigned
+    size_t consumed = 0;   // how many of its bytes are already assigned
+    unsigned used = 0;
+
+    for (unsigned slot = 0; slot < workloads && position < indices.size(); ++slot)
+    {
+        const unsigned workload_idx = first_workload + slot;
+        const size_t target = (slot == 0 ? base_bytes_per_worker + base_bytes_remainder : base_bytes_per_worker);
         size_t assigned = 0;
 
-        LOG(DEBUG) << "Assigning work to worker " << workload_idx << ", target bytes: " << target;
+        LOG(DEBUG) << "Assigning work to worker " << workload_idx << ", target bytes: " << target
+                   << (is_async ? " (async)" : " (synchronous)");
 
-        while (index < _transfers.size())
+        while (position < indices.size())
         {
-            auto & transfer = _transfers[index];
+            auto & transfer = _transfers[indices[position]];
 
             // A zero sized transfer is still given a task: its ranges are zero sized, and every range
             // owes exactly one response whatever its size.
@@ -168,43 +253,39 @@ void Assigner::assign(size_t total_bytes_to_read)
 
             if (consumed == transfer.size)
             {
-                ++index;
+                ++position;
                 consumed = 0;
             }
         }
 
+        _async_by_workload[workload_idx] = is_async;
+        used = slot + 1;
+
         LOG(DEBUG) << "Finished assignment for worker " << workload_idx << ", total bytes assigned: " << assigned;
     }
 
-    // Verification - every byte assigned exactly once, and every transfer fully covered by its tasks
-    size_t assigned_total = 0;
-    for (const auto & assignment : _worker_assignments)
-    {
-        assigned_total += assignment.total_bytes;
-    }
+    return used;
+}
 
-    ASSERT(assigned_total == total_bytes_to_read) << "Verification failed: Total bytes assigned (" << assigned_total
-        << ") does not match total bytes requested (" << total_bytes_to_read << ")";
+bool Assigner::is_async_file(unsigned file_index) const
+{
+    return file_index < _async_by_file.size() && _async_by_file[file_index];
+}
 
-    for (size_t i = 0; i < _transfers.size(); ++i)
-    {
-        size_t transfer_total = 0;
-        for (const auto & task : _transfers[i].tasks)
-        {
-            transfer_total += task.size;
-        }
-        ASSERT(transfer_total == _transfers[i].size) << "Transfer " << i << " of file " << _transfers[i].file_index
-            << " assigned " << transfer_total << " bytes but covers " << _transfers[i].size;
-    }
-
-    LOG(DEBUG) << "Workload assignment verification successful. Total bytes assigned: " << assigned_total;
+bool Assigner::is_async_workload(unsigned workload_index) const
+{
+    return workload_index < _async_by_workload.size() && _async_by_workload[workload_index];
 }
 
 // The submission's backend kind. Reading it from the first file alone is sound because a submission is
-// homogeneous by then: Streamer::lock_object_plugin rejects one that mixes filesystem with object storage
-// (or two object-storage plugins) with UnsupportedBackendMix, before an Assigner is ever constructed. That
-// is what lets one worker count and one block size cover the whole submission, and what guarantees every
-// workload is homogeneous for BackendPools::push to route.
+// homogeneous IN THIS RESPECT: Streamer::lock_object_plugin rejects one that mixes filesystem with object
+// storage (or two object-storage plugins) with UnsupportedBackendMix, before an Assigner is ever
+// constructed. That is what lets one block size cover the whole submission, and what guarantees every
+// workload is homogeneous for BackendPools::push to route between filesystem and object storage.
+//
+// It is NOT true that one worker count covers the whole submission: the filesystem side splits between
+// the synchronous pool and the async one, and each group is divided for the pool that will serve it - see
+// assign(). Only the object-storage-versus-filesystem axis is submission-wide.
 bool Assigner::check_object_storage(const std::vector<FileRanges> & request) const
 {
     // The first file WITH RANGES decides. A file with no ranges yields no transfer and reaches no storage,
@@ -243,24 +324,29 @@ unsigned Assigner::get_num_workers() const
     return _num_workers;
 }
 
-size_t Assigner::bytes_per_worker(size_t total_bytes_to_read, size_t & remainder_bytesize)
+// How many bytes each workload of a group should aim for, and how many workloads the group needs.
+//
+// Deliberately pure: writing _num_workloads as a side effect cannot work once there is more than one
+// group, so each group computes its own count and the caller adds them up.
+size_t Assigner::bytes_per_worker_for(size_t group_bytes, unsigned max_workers,
+                                      size_t & remainder_bytesize, unsigned & workloads)
 {
-    size_t block_bytesize = _is_object_storage ? _config->s3_block_bytesize : _config->fs_sync_read_block_bytesize;
-    size_t num_blocks = total_bytes_to_read / block_bytesize;
+    const size_t block_bytesize = _is_object_storage ? _config->s3_block_bytesize : _config->fs_sync_read_block_bytesize;
+    const size_t num_blocks = group_bytes / block_bytesize;
 
-    // zero size files are assigned to one worker
-    // this is because zero size files may contain zero size tensors, which we still need to send response for
-    _num_workloads = std::max(std::min(num_blocks, static_cast<size_t>(_num_workers)), 1UL);
-    size_t base_bytes_per_worker = num_blocks / _num_workloads * block_bytesize;
+    // Zero-sized files are assigned to one worker: they may hold zero-sized tensors, and every range
+    // owes a response whatever its size.
+    workloads = static_cast<unsigned>(std::max(std::min(num_blocks, static_cast<size_t>(max_workers)), 1UL));
 
-    remainder_bytesize = total_bytes_to_read - _num_workloads * base_bytes_per_worker;
+    const size_t base_bytes_per_worker = num_blocks / workloads * block_bytesize;
+    remainder_bytesize = group_bytes - workloads * base_bytes_per_worker;
 
-    LOG(DEBUG) << "Total bytes: " << total_bytes_to_read
-                << ", Block bytesize: " << block_bytesize
-                << ", Num blocks: " << num_blocks
-                << ", Num workers: " << _num_workloads << " out of " << _num_workers
-                << ", Base bytes/worker: " << base_bytes_per_worker
-                << ", Remainder bytesize: " << remainder_bytesize;
+    LOG(DEBUG) << "Group bytes: " << group_bytes
+               << ", Block bytesize: " << block_bytesize
+               << ", Num blocks: " << num_blocks
+               << ", Num workloads: " << workloads << " out of " << max_workers
+               << ", Base bytes/worker: " << base_bytes_per_worker
+               << ", Remainder bytesize: " << remainder_bytesize;
 
     return base_bytes_per_worker;
 }

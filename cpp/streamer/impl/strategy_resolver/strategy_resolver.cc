@@ -35,12 +35,12 @@ common::ResponseCode availability_of(Strategy strategy)
              : common::posix_io::IoUringProbe::instance().capability().error;
 
     case Strategy::IoUringDirect:
-        // The ring is available but the direct path is not written yet (S7). Reported as unavailable
+        // The ring is available but the direct path is not written yet. Reported as unavailable
         // rather than served buffered under a direct name, which would look like it worked.
         return common::ResponseCode::UnsupportedBackendMix;
 
     case Strategy::LibaioDirect:
-        return common::ResponseCode::UnsupportedBackendMix;   // no libaio engine yet (S8)
+        return common::ResponseCode::UnsupportedBackendMix;   // no libaio engine yet
     }
 
     return common::ResponseCode::UnknownError;

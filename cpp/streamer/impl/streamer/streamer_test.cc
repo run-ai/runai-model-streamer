@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include <cstring>
+#include <cstdlib>
 #include <atomic>
 #include <string>
 #include <utility>
@@ -158,6 +159,45 @@ TEST(Async, ReadsThroughIoUringWhenResolvedToIt)
     // What was CHOSEN above; what was USED here. Without this, a dispatch that ignored the resolved
     // strategy and sent everything to the threadpool would pass every assertion in this test.
     EXPECT_EQ(streamer.async_pool_used(), expect_async);
+
+    EXPECT_EQ(std::vector<char>(dst.begin(), dst.end()),
+              std::vector<char>(data.begin(), data.end()));
+}
+
+// tmpfs is pure memcpy: there is no device to overlap, so depth buys nothing and parallelism does.
+// It goes to the 16-thread pool however the strategy resolved - which is the routing rule that needs
+// the mount probe at all.
+TEST(Async, TmpfsGoesToTheSynchronousPool)
+{
+    if (::system("test \"$(stat -f -c %T /dev/shm)\" = tmpfs") != 0)
+    {
+        GTEST_SKIP() << "/dev/shm is not tmpfs here, so there is no memory-backed mount to route from";
+    }
+
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("io_uring_buffered,sync_buffered"));
+
+    const auto data = utils::random::buffer(1 << 20);
+    utils::temp::File file("/dev/shm", utils::random::string(), data);
+
+    std::vector<char> dst(data.size());
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), dst.data() });
+
+    Streamer streamer;
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+    EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+
+    // The strategy still resolves to io_uring - the mount decides the POOL, not the strategy.
+    if (ring_works())
+    {
+        EXPECT_EQ(streamer.fs_strategy(), common::posix_io::Strategy::IoUringBuffered);
+    }
+
+    EXPECT_FALSE(streamer.async_pool_used())
+        << "a tmpfs file must not be read through the ring";
 
     EXPECT_EQ(std::vector<char>(dst.begin(), dst.end()),
               std::vector<char>(data.begin(), data.end()));

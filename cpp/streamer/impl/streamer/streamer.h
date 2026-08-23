@@ -20,6 +20,7 @@
 #include "streamer/impl/request/request.h"
 #include "streamer/impl/submissions/submissions_mgr.h"
 #include "streamer/impl/pools/backend_pools.h"
+#include "common/posix_io/mount_capabilities/mount_capabilities.h"
 #include "streamer/impl/strategy_resolver/strategy_resolver.h"
 
 namespace runai::llm::streamer::impl
@@ -111,6 +112,19 @@ struct Streamer
     // object storage, mixes two object-storage plugins, or uses a plugin differing from the lock; else
     // Success.
     common::ResponseCode lock_object_plugin(const std::vector<FileRanges> & request);
+
+    // Which files the async pool will serve, by file index. Decided BEFORE batches are built, from
+    // one stat per distinct directory rather than one per file - a 200-shard model shares a
+    // directory, so that is one syscall rather than 200.
+    //
+    // Never fails a submission: a directory that cannot be probed falls back to the synchronous
+    // reader for that file, which is where it would have gone before this stage anyway.
+    std::vector<bool> async_files(const std::vector<FileRanges> & request);
+
+    // Whether this submission reads object storage. The first file WITH RANGES decides, as everywhere
+    // else: lock_object_plugin has already rejected a submission that mixes the two, so it is
+    // homogeneous by the time anything asks.
+    bool is_object_storage_submission(const std::vector<FileRanges> & request);
     // Build the object-storage params for a batch. Credentials are NOT included here (they are read only at
     // client creation, from credentials()); the batch params carry the URI, which is all the per-read path uses.
     common::s3::S3ClientWrapper::Params handle_s3(unsigned file_index, const std::string & path);
@@ -164,6 +178,10 @@ struct Streamer
     // pool's factory reads the resolved strategy when it builds its worker, and holding the state by
     // value keeps it alive regardless of destruction order. Neither factory captures `this`.
     std::shared_ptr<StrategyResolver> _strategy_resolver;
+
+    // Mount capabilities, probed once per mount and cached. Consulted per submission to decide which
+    // files the async pool serves - tmpfs goes to the synchronous pool however the strategy resolved.
+    common::posix_io::MountCapabilities _mounts;
 
     std::unique_ptr<S3Cleanup> _s3;
     // Lazily-created worker pools, one per backend kind. Occupies the slot the single ThreadPool used

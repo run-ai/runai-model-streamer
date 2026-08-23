@@ -87,8 +87,8 @@ class BackendPools
     std::once_flag _filesystem_once;
     std::unique_ptr<utils::ThreadPool<Workload>> _filesystem_pool;
 
-    // One worker, so one engine per streamer. S6d makes this one per mount, keyed on st_dev - which
-    // is why the member is named for the pool rather than for the engine inside it.
+    // One worker, so one engine per streamer. Intended to become one engine per mount, keyed on
+    // st_dev - which is why the member is named for the pool rather than for the engine inside it.
     std::once_flag _filesystem_async_once;
     std::unique_ptr<utils::ThreadPool<Workload>> _filesystem_async_pool;
 

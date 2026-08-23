@@ -48,8 +48,8 @@ struct Config
     static constexpr unsigned default_fs_async_queue_depth = 512;
 
     // The synchronous reader, until a measurement says otherwise. io_uring is reachable only by
-    // asking for it: S5's exit criterion is an A/B against the threadpool, and defaulting to the new
-    // path before that would decide by omission what the measurement is meant to decide.
+    // asking for it: the async path must earn the default with an A/B against the threadpool, and
+    // defaulting to it beforehand would decide by omission what the measurement is meant to decide.
     static constexpr const char * default_fs_strategy_candidates = "sync_buffered";
 
     unsigned concurrency;
