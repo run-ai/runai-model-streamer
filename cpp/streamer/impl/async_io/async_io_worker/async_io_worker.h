@@ -10,6 +10,7 @@
 
 #include "common/posix_io/engine_factory/engine_factory.h"
 #include "common/posix_io/io_engine/io_engine.h"
+#include "common/posix_io/scratch_pool/scratch_pool.h"
 #include "common/posix_io/strategy/strategy.h"
 #include "common/response_code/response_code.h"
 
@@ -62,6 +63,22 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     explicit AsyncIoWorker(common::posix_io::Strategy strategy,
                            EngineFactory factory = common::posix_io::make_io_engine);
     ~AsyncIoWorker() override;
+
+    // Bytes copied out of a scratch buffer, over this worker's life.
+    //
+    // THIS is the cost of direct reads, not the number of passes: a pass that copies 24 bytes and one
+    // that copies 4096 are not the same thing. The bound that matters is per region - at most one
+    // partial block at each end, so at most 2 x block whatever the region's size. That is what makes
+    // the cost about 0.1% of an 8 MiB region rather than a share of every chunk.
+    //
+    // Expected to be a small constant per region on the CPU pool path, and ZERO once destinations are
+    // placed congruently with room to spare. A number that grows with the bytes read means the
+    // placement has stopped working and every read is being copied.
+    size_t bounced_bytes() const;
+
+    // Every byte delivered to a caller by this worker. Only useful beside bounced_bytes(): the ratio
+    // is what says whether direct reads are working.
+    size_t bytes_read() const;
 
  protected:
     // Builds the engine and returns the window size, on the FIRST workload.
@@ -179,6 +196,42 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     // failure.
     bool wants_direct(size_t file_offset, const char * buffer) const;
 
+    // What one pass of a DIRECT read should ask the kernel for.
+    //
+    // A direct read needs offset, length and address to be block multiples, and a region rarely starts
+    // or ends on a block boundary. So a pass is one of three, decided from the two numbers the chunk
+    // already carries - no state, no phase:
+    //
+    //   cursor not on a block boundary   HEAD    one block into scratch, copy from (cursor % block)
+    //   on a boundary, >= a block left   MIDDLE  whole blocks, straight into the destination
+    //   on a boundary, < a block left    TAIL    one block into scratch, copy what is left
+    //
+    // The existing re-stage loop then walks head -> middle -> tail by itself, because each pass
+    // advances the cursor and the next pass looks at it afresh.
+    //
+    // Returns false when a scratch buffer was needed and none was free. The caller then leaves the
+    // read buffered rather than failing it.
+    struct DirectPass
+    {
+        size_t offset = 0;      // what to ask the kernel for
+        size_t bytesize = 0;
+        char * buffer = nullptr;
+
+        char * scratch = nullptr;   // null when the pass goes straight to the destination
+        size_t skip = 0;            // where the wanted bytes start inside the scratch
+        size_t wanted = 0;          // how many of them this pass yields
+    };
+
+    bool plan_direct_pass(const Chunk & pending, size_t block, DirectPass & out);
+
+    // Copy a bounced pass out of its scratch buffer, give the buffer back, and return how many WANTED
+    // bytes arrived.
+    //
+    // The conversion matters: the kernel reports a whole block, but only part of it was asked for.
+    // Recording the raw count would advance the cursor past bytes that were never delivered, and the
+    // read would silently skip data.
+    size_t land_bounced_pass(common::posix_io::RequestId id, size_t bytes_transferred);
+
     void finalize(InflightMap::iterator it, common::ResponseCode code);
 
     // Wait until no read is still in flight, so no destination can be written after its range is
@@ -194,6 +247,10 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     // retries - though a failure here is permanent in practice.
     common::ResponseCode _engine_error = common::ResponseCode::UnknownError;
 
+    // Block-sized buffers for the partial blocks at the edges of a region. Empty on a buffered
+    // engine, which never bounces.
+    std::unique_ptr<common::posix_io::ScratchPool> _scratch;
+
     std::optional<AsyncIoSettings> _settings;          // resolved with the engine, on the first workload
     std::unique_ptr<common::posix_io::IoEngine> _engine;
 
@@ -206,6 +263,16 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     // with nothing issued waits on an empty ring for a completion that will never arrive. When this is
     // zero the wait must be NonBlocking.
     size_t _issued = 0;
+
+    // Bytes copied out of scratch. See bounced_bytes().
+    size_t _bounced_bytes = 0;
+
+    // Every byte delivered, bounced or not. Only meaningful next to _bounced_bytes: the RATIO is what
+    // says whether direct reads are working, and a count of copied bytes alone cannot say that.
+    size_t _bytes_read = 0;
+
+    // So the warning below is said once, not once per workload.
+    bool _warned_about_bouncing = false;
 
     // Harvested into on every drain, sized once - nothing is allocated while completing.
     std::vector<common::posix_io::Completion> _completions;

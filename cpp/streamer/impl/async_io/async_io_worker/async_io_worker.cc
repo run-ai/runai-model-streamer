@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <utility>
@@ -91,6 +92,15 @@ std::size_t AsyncIoWorker::capacity(const Workload & first)
 
     // Harvest into a buffer sized once - nothing is allocated while completing.
     _completions.resize(_engine->depth());
+
+    // One block-sized buffer per in-flight read, so a bounced pass can always get one and there is no
+    // limit to enforce. At depth 512 and a 4096-byte block that is 2 MB. Only a direct strategy ever
+    // bounces, so a buffered engine builds none.
+    if (common::posix_io::is_direct(_strategy))
+    {
+        _scratch = std::make_unique<common::posix_io::ScratchPool>(
+            _engine->depth(), common::posix_io::block_size(_engine->limits()));
+    }
 
     return _engine->depth();
 }
@@ -178,6 +188,98 @@ bool AsyncIoWorker::wants_direct(size_t file_offset, const char * buffer) const
     return true;
 }
 
+bool AsyncIoWorker::plan_direct_pass(const Chunk & pending, size_t block, DirectPass & out)
+{
+    const size_t head = pending.offset % block;
+
+    if (head != 0)
+    {
+        // The cursor is inside a block. Read that whole block into scratch and copy out the part that
+        // was asked for - which may be the whole rest of the block, or less if the chunk ends inside
+        // it.
+        char * scratch = _scratch == nullptr ? nullptr : _scratch->take();
+        if (scratch == nullptr)
+        {
+            return false;
+        }
+
+        out.offset = pending.offset - head;
+        out.bytesize = block;
+        out.buffer = scratch;
+        out.scratch = scratch;
+        out.skip = head;
+        out.wanted = std::min(block - head, pending.bytesize);
+        return true;
+    }
+
+    if (pending.bytesize >= block)
+    {
+        // On a boundary with at least a block to read: whole blocks, straight into the destination.
+        // This is the case that costs nothing, and it is every chunk in the middle of a region.
+        out.offset = pending.offset;
+        out.bytesize = pending.bytesize - (pending.bytesize % block);
+        out.buffer = pending.buffer;
+        return true;
+    }
+
+    // On a boundary with less than a block left: the tail. One block into scratch, keep what is owed.
+    char * scratch = _scratch == nullptr ? nullptr : _scratch->take();
+    if (scratch == nullptr)
+    {
+        return false;
+    }
+
+    out.offset = pending.offset;
+    out.bytesize = block;
+    out.buffer = scratch;
+    out.scratch = scratch;
+    out.skip = 0;
+    out.wanted = pending.bytesize;
+    return true;
+}
+
+size_t AsyncIoWorker::bounced_bytes() const
+{
+    return _bounced_bytes;
+}
+
+size_t AsyncIoWorker::bytes_read() const
+{
+    return _bytes_read;
+}
+
+size_t AsyncIoWorker::land_bounced_pass(common::posix_io::RequestId id, size_t bytes_transferred)
+{
+    auto * entry = _chunks.find_mutable(id);
+    ASSERT(entry != nullptr) << "landing a bounced pass for an unknown request " << id;
+
+    if (entry->scratch == nullptr)
+    {
+        return bytes_transferred;   // not bounced; the bytes are already where they belong
+    }
+
+    // What the kernel gave us minus the part we did not ask for. A short read can land inside the
+    // skipped head, in which case nothing wanted arrived at all.
+    const size_t useful = bytes_transferred <= entry->scratch_skip
+                        ? 0
+                        : std::min(entry->scratch_wanted, bytes_transferred - entry->scratch_skip);
+
+    if (useful > 0)
+    {
+        // pending() gives the destination for the cursor, which is where these bytes belong.
+        const auto pending = _chunks.pending(id);
+        std::memcpy(pending.buffer, entry->scratch + entry->scratch_skip, useful);
+
+        // Counted where the copy happens, so the number is the bytes actually moved rather than an
+        // estimate from the request sizes. A pass reads a whole block but copies only what was asked
+        // for.
+        _bounced_bytes += useful;
+    }
+
+    _scratch->give(_chunks.clear_bounce(id));
+    return useful;
+}
+
 int AsyncIoWorker::fd_for(Inflight & wl, unsigned batch_index, size_t file_offset, const char * buffer,
                           common::ResponseCode & out_error)
 {
@@ -257,12 +359,38 @@ void AsyncIoWorker::stage_pending(common::posix_io::RequestId id)
     }
 
     // What the file WAS opened as, not what the strategy wanted. A direct open can fall back per file.
-    const common::posix_io::FileRef file{ fd, wlit->second.fds[entry->batch_index].direct };
+    const bool direct = wlit->second.fds[entry->batch_index].direct;
+    const common::posix_io::FileRef file{ fd, direct };
 
-    const auto ret = _engine->stage(id, file, pending.offset, pending.bytesize, pending.buffer);
+    // A buffered read is issued exactly as asked. A direct one is cut to what the kernel will accept,
+    // which may mean reading one block into scratch and copying the wanted part out.
+    auto pass = DirectPass{ pending.offset, pending.bytesize, pending.buffer, nullptr, 0, 0 };
+
+    if (direct && !plan_direct_pass(pending, common::posix_io::block_size(_engine->limits()), pass))
+    {
+        // No scratch was free. Not expected - there is one per in-flight read - but failing the whole
+        // read over it would be worse than reading a little less this pass.
+        LOG(WARNING) << "No scratch buffer for a direct read at offset " << pending.offset
+                     << "; the pool is sized to the window, so this should not happen";
+        complete_chunk(id, common::ResponseCode::UnknownError);
+        return;
+    }
+
+    if (pass.scratch != nullptr)
+    {
+        _chunks.set_bounce(id, pass.scratch, pass.skip, pass.wanted);
+    }
+
+    const auto ret = _engine->stage(id, file, pass.offset, pass.bytesize, pass.buffer);
     if (ret != common::ResponseCode::Success)
     {
-        // Not staged, so no completion will arrive for it - this worker has to resolve it.
+        // Not staged, so no completion will arrive for it - this worker has to resolve it. Give the
+        // scratch back first: nothing else will, and a leaked buffer drains the pool.
+        if (char * scratch = _chunks.clear_bounce(id))
+        {
+            _scratch->give(scratch);
+        }
+
         complete_chunk(id, ret);
     }
 }
@@ -330,11 +458,22 @@ void AsyncIoWorker::drain_batch(std::atomic<bool> & stopped)
 
         if (completion.ret != common::ResponseCode::Success)
         {
+            // Give the scratch back before failing, or the pool drains one buffer per failed read.
+            if (char * scratch = _chunks.clear_bounce(completion.id))
+            {
+                _scratch->give(scratch);
+            }
+
             complete_chunk(completion.id, completion.ret);
             continue;
         }
 
-        switch (_chunks.record(completion.id, completion.bytes_transferred))
+        // A bounced pass read a whole block but only part of it was asked for. Converting here, before
+        // record(), is what stops the cursor advancing past bytes that never arrived.
+        const size_t useful = land_bounced_pass(completion.id, completion.bytes_transferred);
+        _bytes_read += useful;
+
+        switch (_chunks.record(completion.id, useful))
         {
         case Progress::Complete:
             complete_chunk(completion.id, common::ResponseCode::Success);
@@ -434,6 +573,38 @@ void AsyncIoWorker::finalize(InflightMap::iterator it, common::ResponseCode code
 {
     report_workload(it->second, code);
 
+    // Cumulative for this worker, not for this workload: workloads overlap in one window, so bytes
+    // cannot be attributed to one of them. Per-submission numbers need the counters to reach the
+    // streamer, which is a later step.
+    LOG(DEBUG) << "Async io worker: " << _bytes_read << " bytes read, " << _bounced_bytes
+               << " copied through scratch";
+
+    // The number that decides whether direct reads are worth having.
+    //
+    // Expected near zero: a region copies at most one partial block at each end, so about 0.1% of an
+    // 8 MiB region. A large share means destinations are no longer congruent with their file offsets,
+    // and then EVERY byte is copied - by this one thread - which is slower than reading buffered.
+    //
+    // There is no error for this. The reads all succeed. Without this line the only symptom is that
+    // the model loads slowly, which is not a symptom anyone can act on.
+    // Not judged before enough has been read. A region copies at most one partial block at each end,
+    // so a SMALL region is legitimately a large share - a 9 KB region with a 4096 block can be half
+    // copied while everything is working exactly as designed. Judging that would warn about nothing on
+    // any model with many small tensors.
+    //
+    // 64 MiB is a few regions at the default chunk size, which is enough for the ratio to mean
+    // something.
+    constexpr size_t EnoughToJudge = 64ul << 20;
+
+    if (!_warned_about_bouncing && _bytes_read >= EnoughToJudge && _bounced_bytes * 100 > _bytes_read)
+    {
+        _warned_about_bouncing = true;
+        LOG(WARNING) << "More than 1% of bytes read are being copied through a scratch buffer ("
+                     << _bounced_bytes << " of " << _bytes_read << "). Destinations are probably not"
+                     << " congruent with their file offsets, which makes direct reads copy everything."
+                     << " Buffered reads would be faster.";
+    }
+
     for (auto & batch_fd : it->second.fds)
     {
         if (batch_fd.fd >= 0)
@@ -505,6 +676,13 @@ void AsyncIoWorker::abort_all(common::ResponseCode code)
     while (!_inflight.empty())
     {
         finalize(_inflight.begin(), code);
+    }
+
+    // Every buffer still held by an abandoned pass. clear() forgets the chunks, so this must come
+    // first or the pool would be empty for the rest of the streamer's life.
+    if (_scratch != nullptr)
+    {
+        _chunks.release_all_scratch([this](char * scratch) { _scratch->give(scratch); });
     }
 
     _chunks.clear();

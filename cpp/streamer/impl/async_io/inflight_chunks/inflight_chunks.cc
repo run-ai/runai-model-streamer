@@ -79,6 +79,55 @@ Chunk InflightChunks::release(common::posix_io::RequestId id)
     return chunk;
 }
 
+void InflightChunks::set_bounce(common::posix_io::RequestId id, char * scratch, size_t skip, size_t wanted)
+{
+    const auto it = _chunks.find(id);
+    ASSERT(it != _chunks.end()) << "no in-flight chunk for request " << id;
+
+    ASSERT(it->second.scratch == nullptr)
+        << "request " << id << " already holds a scratch buffer - a pass was staged without landing";
+
+    it->second.scratch = scratch;
+    it->second.scratch_skip = skip;
+    it->second.scratch_wanted = wanted;
+}
+
+char * InflightChunks::clear_bounce(common::posix_io::RequestId id)
+{
+    const auto it = _chunks.find(id);
+    if (it == _chunks.end())
+    {
+        return nullptr;   // already released; nothing was held
+    }
+
+    char * scratch = it->second.scratch;
+    it->second.scratch = nullptr;
+    it->second.scratch_skip = 0;
+    it->second.scratch_wanted = 0;
+    return scratch;
+}
+
+InflightChunk * InflightChunks::find_mutable(common::posix_io::RequestId id)
+{
+    const auto it = _chunks.find(id);
+    return it == _chunks.end() ? nullptr : &it->second;
+}
+
+void InflightChunks::release_all_scratch(const std::function<void(char *)> & give)
+{
+    for (auto & [id, entry] : _chunks)
+    {
+        (void)id;
+        if (entry.scratch != nullptr)
+        {
+            give(entry.scratch);
+            entry.scratch = nullptr;
+            entry.scratch_skip = 0;
+            entry.scratch_wanted = 0;
+        }
+    }
+}
+
 void InflightChunks::clear()
 {
     _chunks.clear();   // _next_id is deliberately not reset

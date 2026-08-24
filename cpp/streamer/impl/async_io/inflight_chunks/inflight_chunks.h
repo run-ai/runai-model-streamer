@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <map>
 
 #include "common/posix_io/io_engine/io_engine.h"
@@ -34,6 +35,19 @@ struct InflightChunk
     // erased workload simply fails to resolve and is dropped.
     uint64_t workload_id = 0;
     unsigned batch_index = 0;   // into the workload's batches; chunk.first_task is batch-local
+
+    // Set only while a BOUNCED pass is in flight, and cleared when it lands.
+    //
+    // A direct read needs its offset, length and address to be block multiples. The first and last
+    // block of a region are rarely whole, so those passes read one block into a scratch buffer and the
+    // wanted bytes are copied out. Everything between is read straight into the destination and none
+    // of these are set.
+    //
+    // `scratch` is borrowed from ScratchPool and must be given back when the pass lands, on every path
+    // including failure - otherwise the pool drains and later reads fall back to buffered.
+    char * scratch = nullptr;
+    size_t scratch_skip = 0;    // where the wanted bytes start inside the scratch buffer
+    size_t scratch_wanted = 0;  // how many of them this pass yields
 };
 
 // What a completion meant for the chunk it belongs to.
@@ -77,6 +91,9 @@ class InflightChunks
     // completion to drop or its own bookkeeping gone wrong, so it must check find() first.
     Progress record(common::posix_io::RequestId id, size_t bytes_transferred);
 
+    // Note the three scratch fields describe the CURRENT PASS, not the chunk. A chunk with a partial
+    // head and a partial tail bounces twice, with a direct pass in between, and each sets them afresh.
+
     // What still has to be read for `id`: where to resume, how much is left, and where it goes. Only
     // meaningful after a Partial.
     Chunk pending(common::posix_io::RequestId id) const;
@@ -86,6 +103,23 @@ class InflightChunks
 
     // Forget everything, for teardown. Ids are not rewound, so a completion for a dropped request
     // still finds nothing rather than colliding with a later one.
+    // Record that this pass reads into `scratch`, and which part of it is wanted. Cleared by
+    // clear_bounce() when the pass lands.
+    void set_bounce(common::posix_io::RequestId id, char * scratch, size_t skip, size_t wanted);
+
+    // Forget the current pass's scratch, and return what it was so the caller can give it back. Null
+    // when the pass was not bounced. Safe to call on every path, including failure - which is the
+    // point, since a leaked buffer drains the pool.
+    char * clear_bounce(common::posix_io::RequestId id);
+
+    // Mutable access for the worker, which needs the scratch fields to copy out of. Const would mean
+    // a second lookup to clear them.
+    InflightChunk * find_mutable(common::posix_io::RequestId id);
+
+    // Hand back every scratch buffer still held, then forget them. For teardown: clear() drops the
+    // chunks, so without this the buffers would be lost and the pool empty for good.
+    void release_all_scratch(const std::function<void(char *)> & give);
+
     void clear();
 
     size_t size() const;

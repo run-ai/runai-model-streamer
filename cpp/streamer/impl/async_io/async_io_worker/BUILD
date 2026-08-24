@@ -6,6 +6,7 @@ runai_cc_auto_library(
         "//common/posix_io/engine_factory",
         "//common/posix_io/alignment",
         "//common/posix_io/io_engine",
+        "//common/posix_io/scratch_pool",
         "//common/posix_io/strategy",
         "//common/exception",
         "//streamer/impl/async_io/async_io_settings",

@@ -39,16 +39,19 @@ constexpr size_t ChunkSize = 4096;
 // is the layout a model read produces.
 struct Fixture
 {
-    explicit Fixture(const std::vector<size_t> & range_sizes, unsigned concurrency = 1) :
+    // `start` is the file offset the first range reads from. Non-zero puts the region out of step
+    // with the block boundary, which is what makes a direct read need its edges bounced.
+    explicit Fixture(const std::vector<size_t> & range_sizes, unsigned concurrency = 1, size_t start = 0,
+                     unsigned long queue_depth = 1024UL) :
         concurrency(std::string("RUNAI_STREAMER_CONCURRENCY"), static_cast<unsigned long>(concurrency)),
         chunk_bytesize(std::string("RUNAI_STREAMER_FS_CHUNK_BYTESIZE"), static_cast<unsigned long>(ChunkSize)),
-        depth(std::string("RUNAI_STREAMER_FS_QUEUE_DEPTH"), 1024UL),
+        depth(std::string("RUNAI_STREAMER_FS_QUEUE_DEPTH"), queue_depth),
         group(std::string("RUNAI_STREAMER_PROCESS_GROUP_SIZE"), 1UL),
         sizes(range_sizes),
         total(std::accumulate(range_sizes.begin(), range_sizes.end(), static_cast<size_t>(0))),
         config(std::make_shared<Config>(false /* do not force minimum */)),
         responder(std::make_shared<common::Responder>(0)),
-        data(utils::random::buffer(total == 0 ? 1 : total)),
+        data(utils::random::buffer(start + (total == 0 ? 1 : total))),
         file(data),
         buffer(total == 0 ? 1 : total)
     {
@@ -56,7 +59,7 @@ struct Fixture
 
         FileRanges ranges;
         ranges.path = file.path;
-        size_t offset = 0;
+        size_t offset = start;
         char * dst = buffer.data();
         for (const auto size : sizes)
         {
@@ -146,6 +149,9 @@ struct Driver
     void route() { worker.drain(stopped); }
 
     std::vector<common::posix_io::RequestId> in_flight() { return engine->in_flight(); }
+
+    size_t worker_bounced_bytes() const { return worker.bounced_bytes(); }
+    size_t worker_bytes_read() const { return worker.bytes_read(); }
 
     std::atomic<bool> stopped{ false };
     AsyncIoWorker worker;
@@ -435,6 +441,326 @@ TEST(AsyncIoWorker, Buffered_Strategy_Never_Opens_Direct)
 
     const auto id = driver.engine->staged().front();
     EXPECT_FALSE(driver.engine->request(id).file.direct);
+}
+
+// The case edge bouncing exists for: a region that does not start on a block boundary.
+//
+// The first pass cannot be issued as asked - its offset is not a block multiple - so it reads the
+// whole block into scratch and copies out the part that was wanted. The mock fills from the ABSOLUTE
+// file offset, so the bytes prove the copy came from the right place.
+TEST(AsyncIoWorker, Direct_Bounces_A_Partial_Head)
+{
+    constexpr size_t Block = 4096;
+    constexpr size_t Start = 1000;   // 1000 bytes into a block
+
+    // A destination whose remainder matches the file offset - congruent, so direct is possible.
+    std::vector<char> raw(4 * ChunkSize + 2 * Block);
+    char * const base = raw.data() + ((-reinterpret_cast<uintptr_t>(raw.data())) % Block);
+    char * const dst = base + Start;
+
+    Fixture fixture({ ChunkSize }, 1, Start);
+    fixture.request[0].ranges[0].dst = dst;
+
+    Driver driver(Strategy::IoUringDirect, Block);
+    driver.execute(fixture.workload());
+
+    // Two chunks, because this fixture's chunk size equals the block: the range crosses a chunk
+    // boundary at 4096. The FIRST is the one with the partial head.
+    ASSERT_EQ(driver.engine->staged_count(), 2u);
+    const auto id = driver.engine->staged().front();
+
+    // What the kernel was actually asked for: rounded down, one whole block, into scratch.
+    const auto & staged = driver.engine->request(id);
+    EXPECT_TRUE(staged.file.direct);
+    EXPECT_EQ(staged.offset, 0u) << "rounded down to the block below 1000";
+    EXPECT_EQ(staged.bytesize, Block);
+    EXPECT_NE(staged.buffer, dst) << "a bounced pass must not read into the destination";
+    EXPECT_EQ(reinterpret_cast<uintptr_t>(staged.buffer) % Block, 0u) << "scratch must be aligned";
+
+    // Walk it to completion. A partial region takes at most three passes - head, middle, tail - and
+    // extra rounds are harmless because nothing is left staged.
+    for (int round = 0; round < 4; ++round)
+    {
+        driver.issue();
+        driver.engine->complete_all();
+        driver.route();
+    }
+
+    const auto responses = drain_responses(*fixture.responder, 1);
+    EXPECT_EQ(responses.front().ret, common::ResponseCode::Success);
+
+    // The bytes the caller asked for, from the offset it asked for.
+    const std::vector<char> got(dst, dst + ChunkSize);
+    EXPECT_EQ(got, fixture.expected_at(Start, ChunkSize));
+}
+
+// A head pass that does NOT finish the chunk. This is what separates recording the WANTED bytes from
+// recording what the kernel returned.
+//
+// With a 512-byte block, a chunk starting 1000 bytes in has only 24 useful bytes in its first block.
+// The kernel returns 512. Recording 512 would move the cursor 488 bytes too far, and those bytes would
+// never be read - no error anywhere, just wrong data.
+TEST(AsyncIoWorker, Bounced_Head_Advances_By_The_Wanted_Bytes)
+{
+    constexpr size_t Block = 512;
+    constexpr size_t Start = 1000;
+
+    std::vector<char> raw(4 * ChunkSize + 2 * Block);
+    char * const base = raw.data() + ((-reinterpret_cast<uintptr_t>(raw.data())) % Block);
+    char * const dst = base + (Start % Block);   // congruent for THIS block size
+
+    Fixture fixture({ ChunkSize }, 1, Start);
+    fixture.request[0].ranges[0].dst = dst;
+
+    Driver driver(Strategy::IoUringDirect, Block);
+    driver.execute(fixture.workload());
+
+    const auto first = driver.engine->staged().front();
+    const auto & staged = driver.engine->request(first);
+    EXPECT_EQ(staged.bytesize, Block) << "one block, however much of it is wanted";
+    EXPECT_EQ(staged.offset, Start - (Start % Block));
+
+    // Several passes: the head yields 24 bytes, then whole blocks, then a tail.
+    for (int round = 0; round < 12; ++round)
+    {
+        driver.issue();
+        driver.engine->complete_all();
+        driver.route();
+    }
+
+    EXPECT_EQ(drain_responses(*fixture.responder, 1).front().ret, common::ResponseCode::Success);
+
+    // Every byte, from the right place. A cursor that ran ahead would leave a hole here.
+    EXPECT_EQ(std::vector<char>(dst, dst + ChunkSize), fixture.expected_at(Start, ChunkSize));
+}
+
+// A pass that starts on a block boundary with at least a block to read goes STRAIGHT into the
+// destination. This is every chunk in the middle of a region, and it is why the cost is 0.1% rather
+// than everything.
+TEST(AsyncIoWorker, Direct_Middle_Is_Not_Bounced)
+{
+    constexpr size_t Block = 4096;
+
+    std::vector<char> raw(4 * ChunkSize + Block);
+    char * const dst = raw.data() + ((-reinterpret_cast<uintptr_t>(raw.data())) % Block);
+
+    Fixture fixture({ ChunkSize }, 1, 0);   // starts on a boundary, and ChunkSize is a block multiple
+    fixture.request[0].ranges[0].dst = dst;
+
+    Driver driver(Strategy::IoUringDirect, Block);
+    driver.execute(fixture.workload());
+
+    ASSERT_EQ(driver.engine->staged_count(), 1u);
+    const auto id = driver.engine->staged().front();
+    const auto & staged = driver.engine->request(id);
+
+    EXPECT_TRUE(staged.file.direct);
+    EXPECT_EQ(staged.buffer, dst) << "nothing to bounce, so read into the destination itself";
+    EXPECT_EQ(staged.offset, 0u);
+    EXPECT_EQ(staged.bytesize, ChunkSize);
+
+    driver.issue();
+    driver.engine->complete_all();
+    driver.route();
+
+    EXPECT_EQ(drain_responses(*fixture.responder, 1).front().ret, common::ResponseCode::Success);
+    EXPECT_EQ(std::vector<char>(dst, dst + ChunkSize), fixture.expected_at(0, ChunkSize));
+}
+
+// Scratch buffers must come back. A leak drains the pool, and every later read silently loses the
+// direct path - a slowdown with no error anywhere.
+TEST(AsyncIoWorker, Scratch_Is_Returned)
+{
+    constexpr size_t Block = 4096;
+    constexpr size_t Start = 500;
+
+    std::vector<char> raw(4 * ChunkSize + 2 * Block);
+    char * const base = raw.data() + ((-reinterpret_cast<uintptr_t>(raw.data())) % Block);
+
+    // The pool holds one buffer per in-flight read, so it is sized to the queue depth. A DEPTH OF 2
+    // makes a leak show up almost at once: lose one buffer per region and the third region has none,
+    // and a read with no scratch is failed rather than silently made buffered.
+    Driver driver(Strategy::IoUringDirect, Block);
+
+    for (int i = 0; i < 8; ++i)
+    {
+        Fixture fixture({ ChunkSize }, 1, Start, 2 /* queue depth, so 2 scratch buffers */);
+        fixture.request[0].ranges[0].dst = base + Start;
+
+        driver.execute(fixture.workload());
+
+        for (int round = 0; round < 8; ++round)
+        {
+            driver.issue();
+            driver.engine->complete_all();
+            driver.route();
+        }
+
+        EXPECT_EQ(drain_responses(*fixture.responder, 1).front().ret, common::ResponseCode::Success)
+            << "region " << i << " failed - the pool has probably been drained by a leak";
+    }
+}
+
+// A region of consecutive ranges bounces AT MOST TWICE, however long it is: once for the partial
+// block at the start, once for the partial block at the end. Everything between starts and ends on a
+// block boundary, so it is read straight into the destination.
+//
+// This is the whole cost argument. If it were one bounce per chunk, a 40 GB model would copy several
+// percent of itself instead of about 0.1%.
+TEST(AsyncIoWorker, A_Region_Bounces_At_Most_Twice)
+{
+    constexpr size_t Block = 4096;
+    constexpr size_t Start = 1000;          // partial block at the start
+    constexpr size_t Size = 3 * ChunkSize + 1096;   // and a partial block at the end
+
+    std::vector<char> raw(Size + 4 * Block);
+    char * const base = raw.data() + ((-reinterpret_cast<uintptr_t>(raw.data())) % Block);
+    char * const dst = base + Start;        // congruent with the file offset
+
+    Fixture fixture({ Size }, 1, Start);
+    fixture.request[0].ranges[0].dst = dst;
+
+    Driver driver(Strategy::IoUringDirect, Block);
+    driver.execute(fixture.workload());
+
+    for (int round = 0; round < 10; ++round)
+    {
+        driver.issue();
+        driver.engine->complete_all();
+        driver.route();
+    }
+
+    EXPECT_EQ(drain_responses(*fixture.responder, 1).front().ret, common::ResponseCode::Success);
+
+    // BYTES COPIED, not passes. A pass that copies 24 bytes and one that copies 4096 are not the same
+    // cost, and the cost is what the design's "about 0.1%" claims.
+    //
+    // The bound is per REGION, not per chunk: at most one partial block at each end, so at most two
+    // blocks whatever the region's length. A region twice as long copies exactly the same amount.
+    EXPECT_LE(driver.worker_bounced_bytes(), 2 * Block)
+        << "a region must copy at most one partial block at each end";
+    EXPECT_GT(driver.worker_bounced_bytes(), 0u) << "this region has partial blocks, so it must copy some";
+
+    // And the middle really did go straight to the destination, rather than being copied cheaply.
+    unsigned direct_into_destination = 0;
+    for (const auto & request : driver.engine->history())
+    {
+        if (request.buffer >= dst && request.buffer < dst + Size)
+        {
+            ++direct_into_destination;
+        }
+    }
+    EXPECT_GT(direct_into_destination, 0u) << "the middle must go straight into the destination";
+
+    // And the data is still right, which is what makes the count worth having.
+    EXPECT_EQ(std::vector<char>(dst, dst + Size), fixture.expected_at(Start, Size));
+}
+
+// The bound is per REGION, so a longer region copies the SAME amount, not more. That is the whole
+// claim behind "about 0.1%": the cost is fixed per region while the bytes read grow.
+TEST(AsyncIoWorker, Copied_Bytes_Do_Not_Grow_With_The_Region)
+{
+    constexpr size_t Block = 4096;
+    constexpr size_t Start = 1000;
+
+    const auto copied_for = [](size_t size, size_t start) -> size_t
+    {
+        std::vector<char> raw(size + 4 * Block);
+        char * const base = raw.data() + ((-reinterpret_cast<uintptr_t>(raw.data())) % Block);
+        char * const dst = base + start;
+
+        Fixture fixture({ size }, 1, start);
+        fixture.request[0].ranges[0].dst = dst;
+
+        Driver driver(Strategy::IoUringDirect, Block);
+        driver.execute(fixture.workload());
+
+        for (int round = 0; round < 40; ++round)
+        {
+            driver.issue();
+            driver.engine->complete_all();
+            driver.route();
+        }
+
+        EXPECT_EQ(drain_responses(*fixture.responder, 1).front().ret, common::ResponseCode::Success);
+        EXPECT_EQ(std::vector<char>(dst, dst + size), fixture.expected_at(start, size));
+
+        return driver.worker_bounced_bytes();
+    };
+
+    const size_t small = copied_for(2 * ChunkSize + 1096, Start);
+    const size_t large = copied_for(16 * ChunkSize + 1096, Start);
+
+    EXPECT_EQ(small, large) << "eight times the bytes read, and the same bytes copied";
+    EXPECT_LE(large, 2 * Block);
+}
+
+// The warning fires when direct reads have stopped paying. There is no error for that case - the
+// reads all succeed - so this line is the only signal, and a test should prove it appears.
+//
+// A non-congruent destination is refused direct and read buffered, so it copies nothing. To reach the
+// warning the reads must be direct AND copying a lot, which is what a tiny block plus a region full of
+// partial edges produces.
+TEST(AsyncIoWorker, Bouncing_Is_Counted_Against_Bytes_Read)
+{
+    constexpr size_t Block = 4096;
+    constexpr size_t Start = 1000;
+    constexpr size_t Size = 2 * ChunkSize + 1096;
+
+    std::vector<char> raw(Size + 4 * Block);
+    char * const base = raw.data() + ((-reinterpret_cast<uintptr_t>(raw.data())) % Block);
+    char * const dst = base + Start;
+
+    Fixture fixture({ Size }, 1, Start);
+    fixture.request[0].ranges[0].dst = dst;
+
+    Driver driver(Strategy::IoUringDirect, Block);
+    driver.execute(fixture.workload());
+
+    for (int round = 0; round < 12; ++round)
+    {
+        driver.issue();
+        driver.engine->complete_all();
+        driver.route();
+    }
+
+    EXPECT_EQ(drain_responses(*fixture.responder, 1).front().ret, common::ResponseCode::Success);
+
+    // Both numbers are needed to judge anything. Copied bytes alone cannot say whether that is a lot.
+    EXPECT_EQ(driver.worker_bytes_read(), Size) << "every byte the caller asked for was delivered";
+    EXPECT_LE(driver.worker_bounced_bytes(), 2 * Block);
+    EXPECT_LT(driver.worker_bounced_bytes(), driver.worker_bytes_read())
+        << "copying more than was read would mean something is counted twice";
+}
+
+// A region that starts AND ends on a block boundary bounces not at all.
+TEST(AsyncIoWorker, An_Aligned_Region_Never_Bounces)
+{
+    constexpr size_t Block = 4096;
+    constexpr size_t Size = 3 * ChunkSize;
+
+    std::vector<char> raw(Size + Block);
+    char * const dst = raw.data() + ((-reinterpret_cast<uintptr_t>(raw.data())) % Block);
+
+    Fixture fixture({ Size }, 1, 0);
+    fixture.request[0].ranges[0].dst = dst;
+
+    Driver driver(Strategy::IoUringDirect, Block);
+    driver.execute(fixture.workload());
+
+    for (int round = 0; round < 10; ++round)
+    {
+        driver.issue();
+        driver.engine->complete_all();
+        driver.route();
+    }
+
+    EXPECT_EQ(drain_responses(*fixture.responder, 1).front().ret, common::ResponseCode::Success);
+
+    EXPECT_EQ(driver.worker_bounced_bytes(), 0u)
+        << "an aligned region has no partial block, so not one byte should be copied";
+
+    EXPECT_EQ(std::vector<char>(dst, dst + Size), fixture.expected_at(0, Size));
 }
 
 // Teardown must not report a range while the kernel still holds its destination: a response promises

@@ -60,11 +60,15 @@ ResponseCode MockIoEngine::stage(RequestId id, FileRef file, size_t offset, size
         return _stage_result;
     }
 
-    // The id is the slot index, so staging onto a live slot means the caller lost its free list. A
-    // real engine would then send two completions with the same id, and the second would route to
-    // whatever took over the slot.
+    // Staging onto an id that is already in flight means the caller reused one. A real engine would
+    // then send two completions carrying the same id, and the second would route to whatever now holds
+    // it.
     ASSERT(_live.count(id) == 0) << "id " << id << " is already live";
-    ASSERT(id < _depth) << "id " << id << " is outside the window of " << _depth;
+
+    // There is deliberately NO check that id < depth. The id was once a slot index, and this used to
+    // assert that. It is now an opaque token that the engine echoes back (io_engine.h), and the
+    // caller's ids only ever increase - so on a small window they pass `depth` almost at once. The
+    // in-flight bound is the caller's window, not a range on the id.
 
     const Request request{ id, file, offset, bytesize, buffer };
 
