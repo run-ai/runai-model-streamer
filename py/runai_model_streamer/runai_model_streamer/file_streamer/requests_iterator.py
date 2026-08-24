@@ -17,6 +17,9 @@ DEFAULT_MEMORY_LIMIT_STRING = "40000000000" # 40 GB (to be set to unlimited for 
 RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME = "RUNAI_STREAMER_RING_BUFFERS"
 DEFAULT_RING_BUFFERS = 4
 
+RUNAI_STREAMER_MAX_PADS_PER_BUFFER_ENV_VAR_NAME = "RUNAI_STREAMER_MAX_PADS_PER_BUFFER"
+DEFAULT_MAX_PADS_PER_BUFFER = 1024
+
 class RunaiStreamerMemoryLimitException(Exception):
     pass
 
@@ -102,6 +105,21 @@ class FilesRequest:
         return self.range_base[file_index] + range_index
 
 
+# The block size a direct read must line up with.
+#
+# 4096, not measured. The kernel reports the real value through statx STATX_DIOALIGN, but that needs
+# kernel 6.1 and the streamer supports 5.15. 4096 covers both sizes in use (512 and 4096), and lining
+# up more than needed only wastes a little space.
+DIRECT_IO_BLOCK = 4096
+
+# How many pads one buffer may hold before we give up and pack tightly. See _max_pads_per_buffer().
+
+
+def _align_up(address: int, block: int) -> int:
+    """The next multiple of `block` at or after `address`."""
+    return (address + block - 1) // block * block
+
+
 class FilesRequestsIteratorWithBuffer:
     def __init__(self, buffer_size: int, num_buffers: int, files_chunks: List[FileChunks]) -> None:
         self.files_requests_iterator = FilesRequestsIterator(buffer_size, files_chunks)
@@ -119,15 +137,56 @@ class FilesRequestsIteratorWithBuffer:
             f"{[file_chunks.path for file_chunks in files_chunks]}"
         )
         # ONE allocation sliced into num_buffers views. The pool is fixed at construction and never
-        # grows, so a single contiguous region is simpler for the OS to manage than N separate ones -
-        # and it is the shape the O_DIRECT work needs, where the base has to be page aligned.
-        self.pool = np.empty(buffer_size * num_buffers, dtype=np.uint8)
-        self.buffers = [self.pool[i * buffer_size: (i + 1) * buffer_size] for i in range(num_buffers)]
+        # grows, so a single contiguous region is simpler for the OS to manage than N separate ones.
+        #
+        # THE BASE IS ALIGNED TO A BLOCK, and each slot carries a little extra room. Both are for
+        # direct reads:
+        #
+        #   A direct read needs the destination address and the file offset to leave the same
+        #   remainder when divided by the block - not merely for the address to be aligned. The file
+        #   offset comes from the file's own layout and cannot be chosen, so the ADDRESS has to be
+        #   moved to match it. That is what the extra room is for: the packing loop below skips a few
+        #   bytes before a range so the two line up.
+        #
+        #   Without this, no part of a region can be read directly, and O_DIRECT would copy every byte
+        #   instead of about 0.1% of it.
+        #
+        # np.empty gives about 16 or 32 bytes of alignment, so the base is moved forward by hand.
+        self._slot_size = buffer_size + DIRECT_IO_BLOCK * _max_pads_per_buffer()
+        self._raw = np.empty(self._slot_size * num_buffers + DIRECT_IO_BLOCK, dtype=np.uint8)
+        shift = (-self._raw.ctypes.data) % DIRECT_IO_BLOCK
+        self.pool = self._raw[shift: shift + self._slot_size * num_buffers]
+        self.buffers = [self.pool[i * self._slot_size: (i + 1) * self._slot_size] for i in range(num_buffers)]
         # Destinations are absolute addresses (that is the C contract), and this class packs them
         # itself, so it can recover a range's slice by subtracting its buffer's base. That is local
         # knowledge of its own allocation, not an assumption the range API makes.
         self.buffer_addresses = [buffer.ctypes.data for buffer in self.buffers]
         self._free_buffers = deque(range(num_buffers))
+
+    def _place(self, request: FilesRequest, base: int, aligned: bool) -> Optional[List[int]]:
+        """Addresses for this request's ranges, or None if an aligned layout does not fit.
+
+        With aligned=True a range may be pushed forward a few bytes so that its address and its file
+        offset leave the same remainder. With aligned=False the ranges are packed one after another.
+        """
+        dsts = []
+        cursor = base
+        limit = base + self._slot_size
+
+        for file_chunks in request.files:
+            for offset, size in zip(file_chunks.offsets, file_chunks.sizes):
+                if aligned:
+                    # 0 when they already line up, which is the usual case after the first range of a
+                    # file.
+                    cursor += (offset - cursor) % DIRECT_IO_BLOCK
+
+                if cursor + size > limit:
+                    return None
+
+                dsts.append(cursor)
+                cursor += size
+
+        return dsts
 
     def has_free_buffer(self) -> bool:
         return len(self._free_buffers) > 0
@@ -163,15 +222,22 @@ class FilesRequestsIteratorWithBuffer:
         # Take the buffer only once there is a request to put in it, so end of stream does not consume one.
         request.buffer_index = self._free_buffers.popleft()
 
-        # Pack this request's ranges back to back into its buffer, one absolute address per range.
-        # Placement is free now (each range carries its own destination), so packing is just a running
-        # cursor - no per-file sub-buffer, and no requirement that a file's ranges be adjacent.
-        dsts = []
-        cursor = self.buffer_addresses[request.buffer_index]
-        for file_chunks in request.files:
-            for size in file_chunks.sizes:
-                dsts.append(cursor)
-                cursor += size
+        # Place this request's ranges in its buffer, one absolute address per range. Each range carries
+        # its own destination, so placement is free - it is just a running cursor.
+        #
+        # Where possible a range is placed so that its ADDRESS and its FILE OFFSET leave the same
+        # remainder when divided by the block. That is what lets the reader use a direct read. Skipping
+        # a few bytes is all it takes, and once the first range of a file lines up, the ranges after it
+        # follow by themselves as long as they are laid out one after another in the file.
+        base = self.buffer_addresses[request.buffer_index]
+        dsts = self._place(request, base, aligned=True)
+
+        if dsts is None:
+            # Too many pads for the room reserved. Pack tightly instead: correct, and read buffered.
+            # This is better than making every buffer big enough for the worst case, which would only
+            # ever be reached by a request whose ranges jump around inside the file.
+            dsts = self._place(request, base, aligned=False)
+
         request.range_dsts = dsts
 
         return request
@@ -459,6 +525,25 @@ def _span_whole_stream(
             high = middle
 
     return low, _requests_needed(prefix, low, target)
+
+
+def _max_pads_per_buffer() -> int:
+    """How many pads one ring slot reserves room for.
+
+    A pad is spent each time the write cursor and the file offset fall out of step, because a direct
+    read needs them to leave the same remainder when divided by the block. That happens at every file
+    boundary in a request, and also at any gap inside a file whose ranges are not laid out back to
+    back. Ranges that do follow one another cost nothing: the cursor and the offset advance by the
+    same amount and stay in step.
+
+    So the number to beat is the number of offset jumps in one request, which is driven by how many
+    files fit in one slot. 1024 pads reserve 4 MB per slot - nothing next to a multi-GB ring.
+
+    A request that needs more pads than this simply packs tightly and reads buffered. That is correct,
+    just not direct, so getting this number wrong is slow rather than broken.
+    """
+    # clamped at 0: no pads means tight packing, which is the pre-direct-io behaviour and always valid
+    return max(0, int(os.getenv(RUNAI_STREAMER_MAX_PADS_PER_BUFFER_ENV_VAR_NAME, DEFAULT_MAX_PADS_PER_BUFFER)))
 
 
 def _ring_buffers() -> int:

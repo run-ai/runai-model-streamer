@@ -10,6 +10,9 @@ from runai_model_streamer.file_streamer.requests_iterator import (
     MemoryCapMode,
     RunaiStreamerMemoryLimitException,
     RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME,
+    RUNAI_STREAMER_MAX_PADS_PER_BUFFER_ENV_VAR_NAME,
+    DIRECT_IO_BLOCK,
+    _max_pads_per_buffer,
     _ring_sizing,
 )
 
@@ -563,9 +566,26 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
         )
         self.assertEqual(requests_iterator.buffer_size, 10)
 
-    def test_range_dsts_pack_the_request(self):
-        # replaces the old per-file file_buffers: destinations are per range now, packed back to back
-        # across the whole request, and handed to runai_request as absolute addresses.
+    def assert_congruent(self, request):
+        """Every range's address and its file offset leave the same remainder for the block size.
+
+        This is the property a direct read needs. Aligning the address alone is not enough: the file
+        offset cannot be chosen, so the address has to be moved to match it.
+        """
+        for file_index, file_chunks in enumerate(request.files):
+            for range_index, offset in enumerate(file_chunks.offsets):
+                dst = request.range_dsts[request.flat_index(file_index, range_index)]
+                self.assertEqual(
+                    dst % DIRECT_IO_BLOCK, offset % DIRECT_IO_BLOCK,
+                    f"file {file_chunks.path} range {range_index} at offset {offset} is not congruent",
+                )
+
+    def test_range_dsts_place_the_request_congruently(self):
+        # replaces the old per-file file_buffers: destinations are per range now, one per range across
+        # the whole request, handed to runai_request as absolute addresses.
+        #
+        # They are NOT packed back to back. A range is pushed forward so that its address and its file
+        # offset leave the same remainder - the condition for reading it directly.
         requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
             MemoryCapMode.largest_chunk,
             [FileChunks.contiguous(17, "a.txt", 10, [1, 2, 3, 4]),
@@ -577,18 +597,42 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
 
         files_requests = requests_iterator.next_request()
         self.assertEqual([f.id for f in files_requests.files], [17])
-        self.assertEqual(files_requests.range_dsts, [base, base + 1, base + 3])
+        # a.txt starts at file offset 10, so the first range skips 10 bytes to match it. The two after
+        # it follow back to back in the file, so the cursor stays in step and costs nothing.
+        self.assertEqual(files_requests.range_dsts, [base + 10, base + 11, base + 13])
+        self.assert_congruent(files_requests)
 
         # largest_chunk mode is a ring of one, so the single buffer has to come back before the next
-        # request can be built - and the next request then packs from that same base.
+        # request can be built - and the next request then places from that same base.
         requests_iterator.release(files_requests)
 
         files_requests = requests_iterator.next_request()
         self.assertEqual([f.id for f in files_requests.files], [17, 18])
-        # a.txt's remaining 4 bytes, then b.txt's 1 and 2 - one destination per range, packed from the
-        # start of the buffer this request was given
-        self.assertEqual(files_requests.range_dsts, [base, base + 4, base + 5])
+        # a.txt's remaining 4 bytes at file offset 16, then b.txt's 1 and 2 at file offsets 10 and 11.
+        # Crossing into b.txt sends the file offset BACKWARDS (16 -> 10) while the cursor only moves
+        # forward, so re-syncing costs nearly a whole block. That is the worst case, and it is why the
+        # slot reserves room for many pads rather than a few bytes.
+        self.assertEqual(files_requests.range_dsts, [base + 16, base + 4106, base + 4107])
+        self.assert_congruent(files_requests)
         self.assertEqual(files_requests.file_base, [0, 1])
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_MAX_PADS_PER_BUFFER_ENV_VAR_NAME: "0"})
+    def test_no_pad_budget_falls_back_to_tight_packing(self):
+        # With no room reserved, the aligned placement cannot fit and the request packs back to back
+        # instead. Correct, just not readable directly - the reader falls back to a buffered read.
+        requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
+            MemoryCapMode.largest_chunk,
+            [FileChunks.contiguous(17, "a.txt", 10, [1, 2, 3, 4])],
+            5,
+        )
+        base = requests_iterator.buffer_addresses[0]
+
+        files_requests = requests_iterator.next_request()
+        self.assertEqual(files_requests.range_dsts, [base, base + 1])
+
+        # and the fallback really is the reason: a.txt starts at file offset 10, so a placement that
+        # had any room would have moved the first range 10 bytes in rather than leaving it at the base
+        self.assertNotEqual(base % DIRECT_IO_BLOCK, files_requests.files[0].offsets[0] % DIRECT_IO_BLOCK)
 
     @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "1"})
     def test_get_global_file_and_range_aliases_the_buffer(self):
@@ -600,8 +644,14 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
         self.assertEqual(requests_iterator.buffer_size, 10)
 
         request = requests_iterator.next_request()
-        requests_iterator.buffers[0][0] = 9
-        requests_iterator.buffers[0][3] = 8
+
+        # Write at the address the request will hand to runai_request, then read it back through the
+        # view. That is the invariant: the two must agree. Deriving the index from range_dsts rather
+        # than hardcoding it keeps this test about aliasing, not about where placement chose to put
+        # things - test_range_dsts_place_the_request_congruently covers that.
+        base = requests_iterator.buffer_addresses[0]
+        requests_iterator.buffers[0][request.range_dsts[request.flat_index(0, 0)] - base] = 9
+        requests_iterator.buffers[0][request.range_dsts[request.flat_index(1, 0)] - base] = 8
 
         file_id, range_index, view = requests_iterator.get_global_file_and_range(request, 0, 0)
         self.assertEqual((file_id, range_index), (17, 0))
@@ -634,11 +684,12 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             requests_iterator.next_request()
 
-        # released, so the third request reuses the first one's buffer and packs from its base
+        # released, so the third request reuses the first one's buffer and places from its base. The
+        # range it carries sits at file offset 18 (10 + 4 + 4), so it is placed 18 bytes in.
         requests_iterator.release(first)
         third = requests_iterator.next_request()
         self.assertEqual(third.buffer_index, first_index)
-        self.assertEqual(third.range_dsts, [requests_iterator.buffer_addresses[first_index]])
+        self.assertEqual(third.range_dsts, [requests_iterator.buffer_addresses[first_index] + 18])
 
     @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "2"})
     def test_releasing_twice_is_rejected(self):
@@ -658,16 +709,28 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
             MemoryCapMode.limited, [FileChunks.contiguous(17, "a.txt", 10, [4, 4, 4])], 12
         )
         self.assertEqual(len(requests_iterator.buffers), 3)
-        self.assertEqual(len(requests_iterator.pool), 12)
+
+        # A slot is the caller's bytes plus room for the pads that make a direct read possible, so the
+        # pool is bigger than the memory cap asked for. That overshoot is fixed per slot, not
+        # proportional, so it disappears next to a real ring.
+        slot_size = requests_iterator.buffer_size + DIRECT_IO_BLOCK * _max_pads_per_buffer()
+        self.assertEqual(len(requests_iterator.pool), slot_size * 3)
+
+        # The base must be block aligned. Without it no range in any slot could be placed congruently,
+        # because a pad can only move an address forward within the block it already sits in.
+        self.assertEqual(requests_iterator.pool.ctypes.data % DIRECT_IO_BLOCK, 0)
+        self.assertEqual(
+            requests_iterator.buffer_addresses,
+            [requests_iterator.pool.ctypes.data + slot_size * i for i in range(3)],
+        )
 
         # writing through one buffer must not disturb another, and each view must alias the pool
         for index, buffer in enumerate(requests_iterator.buffers):
             buffer[:] = index
-        self.assertEqual(list(requests_iterator.pool), [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2])
-        self.assertEqual(
-            requests_iterator.buffer_addresses,
-            [requests_iterator.pool.ctypes.data + 4 * i for i in range(3)],
-        )
+        for index in range(3):
+            # first and last byte of each slot, rather than the whole pool - the slots are megabytes
+            self.assertEqual(requests_iterator.pool[slot_size * index], index)
+            self.assertEqual(requests_iterator.pool[slot_size * (index + 1) - 1], index)
 
     def test_end_of_stream_does_not_consume_a_buffer(self):
         requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
