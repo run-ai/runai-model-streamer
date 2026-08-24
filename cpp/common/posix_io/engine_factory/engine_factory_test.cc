@@ -74,11 +74,38 @@ TEST(EngineFactory, IoUringBuffered_Follows_The_Kernel)
     }
 }
 
-// Not implemented is not the same as broken: these return nullptr so the dispatcher moves to the next
-// candidate, rather than opening buffered under a direct name.
-TEST(EngineFactory, Unimplemented_Strategies_Are_Unavailable)
+// StrategyResolver reports both io_uring strategies as available wherever the ring is. This test
+// checks that the factory agrees with it.
+//
+// If the factory refused one of them, resolution would still succeed and the first workload would
+// then fail because it has no engine. That failure would be reported as a routing bug, which would
+// send anyone debugging it to the wrong place.
+//
+// Both can be built because they use the same ring. O_DIRECT is a property of the file, and the
+// worker opens each file itself.
+TEST(EngineFactory, Both_IoUring_Strategies_Build_Or_Refuse_Together)
 {
-    EXPECT_EQ(make_io_engine(Strategy::IoUringDirect, config()), nullptr);
+    auto direct = make_io_engine(Strategy::IoUringDirect, config());
+    auto buffered = make_io_engine(Strategy::IoUringBuffered, config());
+
+    EXPECT_EQ(direct == nullptr, buffered == nullptr)
+        << "the resolver offers these two together, so the factory must serve them together";
+
+    if (ring_works())
+    {
+        ASSERT_NE(direct, nullptr) << "io_uring works here but the factory refused the direct strategy";
+
+        // The caller sizes its in-flight window from depth(). Both strategies build the same ring, so
+        // both must report the same depth - otherwise the window would depend on which strategy was
+        // resolved.
+        EXPECT_EQ(direct->depth(), buffered->depth());
+    }
+}
+
+// libaio has no engine yet, so the factory returns nullptr and the dispatcher tries the next
+// candidate. This is different from a broken host: nothing was attempted. Remove this test in S8.
+TEST(EngineFactory, Libaio_Is_Not_Implemented_Yet)
+{
     EXPECT_EQ(make_io_engine(Strategy::LibaioDirect, config()), nullptr);
 }
 

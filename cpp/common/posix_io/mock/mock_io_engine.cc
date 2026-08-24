@@ -52,12 +52,49 @@ unsigned MockIoEngine::depth() const
     return _depth;
 }
 
+size_t MockIoEngine::misaligned_direct_stages() const
+{
+    return _misaligned_direct_stages;
+}
+
 ResponseCode MockIoEngine::stage(RequestId id, FileRef file, size_t offset, size_t bytesize, char * buffer)
 {
     if (_stage_result != ResponseCode::Success)
     {
         // Nothing is recorded: no completion will arrive, and the caller must resolve it itself.
         return _stage_result;
+    }
+
+    // The O_DIRECT rules, as the kernel applies them. All three values must be multiples of the block
+    // size, and the kernel answers EINVAL if any one of them is not.
+    //
+    // Refused here rather than completed with an error, because that is what the kernel does: the read
+    // is rejected when it is submitted, so no completion ever arrives and the caller has to resolve
+    // the request itself. Returning an error from stage() says exactly that (io_engine.h).
+    if (file.direct)
+    {
+        const size_t offset_block = _limits.offset_alignment;
+        const size_t buffer_block = _limits.buffer_alignment;
+
+        // The length is checked against offset_alignment, not against buffer_alignment. The kernel
+        // reports two numbers but constrains three things, and the length follows the offset rule -
+        // this mirrors what Limits already says (io_engine.h).
+        const bool aligned =
+            offset % offset_block == 0 &&
+            bytesize % offset_block == 0 &&
+            reinterpret_cast<uintptr_t>(buffer) % buffer_block == 0;
+
+        if (!aligned)
+        {
+            ++_misaligned_direct_stages;
+
+            LOG(ERROR) << "Direct read " << id << " is not aligned for block " << offset_block
+                       << ": offset " << offset << ", length " << bytesize << ", buffer address"
+                       << " remainder " << (reinterpret_cast<uintptr_t>(buffer) % buffer_block)
+                       << " - the kernel would answer EINVAL";
+
+            return ResponseCode::UnknownError;
+        }
     }
 
     // Staging onto an id that is already in flight means the caller reused one. A real engine would

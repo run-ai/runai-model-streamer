@@ -54,15 +54,22 @@ std::unique_ptr<IoEngine> make_io_engine(Strategy strategy, const AsyncIoConfig 
 
     switch (strategy)
     {
-    case Strategy::IoUringBuffered:
-        return make_io_uring_engine(strategy, config);
-
     case Strategy::IoUringDirect:
-        // The ring is the same; only the fds differ, and those belong to the caller. Waiting for the
-        // O_DIRECT work rather than opening buffered under a direct name, which would read as working
-        // while quietly not being direct at all.
-        LOG(DEBUG) << strategy << " is not available: the direct path is not implemented yet";
-        return nullptr;
+    case Strategy::IoUringBuffered:
+        // Both strategies use the same builder, because both use the same ring.
+        //
+        // O_DIRECT is a property of the open file, not of the ring. Each request carries its own
+        // FileRef, and the engine reads that request's `direct` flag when it decides whether to set
+        // IOSQE_ASYNC. There is no ring-wide setting to choose here.
+        //
+        // Under IoUringDirect the worker still decides file by file. It reads a file buffered if the
+        // file offset is not congruent with the destination, or if the mount refuses O_DIRECT. So one
+        // engine serves both kinds of file even when the strategy is the direct one.
+        //
+        // The two strategies must succeed or fail together. StrategyResolver reports them as equally
+        // available, so if this refused one of them, resolution would succeed and the first workload
+        // would then fail with no engine.
+        return make_io_uring_engine(strategy, config);
 
     case Strategy::LibaioDirect:
         LOG(DEBUG) << strategy << " is not available: no libaio engine yet";

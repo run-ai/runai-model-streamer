@@ -123,6 +123,24 @@ class MockIoEngine : public IoEngine
     unsigned last_wait_timeout_ms() const;
     unsigned waits() const;
 
+    // ---- the O_DIRECT rules ----
+    //
+    // How many direct reads this engine refused because they were not aligned.
+    //
+    // A direct read must have its file offset, its length AND its buffer address all be multiples of
+    // the block size. The kernel returns EINVAL when any of the three is wrong. This engine applies
+    // the same rule, so the tests that drive it are checking the alignment maths and not only the
+    // bookkeeping around it.
+    //
+    // This is a CHECK, not a copy of what a block device does. The engine reads no file and moves no
+    // page. It tests one documented rule its caller must follow, which keeps it small and keeps it
+    // from slowly turning into a second, different kernel.
+    //
+    // The rule is only applied when the request says `direct`. Buffered reads have no alignment
+    // requirement, and a test that leaves Limits at its default has an alignment of 1, where every
+    // value is a multiple and the check does nothing.
+    size_t misaligned_direct_stages() const;
+
     // The byte written for `file_offset`, so a test can build what it expects.
     static char pattern(size_t file_offset);
 
@@ -134,6 +152,8 @@ class MockIoEngine : public IoEngine
 
     const unsigned _depth;
     const Limits _limits;
+
+    size_t _misaligned_direct_stages = 0;
 
     std::map<RequestId, Request> _live;      // staged or in flight, by id
     std::deque<RequestId> _staged;           // stage order

@@ -361,4 +361,121 @@ TEST(MockIoEngine, LimitsDefaultToTheRealKernelCap)
     EXPECT_EQ(constrained.limits().offset_alignment, 512);
 }
 
+// ---- the O_DIRECT alignment rule ----
+
+namespace
+{
+
+constexpr size_t Block = 4096;
+
+Limits direct_limits()
+{
+    Limits limits;
+    limits.max_read_bytesize = max_read_bytesize();
+    limits.offset_alignment = Block;
+    limits.buffer_alignment = Block;
+    return limits;
+}
+
+// A buffer whose address is a multiple of Block, so the address is never the reason a read is
+// refused. Tests that want to break the address shift a pointer inside it.
+struct AlignedDestination
+{
+    explicit AlignedDestination(size_t bytesize) :
+        storage(bytesize + Block)
+    {
+        const auto raw = reinterpret_cast<uintptr_t>(storage.data());
+        _base = storage.data() + ((Block - raw % Block) % Block);
+    }
+
+    char * buffer() { return _base; }
+
+ private:
+    std::vector<char> storage;
+    char * _base = nullptr;
+};
+
+} // namespace
+
+// A direct read that follows all three rules is staged like any other.
+TEST(MockIoEngine, DirectStageIsAcceptedWhenAligned)
+{
+    MockIoEngine engine(Depth, direct_limits());
+    AlignedDestination dst(Block);
+
+    EXPECT_EQ(engine.stage(1, FileRef{ 3, true }, Block, Block, dst.buffer()), ResponseCode::Success);
+
+    EXPECT_EQ(engine.misaligned_direct_stages(), 0u);
+    EXPECT_EQ(engine.staged_count(), 1u);
+}
+
+// Each of the three values is checked on its own, so a test that breaks one is not passing because
+// another was already wrong.
+TEST(MockIoEngine, DirectStageIsRefusedWhenAnyValueIsMisaligned)
+{
+    AlignedDestination dst(Block * 2);
+
+    // the file offset
+    {
+        MockIoEngine engine(Depth, direct_limits());
+
+        EXPECT_NE(engine.stage(1, FileRef{ 3, true }, Block + 1, Block, dst.buffer()),
+                  ResponseCode::Success);
+
+        EXPECT_EQ(engine.misaligned_direct_stages(), 1u);
+
+        // Refused means NOTHING was staged and no completion will arrive, which is what the kernel
+        // does with EINVAL. The caller has to resolve the request itself.
+        EXPECT_EQ(engine.staged_count(), 0u);
+    }
+
+    // the length
+    {
+        MockIoEngine engine(Depth, direct_limits());
+
+        EXPECT_NE(engine.stage(1, FileRef{ 3, true }, Block, Block - 8, dst.buffer()),
+                  ResponseCode::Success);
+
+        EXPECT_EQ(engine.misaligned_direct_stages(), 1u);
+        EXPECT_EQ(engine.staged_count(), 0u);
+    }
+
+    // the buffer address
+    {
+        MockIoEngine engine(Depth, direct_limits());
+
+        EXPECT_NE(engine.stage(1, FileRef{ 3, true }, Block, Block, dst.buffer() + 1),
+                  ResponseCode::Success);
+
+        EXPECT_EQ(engine.misaligned_direct_stages(), 1u);
+        EXPECT_EQ(engine.staged_count(), 0u);
+    }
+}
+
+// The rule belongs to O_DIRECT alone. A buffered read at the same offset, length and address is fine,
+// and checking it would refuse reads the kernel accepts.
+TEST(MockIoEngine, BufferedStageIgnoresAlignment)
+{
+    MockIoEngine engine(Depth, direct_limits());
+    AlignedDestination dst(Block);
+
+    EXPECT_EQ(engine.stage(1, FileRef{ 3, false }, Block + 1, Block - 8, dst.buffer() + 1),
+              ResponseCode::Success);
+
+    EXPECT_EQ(engine.misaligned_direct_stages(), 0u);
+    EXPECT_EQ(engine.staged_count(), 1u);
+}
+
+// The default Limits have an alignment of 1, where every value is a multiple. Tests written before
+// this check existed pass unchanged, and only a test that asks for a real block size gets checked.
+TEST(MockIoEngine, DefaultLimitsImposeNoAlignment)
+{
+    MockIoEngine engine(Depth);
+    Destination dst;
+
+    EXPECT_EQ(engine.stage(1, FileRef{ 3, true }, 7, 13, dst.buffer() + 1), ResponseCode::Success);
+
+    EXPECT_EQ(engine.misaligned_direct_stages(), 0u);
+}
+
 }; // namespace runai::llm::streamer::common::posix_io
