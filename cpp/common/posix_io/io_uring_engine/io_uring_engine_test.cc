@@ -373,7 +373,14 @@ struct DirectFixture
         data(utils::random::buffer(bytesize)),
         file(data),
         fd(::open(file.path.c_str(), O_RDONLY | O_DIRECT))
-    {}
+    {
+        // Kept, rather than read from errno later. errno belongs to the last failed call anywhere, so
+        // by the time the test reports why it stopped, something else may have overwritten it.
+        if (fd < 0)
+        {
+            error = errno;
+        }
+    }
 
     ~DirectFixture()
     {
@@ -395,6 +402,7 @@ struct DirectFixture
     std::vector<uint8_t> data;
     utils::temp::File file;
     int fd = -1;
+    int error = 0;   // the errno from the open, when it failed
 };
 
 // A buffer whose address is a multiple of Block. Tests that want an unaligned address add 1 to it.
@@ -432,12 +440,28 @@ Completion read_once(IoUringEngine & engine, FileRef file, size_t offset, size_t
     return completions.empty() ? Completion{} : completions.front();
 }
 
+// The SAME gate as SKIP_WITHOUT_RING, for the second thing that can make these tests disappear.
+//
+// A filesystem can refuse O_DIRECT even where io_uring works, and only these two tests check our
+// alignment rule against the KERNEL - everything else checks it against MockIoEngine, which enforces
+// the rule we believe in. So when they skip, that rule is unverified and nothing says so.
+//
+// RUNAI_STREAMER_REQUIRE_IO_URING means "this host is set up for the async backend", which covers
+// O_DIRECT as well as the ring. A host prepared for benchmarking has a filesystem that supports it,
+// so a refusal there is a setup problem worth stopping for rather than a reason to test less.
 #define SKIP_WITHOUT_O_DIRECT(fixture)                                                  \
     do {                                                                                \
         if (!(fixture).supported())                                                     \
         {                                                                               \
+            if (require_io_uring())                                                     \
+            {                                                                           \
+                FAIL() << "this filesystem refused O_DIRECT ("                           \
+                       << std::strerror((fixture).error) << ") but "                     \
+                       << "RUNAI_STREAMER_REQUIRE_IO_URING=1 says this host is set up "  \
+                       << "for direct reads - the alignment rule would go unchecked";    \
+            }                                                                           \
             GTEST_SKIP() << "this filesystem refused O_DIRECT ("                        \
-                         << std::strerror(errno) << ")";                                \
+                         << std::strerror((fixture).error) << ")";                      \
         }                                                                               \
     } while (0)
 
