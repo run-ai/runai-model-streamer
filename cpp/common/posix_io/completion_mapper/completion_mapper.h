@@ -24,13 +24,26 @@ namespace runai::llm::streamer::common::posix_io
 //   res >= 0                            Success - the CALLER still compares res against bytesize, and
 //                                       re-stages the remainder if it is short. A short read is not an
 //                                       error, and only the caller knows what it asked for.
-//   -EIO -ENXIO -ESTALE -ETIMEDOUT      FileAccessError - this file failed; others carry on
-//   -ECONNRESET -EREMOTEIO
 //   -ECANCELED                          FinishedError - teardown, NOT a storage fault. Reporting it as
 //                                       one sends an operator to investigate the wrong system.
+//   -EFAULT -EBADF                      our bug: UnknownError
 //   -EINVAL on a direct fd              our bug: the alignment contract broke. See below.
-//   -EFAULT -EBADF                      our bug
-//   anything else                       UnknownError, with the raw errno logged
+//   anything else                       FileAccessError - this file failed; others carry on. The raw
+//                                       errno is logged.
+//
+// THE DEFAULT IS FileAccessError, and the three "our bug" rows are the exceptions. That direction is
+// the point of this table.
+//
+// UnknownError tells the caller to abort the whole submission, so it must be earned. The three rows
+// above are the results we can prove are ours. Any other errno is far more likely to describe the
+// file than our own bookkeeping.
+//
+// An allowlist of storage errnos (EIO, ENXIO, ESTALE, ETIMEDOUT, ECONNRESET, EREMOTEIO) used to sit
+// here instead, with everything else falling through to UnknownError. It could not be complete.
+// EISDIR was one it missed, so reading a directory ended an entire model load.
+//
+// The synchronous reader made the same choice, with the same reasoning - see file.cc. Both readers
+// must agree, because which one served a request is meant to be invisible to the caller.
 //
 // No -EINTR row on purpose. It is unreachable as a completion: regular-file reads sit in
 // uninterruptible sleep, io-wq workers do not take signals the usual way, and libaio surfaces EINTR

@@ -71,14 +71,19 @@ struct Fixture
     }
 
     // One workload holding every batch, which is what a single async worker gets.
-    Workload workload()
+    //
+    // `path_override` gives the batches a path that is not the temp file. The worker opens
+    // batch.path, so this is how a test makes the open fail while the ranges stay valid.
+    Workload workload(const std::string & path_override = "")
     {
+        const std::string & batch_path = path_override.empty() ? file.path : path_override;
+
         Assigner assigner(request, config);
         Workload out;
         for (const auto & transfer : assigner.transfers())
         {
             Batches batches(1 /* submission */, transfer.file_index, transfer.tasks, config, responder,
-                            file.path, params, transfer.range_sizes, transfer.first_range_index);
+                            batch_path, params, transfer.range_sizes, transfer.first_range_index);
             for (size_t i = 0; i < batches.size(); ++i)
             {
                 out.add_batch(std::move(batches[i]));
@@ -333,6 +338,106 @@ TEST(AsyncIoWorker, Eof_Is_Reported)
 
     const auto responses = drain_responses(*fixture.responder, 1);
     EXPECT_EQ(responses.front().ret, common::ResponseCode::EofError);
+}
+
+// The worker turns the kernel's errno into a ResponseCode, and the engine no longer does.
+//
+// The engine passes the raw result through because mapping needs the file: EINVAL means our alignment
+// rule broke on a direct fd, and something else on a buffered one. Only the worker knows how the file
+// was opened.
+//
+// EIO is used here because it maps to a code of its own. It shows the mapping really happens, which a
+// value that maps to UnknownError could not - almost everything maps to UnknownError.
+TEST(AsyncIoWorker, Kernel_Errno_Is_Mapped_By_The_Worker)
+{
+    Fixture fixture({ ChunkSize });
+    Driver driver;
+
+    driver.execute(fixture.workload());
+
+    driver.issue();
+    const auto id = driver.in_flight().front();
+
+    driver.engine->fail(id, EIO);
+    driver.route();
+
+    const auto responses = drain_responses(*fixture.responder, 1);
+
+    // FileAccessError, so an operator is sent to the storage. Reporting this as UnknownError would
+    // hide a real disk problem.
+    EXPECT_EQ(responses.front().ret, common::ResponseCode::FileAccessError);
+}
+
+// A failure that is OUR fault must never be reported as a storage fault. EFAULT means we handed the
+// kernel a bad address, and the storage had no part in it.
+TEST(AsyncIoWorker, Our_Own_Errors_Are_Not_Reported_As_Storage_Faults)
+{
+    Fixture fixture({ ChunkSize });
+    Driver driver;
+
+    driver.execute(fixture.workload());
+
+    driver.issue();
+    const auto id = driver.in_flight().front();
+
+    driver.engine->fail(id, EFAULT);
+    driver.route();
+
+    const auto responses = drain_responses(*fixture.responder, 1);
+
+    EXPECT_EQ(responses.front().ret, common::ResponseCode::UnknownError);
+    EXPECT_NE(responses.front().ret, common::ResponseCode::FileAccessError)
+        << "this would send an operator to investigate storage that is working correctly";
+}
+
+// A zero-sized range in a file that cannot be opened fails WITH the file.
+//
+// It reads nothing, so no chunk is ever made for it, and the file used to be opened only when a chunk
+// was staged. A workload whose ranges are all zero-sized therefore never opened the file, never
+// noticed it was missing, and answered Success.
+//
+// The synchronous reader opens the file for every batch before it looks at any range size, so it has
+// always reported FileAccessError here. Which reader served a request is meant to be invisible to the
+// caller, so they must agree.
+//
+// Found by running the Python suite against the REAL library. The mock library used by `make test`
+// stubs this path, so nothing in the normal suite covered it - which is why this test is here.
+TEST(AsyncIoWorker, Zero_Sized_Ranges_On_An_Unopenable_File_Fail_With_The_File)
+{
+    Fixture fixture({ 0, 0 });
+    Driver driver;
+
+    driver.execute(fixture.workload("/nonexistent-directory/definitely-missing.bin"));
+
+    const auto responses = drain_responses(*fixture.responder, 2);
+    ASSERT_EQ(responses.size(), 2u) << "every range owes a response, even one of zero bytes";
+
+    for (const auto & r : responses)
+    {
+        EXPECT_EQ(r.ret, common::ResponseCode::FileAccessError)
+            << "the file does not exist, so the caller must be told";
+    }
+}
+
+// One file, one answer. A batch that mixes zero-sized and real ranges must not report success for the
+// empty ones and failure for the rest - they all failed for the same reason, that the file is missing.
+TEST(AsyncIoWorker, Mixed_Ranges_On_An_Unopenable_File_All_Fail)
+{
+    Fixture fixture({ 0, ChunkSize });
+    Driver driver;
+
+    driver.execute(fixture.workload("/nonexistent-directory/definitely-missing.bin"));
+    driver.issue();
+    driver.route();
+
+    const auto responses = drain_responses(*fixture.responder, 2);
+    ASSERT_EQ(responses.size(), 2u);
+
+    for (const auto & r : responses)
+    {
+        EXPECT_EQ(r.ret, common::ResponseCode::FileAccessError)
+            << "a zero-sized range must not report success while its neighbours fail";
+    }
 }
 
 // A zero-sized range reads nothing but owes a response like any other - answered at enqueue, since no

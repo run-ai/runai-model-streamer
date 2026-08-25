@@ -5,6 +5,7 @@ runai_cc_auto_library(
     deps = [
         "//common/posix_io/engine_factory",
         "//common/posix_io/alignment",
+        "//common/posix_io/completion_mapper",
         "//common/posix_io/io_engine",
         "//common/posix_io/scratch_pool",
         "//common/posix_io/strategy",

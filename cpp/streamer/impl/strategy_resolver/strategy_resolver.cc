@@ -37,7 +37,9 @@ common::ResponseCode availability_of(Strategy strategy)
         return common::posix_io::IoUringProbe::instance().capability().error;
 
     case Strategy::LibaioDirect:
-        return common::ResponseCode::UnsupportedBackendMix;   // no libaio engine yet
+        // Not available rather than not implemented: the caller only needs to know it cannot be
+        // served here, and the walk moves to the next candidate either way. S8 replaces this line.
+        return common::ResponseCode::FsStrategyUnavailable;   // no libaio engine yet
     }
 
     return common::ResponseCode::UnknownError;
@@ -77,7 +79,7 @@ common::ResponseCode StrategyResolver::set_candidates(const std::string & candid
         LOG(ERROR) << "Filesystem strategy is already resolved from '" << _resolved_from.value()
                    << "' (using " << _resolved.value() << "); create a new streamer to use '"
                    << candidates << "'";
-        return common::ResponseCode::UnsupportedBackendMix;
+        return common::ResponseCode::FsStrategyConflict;
     }
 
     // Not resolved yet: first set wins, as for credentials.
@@ -85,7 +87,7 @@ common::ResponseCode StrategyResolver::set_candidates(const std::string & candid
     {
         LOG(ERROR) << "Filesystem strategy was already set to '" << _candidates.value()
                    << "'; create a new streamer to use '" << candidates << "'";
-        return common::ResponseCode::UnsupportedBackendMix;
+        return common::ResponseCode::FsStrategyConflict;
     }
 
     _candidates = candidates;
@@ -143,7 +145,7 @@ common::ResponseCode StrategyResolver::resolve_locked()
     LOG(ERROR) << "No filesystem strategy in '" << candidates << "' can be served here"
                << rejections.str()
                << ". Add sync_buffered to the list to allow the synchronous reader";
-    return common::ResponseCode::UnsupportedBackendMix;
+    return common::ResponseCode::FsStrategyUnavailable;
 }
 
 common::posix_io::Strategy StrategyResolver::resolved() const

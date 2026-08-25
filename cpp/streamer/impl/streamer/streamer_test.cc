@@ -496,7 +496,7 @@ TEST(Async, UnservableStrategyFailsTheRequest)
     // happens AFTER the submission is registered and its responses counted, and UnknownError tells
     // the caller to abort everything rather than just this request. The specific code is what
     // separates a clean refusal from a late collapse.
-    EXPECT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::UnsupportedBackendMix);
+    EXPECT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::FsStrategyUnavailable);
 
     // Nothing was committed: no id was minted, so the caller owes nothing and nothing owes it.
     EXPECT_EQ(submission_id, 0u);

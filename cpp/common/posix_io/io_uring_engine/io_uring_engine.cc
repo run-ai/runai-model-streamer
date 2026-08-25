@@ -4,7 +4,6 @@
 #include <cstring>
 
 #include "common/exception/exception.h"
-#include "common/posix_io/completion_mapper/completion_mapper.h"
 #include "utils/logging/logging.h"
 
 namespace runai::llm::streamer::common::posix_io
@@ -215,20 +214,13 @@ ResponseCode IoUringEngine::wait_for_completions(Completion * out, unsigned max,
         Completion & completion = out[out_count];
         completion.id = io_uring_cqe_get_data64(cqe);
 
-        // res is bytes on success and -errno on failure, so a short read reports as a small positive
-        // number and NOT as an error. bytes_transferred is what the caller compares against what it
-        // asked for; treating "no error" as "all bytes arrived" truncates tensors silently.
-        const long res = cqe->res;
-        if (res < 0)
-        {
-            completion.ret = map_completion(res, FileRef{});
-            completion.bytes_transferred = 0;
-        }
-        else
-        {
-            completion.ret = ResponseCode::Success;
-            completion.bytes_transferred = static_cast<size_t>(res);
-        }
+        // Passed through as the kernel gave it: bytes when >= 0, minus an errno when < 0. A short
+        // read is a small positive number, so it does not look like an error here.
+        //
+        // NOT mapped to a ResponseCode here. Mapping EINVAL correctly needs to know whether the fd
+        // was direct, and at this point only the id is available - the CQE carries nothing else, and
+        // this engine keeps no per-file state. The caller knows the file, so the caller maps.
+        completion.res = cqe->res;
 
         ++out_count;
     }

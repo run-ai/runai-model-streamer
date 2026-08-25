@@ -28,6 +28,10 @@ TEST(CompletionMapper, Non_Negative_Is_Success)
 }
 
 // Attributable to this file. Other files, and other submissions, carry on.
+//
+// These reach FileAccessError through the DEFAULT now, not through a list of their own. They are kept
+// as a test because they are the errnos a real disk or network share produces, and they must stay
+// per-file however the mapping is written.
 TEST(CompletionMapper, Storage_Errors_Are_Per_File)
 {
     for (const long err : { EIO, ENXIO, ESTALE, ETIMEDOUT, ECONNRESET, EREMOTEIO })
@@ -52,8 +56,9 @@ TEST(CompletionMapper, Einval_Is_Mode_Aware)
     EXPECT_TRUE(is_internal_error(-EINVAL, direct()));
     EXPECT_FALSE(is_internal_error(-EINVAL, buffered()));
 
-    // Buffered EINVAL falls through to the default branch rather than asserting.
-    EXPECT_EQ(map_completion(-EINVAL, buffered()), ResponseCode::UnknownError);
+    // Buffered EINVAL falls through to the default branch, which is FileAccessError. On a buffered fd
+    // EINVAL is not about alignment, so there is no reason to call it our bug.
+    EXPECT_EQ(map_completion(-EINVAL, buffered()), ResponseCode::FileAccessError);
 }
 
 // The engine never opens or closes anything, so a bad fd can only be our own bookkeeping.
@@ -84,19 +89,46 @@ TEST(CompletionMapper, Internal_Errors_Return_Unknown_Rather_Than_Throwing)
     EXPECT_NO_THROW(map_completion(-EBADF, direct()));
 }
 
-// Unrecognised errnos are UnknownError, never FileAccessError - guessing "the storage failed" for
-// something we do not understand is the wrong direction to be wrong in.
-TEST(CompletionMapper, Unknown_Errno)
+// An errno with no row of its own is FileAccessError, so one file's failure does not end the whole
+// submission.
+//
+// This REVERSES an earlier decision, which sent unrecognised errnos to UnknownError on the grounds
+// that guessing "the storage failed" was the wrong direction to be wrong in. That argument weighed
+// only the chance of guessing wrong, and not what each wrong guess costs.
+//
+// UnknownError tells the caller to abort everything. So calling a file problem UnknownError ends a
+// whole model load, while calling an internal bug a file problem costs one range and some diagnostic
+// quality. The errno is logged either way.
+//
+// EISDIR is the case that proved it. Reading a directory returns errno 21, which was on no list, and
+// the whole submission was abandoned. The synchronous reader has always reported it per file.
+TEST(CompletionMapper, Unrecognised_Errno_Is_Attributed_To_The_File)
 {
-    EXPECT_EQ(map_completion(-ENOSPC, buffered()), ResponseCode::UnknownError);
-    EXPECT_EQ(map_completion(-EPERM, buffered()), ResponseCode::UnknownError);
+    EXPECT_EQ(map_completion(-EISDIR, buffered()), ResponseCode::FileAccessError);
+    EXPECT_EQ(map_completion(-ENOSPC, buffered()), ResponseCode::FileAccessError);
+    EXPECT_EQ(map_completion(-EPERM, buffered()), ResponseCode::FileAccessError);
+}
+
+// UnknownError must be EARNED. Only the results we can prove are ours get it, and nothing else does.
+TEST(CompletionMapper, Only_Our_Own_Bugs_Are_Unknown_Errors)
+{
+    EXPECT_EQ(map_completion(-EFAULT, buffered()), ResponseCode::UnknownError);
+    EXPECT_EQ(map_completion(-EBADF, buffered()), ResponseCode::UnknownError);
+    EXPECT_EQ(map_completion(-EINVAL, direct()), ResponseCode::UnknownError);
+
+    // Everything else, including errnos nobody listed anywhere.
+    for (const long err : { EISDIR, ENOSPC, EPERM, EACCES, ENOTDIR, ELOOP, EOVERFLOW })
+    {
+        EXPECT_EQ(map_completion(-err, buffered()), ResponseCode::FileAccessError) << "errno " << err;
+        EXPECT_EQ(map_completion(-err, direct()), ResponseCode::FileAccessError) << "errno " << err;
+    }
 }
 
 // EINTR is unreachable as a completion - libaio surfaces it from the wait, not the result - so there
 // is deliberately no row for it. Asserted so that adding one is a conscious act.
 TEST(CompletionMapper, Eintr_Has_No_Special_Row)
 {
-    EXPECT_EQ(map_completion(-EINTR, buffered()), ResponseCode::UnknownError);
+    EXPECT_EQ(map_completion(-EINTR, buffered()), ResponseCode::FileAccessError);
 }
 
 }; // namespace runai::llm::streamer::common::posix_io

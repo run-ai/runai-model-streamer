@@ -152,7 +152,7 @@ ResponseCode MockIoEngine::wait_for_completions(Completion * out, unsigned max, 
     for (unsigned i = 0; i < _auto_complete_on_wait && !_in_flight.empty(); ++i)
     {
         const auto id = _in_flight.front();
-        ready(id, ResponseCode::Success, _live.at(id).bytesize);
+        ready(id, static_cast<long>(_live.at(id).bytesize));
     }
 
     // Neither is acted on: this never blocks, so both wait modes return whatever is ready. An expired
@@ -247,7 +247,7 @@ void MockIoEngine::complete(RequestId id)
     const auto it = _live.find(id);
     ASSERT(it != _live.end()) << "id " << id << " is not live";
 
-    ready(id, ResponseCode::Success, it->second.bytesize);
+    ready(id, static_cast<long>(it->second.bytesize));
 }
 
 void MockIoEngine::complete_short(RequestId id, size_t bytes)
@@ -257,17 +257,19 @@ void MockIoEngine::complete_short(RequestId id, size_t bytes)
     ASSERT(bytes < it->second.bytesize) << "short completion of " << bytes
                                         << " is not shorter than the requested " << it->second.bytesize;
 
-    // Still Success: a short count is not an error, and is visible only by comparing the count
-    // against what was asked for.
-    ready(id, ResponseCode::Success, bytes);
+    // Still a positive result: a short count is not an error, and is visible only by comparing the
+    // count against what was asked for.
+    ready(id, static_cast<long>(bytes));
 }
 
-void MockIoEngine::fail(RequestId id, ResponseCode ret)
+void MockIoEngine::fail(RequestId id, long error)
 {
     const auto it = _live.find(id);
     ASSERT(it != _live.end()) << "id " << id << " is not live";
 
-    ready(id, ret, 0);
+    ASSERT(error > 0) << "pass a positive errno such as EIO; the minus sign is added here";
+
+    ready(id, -error);
 }
 
 void MockIoEngine::complete_all()
@@ -319,7 +321,7 @@ void MockIoEngine::fill_expected(char * buffer, size_t offset, size_t bytesize)
     }
 }
 
-void MockIoEngine::ready(RequestId id, ResponseCode ret, size_t bytes_transferred)
+void MockIoEngine::ready(RequestId id, long res)
 {
     const auto it = _live.find(id);
     ASSERT(it != _live.end()) << "id " << id << " is not live";
@@ -330,6 +332,8 @@ void MockIoEngine::ready(RequestId id, ResponseCode ret, size_t bytes_transferre
     // kernel can produce, and would blur the staged/in-flight split the teardown path needs.
     ASSERT(erase_from(_in_flight, id)) << "id " << id << " has not been issued - flush() first";
 
+    const size_t bytes_transferred = res > 0 ? static_cast<size_t>(res) : 0;
+
     if (_fill && bytes_transferred > 0 && request.buffer != nullptr)
     {
         // Exactly what was reported, never what was requested - or a short completion would hide a
@@ -337,7 +341,7 @@ void MockIoEngine::ready(RequestId id, ResponseCode ret, size_t bytes_transferre
         fill_expected(request.buffer, request.offset, bytes_transferred);
     }
 
-    _ready.push_back(Completion{ id, ret, bytes_transferred });
+    _ready.push_back(Completion{ id, res });
     _live.erase(it);
 }
 

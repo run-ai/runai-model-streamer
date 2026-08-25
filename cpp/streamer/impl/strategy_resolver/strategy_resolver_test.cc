@@ -89,7 +89,10 @@ TEST(StrategyResolver, Exhausted_List_Is_An_Error)
 {
     StrategyResolver resolver("libaio_direct");   // no engine for it, and nothing follows it
 
-    EXPECT_NE(resolver.resolve(), common::ResponseCode::Success);
+    // The SPECIFIC code, not just "not Success". These used to report UnsupportedBackendMix, whose
+    // message is about mixing S3, GCS and Azure - so an operator was sent to object storage for a
+    // filesystem problem. A test asserting only "not Success" cannot notice that.
+    EXPECT_EQ(resolver.resolve(), common::ResponseCode::FsStrategyUnavailable);
     EXPECT_FALSE(resolver.is_resolved());
 }
 
@@ -140,7 +143,9 @@ TEST(StrategyResolver, First_Set_Wins)
     ASSERT_EQ(resolver.set_candidates("sync_buffered"), common::ResponseCode::Success);
     EXPECT_EQ(resolver.set_candidates("sync_buffered"), common::ResponseCode::Success)
         << "the same value again must be a no-op, not a conflict";
-    EXPECT_NE(resolver.set_candidates("io_uring_buffered,sync_buffered"), common::ResponseCode::Success);
+    // Conflict, so the message tells the operator to set it once - not that they mixed S3 with GCS.
+    EXPECT_EQ(resolver.set_candidates("io_uring_buffered,sync_buffered"),
+              common::ResponseCode::FsStrategyConflict);
 }
 
 // THE HOLE that first-set-wins alone leaves open.
@@ -155,7 +160,8 @@ TEST(StrategyResolver, Set_After_Resolution_Is_Rejected)
     ASSERT_EQ(resolver.resolve(), common::ResponseCode::Success);
     ASSERT_EQ(resolver.resolved(), Strategy::SyncBuffered);
 
-    EXPECT_NE(resolver.set_candidates("io_uring_buffered,sync_buffered"), common::ResponseCode::Success)
+    EXPECT_EQ(resolver.set_candidates("io_uring_buffered,sync_buffered"),
+              common::ResponseCode::FsStrategyConflict)
         << "accepting this would report success and have no effect";
 
     EXPECT_EQ(resolver.resolved(), Strategy::SyncBuffered) << "and it must not have changed anything";
@@ -177,9 +183,9 @@ TEST(StrategyResolver, Set_After_Failed_Resolution_Is_Rejected)
 {
     StrategyResolver resolver("libaio_direct");
 
-    ASSERT_NE(resolver.resolve(), common::ResponseCode::Success);
+    ASSERT_EQ(resolver.resolve(), common::ResponseCode::FsStrategyUnavailable);
 
-    EXPECT_NE(resolver.set_candidates("sync_buffered"), common::ResponseCode::Success);
+    EXPECT_EQ(resolver.set_candidates("sync_buffered"), common::ResponseCode::FsStrategyConflict);
     EXPECT_EQ(resolver.resolved_from(), "libaio_direct");
 }
 

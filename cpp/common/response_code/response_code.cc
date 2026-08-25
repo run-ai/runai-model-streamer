@@ -42,6 +42,8 @@ constexpr std::array<const char *, static_cast<size_t>(ResponseCode::__Max)> __m
     "Timed out waiting for a response",
     "Streamer is locked to a single object-storage backend (S3/GCS/Azure); mixing object-storage backends in one streamer or submission is not supported",
     "Credentials were already set to a different value; create a new streamer to use different credentials",
+    "The filesystem read strategy was already set to a different value; set RUNAI_STREAMER_FS_STRATEGY, or call runai_set_fs_strategy, once before the first request",
+    "None of the filesystem read strategies in the list can be served on this host; add sync_buffered to the list to allow the synchronous reader",
 };
 
 const char * description(int response_code)

@@ -5,6 +5,8 @@
 
 #include "streamer/impl/async_io/async_io_worker/async_io_worker.h"
 
+#include "common/posix_io/completion_mapper/completion_mapper.h"
+
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -138,12 +140,50 @@ void AsyncIoWorker::enqueue(Workload && workload)
 
         // Zero-size tasks appear in no chunk, so nothing will ever complete for them - but a
         // zero-sized range owes a response like any other.
-        for (const auto & task : batch.tasks)
+        //
+        // The answer depends on whether the FILE can be opened, so the file is checked first. The
+        // synchronous reader opens the file for every batch before it looks at any range size, so a
+        // zero-sized range in a missing file fails with the file. Both readers must agree: which one
+        // served a request is meant to be invisible to the caller.
+        //
+        // Answering Success without looking was wrong in two ways. A batch whose ranges are ALL
+        // zero-sized never opened the file at all, so a missing file reported success. A mixed batch
+        // answered its zero-sized ranges Success and its other ranges FileAccessError, for one file.
+        const bool has_zero_sized = std::any_of(
+            batch.tasks.begin(), batch.tasks.end(),
+            [](const auto & task) { return task.info.bytesize == 0; });
+
+        if (has_zero_sized)
         {
-            if (task.info.bytesize == 0)
+            // Only when there IS a zero-sized range, so the usual path keeps its lazy open.
+            //
+            // Opened and closed rather than kept: fd_for() opens this file later and decides then
+            // whether it can use O_DIRECT, which needs a chunk's offset and destination. Keeping this
+            // buffered fd would take that decision away from every batch that has a zero-sized range.
+            const auto code = probe_open(batch.path);
+
+            if (code == common::ResponseCode::Success)
             {
-                common::backend_api::Response resp(common::ResponseCode::Success);
-                batch.handle_response(resp, &task);
+                for (const auto & task : batch.tasks)
+                {
+                    if (task.info.bytesize == 0)
+                    {
+                        common::backend_api::Response resp(common::ResponseCode::Success);
+                        batch.handle_response(resp, &task);
+                    }
+                }
+            }
+            else
+            {
+                // Recorded against the FILE, not answered here - the same way every other failure on
+                // this path is handled (see complete_chunk). report_workload applies it to every task
+                // of this file that is still unanswered when the workload finalizes.
+                //
+                // Not through handle_response: that THROWS on a non-Success code, because it is the
+                // object-storage abort path. Answering an error through it would throw out of
+                // enqueue, the workload would never finalize, and the caller would wait for a
+                // response that can no longer come.
+                wl.error_by_file_index.emplace(batch.file_index, code);
             }
         }
 
@@ -248,6 +288,24 @@ size_t AsyncIoWorker::bytes_read() const
     return _bytes_read;
 }
 
+common::posix_io::FileRef AsyncIoWorker::file_of(const InflightChunk & entry) const
+{
+    // The file this request was staged against, rebuilt from what the worker already recorded. The
+    // engine cannot supply it: a completion carries only the id.
+    //
+    // An unknown workload gives an empty FileRef. That happens when the workload was finalized while
+    // this read was still out, and the result is only a slightly worse log line - the mapping falls
+    // back to what a buffered fd would give.
+    const auto wlit = _inflight.find(entry.workload_id);
+    if (wlit == _inflight.end() || entry.batch_index >= wlit->second.fds.size())
+    {
+        return common::posix_io::FileRef{};
+    }
+
+    const auto & batch_fd = wlit->second.fds[entry.batch_index];
+    return common::posix_io::FileRef{ batch_fd.fd, batch_fd.direct };
+}
+
 size_t AsyncIoWorker::land_bounced_pass(common::posix_io::RequestId id, size_t bytes_transferred)
 {
     auto * entry = _chunks.find_mutable(id);
@@ -278,6 +336,22 @@ size_t AsyncIoWorker::land_bounced_pass(common::posix_io::RequestId id, size_t b
 
     _scratch->give(_chunks.clear_bounce(id));
     return useful;
+}
+
+common::ResponseCode AsyncIoWorker::probe_open(const std::string & path)
+{
+    // Buffered, always. The question here is only whether the file can be opened, and O_DIRECT would
+    // add a second reason to fail that has nothing to do with the file existing - some mounts refuse
+    // it outright.
+    const int fd = ::open(path.c_str(), O_RDONLY);
+    if (fd < 0)
+    {
+        LOG(ERROR) << "Failed to open " << path << " : " << std::strerror(errno);
+        return common::ResponseCode::FileAccessError;   // this file's failure, not the storage's
+    }
+
+    ::close(fd);
+    return common::ResponseCode::Success;
 }
 
 int AsyncIoWorker::fd_for(Inflight & wl, unsigned batch_index, size_t file_offset, const char * buffer,
@@ -456,21 +530,28 @@ void AsyncIoWorker::drain_batch(std::atomic<bool> & stopped)
             continue;
         }
 
-        if (completion.ret != common::ResponseCode::Success)
+        if (completion.failed())
         {
+            // Mapped HERE, not in the engine, because mapping needs the file. EINVAL means our
+            // alignment rule broke on a direct fd, and means something else on a buffered one
+            // (completion_mapper.h). The engine holds only the id when a completion arrives, so it
+            // cannot tell the two apart. This worker can: it opened the file and recorded how.
+            const auto file = file_of(*entry);
+            const auto code = common::posix_io::map_completion(completion.res, file);
+
             // Give the scratch back before failing, or the pool drains one buffer per failed read.
             if (char * scratch = _chunks.clear_bounce(completion.id))
             {
                 _scratch->give(scratch);
             }
 
-            complete_chunk(completion.id, completion.ret);
+            complete_chunk(completion.id, code);
             continue;
         }
 
         // A bounced pass read a whole block but only part of it was asked for. Converting here, before
         // record(), is what stops the cursor advancing past bytes that never arrived.
-        const size_t useful = land_bounced_pass(completion.id, completion.bytes_transferred);
+        const size_t useful = land_bounced_pass(completion.id, completion.bytes_transferred());
         _bytes_read += useful;
 
         switch (_chunks.record(completion.id, useful))

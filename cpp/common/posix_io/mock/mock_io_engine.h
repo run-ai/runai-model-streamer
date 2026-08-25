@@ -92,7 +92,12 @@ class MockIoEngine : public IoEngine
 
     void complete(RequestId id);                       // the full requested length
     void complete_short(RequestId id, size_t bytes);   // bytes < requested; 0 models EOF
-    void fail(RequestId id, ResponseCode ret);
+
+    // `error` is a POSITIVE errno, such as EIO. The engine reports it as -errno, which is how both
+    // io_uring and libaio report a failed read (io_engine.h). Taking the errno rather than a
+    // ResponseCode keeps the mock at the same level as a real engine: mapping to a ResponseCode is
+    // the caller's job now, and a mock that mapped for the caller could not test that mapping.
+    void fail(RequestId id, long error);
     void complete_all();                               // everything in flight, oldest first
 
     // ---- destination fill ----
@@ -148,7 +153,7 @@ class MockIoEngine : public IoEngine
     static void fill_expected(char * buffer, size_t offset, size_t bytesize);
 
  private:
-    void ready(RequestId id, ResponseCode ret, size_t bytes_transferred);
+    void ready(RequestId id, long res);
 
     const unsigned _depth;
     const Limits _limits;

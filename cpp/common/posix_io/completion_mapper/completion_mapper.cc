@@ -11,22 +11,6 @@ namespace runai::llm::streamer::common::posix_io
 namespace
 {
 
-bool is_storage_error(long err)
-{
-    switch (err)
-    {
-    case EIO:
-    case ENXIO:
-    case ESTALE:
-    case ETIMEDOUT:
-    case ECONNRESET:
-    case EREMOTEIO:
-        return true;
-    default:
-        return false;
-    }
-}
-
 } // namespace
 
 bool is_internal_error(long res, const FileRef & file)
@@ -67,11 +51,6 @@ ResponseCode map_completion(long res, const FileRef & file)
         return ResponseCode::FinishedError;
     }
 
-    if (is_storage_error(err))
-    {
-        return ResponseCode::FileAccessError;
-    }
-
     if (is_internal_error(res, file))
     {
         // Loud, but NOT fatal and NOT an exception.
@@ -89,8 +68,26 @@ ResponseCode map_completion(long res, const FileRef & file)
         return ResponseCode::UnknownError;
     }
 
-    LOG(ERROR) << "Unrecognised errno " << err << " from the io engine on fd " << file.fd;
-    return ResponseCode::UnknownError;
+    // Everything else is this FILE's failure, and the caller may carry on with the rest.
+    //
+    // The default runs THIS way round on purpose. UnknownError tells the caller to abort the whole
+    // submission, so it must need evidence: the three cases above are the ones we can prove are ours.
+    // An errno we do not recognise is far more likely to be about the file than about our own
+    // bookkeeping.
+    //
+    // The two directions cost very different amounts when they are wrong. Calling an internal bug a
+    // file failure loses some diagnostic quality and one range. Calling a file failure UnknownError
+    // ends a whole model load because one file could not be read.
+    //
+    // The synchronous reader already decided this, and for the same reason - see the comment in
+    // file.cc. Both readers must agree, because which one served a request is meant to be invisible
+    // to the caller.
+    //
+    // The errno is still logged, so nothing is lost by not naming it here. An allowlist of storage
+    // errnos used to sit in this place; it could not be complete, and EISDIR was one it missed.
+    LOG(ERROR) << "Read failed with errno " << err << " on fd " << file.fd
+               << (file.direct ? " (direct)" : " (buffered)") << " - reporting it against this file";
+    return ResponseCode::FileAccessError;
 }
 
 }; // namespace runai::llm::streamer::common::posix_io

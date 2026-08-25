@@ -184,6 +184,13 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     // A file is opened once and keeps that mode. Congruence is a property of the whole region, not of
     // one chunk: the ranges of a region are contiguous, so if the first chunk is congruent the rest
     // are too.
+    // Can this file be opened at all? Success or FileAccessError.
+    //
+    // Used to answer zero-sized ranges, which produce no chunk and so would otherwise be answered
+    // without the file ever being touched. The file is opened and closed again - fd_for() opens it
+    // properly later, when it knows whether O_DIRECT can be used.
+    static common::ResponseCode probe_open(const std::string & path);
+
     int fd_for(Inflight & wl, unsigned batch_index, size_t file_offset, const char * buffer,
                common::ResponseCode & out_error);
 
@@ -230,6 +237,13 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     // The conversion matters: the kernel reports a whole block, but only part of it was asked for.
     // Recording the raw count would advance the cursor past bytes that were never delivered, and the
     // read would silently skip data.
+    // The file an in-flight request was staged against.
+    //
+    // Needed to map a failed completion: EINVAL means our alignment rule broke on a direct fd, and
+    // something else on a buffered one. The engine cannot decide that, because a completion carries
+    // only the id, so this worker does it.
+    common::posix_io::FileRef file_of(const InflightChunk & entry) const;
+
     size_t land_bounced_pass(common::posix_io::RequestId id, size_t bytes_transferred);
 
     void finalize(InflightMap::iterator it, common::ResponseCode code);

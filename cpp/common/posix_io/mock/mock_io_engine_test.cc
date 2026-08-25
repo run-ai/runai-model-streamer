@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cerrno>
 #include <vector>
 
 namespace runai::llm::streamer::common::posix_io
@@ -212,8 +213,8 @@ TEST(MockIoEngine, FullCompletionWritesThePatternAndNothingElse)
 
     const auto completions = drain(engine);
     ASSERT_EQ(completions.size(), 1);
-    EXPECT_EQ(completions[0].ret, ResponseCode::Success);
-    EXPECT_EQ(completions[0].bytes_transferred, Bytes);
+    EXPECT_FALSE(completions[0].failed());
+    EXPECT_EQ(completions[0].bytes_transferred(), Bytes);
 
     EXPECT_EQ(dst.contents(Bytes), Destination::expected(offset, Bytes));
     EXPECT_TRUE(dst.guards_intact());
@@ -237,9 +238,9 @@ TEST(MockIoEngine, ShortCompletionWritesOnlyTheReportedBytes)
     const auto completions = drain(engine);
     ASSERT_EQ(completions.size(), 1);
 
-    // Still Success - a short count is visible only by comparing it against what was asked for.
-    EXPECT_EQ(completions[0].ret, ResponseCode::Success);
-    EXPECT_EQ(completions[0].bytes_transferred, landed);
+    // Still not a failure - a short count is visible only by comparing it against what was asked for.
+    EXPECT_FALSE(completions[0].failed());
+    EXPECT_EQ(completions[0].bytes_transferred(), landed);
 
     EXPECT_EQ(dst.contents(landed), Destination::expected(offset, landed));
 
@@ -259,12 +260,14 @@ TEST(MockIoEngine, FailureTransfersNothing)
     engine.stage(0, FileRef{ 1, false }, 0, Bytes, dst.buffer());
     unsigned issued = 0;
     engine.flush(issued);
-    engine.fail(0, ResponseCode::FileAccessError);
+    engine.fail(0, EIO);
 
     const auto completions = drain(engine);
     ASSERT_EQ(completions.size(), 1);
-    EXPECT_EQ(completions[0].ret, ResponseCode::FileAccessError);
-    EXPECT_EQ(completions[0].bytes_transferred, 0);
+    // The raw errno, as a real engine reports it. Turning it into a ResponseCode is the caller's
+    // job, so the mock must not do it here.
+    EXPECT_EQ(completions[0].res, -EIO);
+    EXPECT_EQ(completions[0].bytes_transferred(), 0u);
 
     for (size_t i = 0; i < Bytes; ++i)
     {

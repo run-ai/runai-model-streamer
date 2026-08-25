@@ -49,12 +49,30 @@ struct Limits
 
 struct Completion
 {
-    RequestId    id = 0;
-    ResponseCode ret = ResponseCode::Success;
+    RequestId id = 0;
 
-    // The caller MUST compare this against what it asked for. Short reads are routine under
-    // io_uring, so treating "no error" as "all bytes arrived" truncates tensors silently.
-    size_t bytes_transferred = 0;
+    // The kernel's own result for this read, passed through without being interpreted:
+    //
+    //   res >= 0   the number of bytes that were read
+    //   res <  0   minus an errno, so -22 is EINVAL
+    //
+    // io_uring and libaio both report a result this way, so the engines have nothing to convert.
+    //
+    // RAW, and not a ResponseCode, because the engine cannot map it correctly on its own. Mapping
+    // needs to know whether the fd was opened with O_DIRECT: EINVAL means an alignment bug on a
+    // direct fd and something else on a buffered one (completion_mapper.h). At completion time the
+    // engine holds only the id, and it keeps no per-file state - see FileRef above. The caller has
+    // the FileRef, so the caller calls map_completion().
+    //
+    // The caller MUST also compare a positive res against what it asked for. Short reads are routine
+    // under io_uring, so treating "no error" as "all bytes arrived" truncates tensors silently.
+    long res = 0;
+
+    // Bytes read, or 0 for an error. A short helper because res has two meanings and every caller
+    // needs this one of them.
+    size_t bytes_transferred() const { return res > 0 ? static_cast<size_t>(res) : 0; }
+
+    bool failed() const { return res < 0; }
 };
 
 enum class WaitMode { NonBlocking, Block };

@@ -57,7 +57,8 @@ _RUNAI_EXTERN_C int runai_set_credentials(
 // to the synchronous reader; include sync_buffered to allow that explicitly.
 //
 // Streamer-scoped and SET ONCE, like runai_set_credentials: the same value again returns Success, a
-// different value returns UnsupportedBackendMix. The list is resolved on the first filesystem
+// different value returns FsStrategyConflict. A list this host cannot serve returns
+// FsStrategyUnavailable. The list is resolved on the first filesystem
 // submission, and any different value after that is rejected too - by then an engine has been built
 // for the resolved answer. Create a new streamer to use a different strategy.
 //

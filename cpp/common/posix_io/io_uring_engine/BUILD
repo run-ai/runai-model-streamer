@@ -4,7 +4,6 @@ runai_cc_auto_library(
     name = "io_uring_engine",
     deps = [
         "//common/exception",
-        "//common/posix_io/completion_mapper",
         "//common/posix_io/io_engine",
         "//common/response_code",
         "//utils/logging",
