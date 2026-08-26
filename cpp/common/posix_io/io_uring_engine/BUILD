@@ -4,6 +4,7 @@ runai_cc_auto_library(
     name = "io_uring_engine",
     deps = [
         "//common/exception",
+        "//common/posix_io/alignment",
         "//common/posix_io/io_engine",
         "//common/response_code",
         "//utils/logging",
@@ -17,6 +18,7 @@ runai_cc_test(
     deps = [
         ":io_uring_engine",
         "//common/posix_io/io_uring_probe",
+        "//common/posix_io/alignment",
         "//utils/random",
         "//utils/temp/env",
         "//utils/temp/file",

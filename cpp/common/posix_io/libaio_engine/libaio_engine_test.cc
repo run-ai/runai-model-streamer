@@ -11,6 +11,7 @@
 #include <cstring>
 #include <vector>
 
+#include "common/posix_io/alignment/alignment.h"
 #include "utils/random/random.h"
 #include "utils/temp/file/file.h"
 
@@ -20,7 +21,11 @@ namespace runai::llm::streamer::common::posix_io
 namespace
 {
 
-constexpr size_t Block = 4096;
+// The routing code decides congruence before any engine exists, so it carries its own copy of the
+// block size. If the two ever differ, routing and the worker disagree about which files can be read
+// directly, and nothing fails - the reads just take a path nobody intended. Tying the tests to the
+// constant is what turns that into a build failure.
+constexpr size_t Block = DirectBlockSize;
 
 // These tests have no availability gate, unlike the io_uring ones.
 //

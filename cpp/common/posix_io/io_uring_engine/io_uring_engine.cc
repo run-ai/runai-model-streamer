@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "common/exception/exception.h"
+#include "common/posix_io/alignment/alignment.h"
 #include "utils/logging/logging.h"
 
 namespace runai::llm::streamer::common::posix_io
@@ -46,16 +47,14 @@ IoUringEngine::IoUringEngine(const AsyncIoConfig & config, size_t max_read_bytes
     // the engine, not one request, and the caller only consults these when it is considering a direct
     // read.
     //
-    // 4096, not 1 and not measured. `statx` reports the real numbers through STATX_DIOALIGN, which
-    // landed in kernel 6.1 while our floor is 5.15 - so on some hosts there is nothing to ask. 4096 is
-    // a safe superset of every block size in use (512 and 4096), and over-aligning is always correct:
-    // it can only waste, never fail.
+    // One shared constant, so routing and this engine cannot disagree - see DirectBlockSize for why
+    // the value is assumed rather than measured, and what happens if an engine ever measures it.
     //
     // Reporting 1 here would be much worse than wasteful. The caller tests congruence against this
     // number, and everything is congruent modulo 1 - so every file would be opened with O_DIRECT and
     // every unaligned read would then fail with EINVAL.
-    _limits.offset_alignment = 4096;
-    _limits.buffer_alignment = 4096;
+    _limits.offset_alignment = DirectBlockSize;
+    _limits.buffer_alignment = DirectBlockSize;
 
     LOG(INFO) << "io_uring ready: " << _depth << " submission entries"
               << (_depth == config.depth ? "" : " (rounded up from the configured depth)")

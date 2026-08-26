@@ -23,6 +23,28 @@ struct Requested
 // one number covers all three checks. Over-aligning is always correct. It only wastes a little.
 size_t block_size(const Limits & limits);
 
+// The block size we assume a direct read needs.
+//
+// 4096, assumed rather than measured. statx reports the real numbers through STATX_DIOALIGN, which
+// arrived in kernel 6.1 while our floor is 5.15 - and it is missing from the build headers here even
+// on a 6.8 kernel. 4096 is a safe superset of every block size in use (512 and 4096). Over-aligning
+// can only waste a little; it can never fail.
+//
+// Read by two places that must agree:
+//
+//   the engines   IoUringEngine and LibaioEngine both report it as their Limits alignment
+//   routing       streamer.cc file_groups decides congruence before any engine exists, so it cannot
+//                 ask an engine and needs the number early
+//
+// They share the constant rather than each writing 4096, because a disagreement would be invisible.
+// Routing and the worker would differ about which files can be read directly, nothing would fail, and
+// the reads would quietly take a path nobody intended.
+//
+// If an engine ever measures the real value with statx, it will report something equal or NARROWER
+// than this, and routing stays correct: it would refuse a few files that could have been read
+// directly, sending them to the synchronous reader. Slower for those files, never wrong.
+constexpr size_t DirectBlockSize = 4096;
+
 // Can ANY part of this read be done directly?
 //
 // This is the rule that decides everything, and it is not "is the address aligned". A direct read

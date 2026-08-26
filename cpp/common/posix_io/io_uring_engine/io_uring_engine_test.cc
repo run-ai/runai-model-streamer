@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "common/posix_io/alignment/alignment.h"
 #include "utils/random/random.h"
 #include "utils/temp/file/file.h"
 
@@ -142,6 +143,24 @@ TEST(IoUringEngine, Depth_Is_The_Rings_Real_Size)
     const IoUringEngine rounded(config_with(700));
     EXPECT_EQ(rounded.depth(), 1024u) << "700 entries rounds up to 1024";
     EXPECT_GE(rounded.depth(), 700u) << "the ring must never be smaller than the window";
+}
+
+// limits() had no test at all until this one, so the three values it reports were never checked.
+//
+// The alignments matter most. The caller tests congruence against them, and everything is congruent
+// modulo 1, so reporting 1 would open every file with O_DIRECT and then fail every unaligned read with
+// EINVAL. They also have to match what routing assumes before any engine exists, which is why both
+// read one constant (see DirectBlockSize).
+TEST(IoUringEngine, Limits_Describe_A_Direct_Read)
+{
+    SKIP_WITHOUT_RING();
+
+    const IoUringEngine engine(config_with(8));
+    const auto limits = engine.limits();
+
+    EXPECT_EQ(limits.offset_alignment, DirectBlockSize);
+    EXPECT_EQ(limits.buffer_alignment, DirectBlockSize);
+    EXPECT_EQ(limits.max_read_bytesize, max_read_bytesize());
 }
 
 // One read, end to end: the bytes must be the file's bytes, at the right offset.
@@ -361,7 +380,11 @@ TEST(IoUringEngine, Fills_The_Window)
 namespace
 {
 
-constexpr size_t Block = 4096;
+// Tied to the routing constant, not written out again. Routing decides congruence before any engine
+// exists, so it carries its own block size; if the two drift apart, routing and the worker disagree
+// about which files can be read directly and nothing fails - the reads just take a path nobody
+// intended.
+constexpr size_t Block = DirectBlockSize;
 
 // Like Fixture, but the fd is opened with O_DIRECT.
 //

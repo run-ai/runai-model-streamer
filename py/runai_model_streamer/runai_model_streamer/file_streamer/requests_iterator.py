@@ -20,6 +20,9 @@ DEFAULT_RING_BUFFERS = 4
 RUNAI_STREAMER_MAX_PADS_PER_BUFFER_ENV_VAR_NAME = "RUNAI_STREAMER_MAX_PADS_PER_BUFFER"
 DEFAULT_MAX_PADS_PER_BUFFER = 1024
 
+RUNAI_STREAMER_HUGE_PAGES_ENV_VAR_NAME = "RUNAI_STREAMER_HUGE_PAGES"
+DEFAULT_HUGE_PAGES = 1
+
 class RunaiStreamerMemoryLimitException(Exception):
     pass
 
@@ -112,7 +115,116 @@ class FilesRequest:
 # up more than needed only wastes a little space.
 DIRECT_IO_BLOCK = 4096
 
+# The size of a transparent huge page on x86_64 and on aarch64 with 4 KiB pages.
+#
+# The pool base is moved to a multiple of this, and then advised with MADV_HUGEPAGE, so the whole
+# pool sits on 2 MiB pages instead of 4 KiB ones.
+#
+# The reason is O_DIRECT, not the copying. Every direct read pins its destination pages before the
+# DMA - about 2,048 pages per 8 MiB read, and at 10 GiB/s that is roughly 2.6M pins per second, on
+# the one async worker thread. On 2 MiB pages the same read pins 4. Buffered reads pay none of this,
+# so it is a cost that O_DIRECT adds rather than one it removes.
+#
+# It is INSURANCE, not an optimisation. glibc may already align a large allocation to a huge page and
+# advise it - measured on one host, a plain np.empty comes back with the `hg` flag set and fully
+# huge-page backed. That depends on the glibc version and a tunable, and neither is ours to control
+# on a customer's node. Doing it here makes the result the same everywhere.
+#
+# A 2 MiB base is also a multiple of DIRECT_IO_BLOCK, so it replaces the old 4096 shift rather than
+# adding to it.
+HUGE_PAGE = 2 * 1024 * 1024
+
 # How many pads one buffer may hold before we give up and pack tightly. See _max_pads_per_buffer().
+
+
+def _huge_pages_enabled() -> bool:
+    """Whether to place the pool on huge pages. On by default.
+
+    A switch because it changes how the pool is allocated on every load, and the gain is not the same
+    everywhere. It is worth most with O_DIRECT, where every read pins its destination pages; a
+    buffered load pays none of that. On a host whose allocator already provides huge pages it changes
+    nothing at all.
+
+    Turning it OFF restores exactly the earlier behaviour - a DIRECT_IO_BLOCK-aligned base, no
+    madvise, no check - so it is a clean rollback if huge pages ever cost more than they save. The one
+    known way that can happen is memory fragmentation: with the node's THP defrag set to `madvise` or
+    `always`, faulting an advised region can make the kernel compact memory first, which shows up as a
+    slow first load and nothing in any log.
+
+    Anything other than "1" turns it off, so a typo is safe rather than surprising."""
+    return os.getenv(RUNAI_STREAMER_HUGE_PAGES_ENV_VAR_NAME, str(DEFAULT_HUGE_PAGES)).strip() == "1"
+
+
+def _pool_alignment() -> int:
+    """What the pool base is moved to: a huge page when huge pages are on, a block when they are off.
+
+    Never smaller than DIRECT_IO_BLOCK either way, because congruent placement depends on it - a
+    misaligned base would silently stop direct reads from working at all."""
+    return HUGE_PAGE if _huge_pages_enabled() else DIRECT_IO_BLOCK
+
+
+def _request_huge_pages(array: np.ndarray) -> None:
+    """Ask the kernel to back `array` with huge pages, and say so if it did not.
+
+    Advisory in every sense. madvise cannot fail in a way that matters here - if it is refused, or
+    the kernel cannot find contiguous memory, the pool works exactly as before on 4 KiB pages and
+    reads are a little slower. So every error is logged and swallowed.
+
+    Whether it WORKED is not checked here. THP is decided when a page is first written, never when
+    it is advised, so a check at this point reads zero for an untouched pool whatever the kernel is
+    about to do. _report_huge_pages_once() asks later, when the memory has been written."""
+    try:
+        import ctypes
+
+        MADV_HUGEPAGE = 14
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+
+        # Only the part that is fully inside a huge page boundary at both ends. madvise takes a
+        # page-aligned start, and a partial huge page at either end cannot be backed by one anyway.
+        base = array.ctypes.data
+        start = _align_up(base, HUGE_PAGE)
+        end = (base + array.nbytes) // HUGE_PAGE * HUGE_PAGE
+        if end <= start:
+            return
+
+        if libc.madvise(ctypes.c_void_p(start), ctypes.c_size_t(end - start), MADV_HUGEPAGE) != 0:
+            logger.debug(
+                "[RunAI Streamer] madvise(MADV_HUGEPAGE) was refused (errno %d); the ring buffer "
+                "stays on 4 KiB pages", ctypes.get_errno()
+            )
+    except Exception as exception:  # noqa: BLE001 - never let a hint break a load
+        logger.debug("[RunAI Streamer] Could not request huge pages: %s", exception)
+
+
+def _mapping_memory(address: int) -> Optional[Tuple[int, int]]:
+    """(resident bytes, huge-page bytes) for the mapping holding `address`, or None if unreadable.
+
+    Reads the mapping's own smaps entry rather than the machine-wide counter in /proc/meminfo, which
+    everything else on the node also moves.
+
+    Both numbers are needed, not just the huge-page one. Pages are only backed once they are written,
+    so a pool nobody has written to reports zero huge pages and is perfectly healthy. Rss says how
+    much has been written, which is what makes the other number mean anything.
+
+    Linux only, and /proc may not be mounted, so the caller treats None as "no answer" rather than as
+    a failure."""
+    try:
+        current = None
+        resident = None
+        with open("/proc/self/smaps") as smaps:
+            for line in smaps:
+                head = line.split()
+                if len(head) >= 5 and "-" in head[0] and ":" not in head[0]:
+                    low, high = (int(part, 16) for part in head[0].split("-"))
+                    current = low <= address < high
+                    resident = None
+                elif current and line.startswith("Rss:"):
+                    resident = int(line.split()[1]) * 1024
+                elif current and line.startswith("AnonHugePages:"):
+                    return (resident or 0, int(line.split()[1]) * 1024)
+        return None
+    except OSError:
+        return None
 
 
 def _align_up(address: int, block: int) -> int:
@@ -152,9 +264,14 @@ class FilesRequestsIteratorWithBuffer:
         #   instead of about 0.1% of it.
         #
         # np.empty gives about 16 or 32 bytes of alignment, so the base is moved forward by hand.
+        #
+        # Moved to a HUGE_PAGE boundary when huge pages are on, and to a DIRECT_IO_BLOCK one when they
+        # are off. 2 MiB is a multiple of 4096, so the direct-read rule holds either way - see
+        # HUGE_PAGE for what the larger alignment buys and _huge_pages_enabled() for the switch.
+        alignment = _pool_alignment()
         self._slot_size = buffer_size + DIRECT_IO_BLOCK * _max_pads_per_buffer()
-        self._raw = np.empty(self._slot_size * num_buffers + DIRECT_IO_BLOCK, dtype=np.uint8)
-        shift = (-self._raw.ctypes.data) % DIRECT_IO_BLOCK
+        self._raw = np.empty(self._slot_size * num_buffers + alignment, dtype=np.uint8)
+        shift = (-self._raw.ctypes.data) % alignment
         self.pool = self._raw[shift: shift + self._slot_size * num_buffers]
         self.buffers = [self.pool[i * self._slot_size: (i + 1) * self._slot_size] for i in range(num_buffers)]
         # Destinations are absolute addresses (that is the C contract), and this class packs them
@@ -162,6 +279,12 @@ class FilesRequestsIteratorWithBuffer:
         # knowledge of its own allocation, not an assumption the range API makes.
         self.buffer_addresses = [buffer.ctypes.data for buffer in self.buffers]
         self._free_buffers = deque(range(num_buffers))
+
+        # Marked as already reported when huge pages are off, so release() has nothing to do and the
+        # switch really means "behave as before" rather than "do the work and stay quiet".
+        self._huge_pages_reported = not _huge_pages_enabled()
+        if not self._huge_pages_reported:
+            _request_huge_pages(self.pool)
 
     def _place(self, request: FilesRequest, base: int, aligned: bool) -> Optional[List[int]]:
         """Addresses for this request's ranges, or None if an aligned layout does not fit.
@@ -196,8 +319,60 @@ class FilesRequestsIteratorWithBuffer:
         out for that request afterwards - the next request will overwrite it."""
         if request.buffer_index is None:
             raise ValueError("request has no buffer to release (released twice?)")
+        self._report_huge_pages_once(request.buffer_index)
         self._free_buffers.append(request.buffer_index)
         request.buffer_index = None
+
+    def _report_huge_pages_once(self, buffer_index: int) -> None:
+        """Say whether the pool really got huge pages. Runs once, on the first buffer returned.
+
+        Timed here, and not next to the madvise, because THP is decided when a page is first written
+        - never when it is advised. Checking at allocation always reads zero, since nothing has been
+        touched yet. A buffer coming back is the first moment the memory has really been written.
+
+        THP is best effort. Under memory fragmentation the kernel quietly gives 4 KiB pages instead,
+        the O_DIRECT pinning cost returns, and there is no error anywhere. This is the only way to
+        see it."""
+        if self._huge_pages_reported:
+            return
+
+        measured = _mapping_memory(self.buffer_addresses[buffer_index])
+        if measured is None:
+            self._huge_pages_reported = True    # /proc is not readable here; it never will be
+            return
+
+        resident, backed = measured
+
+        # Nothing written yet, so there is nothing to judge - a request of only zero-sized ranges
+        # reads no bytes at all, and its buffer comes back untouched. Leave the flag alone and ask
+        # again on the next release, when there may be something to see.
+        if resident < HUGE_PAGE:
+            return
+
+        self._huge_pages_reported = True
+
+        # Only "none at all" is worth a warning.
+        #
+        # A share would be the more useful number and it cannot be computed. AnonHugePages counts the
+        # whole mapping, while only the pages written so far are backed by anything - and at this
+        # point that is roughly one buffer of however many. Comparing against the pool size reports a
+        # tiny fraction on every healthy load, which is a warning nobody would read twice.
+        #
+        # Zero is unambiguous: we asked, pages were written, and none of them came back as huge. That
+        # is the fragmentation case, and the O_DIRECT pinning cost is back.
+        if backed == 0:
+            logger.warning(
+                "[RunAI Streamer] The ring buffer got no huge pages, out of %s. Direct reads pin "
+                "every destination page, so this costs read throughput. It usually means the node's "
+                "memory is fragmented.",
+                humanize.naturalsize(self.pool.nbytes, binary=True),
+            )
+        else:
+            logger.debug(
+                "[RunAI Streamer] Ring buffer huge pages so far: %s of a %s pool",
+                humanize.naturalsize(backed, binary=True),
+                humanize.naturalsize(self.pool.nbytes, binary=True),
+            )
 
     def get_global_file_and_range(
         self, request: FilesRequest, local_file_index: int, local_range_index: int

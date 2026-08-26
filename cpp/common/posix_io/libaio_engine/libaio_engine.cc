@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "common/exception/exception.h"
+#include "common/posix_io/alignment/alignment.h"
 #include "utils/logging/logging.h"
 
 namespace runai::llm::streamer::common::posix_io
@@ -113,15 +114,14 @@ LibaioEngine::LibaioEngine(const AsyncIoConfig & config, size_t max_read_bytesiz
 
     _limits.max_read_bytesize = max_read_bytesize;
 
-    // What a direct read on this host requires. The same numbers and the same reasoning as
-    // IoUringEngine: statx reports the real values only from kernel 6.1, our floor is 5.15, and 4096
-    // is a safe superset of every block size in use. Over-aligning can waste, never fail.
+    // One shared constant, so routing and this engine cannot disagree - see DirectBlockSize for why
+    // the value is assumed rather than measured, and what happens if an engine ever measures it.
     //
     // Reporting 1 would be far worse than wasteful. The caller tests congruence against this number,
     // and everything is congruent modulo 1, so every file would be opened with O_DIRECT and every
     // unaligned read would then fail with EINVAL.
-    _limits.offset_alignment = 4096;
-    _limits.buffer_alignment = 4096;
+    _limits.offset_alignment = DirectBlockSize;
+    _limits.buffer_alignment = DirectBlockSize;
 
     LOG(INFO) << "libaio ready: " << _depth << " events";
 }
