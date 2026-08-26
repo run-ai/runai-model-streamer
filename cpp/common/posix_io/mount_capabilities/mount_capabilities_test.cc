@@ -147,4 +147,81 @@ TEST(MountCapabilities, Bad_Fd_Throws)
     EXPECT_THROW(mounts.of_fd(-1), common::Exception);
 }
 
+// The answer must come from the FILESYSTEM, not from the code under test, or a broken probe would
+// agree with itself. So this opens the file directly and compares.
+TEST(MountCapabilities, Direct_Support_Matches_A_Real_Open)
+{
+    const auto data = utils::random::buffer(4096);
+    utils::temp::File file(data);
+
+    int fd = ::open(file.path.c_str(), O_RDONLY | O_DIRECT);
+    const bool really_supported = fd >= 0;
+    if (fd >= 0)
+    {
+        ::close(fd);
+    }
+
+    MountCapabilities mounts;
+    const auto support = mounts.direct_support(device_of(file.path), file.path);
+
+    EXPECT_EQ(support, really_supported ? DirectSupport::Yes : DirectSupport::No);
+}
+
+// One open per mount, however many files sit on it. A model's shards share a mount, so without the
+// cache a 200-shard load would open and close 200 extra times.
+TEST(MountCapabilities, Direct_Support_Is_Probed_Once_Per_Mount)
+{
+    const auto data = utils::random::buffer(4096);
+    utils::temp::File first(data);
+    utils::temp::File second(data);
+
+    const dev_t dev = device_of(first.path);
+    ASSERT_EQ(dev, device_of(second.path)) << "both temp files should be on one mount";
+
+    MountCapabilities mounts;
+    const auto answer = mounts.direct_support(dev, first.path);
+
+    // The second call names a path that does not exist. If it probed, it would report Unknown - so
+    // getting the first answer back proves it did not.
+    EXPECT_EQ(mounts.direct_support(dev, "/no/such/path/" + utils::random::string()), answer);
+}
+
+// A file we cannot open says nothing about its mount. Reporting No would send every other file on
+// that mount to the synchronous reader because of one bad path.
+TEST(MountCapabilities, A_Missing_File_Leaves_Direct_Support_Unknown)
+{
+    MountCapabilities mounts;
+    const auto path = "/no/such/path/" + utils::random::string();
+
+    EXPECT_EQ(mounts.direct_support(device_of("/tmp"), path), DirectSupport::Unknown);
+
+    // And nothing was remembered, so a readable file on the same mount can still answer.
+    const auto data = utils::random::buffer(4096);
+    utils::temp::File file(data);
+    EXPECT_NE(mounts.direct_support(device_of(file.path), file.path), DirectSupport::Unknown);
+}
+
+// A directory can never be opened with O_DIRECT - measured, EINVAL - so probing with one would report
+// every mount as incapable. This pins that the probe is given a file.
+TEST(MountCapabilities, A_Directory_Is_Not_A_Valid_Probe_Target)
+{
+    const auto data = utils::random::buffer(4096);
+    utils::temp::File file(data);
+
+    MountCapabilities mounts;
+    const auto by_file = mounts.direct_support(device_of(file.path), file.path);
+
+    // A fresh instance, so the cache cannot answer for it.
+    MountCapabilities by_directory_mounts;
+    const auto by_directory = by_directory_mounts.direct_support(device_of("/tmp"), "/tmp");
+
+    EXPECT_EQ(by_directory, DirectSupport::No)
+        << "a directory refuses O_DIRECT whatever the mount can do";
+
+    if (by_file == DirectSupport::Yes)
+    {
+        EXPECT_NE(by_file, by_directory) << "which is exactly why the probe must be given a file";
+    }
+}
+
 }; // namespace runai::llm::streamer::common::posix_io

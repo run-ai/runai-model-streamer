@@ -8,6 +8,7 @@
 #include "common/posix_io/completion_mapper/completion_mapper.h"
 
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -350,8 +351,13 @@ common::ResponseCode AsyncIoWorker::probe_open(const std::string & path)
         return common::ResponseCode::FileAccessError;   // this file's failure, not the storage's
     }
 
+    // The same check fd_for makes, so a path answers the same way whether or not its ranges have
+    // bytes in them. Without this a directory would be Success for a zero-sized range and
+    // FileAccessError for every other range of the same path.
+    const bool readable = readable_file(fd, path);
+
     ::close(fd);
-    return common::ResponseCode::Success;
+    return readable ? common::ResponseCode::Success : common::ResponseCode::FileAccessError;
 }
 
 int AsyncIoWorker::fd_for(Inflight & wl, unsigned batch_index, size_t file_offset, const char * buffer,
@@ -398,7 +404,48 @@ int AsyncIoWorker::fd_for(Inflight & wl, unsigned batch_index, size_t file_offse
     }
 
     entry.direct = false;
+
+    if (!readable_file(entry.fd, path))
+    {
+        ::close(entry.fd);
+        entry.fd = -1;
+        entry.error = common::ResponseCode::FileAccessError;
+        out_error = entry.error;
+        return -1;
+    }
+
     return entry.fd;
+}
+
+bool AsyncIoWorker::readable_file(int fd, const std::string & path)
+{
+    struct stat st;
+
+    if (::fstat(fd, &st) != 0)
+    {
+        LOG(ERROR) << "Failed to stat " << path << " : " << std::strerror(errno);
+        return false;
+    }
+
+    if (!S_ISDIR(st.st_mode))
+    {
+        return true;
+    }
+
+    // open(O_RDONLY) succeeds on a directory, so without this check the read is staged and each reader
+    // finds out somewhere different. Measured: libaio refuses the whole io_submit with EINVAL,
+    // io_uring accepts the read and completes it with -EINVAL, and the synchronous reader gets EISDIR
+    // from pread.
+    //
+    // Answering here makes all three say the same thing, and say it in words.
+    //
+    // It also removes a dependency on an accident. A directory cannot be opened with O_DIRECT, so its
+    // fd is always buffered, and map_completion turns EINVAL on a buffered fd into FileAccessError -
+    // one file fails and the rest carry on. On a DIRECT fd the same EINVAL means an alignment bug and
+    // maps to UnknownError, which aborts the whole submission. We would be relying on the kernel to
+    // keep refusing O_DIRECT on directories.
+    LOG(ERROR) << path << " is a directory, not a file";
+    return false;
 }
 
 void AsyncIoWorker::stage_pending(common::posix_io::RequestId id)

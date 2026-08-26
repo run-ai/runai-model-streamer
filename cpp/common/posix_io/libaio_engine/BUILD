@@ -1,0 +1,22 @@
+load("//:rules.bzl", "runai_cc_auto_library", "runai_cc_test")
+
+runai_cc_auto_library(
+    name = "libaio_engine",
+    deps = [
+        "//common/exception",
+        "//common/posix_io/io_engine",
+        "//common/response_code",
+        "//utils/logging",
+        "@aio//:aio",
+    ],
+)
+
+runai_cc_test(
+    name = "libaio_engine_test",
+    srcs = ["libaio_engine_test.cc"],
+    deps = [
+        ":libaio_engine",
+        "//utils/random",
+        "//utils/temp/file",
+    ],
+)

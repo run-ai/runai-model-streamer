@@ -1,7 +1,14 @@
+// O_DIRECT is a GNU extension, so this must come before any libc header.
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include "common/posix_io/mount_capabilities/mount_capabilities.h"
 
+#include <fcntl.h>
 #include <linux/magic.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <sys/sysmacros.h>   // major/minor - moved out of sys/types.h in glibc 2.28
 #include <sys/vfs.h>
 
@@ -35,6 +42,17 @@ std::ostream & operator<<(std::ostream & os, const MountCapability & capability)
               << (capability.memory_backed ? " memory-backed" : "");
 }
 
+std::ostream & operator<<(std::ostream & os, DirectSupport support)
+{
+    switch (support)
+    {
+    case DirectSupport::Yes:     return os << "O_DIRECT supported";
+    case DirectSupport::No:      return os << "O_DIRECT unsupported";
+    case DirectSupport::Unknown: return os << "O_DIRECT support unknown";
+    }
+    return os << "O_DIRECT support " << static_cast<int>(support);
+}
+
 MountCapability MountCapabilities::remember(dev_t dev, bool memory_backed)
 {
     const MountCapability capability{ dev, memory_backed };
@@ -49,6 +67,16 @@ MountCapability MountCapabilities::remember(dev_t dev, bool memory_backed)
         LOG(DEBUG) << "Probed " << capability;
     }
     return it->second;
+}
+
+DirectSupport MountCapabilities::remember_direct(dev_t dev, bool supported)
+{
+    std::unique_lock<std::mutex> lock(_mutex);
+
+    // try_emplace, like remember(): two threads can probe the same mount at once and reach the same
+    // answer, so the first one wins and the second is a no-op.
+    _direct.try_emplace(dev, supported);
+    return supported ? DirectSupport::Yes : DirectSupport::No;
 }
 
 MountCapability MountCapabilities::of_path(const std::string & path)
@@ -108,6 +136,46 @@ MountCapability MountCapabilities::of_fd(int fd)
     }
 
     return remember(st.st_dev, is_memory_backed(fs));
+}
+
+DirectSupport MountCapabilities::direct_support(dev_t dev, const std::string & file_path)
+{
+    {
+        std::unique_lock<std::mutex> lock(_mutex);
+        const auto it = _direct.find(dev);
+        if (it != _direct.end())
+        {
+            return it->second ? DirectSupport::Yes : DirectSupport::No;
+        }
+    }
+
+    // Opened and closed, nothing read. The open is the whole test: a filesystem with no O_DIRECT
+    // refuses here, and one that has it does not.
+    const int fd = ::open(file_path.c_str(), O_RDONLY | O_DIRECT);
+    if (fd >= 0)
+    {
+        ::close(fd);
+        return remember_direct(dev, true);
+    }
+
+    // Captured before anything else can overwrite it.
+    const int error = errno;
+
+    if (error == EINVAL || error == EOPNOTSUPP)
+    {
+        // The mount itself refuses O_DIRECT. This is the answer libaio needs, and it belongs to the
+        // mount rather than to this file, so it is remembered.
+        LOG(INFO) << "Mount " << major(dev) << ":" << minor(dev) << " does not support O_DIRECT ("
+                  << std::strerror(error) << ")";
+        return remember_direct(dev, false);
+    }
+
+    // Anything else is about the FILE, not the mount - it is missing, or we may not read it. Saying
+    // "no O_DIRECT here" would send every other file on the same mount to the synchronous reader
+    // because of this one path. Nothing is remembered, so the next file answers instead.
+    LOG(DEBUG) << "Cannot tell whether " << file_path << " supports O_DIRECT: "
+               << std::strerror(error);
+    return DirectSupport::Unknown;
 }
 
 size_t MountCapabilities::size() const

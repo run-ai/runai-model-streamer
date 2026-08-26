@@ -194,6 +194,13 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     int fd_for(Inflight & wl, unsigned batch_index, size_t file_offset, const char * buffer,
                common::ResponseCode & out_error);
 
+    // Is this open fd something we can read ranges from? One fstat, on a file we just opened.
+    //
+    // It exists for directories. open(O_RDONLY) succeeds on one, and the failure then surfaces deep in
+    // whichever engine is running, in a different place for each. Answering it here costs one syscall
+    // per file and says what is actually wrong - see the body for the second reason.
+    static bool readable_file(int fd, const std::string & path);
+
     // Whether this file should be opened with O_DIRECT.
     //
     // Two things must both hold: the strategy asked for it, and a direct read is possible at all. The

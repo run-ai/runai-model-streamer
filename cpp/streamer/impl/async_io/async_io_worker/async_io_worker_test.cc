@@ -440,6 +440,47 @@ TEST(AsyncIoWorker, Mixed_Ranges_On_An_Unopenable_File_All_Fail)
     }
 }
 
+// open(O_RDONLY) SUCCEEDS on a directory, so nothing before the read notices. Each reader then finds
+// out somewhere different - measured: libaio refuses the whole io_submit with EINVAL, io_uring
+// completes the read with -EINVAL, and pread returns EISDIR. The worker answers it at open instead, so
+// all three say the same thing.
+//
+// FileAccessError, not UnknownError: this is one bad path, and the other files of the submission are
+// fine. It also removes a dependency on an accident - a directory cannot be opened with O_DIRECT, so
+// its fd is always buffered, and EINVAL on a DIRECT fd maps to UnknownError and aborts everything.
+TEST(AsyncIoWorker, A_Directory_Is_Not_A_File)
+{
+    Fixture fixture({ ChunkSize });
+    Driver driver;
+
+    driver.execute(fixture.workload("/tmp"));
+    driver.issue();
+    driver.route();
+
+    const auto responses = drain_responses(*fixture.responder, 1);
+    ASSERT_EQ(responses.size(), 1u);
+    EXPECT_EQ(responses[0].ret, common::ResponseCode::FileAccessError);
+}
+
+// The same answer whether or not the ranges have bytes in them. A zero-sized range never reaches the
+// read, so without the check at open it would report Success for a path that cannot be read at all.
+TEST(AsyncIoWorker, A_Directory_Fails_Its_Zero_Sized_Ranges_Too)
+{
+    Fixture fixture({ 0, 0 });
+    Driver driver;
+
+    driver.execute(fixture.workload("/tmp"));
+
+    const auto responses = drain_responses(*fixture.responder, 2);
+    ASSERT_EQ(responses.size(), 2u);
+
+    for (const auto & r : responses)
+    {
+        EXPECT_EQ(r.ret, common::ResponseCode::FileAccessError)
+            << "a directory must not answer Success just because the range was empty";
+    }
+}
+
 // A zero-sized range reads nothing but owes a response like any other - answered at enqueue, since no
 // completion will ever arrive for it.
 TEST(AsyncIoWorker, Zero_Sized_Range_Is_Answered)
