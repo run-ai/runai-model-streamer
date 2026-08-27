@@ -5,6 +5,7 @@ runai_cc_auto_library(
     deps = [
         "//common/exception",
         "//common/posix_io/io_uring_probe",
+        "//common/posix_io/libaio_probe",
         "//common/posix_io/strategy",
         "//common/response_code",
         "//utils/logging",

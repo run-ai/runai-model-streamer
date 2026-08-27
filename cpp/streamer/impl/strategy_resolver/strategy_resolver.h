@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -21,16 +22,34 @@ namespace runai::llm::streamer::impl
 // fall-through to the synchronous reader: an operator who asked for io_uring and quietly got
 // something else has no way to find out.
 //
-// Availability comes from IoUringProbe, NOT from building an engine. An engine needs a depth, which
-// needs RUNAI_STREAMER_PROCESS_GROUP_SIZE, and it belongs to the worker; the probe needs nothing.
+// Availability comes from the PROBES - IoUringProbe and LibaioProbe - and never from building an
+// engine. An engine needs a depth, which needs RUNAI_STREAMER_PROCESS_GROUP_SIZE, and it belongs to
+// the worker; a probe needs nothing.
 //
 // Thread safe - several submitters can race on the first request.
 class StrategyResolver
 {
  public:
+    // Whether the host can serve a strategy: Success, or the reason it cannot.
+    //
+    // Replaceable for testing, because otherwise the interesting cases cannot be reached. Every
+    // strategy is available on a normal host now - sync_buffered always, libaio nearly always, and
+    // io_uring wherever seccomp permits it - so there is no candidate a test can use to exercise a
+    // rejected head or an exhausted list.
+    //
+    // Those tests used `libaio_direct` for that, which worked only while libaio had no engine. When
+    // it got one they broke, which is the good outcome: a test that depends on a feature being
+    // MISSING should fail the day it arrives.
+    //
+    // Demoting the real probe instead would work once and then leak into every test after it, which
+    // is what the probes' own tests take care to avoid.
+    using Availability = std::function<common::ResponseCode(common::posix_io::Strategy)>;
+
     // `default_candidates` is what resolve() walks if nobody calls set_candidates. Normally
     // RUNAI_STREAMER_FS_STRATEGY, read into Config.
-    explicit StrategyResolver(std::string default_candidates);
+    //
+    // Production passes nothing for `availability` and the probes answer.
+    explicit StrategyResolver(std::string default_candidates, Availability availability = nullptr);
 
     // Record the caller's preference, before it is used. TWO rules, and both are needed:
     //
@@ -70,6 +89,7 @@ class StrategyResolver
 
     mutable std::mutex _mutex;
 
+    const Availability _availability;
     const std::string _default_candidates;
 
     std::optional<std::string> _candidates;     // what the caller set, if anything

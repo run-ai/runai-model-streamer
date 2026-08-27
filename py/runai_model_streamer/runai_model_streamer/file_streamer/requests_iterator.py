@@ -21,7 +21,7 @@ RUNAI_STREAMER_MAX_PADS_PER_BUFFER_ENV_VAR_NAME = "RUNAI_STREAMER_MAX_PADS_PER_B
 DEFAULT_MAX_PADS_PER_BUFFER = 1024
 
 RUNAI_STREAMER_HUGE_PAGES_ENV_VAR_NAME = "RUNAI_STREAMER_HUGE_PAGES"
-DEFAULT_HUGE_PAGES = 1
+DEFAULT_HUGE_PAGES = 0
 
 class RunaiStreamerMemoryLimitException(Exception):
     pass
@@ -125,33 +125,67 @@ DIRECT_IO_BLOCK = 4096
 # the one async worker thread. On 2 MiB pages the same read pins 4. Buffered reads pay none of this,
 # so it is a cost that O_DIRECT adds rather than one it removes.
 #
-# It is INSURANCE, not an optimisation. glibc may already align a large allocation to a huge page and
-# advise it - measured on one host, a plain np.empty comes back with the `hg` flag set and fully
-# huge-page backed. That depends on the glibc version and a tunable, and neither is ours to control
-# on a customer's node. Doing it here makes the result the same everywhere.
+# Doing it here rather than leaving it to the allocator, because the allocator is not ours. glibc may
+# already align a large allocation to a huge page and advise it - measured on one host, a plain
+# np.empty comes back with the `hg` flag set and fully huge-page backed - but that depends on the
+# glibc version and a tunable, neither of which we control on a customer's node.
 #
 # A 2 MiB base is also a multiple of DIRECT_IO_BLOCK, so it replaces the old 4096 shift rather than
 # adding to it.
+#
+# OFF unless RUNAI_STREAMER_HUGE_PAGES=1. See _huge_pages_enabled() for the measurements on both
+# sides and for why the default is off despite the gain.
+#
+# THIS SIZE IS FOR THE POOL BASE ONLY. Padding between ranges stays at DIRECT_IO_BLOCK, and must: if
+# congruence had to hold modulo 2 MiB, one pad could cost 2 MiB and the 1024-pad budget would want
+# 2 GB per buffer instead of 4 MB.
+#
+# It does not, because the two sizes answer different questions. O_DIRECT alignment comes from the
+# STORAGE DEVICE - its logical block, 512 or 4096. A huge page is a property of the MEMORY MAPPING.
+# The kernel does not tie them together. Measured on a huge-page-backed pool: a direct read into an
+# address one block into a huge page succeeds, as does three blocks in, as does the last block; only a
+# non-block-aligned address fails, with EINVAL.
+#
+# And it costs nothing to sit inside a huge page rather than at its start - io_submit for 64 reads of
+# 2 MiB took 1.14-1.42 ms with destinations one block in, against 1.27-1.45 ms with them 2 MiB
+# aligned. Pinning still walks one compound page either way.
 HUGE_PAGE = 2 * 1024 * 1024
 
 # How many pads one buffer may hold before we give up and pack tightly. See _max_pads_per_buffer().
 
 
 def _huge_pages_enabled() -> bool:
-    """Whether to place the pool on huge pages. On by default.
+    """Whether to place the pool on huge pages. OFF by default - opt in with RUNAI_STREAMER_HUGE_PAGES=1.
 
-    A switch because it changes how the pool is allocated on every load, and the gain is not the same
-    everywhere. It is worth most with O_DIRECT, where every read pins its destination pages; a
-    buffered load pays none of that. On a host whose allocator already provides huge pages it changes
-    nothing at all.
+    Off by default despite a large measured gain, because the risk is on a machine we have not tested
+    and the gain is on one we have.
 
-    Turning it OFF restores exactly the earlier behaviour - a DIRECT_IO_BLOCK-aligned base, no
-    madvise, no check - so it is a clean rollback if huge pages ever cost more than they save. The one
-    known way that can happen is memory fragmentation: with the node's THP defrag set to `madvise` or
-    `always`, faulting an advised region can make the kernel compact memory first, which shows up as a
-    slow first load and nothing in any log.
+    MEASURED GAIN. Time inside io_submit for 64 direct reads of 2 MiB, on an unfragmented host:
 
-    Anything other than "1" turns it off, so a typo is safe rather than surprising."""
+        first pass   50 ms plain   ->  27 ms advised
+        every pass   8-10 ms       ->  1.0-1.6 ms
+
+    The second row is the one that counts. Faulting happens once, because the ring is reused for the
+    whole stream, but PINNING happens on every direct read - O_DIRECT pins each destination page
+    before the DMA. At 4 KiB that is 512 pages per 2 MiB read; at 2 MiB it is one. So this is a 7-8x
+    cut in io_submit time on every pass, and io_submit runs on the single async worker, where blocking
+    also stops completions being reaped.
+
+    THE RISK, and why the default is still off. With the node's THP defrag set to `madvise` - which is
+    common, and is what this host uses - advising a region opts it into DIRECT COMPACTION at fault
+    time. On a node whose memory is fragmented the kernel may compact before it can hand out a huge
+    page, and that wait lands inside the same io_submit. compact_stall in /proc/vmstat stayed at zero
+    throughout our runs, so the bad case is unmeasured rather than absent.
+
+    The two are asymmetric: compaction can only slow the FIRST touch of the pool, while the pinning
+    gain applies to every read after it. That is an argument for turning this on once a fragmented
+    node has been measured, not for turning it on blind.
+
+    hugetlbfs would remove the risk entirely - pre-reserved pages are never compacted or swapped - but
+    it needs node pre-allocation and a pod hugepages-2Mi request, which is a cluster decision rather
+    than a code one (design_async_io.md 5.10).
+
+    Anything other than "1" leaves it off, so a typo is safe rather than surprising."""
     return os.getenv(RUNAI_STREAMER_HUGE_PAGES_ENV_VAR_NAME, str(DEFAULT_HUGE_PAGES)).strip() == "1"
 
 

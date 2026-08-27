@@ -6,6 +6,7 @@
 
 #include "common/exception/exception.h"
 #include "common/posix_io/io_uring_probe/io_uring_probe.h"
+#include "common/posix_io/libaio_probe/libaio_probe.h"
 #include "utils/logging/logging.h"
 
 namespace runai::llm::streamer::impl
@@ -37,9 +38,10 @@ common::ResponseCode availability_of(Strategy strategy)
         return common::posix_io::IoUringProbe::instance().capability().error;
 
     case Strategy::LibaioDirect:
-        // Not available rather than not implemented: the caller only needs to know it cannot be
-        // served here, and the walk moves to the next candidate either way. S8 replaces this line.
-        return common::ResponseCode::FsStrategyUnavailable;   // no libaio engine yet
+        // Almost always available - Docker's default seccomp profile does not block io_setup, unlike
+        // io_uring_setup. Probed anyway, because /proc/sys/fs/aio-max-nr is node wide and shared with
+        // every other pod, so a busy node can refuse a context however healthy the kernel is.
+        return common::posix_io::LibaioProbe::instance().capability().error;
     }
 
     return common::ResponseCode::UnknownError;
@@ -47,7 +49,8 @@ common::ResponseCode availability_of(Strategy strategy)
 
 } // namespace
 
-StrategyResolver::StrategyResolver(std::string default_candidates) :
+StrategyResolver::StrategyResolver(std::string default_candidates, Availability availability) :
+    _availability(availability ? std::move(availability) : Availability(availability_of)),
     _default_candidates(std::move(default_candidates))
 {}
 
@@ -128,7 +131,7 @@ common::ResponseCode StrategyResolver::resolve_locked()
 
     for (const auto strategy : list)
     {
-        const auto available = availability_of(strategy);
+        const auto available = _availability(strategy);
         if (available == common::ResponseCode::Success)
         {
             _resolved = strategy;

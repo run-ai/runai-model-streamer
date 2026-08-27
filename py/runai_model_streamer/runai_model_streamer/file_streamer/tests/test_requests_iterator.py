@@ -827,10 +827,44 @@ class TestPoolHugePages(unittest.TestCase):
         # A typo must be safe rather than surprising, so only "1" enables it.
         self.assertFalse(requests_iterator._huge_pages_enabled())
 
-    def test_huge_pages_are_on_by_default(self):
+    def test_huge_pages_are_off_by_default(self):
+        # Opt in, not opt out. The gain is large and measured (see _huge_pages_enabled), but the risk -
+        # direct compaction at fault time on a fragmented node - is not, so the default stays off until
+        # someone measures the bad case.
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop(RUNAI_STREAMER_HUGE_PAGES_ENV_VAR_NAME, None)
-            self.assertTrue(requests_iterator._huge_pages_enabled())
+            self.assertFalse(requests_iterator._huge_pages_enabled())
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_HUGE_PAGES_ENV_VAR_NAME: "1"})
+    def test_the_default_pool_alignment_is_a_block(self):
+        # With the feature off, the pool must be laid out exactly as it was before huge pages existed.
+        # Checked here as well as through _huge_pages_enabled, because the alignment is what a direct
+        # read actually depends on.
+        with patch.dict(os.environ, {RUNAI_STREAMER_HUGE_PAGES_ENV_VAR_NAME: "0"}):
+            pool = self._pool()
+            self.assertEqual(pool.pool.ctypes.data % DIRECT_IO_BLOCK, 0)
+            self.assertNotEqual(requests_iterator._pool_alignment(), HUGE_PAGE)
+
+    def test_the_pad_budget_does_not_grow_with_huge_pages(self):
+        """A slot reserves room for pads at DIRECT_IO_BLOCK each, whatever the page size.
+
+        The trap this guards: if congruent placement had to hold modulo 2 MiB, one pad would cost
+        2 MiB and the 1024-pad budget would want 2 GB per buffer instead of 4 MB.
+
+        It does not, because O_DIRECT alignment comes from the storage device's logical block while a
+        huge page is a property of the memory mapping. Measured: a direct read into an address one
+        block inside a huge page succeeds and is exactly as cheap as one at the huge page's start.
+        """
+        with patch.dict(os.environ, {RUNAI_STREAMER_HUGE_PAGES_ENV_VAR_NAME: "0"}):
+            without = self._pool()._slot_size
+        with patch.dict(os.environ, {RUNAI_STREAMER_HUGE_PAGES_ENV_VAR_NAME: "1"}):
+            with_huge = self._pool()._slot_size
+
+        self.assertEqual(without, with_huge, "the pad budget must not scale with the page size")
+
+        # And it really is the block, not the page: the reserved room is exactly one block per pad.
+        expected = 4 * 1024 * 1024 + DIRECT_IO_BLOCK * requests_iterator._max_pads_per_buffer()
+        self.assertEqual(with_huge, expected)
 
     def test_mapping_memory_tolerates_a_bad_address(self):
         # It reads /proc/self/smaps, which may not exist. An address in no mapping must come back as

@@ -23,6 +23,7 @@
 #include "streamer/impl/assigner/assigner.h"
 #include "streamer/impl/batches/batches.h"
 #include "common/exception/exception.h"
+#include "common/posix_io/alignment/alignment.h"
 #include "common/storage_uri/storage_uri.h"
 
 namespace runai::llm::streamer::impl
@@ -31,11 +32,12 @@ namespace runai::llm::streamer::impl
 Streamer::Streamer() : Streamer(Config())
 {}
 
-Streamer::Streamer(Config config, MountProbe mount_probe) :
+Streamer::Streamer(Config config, Environment environment) :
     _config(std::make_shared<Config>(config)),
     // Built here, resolved on the first submission - so RUNAI_STREAMER_FS_STRATEGY is only the
     // DEFAULT, and anything set between runai_start() and the first request still takes effect.
-    _strategy_resolver(std::make_shared<StrategyResolver>(config.fs_strategy_candidates)),
+    _strategy_resolver(std::make_shared<StrategyResolver>(config.fs_strategy_candidates,
+                                                          environment.availability)),
     // Filesystem reads are synchronous (concurrency threads, stateless handler); object-storage reads are
     // asynchronous (s3_concurrency ObjectStorageWorkers, each owning a client + in-flight capacity window).
     // Pools are created lazily on first use of each kind.
@@ -62,7 +64,7 @@ Streamer::Streamer(Config config, MountProbe mount_probe) :
     // One PERSISTENT responder for the streamer's lifetime, shared by all submissions and
     // demuxed by submission_id. increment() grows its expected count per accepted submission.
     _responder(std::make_shared<common::Responder>(0, common::QueueMode::PERSISTENT)),
-    _mount_probe(std::move(mount_probe))
+    _environment(std::move(environment))
 {
     LOG(DEBUG) << config;
 }
@@ -561,6 +563,62 @@ std::vector<int> Streamer::file_groups(const std::vector<FileRanges> & request,
     // st_dev -> group id, so two directories on the same mount share a group and therefore an engine.
     std::map<dev_t, int> by_device;
 
+    // Which group serves this directory, or -1 for the synchronous reader. Answered once per
+    // directory; every shard beside the first is free.
+    const auto group_of_directory = [&](const std::string & directory, const std::string & path)
+    {
+        const auto seen = by_directory.find(directory);
+        if (seen != by_directory.end())
+        {
+            return seen->second;
+        }
+
+        int group = -1;
+        try
+        {
+            const auto capability = _environment.mount ? _environment.mount(directory)
+                                                       : _mounts.of_path(directory);
+
+            // tmpfs and ramfs are pure memcpy with no device to overlap, so depth buys nothing and
+            // parallelism does - the 16-thread pool is the right reader for them (5.12).
+            if (!capability.memory_backed)
+            {
+                // One group per MOUNT, so directories sharing a mount share an engine. Groups are
+                // numbered in first-seen order, which is what makes them dense indices into
+                // out_devices.
+                const auto device = by_device.find(capability.dev);
+                if (device != by_device.end())
+                {
+                    group = device->second;
+                }
+                else
+                {
+                    group = static_cast<int>(out_devices.size());
+                    by_device.emplace(capability.dev, group);
+                    out_devices.push_back(capability.dev);
+                }
+            }
+        }
+        catch (const common::Exception & e)
+        {
+            // Deliberately NOT fatal. A directory we cannot stat means we cannot tell what serves it
+            // best, not that the read must fail - and failing here would turn a per-file problem into
+            // a whole-submission one, which is exactly what the missing file itself will report
+            // later, attributably.
+            LOG(WARNING) << "Cannot probe the mount of " << directory << " (" << e.error()
+                         << "); reading " << path << " with the synchronous reader";
+        }
+
+        // Remembered whatever the answer, so an unprobeable directory is not retried once per file.
+        by_directory.emplace(directory, group);
+        return group;
+    };
+
+    // libaio has no asynchronous buffered mode, so a file it cannot read directly must be routed away
+    // before dispatch. Every other async strategy keeps its files whatever this would have said - see
+    // reads_directly().
+    const bool check_direct = _strategy_resolver->resolved() == common::posix_io::Strategy::LibaioDirect;
+
     for (size_t i = 0; i < request.size(); ++i)
     {
         const auto & path = request[i].path;
@@ -579,57 +637,59 @@ std::vector<int> Streamer::file_groups(const std::vector<FileRanges> & request,
         const std::string directory = (slash == std::string::npos) ? std::string(".")
                                     : (slash == 0 ? std::string("/") : path.substr(0, slash));
 
-        const auto seen = by_directory.find(directory);
-        if (seen != by_directory.end())
+        const int group = group_of_directory(directory, path);
+        if (group < 0)
         {
-            group_by_file[i] = seen->second;
+            continue;   // the synchronous reader serves it
+        }
+
+        // PER FILE, so it cannot be answered from the directory cache above: congruence depends on
+        // this file's own offsets and destinations, and two shards in one directory can differ.
+        if (check_direct && !reads_directly(request[i], out_devices[group]))
+        {
             continue;
         }
 
-        try
-        {
-            const auto capability = _mount_probe ? _mount_probe(directory)
-                                                 : _mounts.of_path(directory);
-
-            // tmpfs and ramfs are pure memcpy with no device to overlap, so depth buys nothing and
-            // parallelism does - the 16-thread pool is the right reader for them (5.12).
-            if (capability.memory_backed)
-            {
-                by_directory.emplace(directory, -1);
-                continue;
-            }
-
-            // One group per MOUNT, so directories sharing a mount share an engine. Groups are numbered
-            // in first-seen order, which is what makes them dense indices into out_devices.
-            const auto device = by_device.find(capability.dev);
-            if (device != by_device.end())
-            {
-                group_by_file[i] = device->second;
-            }
-            else
-            {
-                group_by_file[i] = static_cast<int>(out_devices.size());
-                by_device.emplace(capability.dev, group_by_file[i]);
-                out_devices.push_back(capability.dev);
-            }
-
-            by_directory.emplace(directory, group_by_file[i]);
-        }
-        catch (const common::Exception & e)
-        {
-            // Remembered too, so an unprobeable directory is not retried once per file.
-            by_directory.emplace(directory, -1);
-
-            // Deliberately NOT fatal. A directory we cannot stat means we cannot tell what serves it
-            // best, not that the read must fail - and failing here would turn a per-file problem into
-            // a whole-submission one, which is exactly what the missing file itself will report
-            // later, attributably.
-            LOG(WARNING) << "Cannot probe the mount of " << directory << " (" << e.error()
-                         << "); reading " << path << " with the synchronous reader";
-        }
+        group_by_file[i] = group;
     }
 
     return group_by_file;
+}
+
+bool Streamer::reads_directly(const FileRanges & file, dev_t device)
+{
+    const auto block = common::posix_io::DirectBlockSize;
+
+    for (const auto & range : file.ranges)
+    {
+        // A zero-sized range produces no chunk, so it is never read and never opens the file. Letting
+        // one decide the reader for the whole file would be deciding on a range nobody reads.
+        if (range.size == 0)
+        {
+            continue;
+        }
+
+        if (!common::posix_io::is_congruent(range.offset, range.dst, block))
+        {
+            // No PART of this range can be read directly - not the middle, not one block of it. So
+            // the worker would open the file buffered, and under libaio that is a serial read.
+            LOG(DEBUG) << "Reading " << file.path << " with the synchronous reader: offset "
+                       << range.offset << " and its destination are not congruent for block " << block;
+            return false;
+        }
+    }
+
+    const auto support = _environment.direct ? _environment.direct(device, file.path)
+                                             : _mounts.direct_support(device, file.path);
+
+    if (support == common::posix_io::DirectSupport::No)
+    {
+        LOG(DEBUG) << "Reading " << file.path << " with the synchronous reader: its mount cannot"
+                   << " serve O_DIRECT, and libaio without O_DIRECT reads one file at a time";
+        return false;
+    }
+
+    return true;
 }
 
 common::ResponseCode Streamer::lock_object_plugin(const std::vector<FileRanges> & request)

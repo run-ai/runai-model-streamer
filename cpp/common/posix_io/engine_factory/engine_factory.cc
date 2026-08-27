@@ -5,6 +5,8 @@
 #include "common/exception/exception.h"
 #include "common/posix_io/io_uring_engine/io_uring_engine.h"
 #include "common/posix_io/io_uring_probe/io_uring_probe.h"
+#include "common/posix_io/libaio_engine/libaio_engine.h"
+#include "common/posix_io/libaio_probe/libaio_probe.h"
 #include "utils/logging/logging.h"
 
 namespace runai::llm::streamer::common::posix_io
@@ -45,6 +47,38 @@ std::unique_ptr<IoEngine> make_io_uring_engine(Strategy strategy, const AsyncIoC
     }
 }
 
+
+std::unique_ptr<IoEngine> make_libaio_engine(const AsyncIoConfig & config)
+{
+    auto & probe = LibaioProbe::instance();
+
+    // Consulted rather than re-derived, exactly as the io_uring builder does. Resolution and this
+    // both ask "can this host do libaio", and two mechanisms answering independently can disagree -
+    // resolution picking a strategy this then refuses to build.
+    const auto capability = probe.capability();
+    if (!capability.available)
+    {
+        LOG(WARNING) << "Cannot build " << Strategy::LibaioDirect << ": libaio is unavailable here ("
+                     << capability.error << ")";
+        return nullptr;
+    }
+
+    try
+    {
+        return std::make_unique<LibaioEngine>(config);
+    }
+    catch (const common::Exception & e)
+    {
+        // A one-event context worked, so aio is here - a context of THIS depth is what failed, after
+        // halving all the way down. The node's aio budget does not grow on its own, so retrying
+        // cannot help and leaving the strategy in the chain would have resolution keep choosing it.
+        LOG(ERROR) << "libaio is available but a context for depth " << config.depth
+                   << " could not be built: " << e.error();
+        probe.mark_unavailable(e.error());
+        return nullptr;
+    }
+}
+
 } // namespace
 
 std::unique_ptr<IoEngine> make_io_engine(Strategy strategy, const AsyncIoConfig & config)
@@ -72,8 +106,7 @@ std::unique_ptr<IoEngine> make_io_engine(Strategy strategy, const AsyncIoConfig 
         return make_io_uring_engine(strategy, config);
 
     case Strategy::LibaioDirect:
-        LOG(DEBUG) << strategy << " is not available: no libaio engine yet";
-        return nullptr;
+        return make_libaio_engine(config);
 
     default:
         return nullptr;

@@ -53,8 +53,40 @@ struct Streamer
     // It must throw when a path cannot be read, as MountCapabilities::of_path does.
     using MountProbe = std::function<common::posix_io::MountCapability(const std::string &)>;
 
+    // Whether a mount can serve O_DIRECT. Replaceable for the same reason as MountProbe, and more
+    // sharply: the real answer is whatever the build machine's filesystem happens to support, so a
+    // test that used it would pass or fail depending on where it ran.
+    //
+    // Production passes nothing and MountCapabilities::direct_support answers.
+    using DirectProbe =
+        std::function<common::posix_io::DirectSupport(dev_t, const std::string &)>;
+
+    // What a test may answer instead of the machine.
+    //
+    // Grouped rather than taken as three more parameters. Each is a std::function, so positionally
+    // they are three interchangeable nulls at a call site - `Streamer(Config(), nullptr, nullptr, f)`
+    // says nothing about which seam `f` is. A named field says it.
+    //
+    // Every field is empty in production, and an empty field means "ask the machine". So the default
+    // Environment is exactly today's behaviour and nothing has to opt out.
+    struct Environment
+    {
+        // The mount a path is on. A test cannot create a second mount without CAP_SYS_ADMIN, so
+        // without this the routing from st_dev to group to engine can only be tested on a machine
+        // that already has two filesystems.
+        MountProbe mount;
+
+        // Whether a mount serves O_DIRECT. The true answer is whatever the build machine offers, so a
+        // test using it would pass or fail depending on where it ran.
+        DirectProbe direct;
+
+        // Whether a strategy can be served here. Needed because every strategy is available on a
+        // normal host, so there is no candidate a test can use to reach a failed resolution.
+        StrategyResolver::Availability availability;
+    };
+
     Streamer();
-    explicit Streamer(Config config, MountProbe mount_probe = nullptr);
+    explicit Streamer(Config config, Environment environment = {});
     ~Streamer();
 
     // Set the streamer's object-storage credentials (a general key->value dictionary; see
@@ -154,6 +186,26 @@ struct Streamer
     std::vector<int> file_groups(const std::vector<FileRanges> & request,
                                  std::vector<dev_t> & out_devices);
 
+    // Can this file be read directly, on this mount? Asked only for libaio, and per file.
+    //
+    // libaio is asynchronous only with O_DIRECT. When a file cannot be read directly the worker opens
+    // it buffered, and a buffered read inside io_submit runs inline - one thread, one file at a time,
+    // in place of a 16-thread pool with kernel readahead (design 5.7.2). So such a file has to reach
+    // the synchronous reader instead, and the decision has to be made HERE: once a workload is on the
+    // async pool the worker cannot hand it back.
+    //
+    // io_uring needs none of this. It falls back to a buffered read on the same ring, which is still
+    // asynchronous, so its files stay where they are.
+    //
+    // Two ways to fail, and they are found in different places. Congruence is a property of the
+    // request - the destination and the file offset must leave the same remainder - so it is computed
+    // here. O_DIRECT support is a property of the mount and is probed once per mount.
+    //
+    // Unknown support counts as yes. It means the probe could not open the file at all, which the
+    // read is about to report properly; refusing the mount on that basis would send every other file
+    // beside it to the synchronous reader too.
+    bool reads_directly(const FileRanges & file, dev_t device);
+
     // Whether this submission reads object storage. The first file WITH RANGES decides, as everywhere
     // else: lock_object_plugin has already rejected a submission that mixes the two, so it is
     // homogeneous by the time anything asks.
@@ -218,8 +270,8 @@ struct Streamer
 
     AsyncIoStats _stats;
 
-    // Null in production, where _mounts answers directly.
-    MountProbe _mount_probe;
+    // Empty in production, where the machine answers directly.
+    Environment _environment;
 
     std::unique_ptr<S3Cleanup> _s3;
     // Lazily-created worker pools, one per backend kind. Occupies the slot the single ThreadPool used

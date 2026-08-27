@@ -1,5 +1,7 @@
 #include "streamer/impl/streamer/streamer.h"
 
+#include "common/posix_io/alignment/alignment.h"
+
 #include <unistd.h>
 
 #include <gtest/gtest.h>
@@ -84,6 +86,28 @@ bool ring_works()
 constexpr unsigned EMPTY_WAIT_MS = 50;
 
 } // namespace
+
+
+// Say that one strategy cannot be served here, and let the probes answer for the rest.
+//
+// Needed because every strategy is available on a normal host: sync_buffered always, libaio nearly
+// always, io_uring wherever seccomp permits. Without this there is no candidate that reliably fails,
+// so a submission that must be refused for want of a reader cannot be built.
+//
+// These tests named `libaio_direct` for that, which held only while libaio had no engine. They broke
+// the day it got one, which is the right way round: a test resting on a feature being MISSING should
+// fail when it arrives.
+Streamer::Environment without(common::posix_io::Strategy unavailable)
+{
+    Streamer::Environment environment;
+    environment.availability = [unavailable](common::posix_io::Strategy strategy)
+    {
+        return strategy == unavailable ? common::ResponseCode::FsStrategyUnavailable
+                                       : common::ResponseCode::Success;
+    };
+    return environment;
+}
+
 
 TEST(Creation, Default)
 {
@@ -185,11 +209,12 @@ TEST(Async, StatsRecordTheStrategyPerFile)
 
     // One directory is memory backed, so it goes to the synchronous reader whatever the strategy says.
     const std::string memory_dir = "/dev/shm";
-    Streamer streamer(Config(),
-                      [memory_dir](const std::string & directory) -> common::posix_io::MountCapability
+    Streamer streamer(Config(), Streamer::Environment{
+                      .mount = [memory_dir](const std::string & directory) -> common::posix_io::MountCapability
                       {
                           return common::posix_io::MountCapability{ makedev(8, 1), directory == memory_dir };
-                      });
+                      },
+    });
 
     std::vector<char> dst1(data.size());
     std::vector<char> dst2(data.size());
@@ -234,7 +259,7 @@ TEST(Async, StatsSkipARejectedSubmission)
     request[0].path = file.path;
     request[0].ranges.push_back(ReadRange{ 0, data.size(), dst.data() });
 
-    Streamer streamer;
+    Streamer streamer(Config(), without(common::posix_io::Strategy::LibaioDirect));
 
     SubmissionId submission_id = 0;
     ASSERT_NE(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
@@ -266,11 +291,12 @@ TEST(Async, TwoMountsGetTwoEngines)
 
     // Both files really live on one filesystem; the probe says otherwise, which is the point.
     const std::string first = dir_one.path;
-    Streamer streamer(Config(),
-                      [first](const std::string & directory) -> common::posix_io::MountCapability
+    Streamer streamer(Config(), Streamer::Environment{
+                      .mount = [first](const std::string & directory) -> common::posix_io::MountCapability
                       {
                           return common::posix_io::MountCapability{ directory == first ? makedev(8, 1) : makedev(8, 2), false };
-                      });
+                      },
+    });
 
     std::vector<char> dst1(data.size());
     std::vector<char> dst2(data.size());
@@ -315,11 +341,12 @@ TEST(Async, TwoDirectoriesOnOneMountShareAnEngine)
     utils::temp::File two(dir_two.path, utils::random::string(), data);
 
     // Different directories, one device.
-    Streamer streamer(Config(),
-                      [](const std::string &) -> common::posix_io::MountCapability
+    Streamer streamer(Config(), Streamer::Environment{
+                      .mount = [](const std::string &) -> common::posix_io::MountCapability
                       {
                           return common::posix_io::MountCapability{ makedev(8, 1), false };
-                      });
+                      },
+    });
 
     std::vector<char> dst1(data.size());
     std::vector<char> dst2(data.size());
@@ -487,7 +514,7 @@ TEST(Async, UnservableStrategyFailsTheRequest)
     request[0].path = file.path;
     request[0].ranges.push_back(ReadRange{ 0, data.size(), dst.data() });
 
-    Streamer streamer;
+    Streamer streamer(Config(), without(common::posix_io::Strategy::LibaioDirect));
 
     SubmissionId submission_id = 123;   // must be cleared, so a stale id cannot be mistaken for a real one
 
@@ -1301,6 +1328,154 @@ TEST(Async, Scattered_Ranges_And_Destinations)
         }
         EXPECT_EQ(dsts[i][length], 0xAB) << "range " << i << " wrote past the end of its destination";
     }
+}
+
+// libaio has no asynchronous buffered mode, so a file it cannot read directly has to reach the
+// synchronous reader BEFORE dispatch - once a workload is on the async pool the worker cannot hand it
+// back. Congruence is the first of the two reasons.
+//
+// The destination here is deliberately one byte out of step with the file offset. Aligning the buffer
+// is not enough: a direct read puts file byte F+k at address B+k, so it needs (B - F) % block == 0.
+// Without that NO part of the region can be read directly.
+TEST(Async, LibaioSkipsAFileItCannotReadDirectly)
+{
+    const auto data = utils::random::buffer(8192);
+    utils::temp::File file(data);
+
+    // Over-allocated so the destination can be moved off a block boundary on purpose.
+    std::vector<char> dst(data.size() + common::posix_io::DirectBlockSize);
+    char * misaligned = dst.data() + 1;
+    ASSERT_NE((reinterpret_cast<uintptr_t>(misaligned)) % common::posix_io::DirectBlockSize, 0u);
+
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), misaligned });
+
+    Streamer::Environment environment;
+    environment.availability = [](common::posix_io::Strategy) { return common::ResponseCode::Success; };
+    environment.direct = [](dev_t, const std::string &) { return common::posix_io::DirectSupport::Yes; };
+
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("libaio_direct"));
+    Streamer streamer(Config(), std::move(environment));
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+    EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+
+    EXPECT_FALSE(streamer.async_pool_used())
+        << "a file libaio cannot read directly must not reach the async pool at all";
+
+    SubmissionStats stats;
+    ASSERT_TRUE(streamer.stats().find(submission_id, stats));
+    ASSERT_EQ(stats.files.size(), 1u);
+    EXPECT_EQ(stats.files[0].strategy, common::posix_io::Strategy::SyncBuffered);
+
+    // And the bytes are still right - routing away is a performance decision, never a correctness one.
+    EXPECT_EQ(std::vector<uint8_t>(misaligned, misaligned + data.size()), data);
+}
+
+// The second reason: the mount cannot serve O_DIRECT at all. Congruence holds here, so this isolates
+// the mount from the placement.
+TEST(Async, LibaioSkipsAMountWithoutODirect)
+{
+    const auto data = utils::random::buffer(8192);
+    utils::temp::File file(data);
+
+    std::vector<char> dst(data.size() + common::posix_io::DirectBlockSize);
+    char * congruent = dst.data() + ((-reinterpret_cast<uintptr_t>(dst.data()))
+                                     % common::posix_io::DirectBlockSize);
+    ASSERT_TRUE(common::posix_io::is_congruent(0, congruent, common::posix_io::DirectBlockSize));
+
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), congruent });
+
+    Streamer::Environment environment;
+    environment.availability = [](common::posix_io::Strategy) { return common::ResponseCode::Success; };
+    environment.direct = [](dev_t, const std::string &) { return common::posix_io::DirectSupport::No; };
+
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("libaio_direct"));
+    Streamer streamer(Config(), std::move(environment));
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+    EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+
+    EXPECT_FALSE(streamer.async_pool_used())
+        << "libaio without O_DIRECT reads one file at a time, which is worse than the 16-thread pool";
+
+    EXPECT_EQ(std::vector<uint8_t>(congruent, congruent + data.size()), data);
+}
+
+// A congruent file on a mount that serves O_DIRECT is the case libaio exists for, so it must reach
+// the async pool. Without this the two tests above would pass with routing that always said no.
+TEST(Async, LibaioTakesAFileItCanReadDirectly)
+{
+    const auto data = utils::random::buffer(8192);
+    utils::temp::File file(data);
+
+    std::vector<char> dst(data.size() + common::posix_io::DirectBlockSize);
+    char * congruent = dst.data() + ((-reinterpret_cast<uintptr_t>(dst.data()))
+                                     % common::posix_io::DirectBlockSize);
+
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), congruent });
+
+    Streamer::Environment environment;
+    environment.availability = [](common::posix_io::Strategy) { return common::ResponseCode::Success; };
+    environment.direct = [](dev_t, const std::string &) { return common::posix_io::DirectSupport::Yes; };
+
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("libaio_direct"));
+    Streamer streamer(Config(), std::move(environment));
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+    EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+
+    EXPECT_TRUE(streamer.async_pool_used());
+
+    SubmissionStats stats;
+    ASSERT_TRUE(streamer.stats().find(submission_id, stats));
+    ASSERT_EQ(stats.files.size(), 1u);
+    EXPECT_EQ(stats.files[0].strategy, common::posix_io::Strategy::LibaioDirect);
+
+    EXPECT_EQ(std::vector<uint8_t>(congruent, congruent + data.size()), data);
+}
+
+// io_uring keeps a file it cannot read directly, because a buffered read on the ring is STILL
+// asynchronous - the worker just opens that one file without O_DIRECT. Only libaio has to route away.
+//
+// Without this test the routing could reject non-congruent files for every strategy and nothing would
+// notice, which would quietly send io_uring work to the 16-thread pool.
+TEST(Async, IoUringKeepsAFileItCannotReadDirectly)
+{
+    if (!ring_works())
+    {
+        GTEST_SKIP() << "io_uring is unavailable here";
+    }
+
+    const auto data = utils::random::buffer(8192);
+    utils::temp::File file(data);
+
+    std::vector<char> dst(data.size() + common::posix_io::DirectBlockSize);
+    char * misaligned = dst.data() + 1;
+
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), misaligned });
+
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("io_uring_direct"));
+    Streamer streamer;
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+    EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+
+    EXPECT_TRUE(streamer.async_pool_used())
+        << "io_uring falls back to a buffered read on the same ring, so the file stays on the engine";
+
+    EXPECT_EQ(std::vector<uint8_t>(misaligned, misaligned + data.size()), data);
 }
 
 }; // namespace runai::llm::streamer::impl

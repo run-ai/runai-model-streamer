@@ -7,6 +7,8 @@ runai_cc_auto_library(
         "//common/posix_io/io_engine",
         "//common/posix_io/io_uring_engine",
         "//common/posix_io/io_uring_probe",
+        "//common/posix_io/libaio_engine",
+        "//common/posix_io/libaio_probe",
         "//common/posix_io/strategy",
         "//utils/logging",
     ],
@@ -17,5 +19,6 @@ runai_cc_test(
     srcs = ["engine_factory_test.cc"],
     deps = [
         ":engine_factory",
+        "//common/posix_io/libaio_probe",
     ],
 )

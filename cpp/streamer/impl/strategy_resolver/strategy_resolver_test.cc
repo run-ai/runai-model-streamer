@@ -37,6 +37,23 @@ bool ring_works()
     return true;
 }
 
+
+// Say that one strategy cannot be served here, and let the probes answer for the rest.
+//
+// Needed because every strategy is available on a normal host: sync_buffered always, libaio nearly
+// always, io_uring wherever seccomp permits. Without this there is no candidate that reliably fails,
+// so a rejected head and an exhausted list cannot be reached.
+//
+// These tests used to name `libaio_direct` for that, which held only while libaio had no engine.
+StrategyResolver::Availability all_but(Strategy unavailable)
+{
+    return [unavailable](Strategy strategy)
+    {
+        return strategy == unavailable ? common::ResponseCode::FsStrategyUnavailable
+                                       : common::ResponseCode::Success;
+    };
+}
+
 } // namespace
 
 // The synchronous reader needs nothing probed, so it always wins if it is reachable. This is the
@@ -53,12 +70,14 @@ TEST(StrategyResolver, Sync_Buffered_Always_Resolves)
 // rather than failing the whole list.
 TEST(StrategyResolver, Takes_The_First_Available_Candidate)
 {
-    // libaio has no engine, so the first candidate can never be served and the walk must go on.
-    StrategyResolver resolver("libaio_direct,io_uring_buffered,sync_buffered");
+    // The head cannot be served here, so the walk must go on rather than fail the whole list.
+    StrategyResolver resolver("libaio_direct,io_uring_buffered,sync_buffered",
+                              all_but(Strategy::LibaioDirect));
 
     ASSERT_EQ(resolver.resolve(), common::ResponseCode::Success);
 
-    EXPECT_EQ(resolver.resolved(), ring_works() ? Strategy::IoUringBuffered : Strategy::SyncBuffered);
+    EXPECT_EQ(resolver.resolved(), Strategy::IoUringBuffered)
+        << "the second candidate is available, so the walk stops there";
 }
 
 // Both io_uring strategies use the same ring, so both are available wherever the ring is. Whether a
@@ -87,7 +106,8 @@ TEST(StrategyResolver, Direct_And_Buffered_Are_Equally_Available)
 // the synchronous reader without being told has no way to discover it.
 TEST(StrategyResolver, Exhausted_List_Is_An_Error)
 {
-    StrategyResolver resolver("libaio_direct");   // no engine for it, and nothing follows it
+    // Nothing follows the one candidate, and it cannot be served here.
+    StrategyResolver resolver("libaio_direct", all_but(Strategy::LibaioDirect));
 
     // The SPECIFIC code, not just "not Success". These used to report UnsupportedBackendMix, whose
     // message is about mixing S3, GCS and Azure - so an operator was sent to object storage for a
@@ -127,7 +147,7 @@ TEST(StrategyResolver, Resolve_Is_Idempotent)
 // Set before use: the caller's list replaces the default.
 TEST(StrategyResolver, Set_Candidates_Overrides_The_Default)
 {
-    StrategyResolver resolver("libaio_direct");   // a default that cannot be served
+    StrategyResolver resolver("libaio_direct", all_but(Strategy::LibaioDirect));   // cannot be served
 
     ASSERT_EQ(resolver.set_candidates("sync_buffered"), common::ResponseCode::Success);
     ASSERT_EQ(resolver.resolve(), common::ResponseCode::Success);
@@ -181,7 +201,7 @@ TEST(StrategyResolver, Set_After_Resolution_With_The_Same_List_Is_Accepted)
 // streamer that has already reported an error to its caller.
 TEST(StrategyResolver, Set_After_Failed_Resolution_Is_Rejected)
 {
-    StrategyResolver resolver("libaio_direct");
+    StrategyResolver resolver("libaio_direct", all_but(Strategy::LibaioDirect));
 
     ASSERT_EQ(resolver.resolve(), common::ResponseCode::FsStrategyUnavailable);
 

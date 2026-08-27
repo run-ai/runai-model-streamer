@@ -12,6 +12,7 @@ runai_cc_auto_library(
         "//streamer/impl/submissions:submissions_mgr",
         "//streamer/impl/pools:backend_pools",
         "//streamer/impl/strategy_resolver",
+        "//common/posix_io/alignment",
         "//common/posix_io/mount_capabilities",
         "//streamer/impl/async_io/async_io_worker",
         "//streamer/impl/async_io/async_io_stats",

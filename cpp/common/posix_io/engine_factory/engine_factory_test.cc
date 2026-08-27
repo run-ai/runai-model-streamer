@@ -1,5 +1,7 @@
 #include "common/posix_io/engine_factory/engine_factory.h"
 
+#include "common/posix_io/libaio_probe/libaio_probe.h"
+
 #include <gtest/gtest.h>
 
 #include <sys/syscall.h>
@@ -102,11 +104,27 @@ TEST(EngineFactory, Both_IoUring_Strategies_Build_Or_Refuse_Together)
     }
 }
 
-// libaio has no engine yet, so the factory returns nullptr and the dispatcher tries the next
-// candidate. This is different from a broken host: nothing was attempted. Remove this test in S8.
-TEST(EngineFactory, Libaio_Is_Not_Implemented_Yet)
+// libaio must follow the kernel, the same way the io_uring strategies do. It is normally available
+// everywhere - Docker's default seccomp profile does not block io_setup - so this usually runs the
+// available branch, including in CI.
+//
+// The expectation comes from LibaioProbe rather than from a fixed value, for the reason the probe's
+// own tests give: a host with /proc/sys/fs/aio-max-nr exhausted really has no libaio, and the factory
+// must return nullptr there rather than a broken engine.
+TEST(EngineFactory, Libaio_Follows_The_Kernel)
 {
-    EXPECT_EQ(make_io_engine(Strategy::LibaioDirect, config()), nullptr);
+    const auto engine = make_io_engine(Strategy::LibaioDirect, config());
+
+    if (probe_libaio().available)
+    {
+        ASSERT_NE(engine, nullptr) << "libaio works here, so an engine must be built";
+        EXPECT_GE(engine->depth(), 1u);
+        EXPECT_LE(engine->depth(), config().depth) << "a context is never larger than asked for";
+    }
+    else
+    {
+        EXPECT_EQ(engine, nullptr);
+    }
 }
 
 // SyncBuffered is the alternative to an engine, not one of them. Asking for it is a routing bug, and
