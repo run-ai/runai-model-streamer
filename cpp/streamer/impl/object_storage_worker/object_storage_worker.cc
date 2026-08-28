@@ -243,7 +243,7 @@ void ObjectStorageWorker::submit(const ObjectChunk & chunk)
 
     // ObjectStorageRetry starts the deadline here, so queueing before the first backend attempt does not
     // consume the chunk's retry budget. A delayed retry promoted after its deadline is rejected here.
-    if (!_retry.begin_attempt(cs.retry))
+    if (_retry.enabled() && !_retry.begin_attempt(cs.retry))
     {
         LOG(WARNING) << "Object chunk " << chunk.handle << " exhausted RUNAI_STREAMER_S3_TIMEOUT after "
                      << _retry.retry_count(cs.retry) << " application retries";
