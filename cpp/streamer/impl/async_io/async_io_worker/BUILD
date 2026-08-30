@@ -11,6 +11,7 @@ runai_cc_auto_library(
         "//common/posix_io/strategy",
         "//common/exception",
         "//streamer/impl/async_io/async_io_settings",
+        "//streamer/impl/async_io/async_io_stats",
         "//streamer/impl/async_io/inflight_chunks",
         "//streamer/impl/batch",
         "//streamer/impl/workload",

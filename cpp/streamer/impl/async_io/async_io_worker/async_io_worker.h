@@ -5,6 +5,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <vector>
 
@@ -15,6 +16,7 @@
 #include "common/response_code/response_code.h"
 
 #include "streamer/impl/async_io/async_io_settings/async_io_settings.h"
+#include "streamer/impl/async_io/async_io_stats/async_io_stats.h"
 #include "streamer/impl/async_io/inflight_chunks/inflight_chunks.h"
 #include "streamer/impl/batch/batch.h"
 #include "streamer/impl/workload/workload.h"
@@ -79,6 +81,17 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     // Every byte delivered to a caller by this worker. Only useful beside bounced_bytes(): the ratio
     // is what says whether direct reads are working.
     size_t bytes_read() const;
+
+    // This worker's numbers, for the streamer to sum with the other workers'.
+    //
+    // Safe to call from ANY thread, which is the reason the counters below are atomic. Everything
+    // else in this class is touched only by the worker's own thread; these are the exception, because
+    // the streamer reads them while the worker is still running.
+    //
+    // A snapshot rather than a live view: the four values are read one at a time, so they can come
+    // from slightly different moments. That is fine for what they are for - a ratio and a high-water
+    // mark - and a lock would put contention on the read path for no gain.
+    AsyncIoCounters counters() const;
 
  protected:
     // Builds the engine and returns the window size, on the FIRST workload.
@@ -285,18 +298,62 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     // zero the wait must be NonBlocking.
     size_t _issued = 0;
 
+    // The most reads this worker ever had outstanding at once.
+    //
+    // Tracked beside _issued rather than derived from it, because _issued is a live count that rises
+    // and falls; by the time anyone asks, the peak is long gone. Written only by the worker thread,
+    // read by anyone - hence atomic.
+    std::atomic<unsigned> _achieved_depth{ 0 };
+
+    // Reads the kernel answered short, and which were re-staged for the remainder. Counted where the
+    // re-stage happens, so it counts passes rather than chunks: one chunk answered in three pieces
+    // adds two.
+    std::atomic<uint64_t> _short_read_restages{ 0 };
+
     // Bytes copied out of scratch. See bounced_bytes().
-    size_t _bounced_bytes = 0;
+    std::atomic<uint64_t> _bounced_bytes{ 0 };
 
     // Every byte delivered, bounced or not. Only meaningful next to _bounced_bytes: the RATIO is what
     // says whether direct reads are working, and a count of copied bytes alone cannot say that.
-    size_t _bytes_read = 0;
+    std::atomic<uint64_t> _bytes_read{ 0 };
 
     // So the warning below is said once, not once per workload.
     bool _warned_about_bouncing = false;
 
     // Harvested into on every drain, sized once - nothing is allocated while completing.
     std::vector<common::posix_io::Completion> _completions;
+};
+
+// Every async worker the streamer has created, so their counters can be summed.
+//
+// Filled by the worker FACTORY rather than by walking the pools. The pools hold workers as
+// Worker<Workload>, which knows nothing of counters, so reaching them from there would mean a
+// dynamic_cast or a virtual method on a base that object storage shares. The factory already knows
+// the concrete type, because it is the thing that constructs it.
+//
+// Held by shared_ptr and captured by value, like the strategy resolver and the credentials state, so
+// the factory never captures `this` and the registry outlives the pools whatever the destruction
+// order.
+//
+// RAW POINTERS, and they are not owning: each worker belongs to its pool. Nothing is ever removed,
+// because pools are created on first use and live as long as the streamer - so a registered worker is
+// alive for as long as anything can ask. If pools ever became destructible, this needs revisiting.
+//
+// Thread safe. Pools are created lazily, so workers can be registered while another thread reads.
+class AsyncIoWorkers
+{
+ public:
+    void add(const AsyncIoWorker * worker);
+
+    // The sum over every worker. See AsyncIoCounters for why a sum is the right shape for three of
+    // the four and a maximum for the last.
+    AsyncIoCounters total() const;
+
+    size_t size() const;
+
+ private:
+    mutable std::mutex _mutex;
+    std::vector<const AsyncIoWorker *> _workers;
 };
 
 }; // namespace runai::llm::streamer::impl

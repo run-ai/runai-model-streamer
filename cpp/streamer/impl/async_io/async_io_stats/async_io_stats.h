@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <mutex>
 #include <ostream>
 #include <string>
@@ -38,19 +39,57 @@ struct SubmissionStats
     // RUNAI_STREAMER_FS_MAX_ENGINES is too low for the number of mounts read.
     unsigned shared_engine_mounts = 0;
 
-    // NOT HERE, on purpose:
+    // NOT HERE, on purpose. Achieved depth, short-read re-stages and bounced bytes all belong to a
+    // WORKER rather than to a submission, because one worker serves many submissions and interleaves
+    // their chunks. They live in AsyncIoCounters above, summed across workers.
     //
-    //   achieved depth  belongs to the ENGINE, not to a submission. Submissions share one engine's
-    //                   window, so "the highest number of reads during submission X" has no clear
-    //                   meaning. It needs its own place, per engine.
-    //
-    //   short-read re-stages  the worker counts these, and one worker serves many submissions.
-    //                   Giving each submission its own number needs the count to travel from the
-    //                   worker back to here. Worth doing, but it is not free, so it is separate.
-    //
-    // Both are left out rather than added as fields that nothing fills. An empty counter reads as
-    // "this did not happen".
+    // There is a second reason they could not live here even if the scope fitted: this struct is
+    // recorded when a submission is DISPATCHED, before any read has happened, so nothing measured
+    // during the reads can reach it. Everything here is knowable in advance.
 };
+
+// What the async workers have done, summed over all of them.
+//
+// ENGINE-SCOPED, not per submission, and that is a correction to design 5.11. A worker serves many
+// submissions and interleaves their chunks, so "the bytes this submission bounced" would mean
+// attributing a shared worker's work after the fact. Achieved depth is worse: submissions share one
+// engine's window, so the highest number of reads "during" a submission has no clear meaning at all.
+//
+// The questions these answer are global anyway - is congruent placement working, are reads being
+// split, is the window being filled - so a total is the honest shape.
+struct AsyncIoCounters
+{
+    // Every byte delivered by an async worker. Only useful beside bounced_bytes.
+    uint64_t bytes_read = 0;
+
+    // Bytes copied out of a scratch buffer.
+    //
+    // AN ASSERTION, and the reason this struct exists. Reading into buffers the streamer placed itself
+    // should bounce NOTHING: each region starts at an offset that makes it congruent with its file
+    // offset, so no edge needs a partial block. A number that grows with bytes_read means the
+    // placement has stopped working and every byte is being copied - which costs throughput and
+    // reports no error anywhere.
+    //
+    // Non-zero is expected only for destinations the CALLER placed, which the range API allows.
+    uint64_t bounced_bytes = 0;
+
+    // Reads the kernel answered with fewer bytes than asked for, and which were re-staged for the
+    // rest. Routine under io_uring rather than a fault; a large number against the number of chunks
+    // says reads are being split and each one is costing more than one round trip.
+    uint64_t short_read_restages = 0;
+
+    // The most reads any single engine had outstanding at once.
+    //
+    // A MAXIMUM ACROSS ENGINES, not a sum: each engine has its own window, and adding them would
+    // describe a queue depth no device ever saw. Well below the configured depth means the window is
+    // not being filled, which is what says whether io_submit time should be read as a real loss.
+    unsigned achieved_depth = 0;
+
+    // Adds another worker's numbers into these.
+    AsyncIoCounters & operator+=(const AsyncIoCounters & other);
+};
+
+std::ostream & operator<<(std::ostream &, const AsyncIoCounters &);
 
 std::ostream & operator<<(std::ostream &, const SubmissionStats &);
 

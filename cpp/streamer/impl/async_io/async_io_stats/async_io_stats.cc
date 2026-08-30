@@ -88,4 +88,33 @@ size_t AsyncIoStats::dropped() const
     return _dropped;
 }
 
+AsyncIoCounters & AsyncIoCounters::operator+=(const AsyncIoCounters & other)
+{
+    bytes_read += other.bytes_read;
+    bounced_bytes += other.bounced_bytes;
+    short_read_restages += other.short_read_restages;
+
+    // MAX, not sum - see the field. Each engine has its own window, so adding them would report a
+    // queue depth no device ever saw.
+    achieved_depth = std::max(achieved_depth, other.achieved_depth);
+
+    return *this;
+}
+
+std::ostream & operator<<(std::ostream & os, const AsyncIoCounters & counters)
+{
+    os << counters.bytes_read << " bytes read";
+
+    if (counters.bytes_read != 0)
+    {
+        // The ratio, because the raw number says nothing on its own: 4 KB bounced out of 4 KB is a
+        // broken placement, and out of 40 GB is two edges of one region.
+        os << ", " << counters.bounced_bytes << " bounced ("
+           << (counters.bounced_bytes * 100 / counters.bytes_read) << "%)";
+    }
+
+    return os << ", " << counters.short_read_restages << " short reads re-staged"
+              << ", deepest engine reached " << counters.achieved_depth;
+}
+
 }; // namespace runai::llm::streamer::impl

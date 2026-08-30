@@ -1478,4 +1478,145 @@ TEST(Async, IoUringKeepsAFileItCannotReadDirectly)
     EXPECT_EQ(std::vector<uint8_t>(misaligned, misaligned + data.size()), data);
 }
 
+// THE ASSERTION S8b EXISTS FOR: reading into destinations the streamer placed congruently must copy
+// NOTHING.
+//
+// A direct read puts file byte F+k at address B+k, so if (B - F) is a multiple of the block, every
+// block boundary in the file lines up with one in memory and no edge needs a scratch buffer. When it
+// does not line up, every byte is copied through scratch instead - which costs throughput and reports
+// no error anywhere. A number, not a log line, is the only way to see it.
+//
+// This could not be written before. The worker tests drive chunks directly, so they check the
+// bouncing logic rather than the placement; only here do a real request, real routing and a real
+// engine meet.
+TEST(Async, CongruentDestinationsBounceNothing)
+{
+    if (!ring_works())
+    {
+        GTEST_SKIP() << "io_uring is unavailable here";
+    }
+
+    const size_t block = common::posix_io::DirectBlockSize;
+    const auto data = utils::random::buffer(block * 16);
+    utils::temp::File file(data);
+
+    // Congruent with file offset 0: the destination itself lands on a block boundary.
+    std::vector<char> dst(data.size() + block);
+    char * congruent = dst.data() + ((-reinterpret_cast<uintptr_t>(dst.data())) % block);
+    ASSERT_TRUE(common::posix_io::is_congruent(0, congruent, block));
+
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), congruent });
+
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("io_uring_direct"));
+    Streamer streamer;
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+    EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+
+    const auto counters = streamer.async_counters();
+    EXPECT_EQ(counters.bytes_read, data.size());
+    EXPECT_EQ(counters.bounced_bytes, 0u)
+        << "a congruent destination has no partial edge, so nothing should go through scratch";
+
+    EXPECT_EQ(std::vector<uint8_t>(congruent, congruent + data.size()), data);
+}
+
+// The other side of the same assertion, so a zero above cannot come from bouncing being broken or
+// never reached. A destination one byte out of step has no aligned part at all, so the worker reads
+// the file BUFFERED - and a buffered read never bounces either.
+//
+// So what this pins is the routing, not the copying: the bytes still arrive, and they arrive without
+// scratch, because the worker chose the reader that does not need it.
+TEST(Async, ANonCongruentDestinationIsReadBufferedRatherThanBounced)
+{
+    if (!ring_works())
+    {
+        GTEST_SKIP() << "io_uring is unavailable here";
+    }
+
+    const size_t block = common::posix_io::DirectBlockSize;
+    const auto data = utils::random::buffer(block * 4);
+    utils::temp::File file(data);
+
+    std::vector<char> dst(data.size() + block);
+    char * misaligned = dst.data() + 1;
+    ASSERT_FALSE(common::posix_io::is_congruent(0, misaligned, block));
+
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), misaligned });
+
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("io_uring_direct"));
+    Streamer streamer;
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+    EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+
+    const auto counters = streamer.async_counters();
+    EXPECT_EQ(counters.bytes_read, data.size());
+    EXPECT_EQ(counters.bounced_bytes, 0u)
+        << "no part of this region can be read directly, so the worker reads it buffered instead of"
+           " copying every byte through scratch";
+
+    EXPECT_EQ(std::vector<uint8_t>(misaligned, misaligned + data.size()), data);
+}
+
+// The counters are summed over every worker and reach zero when nothing async ran, so a caller cannot
+// mistake "no async work" for "async work that copied nothing".
+TEST(Async, CountersAreZeroWithoutAnAsyncWorkload)
+{
+    const auto data = utils::random::buffer(4096);
+    utils::temp::File file(data);
+
+    std::vector<char> dst(data.size());
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), dst.data() });
+
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("sync_buffered"));
+    Streamer streamer;
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+    EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+
+    const auto counters = streamer.async_counters();
+    EXPECT_EQ(counters.bytes_read, 0u) << "the synchronous reader served this, so no worker counted it";
+    EXPECT_EQ(counters.bounced_bytes, 0u);
+    EXPECT_EQ(counters.achieved_depth, 0u);
+}
+
+// Achieved depth is a high-water mark, so it must survive the reads finishing - by the time anyone
+// asks, the live in-flight count is back to zero.
+TEST(Async, AchievedDepthOutlivesTheReads)
+{
+    if (!ring_works())
+    {
+        GTEST_SKIP() << "io_uring is unavailable here";
+    }
+
+    const auto data = utils::random::buffer(4 * 1024 * 1024);
+    utils::temp::File file(data);
+
+    std::vector<char> dst(data.size());
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), dst.data() });
+
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("io_uring_buffered"));
+    Streamer streamer;
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+    EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+
+    const auto counters = streamer.async_counters();
+    EXPECT_GE(counters.achieved_depth, 1u) << "at least one read was outstanding at some point";
+    EXPECT_EQ(counters.bytes_read, data.size());
+}
+
 }; // namespace runai::llm::streamer::impl

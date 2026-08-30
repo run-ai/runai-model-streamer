@@ -23,6 +23,7 @@
 #include "streamer/impl/pools/backend_pools.h"
 #include "common/posix_io/mount_capabilities/mount_capabilities.h"
 #include "streamer/impl/async_io/async_io_stats/async_io_stats.h"
+#include "streamer/impl/async_io/async_io_worker/async_io_worker.h"
 #include "streamer/impl/strategy_resolver/strategy_resolver.h"
 
 namespace runai::llm::streamer::impl
@@ -137,6 +138,15 @@ struct Streamer
     // What each submission did, and which reader served each of its files. Kept for the last few
     // submissions - see AsyncIoStats.
     const AsyncIoStats & stats() const;
+
+    // What the async workers have done, summed over all of them and over the streamer's whole life.
+    //
+    // SEPARATE from stats(), and not a field on it, because the scopes differ. A SubmissionStats
+    // describes one submission and is recorded when it is dispatched; these are measured during the
+    // reads and belong to a worker, which serves many submissions at once.
+    //
+    // Zero when no async workload has run - there is nothing to sum.
+    AsyncIoCounters async_counters() const;
 
     // For testing only. Credentials are streamer-scoped: call set_credentials first (these use whatever
     // was set there).
@@ -272,6 +282,13 @@ struct Streamer
 
     // Empty in production, where the machine answers directly.
     Environment _environment;
+
+    // Every async worker built by the pool factory, so their counters can be summed.
+    //
+    // shared_ptr and declared BEFORE _pools, for the same reason as the resolver and the credentials:
+    // the factory captures it by value and never `this`, so the registry outlives the workers whatever
+    // the destruction order.
+    std::shared_ptr<AsyncIoWorkers> _async_workers = std::make_shared<AsyncIoWorkers>();
 
     std::unique_ptr<S3Cleanup> _s3;
     // Lazily-created worker pools, one per backend kind. Occupies the slot the single ThreadPool used

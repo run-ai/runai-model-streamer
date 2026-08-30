@@ -281,12 +281,22 @@ bool AsyncIoWorker::plan_direct_pass(const Chunk & pending, size_t block, Direct
 
 size_t AsyncIoWorker::bounced_bytes() const
 {
-    return _bounced_bytes;
+    return _bounced_bytes.load(std::memory_order_relaxed);
+}
+
+AsyncIoCounters AsyncIoWorker::counters() const
+{
+    AsyncIoCounters counters;
+    counters.bytes_read = _bytes_read.load(std::memory_order_relaxed);
+    counters.bounced_bytes = _bounced_bytes.load(std::memory_order_relaxed);
+    counters.short_read_restages = _short_read_restages.load(std::memory_order_relaxed);
+    counters.achieved_depth = _achieved_depth.load(std::memory_order_relaxed);
+    return counters;
 }
 
 size_t AsyncIoWorker::bytes_read() const
 {
-    return _bytes_read;
+    return _bytes_read.load(std::memory_order_relaxed);
 }
 
 common::posix_io::FileRef AsyncIoWorker::file_of(const InflightChunk & entry) const
@@ -332,7 +342,7 @@ size_t AsyncIoWorker::land_bounced_pass(common::posix_io::RequestId id, size_t b
         // Counted where the copy happens, so the number is the bytes actually moved rather than an
         // estimate from the request sizes. A pass reads a whole block but copies only what was asked
         // for.
-        _bounced_bytes += useful;
+        _bounced_bytes.fetch_add(useful, std::memory_order_relaxed);
     }
 
     _scratch->give(_chunks.clear_bounce(id));
@@ -541,6 +551,13 @@ void AsyncIoWorker::drain_batch(std::atomic<bool> & stopped)
     }
     _issued += issued;
 
+    // The high-water mark, recorded where the count RISES - the only place it can grow. _issued
+    // itself is a live count that falls again, so by the time anyone asks the peak has gone.
+    if (_issued > _achieved_depth.load(std::memory_order_relaxed))
+    {
+        _achieved_depth.store(static_cast<unsigned>(_issued), std::memory_order_relaxed);
+    }
+
     // Block only when something is actually ISSUED. Staged is not issued, so waiting with nothing in
     // flight waits on an empty ring for a completion that will never arrive.
     const auto mode = (_issued > 0) ? common::posix_io::WaitMode::Block
@@ -599,7 +616,7 @@ void AsyncIoWorker::drain_batch(std::atomic<bool> & stopped)
         // A bounced pass read a whole block but only part of it was asked for. Converting here, before
         // record(), is what stops the cursor advancing past bytes that never arrived.
         const size_t useful = land_bounced_pass(completion.id, completion.bytes_transferred());
-        _bytes_read += useful;
+        _bytes_read.fetch_add(useful, std::memory_order_relaxed);
 
         switch (_chunks.record(completion.id, useful))
         {
@@ -616,6 +633,11 @@ void AsyncIoWorker::drain_batch(std::atomic<bool> & stopped)
         case Progress::Partial:
             // Re-stage the remainder on the same request. The window credit is still held, so this
             // does not go back through the queue - it is the same path submit() takes, resumed.
+            //
+            // Counted here rather than at the chunk, so it counts PASSES: a chunk answered in three
+            // pieces adds two. That is the number that says how much a short read really cost, since
+            // each extra pass is another submit and another completion.
+            _short_read_restages.fetch_add(1, std::memory_order_relaxed);
             stage_pending(completion.id);
             break;
         }
@@ -702,10 +724,9 @@ void AsyncIoWorker::finalize(InflightMap::iterator it, common::ResponseCode code
     report_workload(it->second, code);
 
     // Cumulative for this worker, not for this workload: workloads overlap in one window, so bytes
-    // cannot be attributed to one of them. Per-submission numbers need the counters to reach the
-    // streamer, which is a later step.
-    LOG(DEBUG) << "Async io worker: " << _bytes_read << " bytes read, " << _bounced_bytes
-               << " copied through scratch";
+    // cannot be attributed to one of them. Streamer::async_counters() sums this across workers, and is
+    // engine-scoped for the same reason.
+    LOG(DEBUG) << "Async io worker: " << counters();
 
     // The number that decides whether direct reads are worth having.
     //
@@ -815,6 +836,30 @@ void AsyncIoWorker::abort_all(common::ResponseCode code)
 
     _chunks.clear();
     _issued = 0;
+}
+
+void AsyncIoWorkers::add(const AsyncIoWorker * worker)
+{
+    const auto guard = std::unique_lock<std::mutex>(_mutex);
+    _workers.push_back(worker);
+}
+
+AsyncIoCounters AsyncIoWorkers::total() const
+{
+    const auto guard = std::unique_lock<std::mutex>(_mutex);
+
+    AsyncIoCounters total;
+    for (const auto * worker : _workers)
+    {
+        total += worker->counters();
+    }
+    return total;
+}
+
+size_t AsyncIoWorkers::size() const
+{
+    const auto guard = std::unique_lock<std::mutex>(_mutex);
+    return _workers.size();
 }
 
 }; // namespace runai::llm::streamer::impl

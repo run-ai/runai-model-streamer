@@ -49,9 +49,15 @@ Streamer::Streamer(Config config, Environment environment) :
         // the async worker owns an IoEngine built for the resolved strategy. Reading the strategy
         // here is safe: this factory runs when the pool is created, which is the first push, which is
         // after resolution. Captures the resolver by value, never `this`.
-        [resolver = _strategy_resolver]() -> std::unique_ptr<utils::Worker<Workload>>
+        [resolver = _strategy_resolver, workers = _async_workers]() -> std::unique_ptr<utils::Worker<Workload>>
         {
-            return std::make_unique<AsyncIoWorker>(resolver->resolved());
+            auto worker = std::make_unique<AsyncIoWorker>(resolver->resolved());
+
+            // Registered here, where the concrete type is still known. The pool stores it as a
+            // Worker<Workload>, which knows nothing of counters, so this is the last point at which
+            // it can be recorded without a cast.
+            workers->add(worker.get());
+            return worker;
         },
         // each object-storage worker reads the streamer's credentials once, at client creation, via this
         // provider. It captures the shared credentials state by value, so the state outlives the worker
@@ -170,6 +176,11 @@ common::s3::Credentials Streamer::credentials() const
 const AsyncIoStats & Streamer::stats() const
 {
     return _stats;
+}
+
+AsyncIoCounters Streamer::async_counters() const
+{
+    return _async_workers->total();
 }
 
 unsigned Streamer::async_engines() const
