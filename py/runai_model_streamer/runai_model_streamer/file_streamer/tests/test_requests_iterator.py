@@ -926,14 +926,21 @@ class TestPoolHugePages(unittest.TestCase):
     @patch.dict(os.environ, {RUNAI_STREAMER_HUGE_PAGES_ENV_VAR_NAME: "1"})
     def test_the_report_runs_at_most_once(self):
         # It reads /proc/self/smaps, which is not free, and the answer cannot change. Once per pool.
+        #
+        # _mapping_memory is faked so the answer does not depend on how much of this small pool the
+        # allocator happens to have made resident. Asserting on the real value made this test pass or
+        # fail according to what ran before it - which it did, once the suite grew.
         pool = self._pool()
-        with patch.object(
+        with patch(
+            "runai_model_streamer.file_streamer.requests_iterator._mapping_memory",
+            return_value=(64 * 1024 * 1024, 64 * 1024 * 1024),
+        ), patch.object(
             type(pool), "_report_huge_pages_once", wraps=pool._report_huge_pages_once
         ) as reported:
             request = pool.next_request()
             pool.release(request)
             self.assertEqual(reported.call_count, 1)
-        self.assertTrue(pool._huge_pages_reported)
+            self.assertTrue(pool._huge_pages_reported)
 
     def test_releasing_twice_does_not_report_twice(self):
         pool = self._pool()
