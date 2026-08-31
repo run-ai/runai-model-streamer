@@ -202,6 +202,20 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     // Used to answer zero-sized ranges, which produce no chunk and so would otherwise be answered
     // without the file ever being touched. The file is opened and closed again - fd_for() opens it
     // properly later, when it knows whether O_DIRECT can be used.
+    // Queue this workload's chunks so that several files are read from at once, and return how many
+    // went in. Order only - destinations are already fixed, so nothing here moves a byte.
+    size_t enqueue_interleaved(Inflight & wl, uint64_t workload_id);
+
+    // The queue's round-robin key: one value per file, unique across workloads.
+    static uint64_t file_group(uint64_t workload_id, unsigned batch_index);
+
+    // How many files this worker reads from at once - the queue rotates over exactly this many.
+    std::size_t max_active_groups() const override;
+
+    // Close the interval the current in-flight level lasted for. Called before every change to
+    // _issued.
+    void account_inflight();
+
     static common::ResponseCode probe_open(const std::string & path);
 
     int fd_for(Inflight & wl, unsigned batch_index, size_t file_offset, const char * buffer,
@@ -304,6 +318,18 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     // and falls; by the time anyone asks, the peak is long gone. Written only by the worker thread,
     // read by anyone - hence atomic.
     std::atomic<unsigned> _achieved_depth{ 0 };
+
+    // Time-weighted in-flight, as a numerator and a denominator so workers can be summed. See
+    // AsyncIoCounters for why the peak alone is not enough.
+    //
+    // Written only by the worker thread and read by anyone, hence atomic - the same reason
+    // _achieved_depth is.
+    std::atomic<uint64_t> _inflight_nanos{ 0 };
+    std::atomic<uint64_t> _observed_nanos{ 0 };
+
+    // When the current in-flight level began. 0 until the first change, so the interval before any
+    // read was issued is not counted as time spent at depth zero.
+    uint64_t _inflight_since = 0;
 
     // Reads the kernel answered short, and which were re-staged for the remainder. Counted where the
     // re-stage happens, so it counts passes rather than chunks: one chunk answered in three pieces

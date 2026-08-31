@@ -40,7 +40,10 @@ class CapacityWorker : public Worker<Request>
         {
             try
             {
-                _queue = std::make_unique<CapacityQueue<Chunk>>(capacity(request));
+                // Sized from the same request as the capacity, and for the same reason: both depend on
+                // settings the Python layer does not publish until the first stream.
+                const auto window = capacity(request);
+                _queue = std::make_unique<CapacityQueue<Chunk>>(window, max_active_groups());
             }
             catch (...)
             {
@@ -88,6 +91,13 @@ class CapacityWorker : public Worker<Request>
     // May THROW if the window cannot be sized from this request; the base then calls discard(request) and
     // retries on the next request.
     virtual std::size_t capacity(const Request & first_request) = 0;
+
+    // How many groups the queue may rotate over at once, or 0 for no bound. Called once, right after
+    // capacity(), so it may read anything capacity() resolved.
+    //
+    // Not pure: a backend that does not group its chunks wants the default, and object storage does
+    // not group.
+    virtual std::size_t max_active_groups() const { return 0; }
 
     // Resolve a request that could not be admitted because the window failed to come up (capacity() or the
     // queue allocation threw). The worker must finalize it - push its responses - so the consumer never hangs.

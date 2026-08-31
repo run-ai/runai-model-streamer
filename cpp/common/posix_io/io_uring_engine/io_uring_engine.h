@@ -50,10 +50,17 @@ class IoUringEngine : public IoEngine
     ResponseCode wait_for_completions(Completion * out, unsigned max, unsigned & out_count,
                                       WaitMode mode, unsigned timeout_ms = 0) override;
 
+    // Time spent inside io_uring_submit. Reported for the same reason libaio reports it, and so the
+    // two can be compared: io_uring's submit is described as a ring append rather than work done
+    // inline, and that is a claim worth checking rather than assuming.
+    SubmitStats submit_stats() const override;
+
  private:
     // Prepared with io_uring_get_sqe() and not yet handed to io_uring_submit(). The kernel has not
     // seen these; only flush() makes them real.
     unsigned _staged = 0;
+
+    SubmitStats _submit_stats;
 
     struct io_uring _ring;
     Limits _limits;

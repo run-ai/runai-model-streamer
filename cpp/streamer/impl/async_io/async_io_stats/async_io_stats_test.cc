@@ -135,4 +135,45 @@ TEST(AsyncIoStats, Concurrent_Recording)
     EXPECT_EQ(stats.submissions().size() + stats.dropped(), threads * each);
 }
 
+
+// The peak and the average answer different questions, and only the average says whether the window
+// STAYED full. A run that touches 64 outstanding once and then averages three reports the same
+// achieved_depth as one that sits at 64 throughout.
+TEST(AsyncIoCounters, Average_Inflight_Is_Time_Weighted)
+{
+    AsyncIoCounters counters;
+
+    // Two levels: 8 outstanding for 1 ms, then 2 outstanding for 3 ms.
+    // (8*1 + 2*3) / 4 = 3.5
+    counters.inflight_nanos = 8 * 1000000ULL + 2 * 3000000ULL;
+    counters.observed_nanos = 4000000ULL;
+
+    EXPECT_DOUBLE_EQ(counters.average_inflight(), 3.5)
+        << "a long spell at a low level must outweigh a brief spike";
+}
+
+TEST(AsyncIoCounters, Average_Inflight_Is_Zero_Before_Anything_Is_Observed)
+{
+    AsyncIoCounters counters;
+    EXPECT_EQ(counters.average_inflight(), 0.0) << "no division by zero, and no invented number";
+}
+
+// Summed rather than maxed, unlike achieved_depth - which is why the two parts are carried separately:
+// means of different durations cannot be added, numerators and denominators can.
+TEST(AsyncIoCounters, Average_Inflight_Combines_Across_Workers)
+{
+    AsyncIoCounters a;
+    a.inflight_nanos = 10 * 1000000ULL;   // 10 outstanding for 1 ms
+    a.observed_nanos = 1000000ULL;
+
+    AsyncIoCounters b;
+    b.inflight_nanos = 2 * 3000000ULL;    // 2 outstanding for 3 ms
+    b.observed_nanos = 3000000ULL;
+
+    a += b;
+
+    // (10 + 6) / 4 = 4, not the (10 + 2) / 2 = 6 that averaging the averages would give.
+    EXPECT_DOUBLE_EQ(a.average_inflight(), 4.0);
+}
+
 }; // namespace runai::llm::streamer::impl

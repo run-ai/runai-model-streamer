@@ -79,6 +79,21 @@ Streamer::~Streamer()
 {
     try
     {
+        // At INFO because it is the only way to tell a real direct read from one that bounced every
+        // pass through the scratch buffer. Both reach the same bytes and both look identical in the
+        // log otherwise, so without this a run that lost congruence reads as a working direct run.
+        //
+        // Reported here, at the end, because the counters are totals over the streamer's life: a
+        // ratio taken mid-run would only describe the submissions seen so far.
+        //
+        // Silent when nothing was read asynchronously, so a synchronous run does not gain a line of
+        // zeroes that means nothing.
+        const auto counters = async_counters();
+        if (counters.bytes_read != 0)
+        {
+            LOG(INFO) << "Async io totals: " << counters;
+        }
+
         LOG(DEBUG) << "Streamer shutting down";
         // unblock any consumer parked in response()/pop() on the persistent responder
         _responder->stop();

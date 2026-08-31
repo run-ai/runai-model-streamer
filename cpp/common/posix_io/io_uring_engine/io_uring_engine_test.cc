@@ -558,4 +558,51 @@ TEST(IoUringEngine, Direct_Read_Is_Refused_When_Misaligned)
     }
 }
 
+// Both engines report what submitting cost, in the same shape, so the two can be compared.
+//
+// This exists because io_uring's submit is DESCRIBED as a ring append rather than work done inline,
+// while libaio's io_submit is known to block. That difference decides whether batching many reads
+// into one call is free or expensive - and it is a claim about the kernel, not something to take on
+// faith. Measuring only libaio would mean tuning both engines on one engine's evidence.
+//
+// A counter that is never filled would answer that question with a silent zero, which is why the
+// nanos are asserted non-zero rather than merely present.
+TEST(IoUringEngine, Submit_Time_Is_Measured)
+{
+    SKIP_WITHOUT_RING();
+
+    Fixture fixture(64 << 10);
+    IoUringEngine engine(config_with(8));
+
+    std::vector<char> buffer(4096);
+    ASSERT_EQ(engine.stage(1, fixture.ref(), 0, buffer.size(), buffer.data()), ResponseCode::Success);
+
+    unsigned issued = 0;
+    ASSERT_EQ(engine.flush(issued), ResponseCode::Success);
+    reap(engine, 1);
+
+    const auto stats = engine.submit_stats();
+    EXPECT_EQ(stats.calls, 1u);
+    EXPECT_EQ(stats.requests, 1u);
+    EXPECT_GT(stats.nanos, 0u);
+    EXPECT_GT(stats.max_nanos, 0u);
+    EXPECT_LE(stats.max_nanos, stats.nanos);
+}
+
+// An empty flush must not be counted. Otherwise the average batch size - requests / calls - is
+// diluted by calls that carried nothing, and that ratio is the number the batching question turns on.
+TEST(IoUringEngine, An_Empty_Flush_Is_Not_Counted)
+{
+    SKIP_WITHOUT_RING();
+
+    IoUringEngine engine(config_with(8));
+
+    unsigned issued = 0;
+    ASSERT_EQ(engine.flush(issued), ResponseCode::Success);
+    EXPECT_EQ(issued, 0u);
+
+    EXPECT_EQ(engine.submit_stats().calls, 0u)
+        << "an empty flush should not reach io_uring_submit at all";
+}
+
 }; // namespace runai::llm::streamer::common::posix_io

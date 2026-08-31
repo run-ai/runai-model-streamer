@@ -85,6 +85,21 @@ struct AsyncIoCounters
     // not being filled, which is what says whether io_submit time should be read as a real loss.
     unsigned achieved_depth = 0;
 
+    // The average number of reads outstanding, weighted by how long each level lasted.
+    //
+    // achieved_depth is a HIGH-WATER MARK: it says the window was full ONCE, which is a different
+    // claim and a much weaker one. A run that touches 64 outstanding for an instant and then averages
+    // three reports the same maximum as one that sits at 64 throughout, and the two have completely
+    // different explanations for a slow read.
+    //
+    // Carried as the numerator and denominator rather than a ratio, so summing across workers is
+    // meaningful: a mean cannot be added, and each worker runs for its own length of time.
+    uint64_t inflight_nanos = 0;      // sum over time of (reads outstanding x nanoseconds at that level)
+    uint64_t observed_nanos = 0;      // how long the worker was observed, whatever was outstanding
+
+    // Reads outstanding on average, or 0 before anything has been observed.
+    double average_inflight() const;
+
     // Adds another worker's numbers into these.
     AsyncIoCounters & operator+=(const AsyncIoCounters & other);
 };

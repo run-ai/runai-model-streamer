@@ -77,6 +77,36 @@ struct Completion
 
 enum class WaitMode { NonBlocking, Block };
 
+// How long an engine spent inside its submission call - io_submit for libaio, io_uring_enter for
+// io_uring.
+//
+// The design accepts a blocking submit instead of using RWF_NOWAIT (5.8.1). These numbers are how we
+// check that choice. If they stay small, nothing more is needed. If one call takes milliseconds, the
+// answer is a submit thread, and these are the evidence for it.
+//
+// How to read them:
+//
+//   nanos / requests   the normal cost of submitting one read
+//   max_nanos          the worst single call
+//   requests / calls   the average batch size, which says whether stage-then-flush is buying anything
+//
+// The total alone would mix two different things. Submission always costs something, and that cost
+// grows with the number of reads in the call. A stall looks different: one call far longer than the
+// per-read cost. That is why the worst call is kept separately.
+//
+// REPORTED BY BOTH ENGINES, on purpose. libaio's io_submit is known to block - it waits on filesystem
+// metadata, on extent lookup, on faulting the destination, or on a busy block layer. io_uring's
+// submit is described as a ring append, which should make it far cheaper. That is a claim about the
+// kernel, and measuring only the engine we already distrust cannot check it: without the same
+// counters on both, a batch size tuned on libaio evidence would be applied to io_uring on faith.
+struct SubmitStats
+{
+    uint64_t calls = 0;        // submission calls made
+    uint64_t requests = 0;     // reads those calls carried
+    uint64_t nanos = 0;        // total time inside the submission call
+    uint64_t max_nanos = 0;    // the slowest single call
+};
+
 // What the operator chooses. Both fields are clamped to their real ceiling when the engine is built,
 // and logged if clamped.
 struct AsyncIoConfig
@@ -163,6 +193,12 @@ class IoEngine
     // ring buffer pool. Python allocates and frees that pool and C++ cannot veto the free, while the
     // kernel keeps pinned pages alive after the mapping goes; freeing a still-registered region
     // corrupts the next allocation. Draining I/O does not help - it is a different hazard.
+    // Time spent submitting; see SubmitStats. Read at teardown, so returning a copy costs nothing.
+    //
+    // Defaulted rather than pure so a test double does not have to measure anything - an engine that
+    // reports zeros is saying "not measured", which is exactly true of a mock.
+    virtual SubmitStats submit_stats() const { return {}; }
+
     virtual void register_memory(char * /* base */, size_t /* size */) {}
     virtual void unregister_memory(char * /* base */) {}
 };

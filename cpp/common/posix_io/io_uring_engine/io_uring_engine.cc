@@ -1,5 +1,8 @@
 #include "common/posix_io/io_uring_engine/io_uring_engine.h"
 
+#include <time.h>
+
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 
@@ -9,6 +12,20 @@
 
 namespace runai::llm::streamer::common::posix_io
 {
+
+namespace
+{
+
+uint64_t now_nanos()
+{
+    struct timespec ts;
+
+    // CLOCK_MONOTONIC goes through the vDSO, so this is tens of nanoseconds and no syscall.
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL + static_cast<uint64_t>(ts.tv_nsec);
+}
+
+} // namespace
 
 namespace
 {
@@ -65,8 +82,22 @@ IoUringEngine::IoUringEngine(const AsyncIoConfig & config) :
     IoUringEngine(config, max_read_bytesize())
 {}
 
+SubmitStats IoUringEngine::submit_stats() const
+{
+    return _submit_stats;
+}
+
 IoUringEngine::~IoUringEngine()
 {
+    // What submitting cost, logged once, in the same shape libaio uses so the two can be read side
+    // by side.
+    if (_submit_stats.calls != 0)
+    {
+        LOG(INFO) << "io_uring submit: " << _submit_stats.calls << " calls carrying "
+                  << _submit_stats.requests << " reads, " << _submit_stats.nanos / 1000
+                  << " us in total, worst call " << _submit_stats.max_nanos / 1000 << " us";
+    }
+
     // Unmaps the rings and closes the ring fd. Anything still in flight is the caller's failure to
     // quiesce (io_engine.h) - the kernel drops it here, having possibly already written to a
     // destination the caller believes is free.
@@ -130,7 +161,14 @@ ResponseCode IoUringEngine::flush(unsigned & out_issued)
         return ResponseCode::Success;
     }
 
+    const uint64_t started = now_nanos();
     const int ret = io_uring_submit(&_ring);
+    const uint64_t elapsed = now_nanos() - started;
+
+    ++_submit_stats.calls;
+    _submit_stats.nanos += elapsed;
+    _submit_stats.max_nanos = std::max(_submit_stats.max_nanos, elapsed);
+
     if (ret < 0)
     {
         const int error = error_of(ret);
@@ -153,6 +191,7 @@ ResponseCode IoUringEngine::flush(unsigned & out_issued)
     }
 
     out_issued = static_cast<unsigned>(ret);
+    _submit_stats.requests += out_issued;
 
     ASSERT(out_issued <= _staged) << "io_uring_submit issued " << out_issued << " of " << _staged
                                   << " staged";

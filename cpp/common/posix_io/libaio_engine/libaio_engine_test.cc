@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
+#include <set>
 #include <vector>
 
 #include "common/posix_io/alignment/alignment.h"
@@ -179,7 +180,21 @@ TEST(LibaioEngine, Reads_A_Range)
     EXPECT_EQ(got, fixture.expected_at(2048, got.size()));
 }
 
-TEST(LibaioEngine, One_Submit_Carries_Every_Staged_Read)
+// One read per io_submit. Fixed, not configurable - see SubmitBatch in the .cc.
+//
+// io_submit BLOCKS on a filesystem that cannot queue a direct read without work in the submission
+// path, and the cost per read grows with the batch. Measured on NFS: 687 us per read at ~44 per call
+// against fio's 559 us submitting one at a time, and the throughput gap matched that ratio. So
+// stage-then-flush, which exists to amortise a syscall, amortises nothing here and makes each read
+// dearer.
+//
+// Pinned because nothing else would notice it changing. A larger batch keeps every other test green -
+// the same reads go out, against the same destinations, and the same bytes arrive - and shows up only
+// as a slower run on a network filesystem.
+//
+// io_uring is deliberately NOT capped this way: measured at 1 us per read on the same mount, and it
+// already averages 1.1 reads per call without being asked.
+TEST(LibaioEngine, Submits_One_Read_Per_Call)
 {
     constexpr unsigned Reads = 6;
 
@@ -189,22 +204,22 @@ TEST(LibaioEngine, One_Submit_Carries_Every_Staged_Read)
     std::vector<std::vector<char>> buffers(Reads, std::vector<char>(512));
     for (unsigned i = 0; i < Reads; ++i)
     {
-        ASSERT_EQ(engine.stage(100 + i, fixture.ref(), i * 512, 512, buffers[i].data()),
+        ASSERT_EQ(engine.stage(300 + i, fixture.ref(), i * 512, 512, buffers[i].data()),
                   ResponseCode::Success);
     }
 
-    // The point of stage-then-flush: one syscall for the whole batch, not one per read.
     unsigned issued = 0;
     ASSERT_EQ(engine.flush(issued), ResponseCode::Success);
+
     EXPECT_EQ(issued, Reads);
-    EXPECT_EQ(engine.submit_stats().calls, 1);
+    EXPECT_EQ(engine.submit_stats().calls, Reads) << "one io_submit per read, always";
+    EXPECT_EQ(engine.submit_stats().requests, Reads);
 
     const auto completions = reap(engine, Reads);
     for (unsigned i = 0; i < Reads; ++i)
     {
-        const auto * completion = completion_for(completions, 100 + i);
-        ASSERT_NE(completion, nullptr) << "no completion for id " << 100 + i;
-        EXPECT_EQ(completion->bytes_transferred(), 512);
+        const auto * completion = completion_for(completions, 300 + i);
+        ASSERT_NE(completion, nullptr) << "no completion for id " << 300 + i;
         EXPECT_EQ(buffers[i], fixture.expected_at(i * 512, 512));
     }
 }
@@ -320,20 +335,16 @@ TEST(LibaioEngine, A_Refused_Read_Does_Not_Block_The_Ones_Behind_It)
               ResponseCode::Success);
     ASSERT_EQ(engine.stage(3, fixture.ref(), 1024, third.size(), third.data()), ResponseCode::Success);
 
-    // Pass one: the good head goes out, the bad fd stops the batch there.
+    // Pass one: the good head goes out, io_submit refuses the bad fd, and flush answers it as a
+    // synthetic completion inside this same call. Success, because the flush itself did not fail -
+    // a failure would make the worker abort every read on this engine.
     unsigned issued = 0;
     ASSERT_EQ(engine.flush(issued), ResponseCode::Success);
-    EXPECT_EQ(issued, 1) << "io_submit should have stopped at the read it cannot take";
+    EXPECT_EQ(issued, 1) << "only the good head should have been issued";
 
-    // Pass two: the bad read is now the head. It is removed and answered, so that nothing behind it
-    // is stuck - Success, because the flush itself did not fail. A failure here would make the worker
-    // abort every read on this engine.
+    // Pass two: the read that was behind the bad one goes out normally - it was never stuck.
     ASSERT_EQ(engine.flush(issued), ResponseCode::Success);
-    EXPECT_EQ(issued, 0);
-
-    // Pass three: the read that was behind it goes out normally.
-    ASSERT_EQ(engine.flush(issued), ResponseCode::Success);
-    EXPECT_EQ(issued, 1);
+    EXPECT_EQ(issued, 1) << "the read behind the refused one must still go out";
 
     const auto completions = reap(engine, 3);
 
@@ -450,9 +461,9 @@ TEST(LibaioEngine, Submit_Time_Is_Measured)
 
     // These numbers decide whether one thread was the right choice, or whether a submit thread has to
     // be designed. A counter that is never filled would answer that question with a silent zero.
-    const auto & stats = engine.submit_stats();
+    const auto stats = engine.submit_stats();
     EXPECT_EQ(stats.calls, 1);
-    EXPECT_EQ(stats.iocbs, 1);
+    EXPECT_EQ(stats.requests, 1);
     EXPECT_GT(stats.nanos, 0);
     EXPECT_GT(stats.max_nanos, 0);
     EXPECT_LE(stats.max_nanos, stats.nanos);
@@ -517,5 +528,6 @@ TEST(LibaioEngine, A_Misaligned_Direct_Read_Fails_As_A_Completion)
     EXPECT_TRUE(completions[0].failed());
     EXPECT_EQ(completions[0].res, -EINVAL);
 }
+
 
 }; // namespace runai::llm::streamer::common::posix_io

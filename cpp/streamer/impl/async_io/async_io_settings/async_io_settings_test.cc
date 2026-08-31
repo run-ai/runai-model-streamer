@@ -121,4 +121,65 @@ TEST(AsyncIoSettings, Reads_The_Group_Size_When_Constructed_Not_When_Config_Was)
     EXPECT_EQ(settings.depth(), 128) << "built too early, this would be 512 and the device would see 4x";
 }
 
+// The file budget is node-wide for the same reason depth is: what it bounds - the connections an NFS
+// client spreads reads over - belongs to the node, not to a process.
+TEST(AsyncIoSettings, Files_In_Flight_Is_Divided_By_The_Process_Group)
+{
+    utils::temp::UnsetEnv budget(std::string("RUNAI_STREAMER_FS_FILES_IN_FLIGHT"));
+    utils::temp::Env group(std::string("RUNAI_STREAMER_PROCESS_GROUP_SIZE"), 8UL);
+
+    const AsyncIoSettings settings(config_with(8 << 20, 512));
+
+    // 16 / 8. Measured: eight readers at two files each match one reader at sixteen, because both
+    // put sixteen streams on the mount.
+    EXPECT_EQ(settings.files_in_flight(), 2);
+}
+
+TEST(AsyncIoSettings, Single_Process_Gets_The_Whole_File_Budget)
+{
+    utils::temp::UnsetEnv budget(std::string("RUNAI_STREAMER_FS_FILES_IN_FLIGHT"));
+    utils::temp::UnsetEnv group(std::string("RUNAI_STREAMER_PROCESS_GROUP_SIZE"));
+
+    const AsyncIoSettings settings(config_with(8 << 20, 512));
+
+    EXPECT_EQ(settings.files_in_flight(), AsyncIoSettings::DefaultFilesBudget);
+}
+
+// Reading one file at a time is the thing this setting exists to prevent, so the division must never
+// arrive back there. At 16 processes 16/16 is 1, which is exactly the old behaviour.
+TEST(AsyncIoSettings, Files_In_Flight_Is_Floored)
+{
+    utils::temp::UnsetEnv budget(std::string("RUNAI_STREAMER_FS_FILES_IN_FLIGHT"));
+    utils::temp::Env group(std::string("RUNAI_STREAMER_PROCESS_GROUP_SIZE"), 16UL);
+
+    const AsyncIoSettings settings(config_with(8 << 20, 512));
+
+    EXPECT_EQ(settings.files_in_flight(), AsyncIoSettings::MinFiles)
+        << "one file per process is the serial behaviour this setting exists to avoid";
+}
+
+// Past the measured knee more files CONTEND rather than help, so a mis-set variable must not be able
+// to do worse than the default.
+TEST(AsyncIoSettings, Files_In_Flight_Is_Capped)
+{
+    utils::temp::UnsetEnv group(std::string("RUNAI_STREAMER_PROCESS_GROUP_SIZE"));
+    utils::temp::Env budget(std::string("RUNAI_STREAMER_FS_FILES_IN_FLIGHT"), 100000UL);
+
+    const AsyncIoSettings settings(config_with(8 << 20, 512));
+
+    EXPECT_EQ(settings.files_in_flight(), AsyncIoSettings::MaxFiles);
+}
+
+// 16 is one mount's nconnect, not a law - another server may saturate elsewhere, so it has to be
+// settable.
+TEST(AsyncIoSettings, File_Budget_Can_Be_Overridden)
+{
+    utils::temp::Env group(std::string("RUNAI_STREAMER_PROCESS_GROUP_SIZE"), 4UL);
+    utils::temp::Env budget(std::string("RUNAI_STREAMER_FS_FILES_IN_FLIGHT"), 32UL);
+
+    const AsyncIoSettings settings(config_with(8 << 20, 512));
+
+    EXPECT_EQ(settings.files_in_flight(), 8);
+}
+
 }; // namespace runai::llm::streamer::impl

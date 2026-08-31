@@ -11,42 +11,6 @@
 namespace runai::llm::streamer::common::posix_io
 {
 
-// How long this engine spent inside io_submit.
-//
-// libaio's io_submit can block. It waits on filesystem metadata, on extent lookup, on faulting the
-// destination buffer, or on a busy block layer. io_uring has no equivalent: its submit is a ring
-// append. One worker does both submitting and reaping, so a blocked submit also stops reaping, and
-// the number of reads in flight falls while we wait.
-//
-// The design accepts that instead of using RWF_NOWAIT (5.8.1). These numbers are how we check that
-// choice. If they stay small, nothing more is needed. If one call takes milliseconds, the answer is a
-// submit thread, and these are the evidence for it.
-//
-// How to read them:
-//
-//   nanos / iocbs   the normal cost of submitting one read
-//   max_nanos       the worst single call
-//   iocbs / calls   the average batch size, which says whether stage-then-flush is buying anything
-//
-// The total alone would mix two different things. io_submit always costs something, and that cost
-// grows with the number of reads in the call. A stall looks different: one call far longer than the
-// per-read cost. That is why the worst call is kept separately.
-//
-// What the blocked time costs in throughput depends on the device. If the device is saturated at our
-// depth, a short block costs little, because the reads already in flight keep it busy. If it is not
-// saturated, every read that finishes without being replaced lowers throughput at once, so the
-// blocked time is close to the loss. Network filesystems are usually not saturated, and libaio is the
-// engine that runs there.
-//
-// The number that separates those two cases is the achieved depth, and nothing records it yet - plan
-// S8b adds it. Until then, read the blocked time as an upper bound on what was lost.
-struct SubmitStats
-{
-    uint64_t calls = 0;        // io_submit calls made
-    uint64_t iocbs = 0;        // reads those calls carried
-    uint64_t nanos = 0;        // total time inside io_submit
-    uint64_t max_nanos = 0;    // the slowest single call
-};
 
 // IoEngine over libaio.
 //
@@ -109,7 +73,7 @@ class LibaioEngine : public IoEngine
 
     // For tests, and for the line logged when this engine is destroyed. Not carried up to
     // AsyncIoStats yet: that path is built once for every worker counter (plan S8b).
-    const SubmitStats & submit_stats() const;
+    SubmitStats submit_stats() const override;
 
  private:
     io_context_t _ctx = nullptr;
@@ -159,6 +123,7 @@ class LibaioEngine : public IoEngine
     std::vector<Completion> _submit_failures;
 
     SubmitStats _submit_stats;
+
     Limits _limits;
     unsigned _depth = 0;
 };

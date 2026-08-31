@@ -121,6 +121,72 @@ struct Fixture
     common::s3::S3ClientWrapper::Params params;   // invalid -> file system
 };
 
+// Several files, each with several chunks, so the ORDER chunks are submitted in can be observed.
+//
+// The single-file Fixture cannot show it: with one file there is nothing to interleave with.
+struct MultiFileFixture
+{
+    // chunks_per_file ranges of exactly ChunkSize in each file, so every range is its own chunk and
+    // the staged order is the enqueue order.
+    MultiFileFixture(unsigned files, unsigned chunks_per_file, unsigned long budget) :
+        chunk_bytesize(std::string("RUNAI_STREAMER_FS_CHUNK_BYTESIZE"), static_cast<unsigned long>(ChunkSize)),
+        depth(std::string("RUNAI_STREAMER_FS_QUEUE_DEPTH"), 1024UL),
+        group(std::string("RUNAI_STREAMER_PROCESS_GROUP_SIZE"), 1UL),
+        files_budget(std::string("RUNAI_STREAMER_FS_FILES_IN_FLIGHT"), budget),
+        config(std::make_shared<Config>(false /* do not force minimum */)),
+        responder(std::make_shared<common::Responder>(0)),
+        buffer(static_cast<size_t>(files) * chunks_per_file * ChunkSize)
+    {
+        responder->increment(static_cast<unsigned>(files) * chunks_per_file);
+
+        char * dst = buffer.data();
+        for (unsigned f = 0; f < files; ++f)
+        {
+            contents.push_back(utils::random::buffer(static_cast<size_t>(chunks_per_file) * ChunkSize));
+            temp_files.push_back(std::make_unique<utils::temp::File>(contents.back()));
+
+            FileRanges ranges;
+            ranges.path = temp_files.back()->path;
+            for (unsigned c = 0; c < chunks_per_file; ++c)
+            {
+                ranges.ranges.push_back(ReadRange{ static_cast<size_t>(c) * ChunkSize, ChunkSize, dst });
+                dst += ChunkSize;
+            }
+            request.push_back(ranges);
+        }
+    }
+
+    Workload workload()
+    {
+        Assigner assigner(request, config);
+        Workload out;
+        unsigned i = 0;
+        for (const auto & transfer : assigner.transfers())
+        {
+            Batches batches(1 /* submission */, transfer.file_index, transfer.tasks, config, responder,
+                            temp_files[i++]->path, params, transfer.range_sizes, transfer.first_range_index);
+            for (size_t b = 0; b < batches.size(); ++b)
+            {
+                out.add_batch(std::move(batches[b]));
+            }
+        }
+        return out;
+    }
+
+    utils::temp::Env chunk_bytesize;
+    utils::temp::Env depth;
+    utils::temp::Env group;
+    utils::temp::Env files_budget;
+
+    std::shared_ptr<Config> config;
+    std::shared_ptr<common::Responder> responder;
+    std::vector<char> buffer;
+    std::vector<std::vector<uint8_t>> contents;
+    std::vector<std::unique_ptr<utils::temp::File>> temp_files;
+    std::vector<FileRanges> request;
+    common::s3::S3ClientWrapper::Params params;
+};
+
 // Drives a worker with a MockIoEngine the test controls.
 struct Driver
 {
@@ -974,12 +1040,120 @@ TEST(AsyncIoWorker, Does_Not_Block_With_Nothing_Issued)
     ASSERT_GT(driver.engine->waits(), 0u);
     EXPECT_EQ(driver.engine->last_wait_mode(), WaitMode::NonBlocking)
         << "blocking here waits for a completion that cannot come";
+}
 
-    // Once something is issued, blocking is correct - and bounded.
-    driver.engine->set_flush_stalled(false);
+// Having reads in flight is not a reason to stop. A window with room still has work to give, so the
+// thread should go back and submit rather than sleep on io_getevents.
+//
+// Blocking whenever anything was outstanding cost exactly that: with a depth of 64 and five reads
+// issued, the thread parked instead of filling the other fifty-nine. It happens on every workload's
+// ramp-up. fio, on the same engine and one thread, waits only once in-flight reaches the target
+// depth - and reaches 17 GB/s on a mount where we reached 11.7.
+//
+// Pinned because nothing else would notice it regressing: the same reads are issued and the same
+// bytes arrive either way, and the cost is only a slower run.
+TEST(AsyncIoWorker, Does_Not_Block_While_The_Window_Has_Room)
+{
+    // One chunk against a depth of 3 (the floor), so something is in flight and the window is not
+    // full - the case that used to block.
+    Fixture fixture({ ChunkSize }, 1 /* concurrency */, 0 /* start */, 1 /* queue depth -> floors at 3 */);
+    Driver driver;
+
+    driver.execute(fixture.workload());
     driver.issue();
-    EXPECT_EQ(driver.engine->last_wait_mode(), WaitMode::Block);
+
+    ASSERT_EQ(driver.engine->depth(), 3u) << "this test needs room left in the window";
+    EXPECT_EQ(driver.engine->last_wait_mode(), WaitMode::NonBlocking)
+        << "one read outstanding in a window of three is not a reason to stop submitting";
+}
+
+// And once the window IS full there is nothing else to do, so blocking is right - and bounded, or a
+// stopped worker would never notice.
+TEST(AsyncIoWorker, Blocks_Once_The_Window_Is_Full)
+{
+    Fixture fixture({ ChunkSize, ChunkSize, ChunkSize }, 1, 0, 1 /* depth floors at 3 */);
+    Driver driver;
+
+    driver.execute(fixture.workload());
+    driver.issue();
+
+    ASSERT_EQ(driver.engine->depth(), 3u);
+    EXPECT_EQ(driver.engine->last_wait_mode(), WaitMode::Block)
+        << "with the window full there is no more to submit, so waiting is the only move";
     EXPECT_GT(driver.engine->last_wait_timeout_ms(), 0u) << "an unbounded wait has no way to notice stopped";
+}
+
+// The files a workload touches are read from TOGETHER, not one after another.
+//
+// On an NFS mount a single file's read stream uses one of the client's connections, so finishing one
+// file before starting the next leaves most of the mount idle at any queue depth. Measured with fio
+// on such a mount: 11.34 GB/s on one file against 19.12 on sixteen. Our reader sat at 11.37.
+//
+// Pinned because nothing else would notice it breaking. Going back to file-by-file keeps every other
+// test green - the same reads are issued, against the same destinations, and the same bytes arrive -
+// and shows up only as a slower run on storage nobody profiles.
+TEST(AsyncIoWorker, Files_Are_Read_From_Together)
+{
+    constexpr unsigned Files = 4;
+    constexpr unsigned ChunksPerFile = 3;
+
+    MultiFileFixture fixture(Files, ChunksPerFile, Files /* budget: all four at once */);
+    Driver driver;
+
+    driver.execute(fixture.workload());
+    ASSERT_EQ(driver.engine->staged_count(), Files * ChunksPerFile);
+
+    // Which file each staged read belongs to, in submission order. The fd identifies the file: each
+    // batch opens its own.
+    std::vector<int> order;
+    for (const auto id : driver.engine->staged())
+    {
+        order.push_back(driver.engine->request(id).file.fd);
+    }
+    ASSERT_EQ(order.size(), Files * ChunksPerFile);
+
+    // The first Files reads must be on Files DIFFERENT descriptors - that is what interleaving means
+    // and what reading file by file cannot produce.
+    const std::set<int> first_round(order.begin(), order.begin() + Files);
+    EXPECT_EQ(first_round.size(), Files)
+        << "the first " << Files << " reads should touch " << Files
+        << " different files; file-by-file would put them all on one";
+
+    // And every file is still read completely - interleaving reorders, it does not drop.
+    std::map<int, unsigned> per_fd;
+    for (const auto fd : order)
+    {
+        ++per_fd[fd];
+    }
+    EXPECT_EQ(per_fd.size(), Files);
+    for (const auto & [fd, count] : per_fd)
+    {
+        EXPECT_EQ(count, ChunksPerFile) << "fd " << fd << " got " << count << " chunks";
+    }
+}
+
+// The width is a budget, not "all of them". With room for two files, the first two reads are on two
+// files and the third is not on a third - otherwise the setting would not bound anything.
+TEST(AsyncIoWorker, Interleaving_Stops_At_The_Configured_Width)
+{
+    constexpr unsigned Files = 4;
+    constexpr unsigned ChunksPerFile = 3;
+
+    MultiFileFixture fixture(Files, ChunksPerFile, 2 /* budget */);
+    Driver driver;
+
+    driver.execute(fixture.workload());
+
+    std::vector<int> order;
+    for (const auto id : driver.engine->staged())
+    {
+        order.push_back(driver.engine->request(id).file.fd);
+    }
+    ASSERT_EQ(order.size(), Files * ChunksPerFile);
+
+    const std::set<int> first_group(order.begin(), order.begin() + ChunksPerFile * 2);
+    EXPECT_EQ(first_group.size(), 2u)
+        << "a width of 2 must rotate over two files before moving on to the next pair";
 }
 
 }; // namespace runai::llm::streamer::impl

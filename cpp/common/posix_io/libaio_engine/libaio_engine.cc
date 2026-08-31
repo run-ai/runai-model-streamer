@@ -23,6 +23,29 @@ int error_of(int ret)
     return -ret;
 }
 
+// ONE read per io_submit. Not a tunable - measured, and there is no regime where more is better.
+//
+// io_submit BLOCKS on a filesystem that cannot queue a direct read without work in the submission
+// path, and the cost per read grows with the batch. Measured on NFS, 8 MiB reads, one reader:
+//
+//     batch    us per read   worst call
+//     1        453           4 ms
+//     8        668          22 ms
+//     44       604         105 ms
+//     ~290     653         870 ms      (what depth 512 produced before this)
+//
+// At batch 1 our submission cost is 453 us against fio's 456 for the identical operation on the same
+// mount - so this is not merely better, it is the point at which the difference disappears.
+//
+// The worst-call column is why it stayed even when throughput was a wash: a single call carrying
+// 2.6 GB blocks the one worker for the best part of a second, during which it cannot reap.
+//
+// io_uring is deliberately NOT capped this way - measured at 15 us per read, 30x cheaper, and it
+// already averages ~1 read per call without being asked. Batching costs nothing there, which is what
+// the stage/flush split was designed for. This is a remedy for a blocking submission path, and it
+// belongs to the engine that has one.
+constexpr size_t SubmitBatch = 1;
+
 uint64_t now_nanos()
 {
     struct timespec ts;
@@ -123,7 +146,7 @@ LibaioEngine::LibaioEngine(const AsyncIoConfig & config, size_t max_read_bytesiz
     _limits.offset_alignment = DirectBlockSize;
     _limits.buffer_alignment = DirectBlockSize;
 
-    LOG(INFO) << "libaio ready: " << _depth << " events";
+    LOG(INFO) << "libaio ready: " << _depth << " events, " << SubmitBatch << " read per io_submit";
 }
 
 LibaioEngine::LibaioEngine(const AsyncIoConfig & config) :
@@ -132,13 +155,12 @@ LibaioEngine::LibaioEngine(const AsyncIoConfig & config) :
 
 LibaioEngine::~LibaioEngine()
 {
-    // How much time submitting cost, logged once. This is the number that says whether keeping one
-    // thread was right, or whether a submit thread has to be designed - see SubmitStats.
-    if (_submit_stats.calls != 0)
+    const auto stats = submit_stats();
+    if (stats.calls != 0)
     {
-        LOG(INFO) << "libaio io_submit: " << _submit_stats.calls << " calls carrying "
-                  << _submit_stats.iocbs << " reads, " << _submit_stats.nanos / 1000
-                  << " us in total, worst call " << _submit_stats.max_nanos / 1000 << " us";
+        LOG(INFO) << "libaio io_submit: " << stats.calls << " calls carrying "
+                  << stats.requests << " reads, " << stats.nanos / 1000
+                  << " us in total, worst call " << stats.max_nanos / 1000 << " us";
     }
 
     // io_destroy MUST NOT run with reads in flight: the kernel would be left writing into
@@ -164,7 +186,7 @@ unsigned LibaioEngine::depth() const
     return _depth;
 }
 
-const SubmitStats & LibaioEngine::submit_stats() const
+SubmitStats LibaioEngine::submit_stats() const
 {
     return _submit_stats;
 }
@@ -205,87 +227,115 @@ ResponseCode LibaioEngine::flush(unsigned & out_issued)
 {
     out_issued = 0;
 
-    if (_pending.empty())
+    // Everything staged goes out on this call, SubmitBatch at a time - see that constant for why the
+    // batch is one. The loop ends on an empty queue, on backpressure, or on an error, and each pass
+    // either issues at least one read or returns, so it always finishes.
+    //
+    // ISSUED HERE, on the caller's thread, and that is a measured decision rather than the default.
+    //
+    // A submit thread was built and measured. It worked mechanically - average in-flight rose from
+    // 13.8 to 45-49 of a depth of 64 - and throughput did not move: 14.80 GB/s against 14.90 without
+    // it. A POOL of them was worse, 12.0-12.4, because io_submit on one io_context is serialised by
+    // the kernel's kioctx lock. Measured, with no EAGAIN at all, so this is queueing and not
+    // starvation:
+    //
+    //     threads   us per read   total time submitting
+    //     1         561           32.5 s
+    //     2         1150          66.7 s      (2.05x)
+    //     4         2389          138.5 s     (4.26x)
+    //     8         4545          263.6 s     (8.10x)
+    //
+    // So parallel submission needs one io_context PER submitter, not more threads on this one. Four
+    // separate PROCESSES reach 19.8 GB/s where one reaches 14.9, and that is the same structure
+    // arrived at by accident - each process has its own context.
+    //
+    // Not built, deliberately: at TP=8 there are already eight processes with eight contexts, so the
+    // only case it would serve is the single-process read.
+    while (!_pending.empty())
     {
-        return ResponseCode::Success;
-    }
+        const size_t batch = std::min(_pending.size(), SubmitBatch);
 
-    const uint64_t started = now_nanos();
-    const int ret = io_submit(_ctx, static_cast<long>(_pending.size()), _pending.data());
-    const uint64_t elapsed = now_nanos() - started;
+        const uint64_t started = now_nanos();
+        const int ret = io_submit(_ctx, static_cast<long>(batch), _pending.data());
+        const uint64_t elapsed = now_nanos() - started;
 
-    ++_submit_stats.calls;
-    _submit_stats.nanos += elapsed;
-    _submit_stats.max_nanos = std::max(_submit_stats.max_nanos, elapsed);
+        ++_submit_stats.calls;
+        _submit_stats.nanos += elapsed;
+        _submit_stats.max_nanos = std::max(_submit_stats.max_nanos, elapsed);
 
-    if (ret < 0)
-    {
-        const int error = error_of(ret);
-
-        // This is backpressure. EAGAIN from io_submit means the aio context is full, which means reads
-        // are in flight, which means completions are coming and reaping will free room. The staged
-        // reads keep their place at the head and go out on the next flush, in order.
-        //
-        // Reported here rather than retried in a loop. Only reaping frees capacity, and reaping runs
-        // on this same thread, so a loop would wait for an event that only it could cause (design
-        // 5.9).
-        //
-        // EINTR is handled the same way, defensively. It is not documented for io_submit and has not
-        // been seen, but any negative return means nothing was accepted, so retrying the untouched
-        // array is right whatever the errno.
-        if (error == EAGAIN || error == EINTR)
+        if (ret < 0)
         {
-            LOG(DEBUG) << "io_submit deferred " << _pending.size() << " staged reads: "
-                       << std::strerror(error);
+            const int error = error_of(ret);
+
+            // Backpressure. EAGAIN means the aio context is full, which means reads are in flight and
+            // reaping will free room. The staged reads keep their place at the head and go out on the
+            // next flush, in order.
+            //
+            // REPORTED rather than retried here: only reaping frees capacity, and reaping runs on
+            // this same thread, so a loop would wait for an event that only it could cause
+            // (design 5.9). A submit thread would make the retry legal - that was one of its
+            // attractions - but it bought no throughput, so the constraint stays and so does this.
+            //
+            // EINTR is handled the same way, defensively. It is not documented for io_submit, but any
+            // negative return means nothing was accepted, so retrying the untouched array is right
+            // whatever the errno.
+            if (error == EAGAIN || error == EINTR)
+            {
+                LOG(DEBUG) << "io_submit deferred " << _pending.size() << " staged reads: "
+                           << std::strerror(error);
+                return ResponseCode::Success;
+            }
+
+            // io_submit stops at the first read it cannot accept, so a negative return is about the
+            // head of the queue and only the head: everything behind it was never looked at.
+            //
+            // That one read is taken out and answered as a completion carrying -errno, which is the
+            // form io_uring uses for the same problem. Leaving it in place would block everything
+            // behind it for good, and failing the whole flush makes the worker abort every read on
+            // this engine (async_io_worker.cc, abort_all).
+            struct iocb * head = _pending.front();
+
+            Completion completion;
+            completion.id = static_cast<RequestId>(reinterpret_cast<uintptr_t>(head->data));
+            completion.res = -static_cast<long>(error);
+
+            LOG(ERROR) << "io_submit refused read " << completion.id << ": " << std::strerror(error)
+                       << ". Reporting it as a failed read and keeping the other "
+                       << _pending.size() - 1 << " staged";
+
+            _submit_failures.push_back(completion);
+            _pending.erase(_pending.begin());
+            _free.push_back(head);
+
+            // Success, and out_issued keeps whatever earlier batches in this same call already
+            // issued - those reads are in flight and the worker must count them. The rest of the
+            // queue is retried on the next flush. This always finishes, because each pass removes
+            // one read.
             return ResponseCode::Success;
         }
 
-        // io_submit stops at the first read it cannot accept and reports how many it took. So a
-        // negative return is about the head of the queue and only the head: everything behind it was
-        // never looked at.
-        //
-        // That one read is taken out and answered as a completion carrying -errno, which is the form
-        // io_uring uses for the same problem. Leaving it in place would block everything behind it for
-        // good, and failing the whole flush makes the worker abort every read on this engine
-        // (async_io_worker.cc, abort_all).
-        //
-        // Success with out_issued == 0: nothing went out, and the rest of the queue is retried on the
-        // next flush. This always finishes, because each pass removes one read.
-        struct iocb * head = _pending.front();
+        const size_t issued = static_cast<size_t>(ret);
 
-        Completion completion;
-        completion.id = static_cast<RequestId>(reinterpret_cast<uintptr_t>(head->data));
-        completion.res = -static_cast<long>(error);
+        ASSERT(issued <= batch) << "io_submit accepted " << issued << " of " << batch << " offered";
 
-        LOG(ERROR) << "io_submit refused read " << completion.id << ": " << std::strerror(error)
-                   << ". Reporting it as a failed read and keeping the other " << _pending.size() - 1
-                   << " staged";
+        _submit_stats.requests += issued;
 
-        _submit_failures.push_back(completion);
-        _pending.erase(_pending.begin());
-        _free.push_back(head);
+        // Accumulated, not assigned: one call to flush() makes several io_submit calls, and the
+        // caller counts what is in flight from this total.
+        out_issued += static_cast<unsigned>(issued);
 
-        return ResponseCode::Success;
-    }
-
-    const size_t issued = static_cast<size_t>(ret);
-
-    ASSERT(issued <= _pending.size()) << "io_submit accepted " << issued << " of "
-                                      << _pending.size() << " staged";
-
-    _submit_stats.iocbs += issued;
-    out_issued = static_cast<unsigned>(issued);
-
-    // Drop the accepted prefix so the unissued head is _pending[0] again. Erasing from the front of
-    // a vector moves the rest, which is at most `depth` pointers and only on the partial path; the
-    // common case is the clear() below.
-    if (issued == _pending.size())
-    {
-        _pending.clear();
-    }
-    else
-    {
+        // Drop the accepted prefix so the unissued head is _pending[0] again.
         _pending.erase(_pending.begin(), _pending.begin() + issued);
+
+        // io_submit is documented to accept at least one when it does not fail, so this is defensive.
+        // It matters because the loop only advances by erasing what was issued: accepting nothing,
+        // forever, would spin here and never reap - and reaping is what this same thread does next.
+        if (issued == 0)
+        {
+            LOG(WARNING) << "io_submit accepted none of " << batch << " offered without reporting an"
+                            " error; leaving " << _pending.size() << " staged for the next flush";
+            return ResponseCode::Success;
+        }
     }
 
     return ResponseCode::Success;

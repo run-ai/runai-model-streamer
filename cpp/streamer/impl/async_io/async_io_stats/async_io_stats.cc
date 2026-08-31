@@ -98,7 +98,17 @@ AsyncIoCounters & AsyncIoCounters::operator+=(const AsyncIoCounters & other)
     // queue depth no device ever saw.
     achieved_depth = std::max(achieved_depth, other.achieved_depth);
 
+    // SUMMED, unlike achieved_depth, and that is why the two parts are carried separately: adding
+    // means-of-different-durations is meaningless, adding the numerators and denominators is not.
+    inflight_nanos += other.inflight_nanos;
+    observed_nanos += other.observed_nanos;
+
     return *this;
+}
+
+double AsyncIoCounters::average_inflight() const
+{
+    return observed_nanos == 0 ? 0.0 : static_cast<double>(inflight_nanos) / observed_nanos;
 }
 
 std::ostream & operator<<(std::ostream & os, const AsyncIoCounters & counters)
@@ -113,8 +123,17 @@ std::ostream & operator<<(std::ostream & os, const AsyncIoCounters & counters)
            << (counters.bounced_bytes * 100 / counters.bytes_read) << "%)";
     }
 
-    return os << ", " << counters.short_read_restages << " short reads re-staged"
-              << ", deepest engine reached " << counters.achieved_depth;
+    os << ", " << counters.short_read_restages << " short reads re-staged"
+       << ", deepest engine reached " << counters.achieved_depth;
+
+    // Beside the peak, not instead of it. The peak says the window CAN fill; this says whether it
+    // stayed full - which is what decides whether time inside io_submit was a real loss.
+    if (counters.observed_nanos != 0)
+    {
+        os << ", " << counters.average_inflight() << " outstanding on average";
+    }
+
+    return os;
 }
 
 }; // namespace runai::llm::streamer::impl
