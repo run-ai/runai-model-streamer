@@ -51,4 +51,10 @@ TEST(Description, Invalid)
     }
 }
 
+TEST(Description, InternalRetryableFileAccessError)
+{
+    EXPECT_STREQ(description(static_cast<int>(ResponseCode::RetryableFileAccessError)),
+                 "Retryable object storage file access error");
+}
+
 }; // namespace runai::llm::streamer::common

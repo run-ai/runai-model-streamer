@@ -10,11 +10,17 @@
 namespace runai::llm::streamer::impl
 {
 
-Config::Config(unsigned concurrency, unsigned s3_concurrency, size_t s3_block_bytesize, size_t fs_block_bytesize, bool enforce_minimum) :
+Config::Config(unsigned concurrency,
+               unsigned s3_concurrency,
+               size_t s3_block_bytesize,
+               size_t fs_block_bytesize,
+               bool enforce_minimum,
+               unsigned long object_storage_retry_timeout_seconds) :
     concurrency(concurrency),
     s3_concurrency(s3_concurrency),
     s3_block_bytesize(s3_block_bytesize),
-    fs_block_bytesize(fs_block_bytesize)
+    fs_block_bytesize(fs_block_bytesize),
+    object_storage_retry_timeout(object_storage_retry_timeout_seconds)
 {
     ASSERT(concurrency) << " threadpool size must be a positive number";
     ASSERT(s3_block_bytesize) << "s3 chunk bytesize must be positive";
@@ -40,7 +46,9 @@ Config::Config(bool enforce_minimum /* = true */) :
     Config(utils::getenv<unsigned long>("RUNAI_STREAMER_CONCURRENCY", 16UL),
            utils::getenv<unsigned long>("RUNAI_STREAMER_CONCURRENCY", 8UL),
            utils::getenv<size_t>("RUNAI_STREAMER_CHUNK_BYTESIZE", common::s3::S3ClientWrapper::default_chunk_bytesize),
-           utils::getenv<size_t>("RUNAI_STREAMER_CHUNK_BYTESIZE", min_fs_block_bytesize), enforce_minimum)
+           utils::getenv<size_t>("RUNAI_STREAMER_CHUNK_BYTESIZE", min_fs_block_bytesize),
+           enforce_minimum,
+           utils::getenv<unsigned long>("RUNAI_STREAMER_S3_TIMEOUT", 0UL))
 {}
 
 unsigned Config::max_concurrency() const
@@ -50,7 +58,7 @@ unsigned Config::max_concurrency() const
 
 std::ostream & operator<<(std::ostream & os, const Config & config)
 {
-    return os << "Streamer concurrency " << config.concurrency << " ; s3 concurrency " << config.s3_concurrency << " ; s3 block size " << config.s3_block_bytesize << " bytes; " << " ; file system block size " << config.fs_block_bytesize << " bytes; ";
+    return os << "Streamer concurrency " << config.concurrency << " ; s3 concurrency " << config.s3_concurrency << " ; s3 block size " << config.s3_block_bytesize << " bytes; " << " ; file system block size " << config.fs_block_bytesize << " bytes; object storage retry timeout " << config.object_storage_retry_timeout.count() << " seconds; ";
 }
 
 }; // namespace runai::llm::streamer::impl

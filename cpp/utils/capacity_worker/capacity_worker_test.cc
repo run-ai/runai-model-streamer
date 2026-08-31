@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstddef>
 #include <memory>
+#include <vector>
 
 #include "utils/threadpool/threadpool.h"
 #include "utils/random/random.h"
@@ -111,6 +112,49 @@ class StopAwareWorker : public CapacityWorker<unsigned, unsigned>
     std::atomic<unsigned> & _completed;
 };
 
+// Models a worker with one deferred item that becomes ready immediately before the next pump. The hook
+// inserts it at the front so it is submitted before chunks from the newly admitted request.
+class PrePumpWorker : public CapacityWorker<unsigned, unsigned>
+{
+ public:
+    const std::vector<unsigned> & submitted() const { return _submitted; }
+
+ protected:
+    std::size_t capacity(const unsigned &) override { return 10; }
+    void discard(unsigned && /*count*/) override {}
+
+    void enqueue(unsigned && count) override
+    {
+        for (unsigned i = 0; i < count; ++i)
+        {
+            _queue->enqueue(i, 1);
+        }
+    }
+
+    void pre_pump() override
+    {
+        if (!_deferred_promoted)
+        {
+            _queue->enqueue_front(99, 1);
+            _deferred_promoted = true;
+        }
+    }
+
+    void submit(const unsigned & chunk) override { _submitted.push_back(chunk); }
+
+    void drain_batch(std::atomic<bool> &) override
+    {
+        if (_queue->inflight() > 0)
+        {
+            _queue->complete(1);
+        }
+    }
+
+ private:
+    bool _deferred_promoted = false;
+    std::vector<unsigned> _submitted;
+};
+
 } // namespace
 
 // --- base pattern, driven synchronously (no pool) ---
@@ -155,6 +199,20 @@ TEST(CapacityWorker, ExecuteSelfDrainsRequestLargerThanWindow)
 
     while (!w.idle()) { w.drain(stopped); }
     EXPECT_EQ(completed.load(), 5u);
+}
+
+TEST(CapacityWorker, PrePumpCanPrioritizeDeferredWork)
+{
+    std::atomic<bool> stopped{false};
+    PrePumpWorker worker;
+
+    unsigned two = 2;
+    worker.execute(std::move(two), stopped);
+
+    ASSERT_EQ(worker.submitted().size(), 3u);
+    EXPECT_EQ(worker.submitted()[0], 99u);
+    EXPECT_EQ(worker.submitted()[1], 0u);
+    EXPECT_EQ(worker.submitted()[2], 1u);
 }
 
 // --- a ThreadPool of CapacityWorkers, stopped mid-flight ---

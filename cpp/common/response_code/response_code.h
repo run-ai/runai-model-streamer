@@ -28,6 +28,7 @@ enum class ResponseCode : int
     TimedOut,
     UnsupportedBackendMix,
     CredentialsAlreadySet,
+    RetryableFileAccessError,
     __Max,
 };
 

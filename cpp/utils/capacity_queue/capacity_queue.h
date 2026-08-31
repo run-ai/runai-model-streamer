@@ -38,6 +38,13 @@ class CapacityQueue
         _pending.push_back(Entry{std::move(item), cost});
     }
 
+    // Add a priority item ahead of normally queued work. Intended for work that was already submitted once
+    // and became ready to retry; capacity is still reserved only when try_take() returns the item.
+    void enqueue_front(T item, size_t cost)
+    {
+        _pending.push_front(Entry{std::move(item), cost});
+    }
+
     // Return the next item to submit and reserve its cost against the capacity, or
     // std::nullopt if the window is currently full.
     //
@@ -51,9 +58,6 @@ class CapacityQueue
             return std::nullopt;
         }
 
-        // Selection point: FIFO today. To add priorities, replace _pending with
-        // per-priority buckets and pick the highest-priority non-empty bucket here;
-        // nothing else in this class needs to change.
         const size_t cost = _pending.front().cost;
 
         if (_inflight != 0 && _inflight + cost > _capacity)

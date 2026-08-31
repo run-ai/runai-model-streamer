@@ -18,6 +18,16 @@ TEST(Creation, Default)
     EXPECT_EQ(config.s3_concurrency, 8UL);
     EXPECT_EQ(config.s3_block_bytesize, 8 * 1024 * 1024);
     EXPECT_EQ(config.fs_block_bytesize, 2 * 1024 * 1024);
+    EXPECT_EQ(config.object_storage_retry_timeout, std::chrono::seconds(0));
+}
+
+TEST(Creation, ObjectStorageRetryTimeout)
+{
+    const auto expected = utils::random::number<unsigned long>(1, 3600);
+    utils::temp::Env timeout("RUNAI_STREAMER_S3_TIMEOUT", expected);
+
+    Config config;
+    EXPECT_EQ(config.object_storage_retry_timeout, std::chrono::seconds(expected));
 }
 
 TEST(Creation, Concurrency)

@@ -1,6 +1,7 @@
 
 #include <aws/core/auth/AWSCredentials.h>
 #include <aws/core/auth/AWSCredentialsProvider.h>
+#include <aws/core/client/CoreErrors.h>
 #include <aws/core/config/ConfigAndCredentialsCacheManager.h>
 #include <aws/core/http/Scheme.h>
 #include <aws/s3-crt/model/GetObjectRequest.h>
@@ -50,6 +51,34 @@ EndpointParseResult parse_endpoint_scheme(const Aws::String & endpoint)
         return { endpoint.substr(http_prefix.size()), Aws::Http::Scheme::HTTP };
     }
     return { endpoint, std::nullopt };
+}
+
+bool application_retryable_error(bool aws_should_retry, int http_status, int error_type)
+{
+    if (http_status < 0)
+    {
+        using Aws::Client::CoreErrors;
+        switch (error_type)
+        {
+        case static_cast<int>(CoreErrors::INVALID_PARAMETER_VALUE):
+        case static_cast<int>(CoreErrors::MISSING_PARAMETER):
+        case static_cast<int>(CoreErrors::REQUEST_TIME_TOO_SKEWED):
+        case static_cast<int>(CoreErrors::CLIENT_SIGNING_FAILURE):
+        case static_cast<int>(CoreErrors::USER_CANCELLED):
+            return false;
+        default:
+            return true;
+        }
+    }
+    if (http_status >= 500)
+    {
+        return true;
+    }
+    if (http_status >= 400 && http_status < 500)
+    {
+        return http_status == 408 || http_status == 429;
+    }
+    return aws_should_retry;
 }
 
 std::optional<Aws::String> convert(const char * input)
@@ -145,6 +174,7 @@ bool S3ClientBase::verify_credentials(const common::backend_api::ObjectClientCon
 S3Client::S3Client(const common::backend_api::ObjectClientConfig_t & config) :
     S3ClientBase(config),
     _stop(false),
+    _application_retries_enabled(utils::getenv<unsigned long>("RUNAI_STREAMER_S3_TIMEOUT", 0UL) > 0),
     _responder(nullptr)
 {
     if (_endpoint.has_value()) // endpoint passed as parameter by user application (in credentials)
@@ -280,7 +310,8 @@ common::backend_api::ResponseCode_t S3Client::async_read(const char* path,
             return stream.release();
         });
 
-    _client->GetObjectAsync(*request, [request, responder = _responder, request_id, bytesize](const Aws::S3Crt::S3CrtClient*, const Aws::S3Crt::Model::GetObjectRequest&,
+    _client->GetObjectAsync(*request, [request, responder = _responder, request_id, bytesize,
+                                      application_retries_enabled = _application_retries_enabled](const Aws::S3Crt::S3CrtClient*, const Aws::S3Crt::Model::GetObjectRequest&,
                                                                     const Aws::S3Crt::Model::GetObjectOutcome& outcome,
                                                                     const std::shared_ptr<const Aws::Client::AsyncCallerContext>&) {
         if (outcome.IsSuccess())
@@ -302,10 +333,29 @@ common::backend_api::ResponseCode_t S3Client::async_read(const char* path,
         }
         else
         {
-            // Note: a failed chunk fails the whole read request; a retry mechanism could be added
             const auto & err = outcome.GetError();
-            LOG(ERROR) << "Failed to download s3 object of request " << request_id << " " << err.GetExceptionName() << ": " << err.GetMessage();
-            responder->push(common::backend_api::Response(request_id, common::ResponseCode::FileAccessError));
+            const int http_status = static_cast<int>(err.GetResponseCode());
+            const int error_type = static_cast<int>(err.GetErrorType());
+            const bool retryable = application_retries_enabled &&
+                application_retryable_error(err.ShouldRetry(), http_status, error_type);
+            if (retryable)
+            {
+                LOG(DEBUG) << "Failed to download s3 object of request " << request_id << " "
+                           << err.GetExceptionName() << ": " << err.GetMessage()
+                           << " (http_status=" << http_status << ", error_type=" << error_type
+                           << ", retryable=true)";
+            }
+            else
+            {
+                LOG(ERROR) << "Failed to download s3 object of request " << request_id << " "
+                           << err.GetExceptionName() << ": " << err.GetMessage()
+                           << " (http_status=" << http_status << ", error_type=" << error_type
+                           << ", retryable=false)";
+            }
+            responder->push(common::backend_api::Response(
+                request_id,
+                retryable ? common::ResponseCode::RetryableFileAccessError
+                          : common::ResponseCode::FileAccessError));
         }
     });
 
