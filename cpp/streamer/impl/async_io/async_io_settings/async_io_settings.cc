@@ -45,7 +45,7 @@ AsyncIoSettings::AsyncIoSettings(const Config & config, size_t max_read_bytesize
 }
 
 AsyncIoSettings::AsyncIoSettings(const Config & config) :
-    AsyncIoSettings(config, common::posix_io::max_read_bytesize())
+    AsyncIoSettings(config, posix_io::max_read_bytesize())
 {}
 
 unsigned AsyncIoSettings::depth() const

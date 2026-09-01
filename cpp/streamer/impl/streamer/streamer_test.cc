@@ -97,10 +97,10 @@ constexpr unsigned EMPTY_WAIT_MS = 50;
 // These tests named `libaio_direct` for that, which held only while libaio had no engine. They broke
 // the day it got one, which is the right way round: a test resting on a feature being MISSING should
 // fail when it arrives.
-Streamer::Environment without(common::posix_io::Strategy unavailable)
+Streamer::Environment without(posix_io::Strategy unavailable)
 {
     Streamer::Environment environment;
-    environment.availability = [unavailable](common::posix_io::Strategy strategy)
+    environment.availability = [unavailable](posix_io::Strategy strategy)
     {
         return strategy == unavailable ? common::ResponseCode::FsStrategyUnavailable
                                        : common::ResponseCode::Success;
@@ -179,8 +179,8 @@ TEST(Async, ReadsThroughIoUringWhenResolvedToIt)
     const bool expect_async = ring_works();
 
     EXPECT_EQ(streamer.fs_strategy(),
-              expect_async ? common::posix_io::Strategy::IoUringBuffered
-                           : common::posix_io::Strategy::SyncBuffered);
+              expect_async ? posix_io::Strategy::IoUringBuffered
+                           : posix_io::Strategy::SyncBuffered);
 
     // What was CHOSEN above; what was USED here. Without this, a dispatch that ignored the resolved
     // strategy and sent everything to the threadpool would pass every assertion in this test.
@@ -210,9 +210,9 @@ TEST(Async, StatsRecordTheStrategyPerFile)
     // One directory is memory backed, so it goes to the synchronous reader whatever the strategy says.
     const std::string memory_dir = "/dev/shm";
     Streamer streamer(Config(), Streamer::Environment{
-                      .mount = [memory_dir](const std::string & directory) -> common::posix_io::MountCapability
+                      .mount = [memory_dir](const std::string & directory) -> posix_io::MountCapability
                       {
-                          return common::posix_io::MountCapability{ makedev(8, 1), directory == memory_dir };
+                          return posix_io::MountCapability{ makedev(8, 1), directory == memory_dir };
                       },
     });
 
@@ -238,10 +238,10 @@ TEST(Async, StatsRecordTheStrategyPerFile)
     ASSERT_EQ(stats.files.size(), 2u);
 
     EXPECT_EQ(stats.files[0].path, on_disk.path);
-    EXPECT_EQ(stats.files[0].strategy, common::posix_io::Strategy::IoUringBuffered);
+    EXPECT_EQ(stats.files[0].strategy, posix_io::Strategy::IoUringBuffered);
 
     EXPECT_EQ(stats.files[1].path, in_memory.path);
-    EXPECT_EQ(stats.files[1].strategy, common::posix_io::Strategy::SyncBuffered)
+    EXPECT_EQ(stats.files[1].strategy, posix_io::Strategy::SyncBuffered)
         << "a memory-backed file must be recorded as read by the synchronous reader";
 }
 
@@ -259,7 +259,7 @@ TEST(Async, StatsSkipARejectedSubmission)
     request[0].path = file.path;
     request[0].ranges.push_back(ReadRange{ 0, data.size(), dst.data() });
 
-    Streamer streamer(Config(), without(common::posix_io::Strategy::LibaioDirect));
+    Streamer streamer(Config(), without(posix_io::Strategy::LibaioDirect));
 
     SubmissionId submission_id = 0;
     ASSERT_NE(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
@@ -292,9 +292,9 @@ TEST(Async, TwoMountsGetTwoEngines)
     // Both files really live on one filesystem; the probe says otherwise, which is the point.
     const std::string first = dir_one.path;
     Streamer streamer(Config(), Streamer::Environment{
-                      .mount = [first](const std::string & directory) -> common::posix_io::MountCapability
+                      .mount = [first](const std::string & directory) -> posix_io::MountCapability
                       {
-                          return common::posix_io::MountCapability{ directory == first ? makedev(8, 1) : makedev(8, 2), false };
+                          return posix_io::MountCapability{ directory == first ? makedev(8, 1) : makedev(8, 2), false };
                       },
     });
 
@@ -342,9 +342,9 @@ TEST(Async, TwoDirectoriesOnOneMountShareAnEngine)
 
     // Different directories, one device.
     Streamer streamer(Config(), Streamer::Environment{
-                      .mount = [](const std::string &) -> common::posix_io::MountCapability
+                      .mount = [](const std::string &) -> posix_io::MountCapability
                       {
-                          return common::posix_io::MountCapability{ makedev(8, 1), false };
+                          return posix_io::MountCapability{ makedev(8, 1), false };
                       },
     });
 
@@ -393,8 +393,8 @@ TEST(Async, SetFsStrategyTakesEffect)
 
     const bool expect_async = ring_works();
     EXPECT_EQ(streamer.fs_strategy(),
-              expect_async ? common::posix_io::Strategy::IoUringBuffered
-                           : common::posix_io::Strategy::SyncBuffered);
+              expect_async ? posix_io::Strategy::IoUringBuffered
+                           : posix_io::Strategy::SyncBuffered);
     EXPECT_EQ(streamer.async_pool_used(), expect_async);
 
     EXPECT_EQ(std::vector<char>(dst.begin(), dst.end()),
@@ -422,12 +422,24 @@ TEST(Async, SetFsStrategyIsRejectedAfterTheFirstRequest)
     ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
     EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
 
-    // Nothing was ever set, so there is no earlier value to conflict with - only the resolution.
-    EXPECT_NE(streamer.set_fs_strategy("io_uring_buffered,sync_buffered"), common::ResponseCode::Success);
-    EXPECT_EQ(streamer.fs_strategy(), common::posix_io::Strategy::SyncBuffered);
+    // Read what resolved rather than naming it. The default list prefers io_uring and falls back, so
+    // the answer depends on the host - and this test is about the SETTER's rules, not about which
+    // strategy won.
+    const auto resolved = streamer.fs_strategy();
 
-    // The value already in force is still accepted, since it changes nothing.
-    EXPECT_EQ(streamer.set_fs_strategy("sync_buffered"), common::ResponseCode::Success);
+    // Something the resolution cannot have produced, so the rejection is about the rule and not about
+    // a value that happened to differ.
+    const char * different = resolved == posix_io::Strategy::IoUringBuffered ? "sync_buffered"
+                                                                             : "io_uring_buffered";
+
+    // Nothing was ever set, so there is no earlier value to conflict with - only the resolution.
+    EXPECT_NE(streamer.set_fs_strategy(different), common::ResponseCode::Success);
+    EXPECT_EQ(streamer.fs_strategy(), resolved) << "a refused set must not change the strategy";
+
+    // The value already in force is still accepted, since it changes nothing. It is the LIST that was
+    // resolved from, not the single strategy that won: the resolver compares candidate lists, so
+    // passing the winner's name alone would read as a different request and be refused.
+    EXPECT_EQ(streamer.set_fs_strategy(Config::default_fs_strategy_candidates), common::ResponseCode::Success);
 }
 
 // A typo must not become a fallback nobody asked for.
@@ -466,7 +478,7 @@ TEST(Async, TmpfsGoesToTheSynchronousPool)
     // The strategy still resolves to io_uring - the mount decides the POOL, not the strategy.
     if (ring_works())
     {
-        EXPECT_EQ(streamer.fs_strategy(), common::posix_io::Strategy::IoUringBuffered);
+        EXPECT_EQ(streamer.fs_strategy(), posix_io::Strategy::IoUringBuffered);
     }
 
     EXPECT_FALSE(streamer.async_pool_used())
@@ -476,10 +488,20 @@ TEST(Async, TmpfsGoesToTheSynchronousPool)
               std::vector<char>(data.begin(), data.end()));
 }
 
-// The default must stay the synchronous reader until the A/B says otherwise. A default that drifted
-// to io_uring would decide by omission what the measurement is meant to decide.
-TEST(Async, DefaultStrategyIsSynchronous)
+// The default list prefers io_uring_direct, so on a host that can serve it the async path is what a
+// caller gets without asking. Pinned because the default is a performance decision: it should change
+// deliberately, with a measurement, not by someone editing the list for an unrelated reason.
+//
+// Skipped rather than branched where the ring is missing: the fallback entries are covered by
+// StrategyResolver's own tests, and asserting "something else resolved" here would pass for the wrong
+// reason on a host where io_uring is merely broken.
+TEST(Async, DefaultStrategyPrefersIoUringDirect)
 {
+    if (!ring_works())
+    {
+        GTEST_SKIP() << "io_uring unavailable, so the default cannot resolve to it here";
+    }
+
     utils::temp::UnsetEnv strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"));
 
     const auto data = utils::random::buffer(4096);
@@ -496,8 +518,8 @@ TEST(Async, DefaultStrategyIsSynchronous)
     ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
     EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
 
-    EXPECT_EQ(streamer.fs_strategy(), common::posix_io::Strategy::SyncBuffered);
-    EXPECT_FALSE(streamer.async_pool_used()) << "the default must not build a ring or a thread";
+    EXPECT_EQ(streamer.fs_strategy(), posix_io::Strategy::IoUringDirect);
+    EXPECT_TRUE(streamer.async_pool_used()) << "the default resolves to an async strategy, so the pool must be built";
 }
 
 // An unservable list is an error, not a quiet fall-through to the synchronous reader - and it must
@@ -514,7 +536,7 @@ TEST(Async, UnservableStrategyFailsTheRequest)
     request[0].path = file.path;
     request[0].ranges.push_back(ReadRange{ 0, data.size(), dst.data() });
 
-    Streamer streamer(Config(), without(common::posix_io::Strategy::LibaioDirect));
+    Streamer streamer(Config(), without(posix_io::Strategy::LibaioDirect));
 
     SubmissionId submission_id = 123;   // must be cleared, so a stale id cannot be mistaken for a real one
 
@@ -1343,17 +1365,17 @@ TEST(Async, LibaioSkipsAFileItCannotReadDirectly)
     utils::temp::File file(data);
 
     // Over-allocated so the destination can be moved off a block boundary on purpose.
-    std::vector<char> dst(data.size() + common::posix_io::DirectBlockSize);
+    std::vector<char> dst(data.size() + posix_io::DirectBlockSize);
     char * misaligned = dst.data() + 1;
-    ASSERT_NE((reinterpret_cast<uintptr_t>(misaligned)) % common::posix_io::DirectBlockSize, 0u);
+    ASSERT_NE((reinterpret_cast<uintptr_t>(misaligned)) % posix_io::DirectBlockSize, 0u);
 
     std::vector<FileRanges> request(1);
     request[0].path = file.path;
     request[0].ranges.push_back(ReadRange{ 0, data.size(), misaligned });
 
     Streamer::Environment environment;
-    environment.availability = [](common::posix_io::Strategy) { return common::ResponseCode::Success; };
-    environment.direct = [](dev_t, const std::string &) { return common::posix_io::DirectSupport::Yes; };
+    environment.availability = [](posix_io::Strategy) { return common::ResponseCode::Success; };
+    environment.direct = [](dev_t, const std::string &) { return posix_io::DirectSupport::Yes; };
 
     utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("libaio_direct"));
     Streamer streamer(Config(), std::move(environment));
@@ -1368,7 +1390,7 @@ TEST(Async, LibaioSkipsAFileItCannotReadDirectly)
     SubmissionStats stats;
     ASSERT_TRUE(streamer.stats().find(submission_id, stats));
     ASSERT_EQ(stats.files.size(), 1u);
-    EXPECT_EQ(stats.files[0].strategy, common::posix_io::Strategy::SyncBuffered);
+    EXPECT_EQ(stats.files[0].strategy, posix_io::Strategy::SyncBuffered);
 
     // And the bytes are still right - routing away is a performance decision, never a correctness one.
     EXPECT_EQ(std::vector<uint8_t>(misaligned, misaligned + data.size()), data);
@@ -1381,18 +1403,18 @@ TEST(Async, LibaioSkipsAMountWithoutODirect)
     const auto data = utils::random::buffer(8192);
     utils::temp::File file(data);
 
-    std::vector<char> dst(data.size() + common::posix_io::DirectBlockSize);
+    std::vector<char> dst(data.size() + posix_io::DirectBlockSize);
     char * congruent = dst.data() + ((-reinterpret_cast<uintptr_t>(dst.data()))
-                                     % common::posix_io::DirectBlockSize);
-    ASSERT_TRUE(common::posix_io::is_congruent(0, congruent, common::posix_io::DirectBlockSize));
+                                     % posix_io::DirectBlockSize);
+    ASSERT_TRUE(posix_io::is_congruent(0, congruent, posix_io::DirectBlockSize));
 
     std::vector<FileRanges> request(1);
     request[0].path = file.path;
     request[0].ranges.push_back(ReadRange{ 0, data.size(), congruent });
 
     Streamer::Environment environment;
-    environment.availability = [](common::posix_io::Strategy) { return common::ResponseCode::Success; };
-    environment.direct = [](dev_t, const std::string &) { return common::posix_io::DirectSupport::No; };
+    environment.availability = [](posix_io::Strategy) { return common::ResponseCode::Success; };
+    environment.direct = [](dev_t, const std::string &) { return posix_io::DirectSupport::No; };
 
     utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("libaio_direct"));
     Streamer streamer(Config(), std::move(environment));
@@ -1414,17 +1436,17 @@ TEST(Async, LibaioTakesAFileItCanReadDirectly)
     const auto data = utils::random::buffer(8192);
     utils::temp::File file(data);
 
-    std::vector<char> dst(data.size() + common::posix_io::DirectBlockSize);
+    std::vector<char> dst(data.size() + posix_io::DirectBlockSize);
     char * congruent = dst.data() + ((-reinterpret_cast<uintptr_t>(dst.data()))
-                                     % common::posix_io::DirectBlockSize);
+                                     % posix_io::DirectBlockSize);
 
     std::vector<FileRanges> request(1);
     request[0].path = file.path;
     request[0].ranges.push_back(ReadRange{ 0, data.size(), congruent });
 
     Streamer::Environment environment;
-    environment.availability = [](common::posix_io::Strategy) { return common::ResponseCode::Success; };
-    environment.direct = [](dev_t, const std::string &) { return common::posix_io::DirectSupport::Yes; };
+    environment.availability = [](posix_io::Strategy) { return common::ResponseCode::Success; };
+    environment.direct = [](dev_t, const std::string &) { return posix_io::DirectSupport::Yes; };
 
     utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("libaio_direct"));
     Streamer streamer(Config(), std::move(environment));
@@ -1438,7 +1460,7 @@ TEST(Async, LibaioTakesAFileItCanReadDirectly)
     SubmissionStats stats;
     ASSERT_TRUE(streamer.stats().find(submission_id, stats));
     ASSERT_EQ(stats.files.size(), 1u);
-    EXPECT_EQ(stats.files[0].strategy, common::posix_io::Strategy::LibaioDirect);
+    EXPECT_EQ(stats.files[0].strategy, posix_io::Strategy::LibaioDirect);
 
     EXPECT_EQ(std::vector<uint8_t>(congruent, congruent + data.size()), data);
 }
@@ -1458,7 +1480,7 @@ TEST(Async, IoUringKeepsAFileItCannotReadDirectly)
     const auto data = utils::random::buffer(8192);
     utils::temp::File file(data);
 
-    std::vector<char> dst(data.size() + common::posix_io::DirectBlockSize);
+    std::vector<char> dst(data.size() + posix_io::DirectBlockSize);
     char * misaligned = dst.data() + 1;
 
     std::vector<FileRanges> request(1);
@@ -1496,14 +1518,14 @@ TEST(Async, CongruentDestinationsBounceNothing)
         GTEST_SKIP() << "io_uring is unavailable here";
     }
 
-    const size_t block = common::posix_io::DirectBlockSize;
+    const size_t block = posix_io::DirectBlockSize;
     const auto data = utils::random::buffer(block * 16);
     utils::temp::File file(data);
 
     // Congruent with file offset 0: the destination itself lands on a block boundary.
     std::vector<char> dst(data.size() + block);
     char * congruent = dst.data() + ((-reinterpret_cast<uintptr_t>(dst.data())) % block);
-    ASSERT_TRUE(common::posix_io::is_congruent(0, congruent, block));
+    ASSERT_TRUE(posix_io::is_congruent(0, congruent, block));
 
     std::vector<FileRanges> request(1);
     request[0].path = file.path;
@@ -1537,13 +1559,13 @@ TEST(Async, ANonCongruentDestinationIsReadBufferedRatherThanBounced)
         GTEST_SKIP() << "io_uring is unavailable here";
     }
 
-    const size_t block = common::posix_io::DirectBlockSize;
+    const size_t block = posix_io::DirectBlockSize;
     const auto data = utils::random::buffer(block * 4);
     utils::temp::File file(data);
 
     std::vector<char> dst(data.size() + block);
     char * misaligned = dst.data() + 1;
-    ASSERT_FALSE(common::posix_io::is_congruent(0, misaligned, block));
+    ASSERT_FALSE(posix_io::is_congruent(0, misaligned, block));
 
     std::vector<FileRanges> request(1);
     request[0].path = file.path;

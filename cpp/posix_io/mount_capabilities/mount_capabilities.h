@@ -7,7 +7,7 @@
 #include <ostream>
 #include <string>
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 // What a mount can do.
@@ -118,4 +118,4 @@ class MountCapabilities
     std::map<dev_t, bool> _direct;
 };
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

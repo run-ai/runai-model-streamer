@@ -10,7 +10,7 @@
 #include "posix_io/alignment/alignment.h"
 #include "utils/logging/logging.h"
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 namespace
@@ -71,7 +71,7 @@ unsigned setup_context(unsigned wanted, io_context_t & out_ctx)
         // and the loop below would skip entirely, so without this the failure would be reported as
         // "the node could not give us one event", which is not what happened.
         LOG(ERROR) << "libaio was asked for a depth of 0";
-        throw common::Exception(ResponseCode::UnknownError);
+        throw common::Exception(common::ResponseCode::UnknownError);
     }
 
     for (unsigned events = wanted; events >= 1; events /= 2)
@@ -90,7 +90,7 @@ unsigned setup_context(unsigned wanted, io_context_t & out_ctx)
         if (error_of(ret) != EAGAIN)
         {
             LOG(ERROR) << "io_setup(" << events << ") failed: " << std::strerror(error_of(ret));
-            throw common::Exception(ResponseCode::UnknownError);
+            throw common::Exception(common::ResponseCode::UnknownError);
         }
 
         LOG(WARNING) << "io_setup(" << events << ") was refused because the node's aio limit is"
@@ -99,7 +99,7 @@ unsigned setup_context(unsigned wanted, io_context_t & out_ctx)
     }
 
     LOG(ERROR) << "io_setup could not provide even one event";
-    throw common::Exception(ResponseCode::UnknownError);
+    throw common::Exception(common::ResponseCode::UnknownError);
 }
 
 } // namespace
@@ -191,7 +191,7 @@ SubmitStats LibaioEngine::submit_stats() const
     return _submit_stats;
 }
 
-ResponseCode LibaioEngine::stage(RequestId id, FileRef file, size_t offset, size_t bytesize, char * buffer)
+common::ResponseCode LibaioEngine::stage(RequestId id, FileRef file, size_t offset, size_t bytesize, char * buffer)
 {
     if (_free.empty())
     {
@@ -204,7 +204,7 @@ ResponseCode LibaioEngine::stage(RequestId id, FileRef file, size_t offset, size
         // put reads in flight that the caller's accounting cannot see.
         LOG(ERROR) << "libaio has no free iocb at depth " << _depth
                    << " - the in-flight window and the context have disagreed";
-        return ResponseCode::UnknownError;
+        return common::ResponseCode::UnknownError;
     }
 
     // file.direct is not read here, and that is not an oversight. io_uring needs it to decide
@@ -220,10 +220,10 @@ ResponseCode LibaioEngine::stage(RequestId id, FileRef file, size_t offset, size
     iocb->data = reinterpret_cast<void *>(static_cast<uintptr_t>(id));
 
     _pending.push_back(iocb);
-    return ResponseCode::Success;
+    return common::ResponseCode::Success;
 }
 
-ResponseCode LibaioEngine::flush(unsigned & out_issued)
+common::ResponseCode LibaioEngine::flush(unsigned & out_issued)
 {
     out_issued = 0;
 
@@ -283,7 +283,7 @@ ResponseCode LibaioEngine::flush(unsigned & out_issued)
             {
                 LOG(DEBUG) << "io_submit deferred " << _pending.size() << " staged reads: "
                            << std::strerror(error);
-                return ResponseCode::Success;
+                return common::ResponseCode::Success;
             }
 
             // io_submit stops at the first read it cannot accept, so a negative return is about the
@@ -311,7 +311,7 @@ ResponseCode LibaioEngine::flush(unsigned & out_issued)
             // issued - those reads are in flight and the worker must count them. The rest of the
             // queue is retried on the next flush. This always finishes, because each pass removes
             // one read.
-            return ResponseCode::Success;
+            return common::ResponseCode::Success;
         }
 
         const size_t issued = static_cast<size_t>(ret);
@@ -334,21 +334,21 @@ ResponseCode LibaioEngine::flush(unsigned & out_issued)
         {
             LOG(WARNING) << "io_submit accepted none of " << batch << " offered without reporting an"
                             " error; leaving " << _pending.size() << " staged for the next flush";
-            return ResponseCode::Success;
+            return common::ResponseCode::Success;
         }
     }
 
-    return ResponseCode::Success;
+    return common::ResponseCode::Success;
 }
 
-ResponseCode LibaioEngine::wait_for_completions(Completion * out, unsigned max, unsigned & out_count,
+common::ResponseCode LibaioEngine::wait_for_completions(Completion * out, unsigned max, unsigned & out_count,
                                                 WaitMode mode, unsigned timeout_ms)
 {
     out_count = 0;
 
     if (max == 0)
     {
-        return ResponseCode::Success;
+        return common::ResponseCode::Success;
     }
 
     // Reads the kernel refused, handed back before anything else. If they waited until after the
@@ -360,7 +360,7 @@ ResponseCode LibaioEngine::wait_for_completions(Completion * out, unsigned max, 
         std::copy(_submit_failures.begin(), _submit_failures.begin() + taken, out);
         _submit_failures.erase(_submit_failures.begin(), _submit_failures.begin() + taken);
         out_count = static_cast<unsigned>(taken);
-        return ResponseCode::Success;
+        return common::ResponseCode::Success;
     }
 
     // min_nr and nr are different questions. min_nr is how many completions to WAIT for; nr is how
@@ -413,10 +413,10 @@ ResponseCode LibaioEngine::wait_for_completions(Completion * out, unsigned max, 
         if (error != EINTR)
         {
             LOG(ERROR) << "io_getevents failed: " << std::strerror(error);
-            return ResponseCode::UnknownError;
+            return common::ResponseCode::UnknownError;
         }
 
-        return ResponseCode::Success;
+        return common::ResponseCode::Success;
     }
 
     for (int i = 0; i < ret; ++i)
@@ -449,7 +449,7 @@ ResponseCode LibaioEngine::wait_for_completions(Completion * out, unsigned max, 
         ++out_count;
     }
 
-    return ResponseCode::Success;
+    return common::ResponseCode::Success;
 }
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

@@ -7,7 +7,7 @@
 
 #include "posix_io/io_engine/io_engine.h"
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 // A test double for IoEngine: no kernel, no threads, and the test decides what completes and when.
@@ -40,16 +40,16 @@ class MockIoEngine : public IoEngine
     Limits limits() const override;
     unsigned depth() const override;
 
-    ResponseCode stage(RequestId id, FileRef file, size_t offset, size_t bytesize, char * buffer) override;
+    common::ResponseCode stage(RequestId id, FileRef file, size_t offset, size_t bytesize, char * buffer) override;
 
     // Issues up to the flush limit, oldest first. The rest stays staged - both real APIs issue a
     // prefix, so the unissued set is always the tail.
-    ResponseCode flush(unsigned & out_issued) override;
+    common::ResponseCode flush(unsigned & out_issued) override;
 
     // Returns what the test has completed, in the order it completed it. Never blocks: with nothing
     // ready this is Success and zero for both wait modes, which is also the expired-timeout case - so
     // a test reaches the teardown path by simply completing nothing.
-    ResponseCode wait_for_completions(Completion * out, unsigned max, unsigned & out_count,
+    common::ResponseCode wait_for_completions(Completion * out, unsigned max, unsigned & out_count,
                                       WaitMode mode, unsigned timeout_ms = 0) override;
 
     void register_memory(char * base, size_t size) override;
@@ -81,8 +81,8 @@ class MockIoEngine : public IoEngine
     void set_flush_stalled(bool stalled);
 
     // Make stage() / flush() return this code instead of acting.
-    void set_stage_result(ResponseCode ret);
-    void set_flush_result(ResponseCode ret);
+    void set_stage_result(common::ResponseCode ret);
+    void set_flush_result(common::ResponseCode ret);
 
     // ---- completion, in the order the test picks ----
     //
@@ -95,7 +95,7 @@ class MockIoEngine : public IoEngine
 
     // `error` is a POSITIVE errno, such as EIO. The engine reports it as -errno, which is how both
     // io_uring and libaio report a failed read (io_engine.h). Taking the errno rather than a
-    // ResponseCode keeps the mock at the same level as a real engine: mapping to a ResponseCode is
+    // common::ResponseCode keeps the mock at the same level as a real engine: mapping to a common::ResponseCode is
     // the caller's job now, and a mock that mapped for the caller could not test that mapping.
     void fail(RequestId id, long error);
     void complete_all();                               // everything in flight, oldest first
@@ -176,8 +176,8 @@ class MockIoEngine : public IoEngine
     bool _flush_stalled = false;
     bool _fill = true;
 
-    ResponseCode _stage_result = ResponseCode::Success;
-    ResponseCode _flush_result = ResponseCode::Success;
+    common::ResponseCode _stage_result = common::ResponseCode::Success;
+    common::ResponseCode _flush_result = common::ResponseCode::Success;
 };
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

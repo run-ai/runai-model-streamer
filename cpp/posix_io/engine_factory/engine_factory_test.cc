@@ -11,7 +11,7 @@
 #include <cstring>
 #include <string>
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 namespace
@@ -134,4 +134,4 @@ TEST(EngineFactory, Synchronous_Strategy_Is_Rejected)
     EXPECT_THROW(make_io_engine(Strategy::SyncBuffered, config()), std::exception);
 }
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

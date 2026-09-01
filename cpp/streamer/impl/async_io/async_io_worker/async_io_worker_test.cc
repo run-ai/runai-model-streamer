@@ -29,9 +29,9 @@ namespace runai::llm::streamer::impl
 namespace
 {
 
-using common::posix_io::MockIoEngine;
-using common::posix_io::Strategy;
-using common::posix_io::WaitMode;
+using posix_io::MockIoEngine;
+using posix_io::Strategy;
+using posix_io::WaitMode;
 
 constexpr size_t ChunkSize = 4096;
 
@@ -129,10 +129,10 @@ struct Driver
     // The real engine reports 4096.
     explicit Driver(Strategy strategy = Strategy::IoUringBuffered, size_t block = 4096) :
         worker(strategy,
-               [this, block](Strategy, const common::posix_io::AsyncIoConfig & config)
+               [this, block](Strategy, const posix_io::AsyncIoConfig & config)
                {
-                   common::posix_io::Limits limits;
-                   limits.max_read_bytesize = common::posix_io::max_read_bytesize();
+                   posix_io::Limits limits;
+                   limits.max_read_bytesize = posix_io::max_read_bytesize();
                    limits.offset_alignment = block;
                    limits.buffer_alignment = block;
 
@@ -153,7 +153,7 @@ struct Driver
     // Harvests and routes whatever the test completed.
     void route() { worker.drain(stopped); }
 
-    std::vector<common::posix_io::RequestId> in_flight() { return engine->in_flight(); }
+    std::vector<posix_io::RequestId> in_flight() { return engine->in_flight(); }
 
     size_t worker_bounced_bytes() const { return worker.bounced_bytes(); }
     size_t worker_bytes_read() const { return worker.bytes_read(); }

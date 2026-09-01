@@ -17,7 +17,7 @@
 #include "utils/random/random.h"
 #include "utils/temp/file/file.h"
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 namespace
@@ -120,7 +120,7 @@ std::vector<Completion> reap(IoUringEngine & engine, unsigned count)
     {
         unsigned got = 0;
         EXPECT_EQ(engine.wait_for_completions(batch.data(), batch.size(), got, WaitMode::Block, 2000),
-                  ResponseCode::Success);
+                  common::ResponseCode::Success);
         out.insert(out.end(), batch.begin(), batch.begin() + got);
     }
 
@@ -172,10 +172,10 @@ TEST(IoUringEngine, Reads_A_File)
     IoUringEngine engine(config_with(8));
 
     std::vector<char> buffer(4096);
-    ASSERT_EQ(engine.stage(7, fixture.ref(), 8192, buffer.size(), buffer.data()), ResponseCode::Success);
+    ASSERT_EQ(engine.stage(7, fixture.ref(), 8192, buffer.size(), buffer.data()), common::ResponseCode::Success);
 
     unsigned issued = 0;
-    ASSERT_EQ(engine.flush(issued), ResponseCode::Success);
+    ASSERT_EQ(engine.flush(issued), common::ResponseCode::Success);
     EXPECT_EQ(issued, 1u);
 
     const auto completions = reap(engine, 1);
@@ -203,11 +203,11 @@ TEST(IoUringEngine, Ids_Survive_The_Round_Trip)
     for (size_t i = 0; i < ids.size(); ++i)
     {
         ASSERT_EQ(engine.stage(ids[i], fixture.ref(), i * 4096, 4096, buffers[i].data()),
-                  ResponseCode::Success);
+                  common::ResponseCode::Success);
     }
 
     unsigned issued = 0;
-    ASSERT_EQ(engine.flush(issued), ResponseCode::Success);
+    ASSERT_EQ(engine.flush(issued), common::ResponseCode::Success);
     EXPECT_EQ(issued, ids.size());
 
     const auto completions = reap(engine, ids.size());
@@ -234,10 +234,10 @@ TEST(IoUringEngine, Short_Read_At_Eof_Is_Not_An_Error)
     IoUringEngine engine(config_with(8));
 
     std::vector<char> buffer(8192);   // asking for twice the file
-    ASSERT_EQ(engine.stage(1, fixture.ref(), 0, buffer.size(), buffer.data()), ResponseCode::Success);
+    ASSERT_EQ(engine.stage(1, fixture.ref(), 0, buffer.size(), buffer.data()), common::ResponseCode::Success);
 
     unsigned issued = 0;
-    ASSERT_EQ(engine.flush(issued), ResponseCode::Success);
+    ASSERT_EQ(engine.flush(issued), common::ResponseCode::Success);
 
     const auto completions = reap(engine, 1);
     ASSERT_EQ(completions.size(), 1u);
@@ -257,12 +257,12 @@ TEST(IoUringEngine, Bad_Fd_Fails_Only_Its_Own_Request)
     std::vector<char> good(4096);
     std::vector<char> bad(4096);
 
-    ASSERT_EQ(engine.stage(1, fixture.ref(), 0, good.size(), good.data()), ResponseCode::Success);
-    ASSERT_EQ(engine.stage(2, FileRef{ -1, false }, 0, bad.size(), bad.data()), ResponseCode::Success)
+    ASSERT_EQ(engine.stage(1, fixture.ref(), 0, good.size(), good.data()), common::ResponseCode::Success);
+    ASSERT_EQ(engine.stage(2, FileRef{ -1, false }, 0, bad.size(), bad.data()), common::ResponseCode::Success)
         << "staging cannot know the fd is bad; only the completion can";
 
     unsigned issued = 0;
-    ASSERT_EQ(engine.flush(issued), ResponseCode::Success);
+    ASSERT_EQ(engine.flush(issued), common::ResponseCode::Success);
 
     const auto completions = reap(engine, 2);
     ASSERT_EQ(completions.size(), 2u);
@@ -293,17 +293,17 @@ TEST(IoUringEngine, Staging_Does_Not_Issue)
     IoUringEngine engine(config_with(8));
 
     std::vector<char> buffer(4096);
-    ASSERT_EQ(engine.stage(1, fixture.ref(), 0, buffer.size(), buffer.data()), ResponseCode::Success);
+    ASSERT_EQ(engine.stage(1, fixture.ref(), 0, buffer.size(), buffer.data()), common::ResponseCode::Success);
 
     // Nothing submitted yet, so nothing can complete.
     Completion completions[4];
     unsigned count = 0;
     ASSERT_EQ(engine.wait_for_completions(completions, 4, count, WaitMode::NonBlocking),
-              ResponseCode::Success);
+              common::ResponseCode::Success);
     EXPECT_EQ(count, 0u) << "a staged request completed without ever being submitted";
 
     unsigned issued = 0;
-    ASSERT_EQ(engine.flush(issued), ResponseCode::Success);
+    ASSERT_EQ(engine.flush(issued), common::ResponseCode::Success);
     EXPECT_EQ(issued, 1u);
     EXPECT_EQ(reap(engine, 1).size(), 1u);
 }
@@ -319,7 +319,7 @@ TEST(IoUringEngine, Expired_Wait_Is_Not_An_Error)
     Completion completions[4];
     unsigned count = 0;
     EXPECT_EQ(engine.wait_for_completions(completions, 4, count, WaitMode::Block, 50),
-              ResponseCode::Success);
+              common::ResponseCode::Success);
     EXPECT_EQ(count, 0u);
 }
 
@@ -331,7 +331,7 @@ TEST(IoUringEngine, Flush_With_Nothing_Staged)
     IoUringEngine engine(config_with(8));
 
     unsigned issued = 7;   // must be overwritten
-    EXPECT_EQ(engine.flush(issued), ResponseCode::Success);
+    EXPECT_EQ(engine.flush(issued), common::ResponseCode::Success);
     EXPECT_EQ(issued, 0u);
 }
 
@@ -352,12 +352,12 @@ TEST(IoUringEngine, Fills_The_Window)
     for (unsigned i = 0; i < Depth; ++i)
     {
         ASSERT_EQ(engine.stage(i + 1, fixture.ref(), i * Bytes, Bytes, buffers[i].data()),
-                  ResponseCode::Success)
+                  common::ResponseCode::Success)
             << "staged " << i << " of " << Depth << " - the ring must hold a full window";
     }
 
     unsigned issued = 0;
-    ASSERT_EQ(engine.flush(issued), ResponseCode::Success);
+    ASSERT_EQ(engine.flush(issued), common::ResponseCode::Success);
     EXPECT_EQ(issued, Depth);
 
     const auto completions = reap(engine, Depth);
@@ -453,10 +453,10 @@ struct AlignedBuffer
 Completion read_once(IoUringEngine & engine, FileRef file, size_t offset, size_t bytesize, char * buffer)
 {
     const auto staged = engine.stage(1, file, offset, bytesize, buffer);
-    EXPECT_EQ(staged, ResponseCode::Success) << "the engine prepares the SQE; the kernel judges it";
+    EXPECT_EQ(staged, common::ResponseCode::Success) << "the engine prepares the SQE; the kernel judges it";
 
     unsigned issued = 0;
-    EXPECT_EQ(engine.flush(issued), ResponseCode::Success);
+    EXPECT_EQ(engine.flush(issued), common::ResponseCode::Success);
     EXPECT_EQ(issued, 1u);
 
     const auto completions = reap(engine, 1);
@@ -575,10 +575,10 @@ TEST(IoUringEngine, Submit_Time_Is_Measured)
     IoUringEngine engine(config_with(8));
 
     std::vector<char> buffer(4096);
-    ASSERT_EQ(engine.stage(1, fixture.ref(), 0, buffer.size(), buffer.data()), ResponseCode::Success);
+    ASSERT_EQ(engine.stage(1, fixture.ref(), 0, buffer.size(), buffer.data()), common::ResponseCode::Success);
 
     unsigned issued = 0;
-    ASSERT_EQ(engine.flush(issued), ResponseCode::Success);
+    ASSERT_EQ(engine.flush(issued), common::ResponseCode::Success);
     reap(engine, 1);
 
     const auto stats = engine.submit_stats();
@@ -598,11 +598,11 @@ TEST(IoUringEngine, An_Empty_Flush_Is_Not_Counted)
     IoUringEngine engine(config_with(8));
 
     unsigned issued = 0;
-    ASSERT_EQ(engine.flush(issued), ResponseCode::Success);
+    ASSERT_EQ(engine.flush(issued), common::ResponseCode::Success);
     EXPECT_EQ(issued, 0u);
 
     EXPECT_EQ(engine.submit_stats().calls, 0u)
         << "an empty flush should not reach io_uring_submit at all";
 }
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

@@ -43,7 +43,7 @@ class StrategyResolver
     //
     // Demoting the real probe instead would work once and then leak into every test after it, which
     // is what the probes' own tests take care to avoid.
-    using Availability = std::function<common::ResponseCode(common::posix_io::Strategy)>;
+    using Availability = std::function<common::ResponseCode(posix_io::Strategy)>;
 
     // `default_candidates` is what resolve() walks if nobody calls set_candidates. Normally
     // RUNAI_STREAMER_FS_STRATEGY, read into Config.
@@ -77,7 +77,7 @@ class StrategyResolver
     common::ResponseCode resolve();
 
     // Valid only after resolve() returned Success.
-    common::posix_io::Strategy resolved() const;
+    posix_io::Strategy resolved() const;
 
     bool is_resolved() const;
 
@@ -94,7 +94,7 @@ class StrategyResolver
 
     std::optional<std::string> _candidates;     // what the caller set, if anything
     std::optional<std::string> _resolved_from;  // the list resolve() walked - setter's or default
-    std::optional<common::posix_io::Strategy> _resolved;
+    std::optional<posix_io::Strategy> _resolved;
 };
 
 }; // namespace runai::llm::streamer::impl

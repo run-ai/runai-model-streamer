@@ -9,7 +9,7 @@
 #include "posix_io/libaio_probe/libaio_probe.h"
 #include "utils/logging/logging.h"
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 namespace
@@ -113,4 +113,4 @@ std::unique_ptr<IoEngine> make_io_engine(Strategy strategy, const AsyncIoConfig 
     }
 }
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

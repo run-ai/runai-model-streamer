@@ -6,7 +6,7 @@
 
 #include "utils/logging/logging.h"
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 size_t max_read_bytesize(size_t page_size)
@@ -23,4 +23,4 @@ size_t max_read_bytesize()
     return max_read_bytesize(static_cast<size_t>(::sysconf(_SC_PAGESIZE)));
 }
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

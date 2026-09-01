@@ -4,7 +4,7 @@
 
 #include "common/response_code/response_code.h"
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 // What io_uring can do on this host.
@@ -27,7 +27,7 @@ struct IoUringCapability
     //   FileAccessError - the kernel has io_uring but this process may not use it (seccomp, or
     //                     kernel.io_uring_disabled): an operator can change this
     //   UnknownError    - no io_uring here at all: nobody can
-    ResponseCode error = ResponseCode::Success;
+    common::ResponseCode error = common::ResponseCode::Success;
 
     // IORING_FEAT_EXT_ARG: a bounded wait costs no submission slot. Without it a timed wait needs a
     // timeout SQE, which consumes one of the entries the caller asked for.
@@ -67,7 +67,7 @@ class IoUringProbe
     //
     // ONE WAY. Demotes available -> unavailable and never the reverse, so the answer cannot flap and
     // a candidate that has genuinely failed stays out of the chain.
-    void mark_unavailable(ResponseCode reason);
+    void mark_unavailable(common::ResponseCode reason);
 
     // The process-wide instance, which is the one production uses.
     static IoUringProbe & instance();
@@ -78,4 +78,4 @@ class IoUringProbe
     IoUringCapability _capability;
 };
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

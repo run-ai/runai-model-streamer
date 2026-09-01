@@ -52,7 +52,7 @@ struct Streamer
     // can only be tested on a machine that already has two filesystems.
     //
     // It must throw when a path cannot be read, as MountCapabilities::of_path does.
-    using MountProbe = std::function<common::posix_io::MountCapability(const std::string &)>;
+    using MountProbe = std::function<posix_io::MountCapability(const std::string &)>;
 
     // Whether a mount can serve O_DIRECT. Replaceable for the same reason as MountProbe, and more
     // sharply: the real answer is whatever the build machine's filesystem happens to support, so a
@@ -60,7 +60,7 @@ struct Streamer
     //
     // Production passes nothing and MountCapabilities::direct_support answers.
     using DirectProbe =
-        std::function<common::posix_io::DirectSupport(dev_t, const std::string &)>;
+        std::function<posix_io::DirectSupport(dev_t, const std::string &)>;
 
     // What a test may answer instead of the machine.
     //
@@ -124,7 +124,7 @@ struct Streamer
     common::ResponseCode set_fs_strategy(const std::string & candidates);
 
     // Valid only after a FILESYSTEM submission: an object-storage one never resolves a strategy.
-    common::posix_io::Strategy fs_strategy() const;
+    posix_io::Strategy fs_strategy() const;
 
     // Whether any workload was actually routed to the async pool. fs_strategy() says what was
     // CHOSEN; this says what was USED, and only the second catches a dispatch that ignores the
@@ -276,7 +276,7 @@ struct Streamer
 
     // Mount capabilities, probed once per mount and cached. Consulted per submission to decide which
     // files the async pool serves - tmpfs goes to the synchronous pool however the strategy resolved.
-    common::posix_io::MountCapabilities _mounts;
+    posix_io::MountCapabilities _mounts;
 
     AsyncIoStats _stats;
 

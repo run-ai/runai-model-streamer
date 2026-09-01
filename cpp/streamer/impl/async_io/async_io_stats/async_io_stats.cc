@@ -19,7 +19,7 @@ std::ostream & operator<<(std::ostream & os, const SubmissionStats & stats)
     unsigned async_files = 0;
     for (const auto & file : stats.files)
     {
-        if (common::posix_io::is_async(file.strategy))
+        if (posix_io::is_async(file.strategy))
         {
             ++async_files;
         }

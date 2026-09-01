@@ -5,7 +5,7 @@
 
 #include "posix_io/io_engine/io_engine.h"
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 // What a direct read was asked to do. Enough to say why the kernel refused it.
@@ -95,4 +95,4 @@ AlignedRead expand(size_t offset, size_t bytesize, char * buffer, size_t block);
 //                         length=100 (align 512 BAD), congruent=no
 std::string alignment_diagnosis(const Requested & requested, const Limits & limits);
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 // How the filesystem is read. Three of these are served by an async IoEngine, one by the existing
@@ -45,4 +45,4 @@ std::vector<Strategy> parse_candidates(const std::string & value);
 
 std::ostream & operator<<(std::ostream &, Strategy);
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

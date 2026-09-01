@@ -31,7 +31,7 @@ struct SubmissionStats
     struct FileStrategy
     {
         std::string path;
-        common::posix_io::Strategy strategy = common::posix_io::Strategy::SyncBuffered;
+        posix_io::Strategy strategy = posix_io::Strategy::SyncBuffered;
     };
     std::vector<FileStrategy> files;
 

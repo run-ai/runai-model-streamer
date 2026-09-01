@@ -7,7 +7,7 @@
 
 #include "utils/logging/logging.h"
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 namespace
@@ -19,9 +19,9 @@ constexpr unsigned ProbeEntries = 8;
 
 // EPERM and EACCES mean "this kernel has io_uring but this process may not use it" - seccomp, or
 // kernel.io_uring_disabled. Everything else (ENOSYS above all) means it is simply not here.
-ResponseCode reason_for(int error)
+common::ResponseCode reason_for(int error)
 {
-    return (error == EPERM || error == EACCES) ? ResponseCode::FileAccessError : ResponseCode::UnknownError;
+    return (error == EPERM || error == EACCES) ? common::ResponseCode::FileAccessError : common::ResponseCode::UnknownError;
 }
 
 } // namespace
@@ -60,7 +60,7 @@ IoUringCapability probe_io_uring()
     {
         // A ring we cannot read through is of no use to us. Reachable only below 5.6, well under our
         // floor - but the rule is to probe rather than to trust the version.
-        capability.error = ResponseCode::UnknownError;
+        capability.error = common::ResponseCode::UnknownError;
         LOG(WARNING) << "io_uring is not available: a ring was created but IORING_OP_READ is not"
                      << " supported";
         return capability;
@@ -87,7 +87,7 @@ IoUringCapability IoUringProbe::capability()
     return _capability;
 }
 
-void IoUringProbe::mark_unavailable(ResponseCode reason)
+void IoUringProbe::mark_unavailable(common::ResponseCode reason)
 {
     std::unique_lock<std::mutex> lock(_mutex);
 
@@ -120,4 +120,4 @@ IoUringProbe & IoUringProbe::instance()
     return probe;
 }
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

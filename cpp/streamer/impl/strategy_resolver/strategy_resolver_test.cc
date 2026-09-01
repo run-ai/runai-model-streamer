@@ -14,7 +14,7 @@ namespace runai::llm::streamer::impl
 namespace
 {
 
-using common::posix_io::Strategy;
+using posix_io::Strategy;
 
 #ifndef __NR_io_uring_setup
 #define __NR_io_uring_setup 425

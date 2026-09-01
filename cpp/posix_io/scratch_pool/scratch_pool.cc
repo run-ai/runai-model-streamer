@@ -6,7 +6,7 @@
 #include "common/exception/exception.h"
 #include "utils/logging/logging.h"
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 ScratchPool::ScratchPool(size_t count, size_t block) :
@@ -68,4 +68,4 @@ size_t ScratchPool::free_count() const
     return _free.size();
 }
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

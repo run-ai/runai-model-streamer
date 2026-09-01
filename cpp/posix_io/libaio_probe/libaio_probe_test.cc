@@ -8,7 +8,7 @@
 #include <cerrno>
 #include <cstring>
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 namespace
@@ -55,16 +55,16 @@ TEST(LibaioProbe, Agrees_With_The_Kernel)
 
     if (raw == 0)
     {
-        EXPECT_EQ(capability.error, ResponseCode::Success);
+        EXPECT_EQ(capability.error, common::ResponseCode::Success);
     }
     else
     {
-        EXPECT_NE(capability.error, ResponseCode::Success) << "unavailable must carry a reason";
+        EXPECT_NE(capability.error, common::ResponseCode::Success) << "unavailable must carry a reason";
 
         // A used-up node budget is an operator's problem; a kernel without aio is nobody's. Reporting
         // the second when it is the first sends whoever reads the log to the wrong place.
-        const auto expected = (raw == EAGAIN) ? ResponseCode::FileAccessError
-                                              : ResponseCode::UnknownError;
+        const auto expected = (raw == EAGAIN) ? common::ResponseCode::FileAccessError
+                                              : common::ResponseCode::UnknownError;
         EXPECT_EQ(capability.error, expected);
     }
 }
@@ -88,11 +88,11 @@ TEST(LibaioProbe, Demotion_Keeps_The_Reason)
 {
     LibaioProbe probe;
 
-    probe.mark_unavailable(ResponseCode::FileAccessError);
+    probe.mark_unavailable(common::ResponseCode::FileAccessError);
 
     const auto capability = probe.capability();
     EXPECT_FALSE(capability.available);
-    EXPECT_EQ(capability.error, ResponseCode::FileAccessError);
+    EXPECT_EQ(capability.error, common::ResponseCode::FileAccessError);
 }
 
 // One way only. A demoted probe that re-probed would answer "available" again, and resolution would
@@ -106,12 +106,12 @@ TEST(LibaioProbe, Demotion_Is_Permanent)
     {
         // Already unavailable here, so demotion cannot be observed to stick. Not a skip: the
         // remaining assertion still holds, and it is the one that matters on such a host.
-        probe.mark_unavailable(ResponseCode::UnknownError);
+        probe.mark_unavailable(common::ResponseCode::UnknownError);
         EXPECT_FALSE(probe.capability().available);
         return;
     }
 
-    probe.mark_unavailable(ResponseCode::UnknownError);
+    probe.mark_unavailable(common::ResponseCode::UnknownError);
 
     for (int i = 0; i < 3; ++i)
     {
@@ -125,10 +125,10 @@ TEST(LibaioProbe, Second_Demotion_Does_Not_Overwrite)
 {
     LibaioProbe probe;
 
-    probe.mark_unavailable(ResponseCode::FileAccessError);
-    probe.mark_unavailable(ResponseCode::UnknownError);
+    probe.mark_unavailable(common::ResponseCode::FileAccessError);
+    probe.mark_unavailable(common::ResponseCode::UnknownError);
 
-    EXPECT_EQ(probe.capability().error, ResponseCode::FileAccessError);
+    EXPECT_EQ(probe.capability().error, common::ResponseCode::FileAccessError);
 }
 
 // Instances are independent, which is what lets the tests above avoid touching process-wide state.
@@ -137,10 +137,10 @@ TEST(LibaioProbe, Instances_Do_Not_Share_State)
     LibaioProbe demoted;
     LibaioProbe fresh;
 
-    demoted.mark_unavailable(ResponseCode::UnknownError);
+    demoted.mark_unavailable(common::ResponseCode::UnknownError);
 
     EXPECT_FALSE(demoted.capability().available);
     EXPECT_EQ(fresh.capability().available, probe_libaio().available);
 }
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

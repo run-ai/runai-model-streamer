@@ -6,7 +6,7 @@
 #include <set>
 #include <vector>
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 // The one property the kernel checks. A buffer that is not block aligned fails the read with EINVAL.
@@ -100,4 +100,4 @@ TEST(ScratchPool, Empty_Pool_Is_Legal)
     EXPECT_EQ(pool.take(), nullptr);
 }
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

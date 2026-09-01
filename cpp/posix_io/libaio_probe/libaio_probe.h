@@ -4,7 +4,7 @@
 
 #include "common/response_code/response_code.h"
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 // Whether libaio can be used on this host.
@@ -28,7 +28,7 @@ struct LibaioCapability
 
     // Why not, when !available. EAGAIN means the node's aio limit is reached, which an operator can
     // raise; anything else means this kernel does not provide aio at all.
-    ResponseCode error = ResponseCode::Success;
+    common::ResponseCode error = common::ResponseCode::Success;
 };
 
 // Create a one-event context, then destroy it.
@@ -64,7 +64,7 @@ class LibaioProbe
     // cannot build.
     //
     // ONE WAY. Demotes available -> unavailable and never back, so the answer cannot flap.
-    void mark_unavailable(ResponseCode reason);
+    void mark_unavailable(common::ResponseCode reason);
 
     // The process-wide instance, which is the one production uses.
     static LibaioProbe & instance();
@@ -75,4 +75,4 @@ class LibaioProbe
     LibaioCapability _capability;
 };
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

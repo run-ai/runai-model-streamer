@@ -6,7 +6,7 @@
 
 #include "utils/logging/logging.h"
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 namespace
@@ -90,4 +90,4 @@ std::string alignment_diagnosis(const Requested & requested, const Limits & limi
     return ss.str();
 }
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

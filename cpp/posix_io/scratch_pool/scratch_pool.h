@@ -4,7 +4,7 @@
 #include <memory>
 #include <vector>
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 // Aligned buffers for reading the partial blocks at the edges of a region.
@@ -48,4 +48,4 @@ class ScratchPool
     std::vector<char *> _free;
 };
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

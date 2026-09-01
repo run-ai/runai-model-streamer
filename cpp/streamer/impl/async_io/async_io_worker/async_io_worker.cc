@@ -36,11 +36,11 @@ constexpr unsigned WaitTimeoutMs = 50;
 
 } // namespace
 
-AsyncIoWorker::AsyncIoWorker(common::posix_io::Strategy strategy, EngineFactory factory) :
+AsyncIoWorker::AsyncIoWorker(posix_io::Strategy strategy, EngineFactory factory) :
     _strategy(strategy),
     _factory(std::move(factory))
 {
-    ASSERT(common::posix_io::is_async(strategy))
+    ASSERT(posix_io::is_async(strategy))
         << strategy << " is served by the synchronous pool, not by an engine";
 }
 
@@ -75,7 +75,7 @@ std::size_t AsyncIoWorker::capacity(const Workload & first)
     // the window size the base wants IS the engine's depth. One moment, one place.
     _settings.emplace(*first.batches().front().config);
 
-    common::posix_io::AsyncIoConfig config;
+    posix_io::AsyncIoConfig config;
     config.depth = _settings->depth();
     config.chunk_bytesize = _settings->chunk_bytesize();
 
@@ -99,10 +99,10 @@ std::size_t AsyncIoWorker::capacity(const Workload & first)
     // One block-sized buffer per in-flight read, so a bounced pass can always get one and there is no
     // limit to enforce. At depth 512 and a 4096-byte block that is 2 MB. Only a direct strategy ever
     // bounces, so a buffered engine builds none.
-    if (common::posix_io::is_direct(_strategy))
+    if (posix_io::is_direct(_strategy))
     {
-        _scratch = std::make_unique<common::posix_io::ScratchPool>(
-            _engine->depth(), common::posix_io::block_size(_engine->limits()));
+        _scratch = std::make_unique<posix_io::ScratchPool>(
+            _engine->depth(), posix_io::block_size(_engine->limits()));
     }
 
     return _engine->depth();
@@ -209,7 +209,7 @@ void AsyncIoWorker::enqueue(Workload && workload)
 
 bool AsyncIoWorker::wants_direct(size_t file_offset, const char * buffer) const
 {
-    if (!common::posix_io::is_direct(_strategy))
+    if (!posix_io::is_direct(_strategy))
     {
         return false;
     }
@@ -218,9 +218,9 @@ bool AsyncIoWorker::wants_direct(size_t file_offset, const char * buffer) const
     // because the file offset is fixed by the file's own layout. When that happens no part of the
     // region can be read directly, so O_DIRECT would copy every byte on this one thread. Buffered I/O
     // copies too, and the kernel does it, and adds readahead - so buffered wins.
-    const auto block = common::posix_io::block_size(_engine->limits());
+    const auto block = posix_io::block_size(_engine->limits());
 
-    if (!common::posix_io::is_congruent(file_offset, buffer, block))
+    if (!posix_io::is_congruent(file_offset, buffer, block))
     {
         LOG(DEBUG) << "Reading buffered: offset " << file_offset << " and destination are not"
                    << " congruent for block " << block << ", so no part of this file could be read"
@@ -303,7 +303,7 @@ size_t AsyncIoWorker::bytes_read() const
     return _bytes_read.load(std::memory_order_relaxed);
 }
 
-common::posix_io::FileRef AsyncIoWorker::file_of(const InflightChunk & entry) const
+posix_io::FileRef AsyncIoWorker::file_of(const InflightChunk & entry) const
 {
     // The file this request was staged against, rebuilt from what the worker already recorded. The
     // engine cannot supply it: a completion carries only the id.
@@ -314,14 +314,14 @@ common::posix_io::FileRef AsyncIoWorker::file_of(const InflightChunk & entry) co
     const auto wlit = _inflight.find(entry.workload_id);
     if (wlit == _inflight.end() || entry.batch_index >= wlit->second.fds.size())
     {
-        return common::posix_io::FileRef{};
+        return posix_io::FileRef{};
     }
 
     const auto & batch_fd = wlit->second.fds[entry.batch_index];
-    return common::posix_io::FileRef{ batch_fd.fd, batch_fd.direct };
+    return posix_io::FileRef{ batch_fd.fd, batch_fd.direct };
 }
 
-size_t AsyncIoWorker::land_bounced_pass(common::posix_io::RequestId id, size_t bytes_transferred)
+size_t AsyncIoWorker::land_bounced_pass(posix_io::RequestId id, size_t bytes_transferred)
 {
     auto * entry = _chunks.find_mutable(id);
     ASSERT(entry != nullptr) << "landing a bounced pass for an unknown request " << id;
@@ -462,7 +462,7 @@ bool AsyncIoWorker::readable_file(int fd, const std::string & path)
     return false;
 }
 
-void AsyncIoWorker::stage_pending(common::posix_io::RequestId id)
+void AsyncIoWorker::stage_pending(posix_io::RequestId id)
 {
     const auto * entry = _chunks.find(id);
     ASSERT(entry != nullptr) << "staging request " << id << " with no in-flight record";
@@ -495,13 +495,13 @@ void AsyncIoWorker::stage_pending(common::posix_io::RequestId id)
 
     // What the file WAS opened as, not what the strategy wanted. A direct open can fall back per file.
     const bool direct = wlit->second.fds[entry->batch_index].direct;
-    const common::posix_io::FileRef file{ fd, direct };
+    const posix_io::FileRef file{ fd, direct };
 
     // A buffered read is issued exactly as asked. A direct one is cut to what the kernel will accept,
     // which may mean reading one block into scratch and copying the wanted part out.
     auto pass = DirectPass{ pending.offset, pending.bytesize, pending.buffer, nullptr, 0, 0 };
 
-    if (direct && !plan_direct_pass(pending, common::posix_io::block_size(_engine->limits()), pass))
+    if (direct && !plan_direct_pass(pending, posix_io::block_size(_engine->limits()), pass))
     {
         // No scratch was free. Not expected - there is one per in-flight read - but failing the whole
         // read over it would be worse than reading a little less this pass.
@@ -604,8 +604,8 @@ void AsyncIoWorker::drain_batch(std::atomic<bool> & stopped)
     // Non-blocking still HARVESTS whatever is ready - it just does not sleep - so nothing is delayed
     // by taking this path.
     const bool window_full = _engine != nullptr && _issued >= _engine->depth();
-    const auto mode = (_issued > 0 && window_full) ? common::posix_io::WaitMode::Block
-                                                   : common::posix_io::WaitMode::NonBlocking;
+    const auto mode = (_issued > 0 && window_full) ? posix_io::WaitMode::Block
+                                                   : posix_io::WaitMode::NonBlocking;
 
     unsigned count = 0;
     const auto ret = _engine->wait_for_completions(_completions.data(), _completions.size(), count, mode, WaitTimeoutMs);
@@ -646,7 +646,7 @@ void AsyncIoWorker::drain_batch(std::atomic<bool> & stopped)
             // (completion_mapper.h). The engine holds only the id when a completion arrives, so it
             // cannot tell the two apart. This worker can: it opened the file and recorded how.
             const auto file = file_of(*entry);
-            const auto code = common::posix_io::map_completion(completion.res, file);
+            const auto code = posix_io::map_completion(completion.res, file);
 
             // Give the scratch back before failing, or the pool drains one buffer per failed read.
             if (char * scratch = _chunks.clear_bounce(completion.id))
@@ -689,7 +689,7 @@ void AsyncIoWorker::drain_batch(std::atomic<bool> & stopped)
     }
 }
 
-void AsyncIoWorker::complete_chunk(common::posix_io::RequestId id, common::ResponseCode ret)
+void AsyncIoWorker::complete_chunk(posix_io::RequestId id, common::ResponseCode ret)
 {
     const auto * entry = _chunks.find(id);
     ASSERT(entry != nullptr) << "completing request " << id << " twice";
@@ -834,7 +834,7 @@ void AsyncIoWorker::quiesce()
     {
         unsigned count = 0;
         const auto ret = _engine->wait_for_completions(_completions.data(), _completions.size(),
-                                                       count, common::posix_io::WaitMode::Block,
+                                                       count, posix_io::WaitMode::Block,
                                                        WaitTimeoutMs);
         if (ret != common::ResponseCode::Success)
         {

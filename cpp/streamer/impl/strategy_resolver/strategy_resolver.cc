@@ -15,7 +15,7 @@ namespace runai::llm::streamer::impl
 namespace
 {
 
-using common::posix_io::Strategy;
+using posix_io::Strategy;
 
 // Why this candidate cannot serve, or Success if it can.
 //
@@ -35,13 +35,13 @@ common::ResponseCode availability_of(Strategy strategy)
         // Both use the same ring. What differs is how each FILE is opened, and that is decided when it
         // is opened - it depends on the mount, and on whether the destination is congruent with the
         // file offset. So availability here asks only whether this host has io_uring at all.
-        return common::posix_io::IoUringProbe::instance().capability().error;
+        return posix_io::IoUringProbe::instance().capability().error;
 
     case Strategy::LibaioDirect:
         // Almost always available - Docker's default seccomp profile does not block io_setup, unlike
         // io_uring_setup. Probed anyway, because /proc/sys/fs/aio-max-nr is node wide and shared with
         // every other pod, so a busy node can refuse a context however healthy the kernel is.
-        return common::posix_io::LibaioProbe::instance().capability().error;
+        return posix_io::LibaioProbe::instance().capability().error;
     }
 
     return common::ResponseCode::UnknownError;
@@ -61,7 +61,7 @@ common::ResponseCode StrategyResolver::set_candidates(const std::string & candid
     // Parse before deciding anything, so a typo is reported as a typo rather than as a conflict.
     try
     {
-        (void)common::posix_io::parse_candidates(candidates);
+        (void)posix_io::parse_candidates(candidates);
     }
     catch (const common::Exception & e)
     {
@@ -115,7 +115,7 @@ common::ResponseCode StrategyResolver::resolve_locked()
     std::vector<Strategy> list;
     try
     {
-        list = common::posix_io::parse_candidates(candidates);
+        list = posix_io::parse_candidates(candidates);
     }
     catch (const common::Exception & e)
     {
@@ -151,7 +151,7 @@ common::ResponseCode StrategyResolver::resolve_locked()
     return common::ResponseCode::FsStrategyUnavailable;
 }
 
-common::posix_io::Strategy StrategyResolver::resolved() const
+posix_io::Strategy StrategyResolver::resolved() const
 {
     const auto guard = std::unique_lock<std::mutex>(_mutex);
     ASSERT(_resolved.has_value()) << "filesystem strategy read before it was resolved";

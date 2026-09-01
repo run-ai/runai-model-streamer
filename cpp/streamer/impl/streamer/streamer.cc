@@ -208,7 +208,7 @@ common::ResponseCode Streamer::set_fs_strategy(const std::string & candidates)
     return _strategy_resolver->set_candidates(candidates);
 }
 
-common::posix_io::Strategy Streamer::fs_strategy() const
+posix_io::Strategy Streamer::fs_strategy() const
 {
     return _strategy_resolver->resolved();
 }
@@ -479,7 +479,7 @@ common::ResponseCode Streamer::async_request(
             {
                 const int group = i < group_by_file.size() ? group_by_file[i] : -1;
                 stats.files.push_back({ request[i].path,
-                                        group < 0 ? common::posix_io::Strategy::SyncBuffered
+                                        group < 0 ? posix_io::Strategy::SyncBuffered
                                                   : _strategy_resolver->resolved() });
             }
         }
@@ -575,7 +575,7 @@ std::vector<int> Streamer::file_groups(const std::vector<FileRanges> & request,
     std::vector<int> group_by_file(request.size(), -1);
     out_devices.clear();
 
-    if (!common::posix_io::is_async(_strategy_resolver->resolved()))
+    if (!posix_io::is_async(_strategy_resolver->resolved()))
     {
         return group_by_file;   // the synchronous reader serves everything
     }
@@ -643,7 +643,7 @@ std::vector<int> Streamer::file_groups(const std::vector<FileRanges> & request,
     // libaio has no asynchronous buffered mode, so a file it cannot read directly must be routed away
     // before dispatch. Every other async strategy keeps its files whatever this would have said - see
     // reads_directly().
-    const bool check_direct = _strategy_resolver->resolved() == common::posix_io::Strategy::LibaioDirect;
+    const bool check_direct = _strategy_resolver->resolved() == posix_io::Strategy::LibaioDirect;
 
     for (size_t i = 0; i < request.size(); ++i)
     {
@@ -684,7 +684,7 @@ std::vector<int> Streamer::file_groups(const std::vector<FileRanges> & request,
 
 bool Streamer::reads_directly(const FileRanges & file, dev_t device)
 {
-    const auto block = common::posix_io::DirectBlockSize;
+    const auto block = posix_io::DirectBlockSize;
 
     for (const auto & range : file.ranges)
     {
@@ -695,7 +695,7 @@ bool Streamer::reads_directly(const FileRanges & file, dev_t device)
             continue;
         }
 
-        if (!common::posix_io::is_congruent(range.offset, range.dst, block))
+        if (!posix_io::is_congruent(range.offset, range.dst, block))
         {
             // No PART of this range can be read directly - not the middle, not one block of it. So
             // the worker would open the file buffered, and under libaio that is a serial read.
@@ -708,7 +708,7 @@ bool Streamer::reads_directly(const FileRanges & file, dev_t device)
     const auto support = _environment.direct ? _environment.direct(device, file.path)
                                              : _mounts.direct_support(device, file.path);
 
-    if (support == common::posix_io::DirectSupport::No)
+    if (support == posix_io::DirectSupport::No)
     {
         LOG(DEBUG) << "Reading " << file.path << " with the synchronous reader: its mount cannot"
                    << " serve O_DIRECT, and libaio without O_DIRECT reads one file at a time";

@@ -14,7 +14,7 @@
 #include "utils/random/random.h"
 #include "utils/temp/file/file.h"
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 namespace
@@ -224,4 +224,4 @@ TEST(MountCapabilities, A_Directory_Is_Not_A_Valid_Probe_Target)
     }
 }
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

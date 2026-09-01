@@ -12,7 +12,7 @@ namespace runai::llm::streamer::impl
 namespace
 {
 
-using common::posix_io::Strategy;
+using posix_io::Strategy;
 
 SubmissionStats made(SubmissionId id, unsigned shared_mounts = 0)
 {

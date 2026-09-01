@@ -36,7 +36,7 @@ namespace runai::llm::streamer::impl
 // Same shape as ObjectStorageWorker's ObjectChunk, so the two can share a base later.
 struct QueuedChunk
 {
-    common::posix_io::RequestId id = 0;
+    posix_io::RequestId id = 0;
     size_t offset = 0;
     size_t bytesize = 0;
     char * buffer = nullptr;
@@ -59,11 +59,11 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     //
     // Injectable so tests can drive the worker with MockIoEngine - the same shape as
     // ObjectStorageWorker's credentials provider, and for the same reason. Production passes nothing.
-    using EngineFactory = std::function<std::unique_ptr<common::posix_io::IoEngine>(
-                              common::posix_io::Strategy, const common::posix_io::AsyncIoConfig &)>;
+    using EngineFactory = std::function<std::unique_ptr<posix_io::IoEngine>(
+                              posix_io::Strategy, const posix_io::AsyncIoConfig &)>;
 
-    explicit AsyncIoWorker(common::posix_io::Strategy strategy,
-                           EngineFactory factory = common::posix_io::make_io_engine);
+    explicit AsyncIoWorker(posix_io::Strategy strategy,
+                           EngineFactory factory = posix_io::make_io_engine);
     ~AsyncIoWorker() override;
 
     // Bytes copied out of a scratch buffer, over this worker's life.
@@ -176,7 +176,7 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
 
     // Stage the outstanding part of a request - the whole chunk the first time, the remainder after a
     // short read. Resolves it here if it cannot be staged, since no completion would then arrive.
-    void stage_pending(common::posix_io::RequestId id);
+    void stage_pending(posix_io::RequestId id);
 
     // Push each batch's aggregate result: the whole-workload code if non-Success, else that file's
     // recorded error.
@@ -184,7 +184,7 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
 
     // Account every task a landed chunk covered - one read carried them all, so they share its
     // outcome - and finalize the workload once its last task lands.
-    void complete_chunk(common::posix_io::RequestId id, common::ResponseCode ret);
+    void complete_chunk(posix_io::RequestId id, common::ResponseCode ret);
 
     // The batch's descriptor, opening it on first use. Returns -1 and sets out_error if it cannot be
     // opened - that is this file's failure, not the storage's.
@@ -266,9 +266,9 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     // Needed to map a failed completion: EINVAL means our alignment rule broke on a direct fd, and
     // something else on a buffered one. The engine cannot decide that, because a completion carries
     // only the id, so this worker does it.
-    common::posix_io::FileRef file_of(const InflightChunk & entry) const;
+    posix_io::FileRef file_of(const InflightChunk & entry) const;
 
-    size_t land_bounced_pass(common::posix_io::RequestId id, size_t bytes_transferred);
+    size_t land_bounced_pass(posix_io::RequestId id, size_t bytes_transferred);
 
     void finalize(InflightMap::iterator it, common::ResponseCode code);
 
@@ -278,7 +278,7 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
 
     void abort_all(common::ResponseCode code);
 
-    const common::posix_io::Strategy _strategy;
+    const posix_io::Strategy _strategy;
     const EngineFactory _factory;
 
     // Why the engine could not be built, for discard() to report. Reset after use so the next workload
@@ -287,10 +287,10 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
 
     // Block-sized buffers for the partial blocks at the edges of a region. Empty on a buffered
     // engine, which never bounces.
-    std::unique_ptr<common::posix_io::ScratchPool> _scratch;
+    std::unique_ptr<posix_io::ScratchPool> _scratch;
 
     std::optional<AsyncIoSettings> _settings;          // resolved with the engine, on the first workload
-    std::unique_ptr<common::posix_io::IoEngine> _engine;
+    std::unique_ptr<posix_io::IoEngine> _engine;
 
     InflightChunks _chunks;   // id -> chunk, its progress, and where to route it
     InflightMap _inflight;
@@ -337,7 +337,7 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     bool _warned_about_bouncing = false;
 
     // Harvested into on every drain, sized once - nothing is allocated while completing.
-    std::vector<common::posix_io::Completion> _completions;
+    std::vector<posix_io::Completion> _completions;
 };
 
 // Every async worker the streamer has created, so their counters can be summed.

@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 namespace
@@ -21,10 +21,10 @@ FileRef direct()   { return FileRef{ 7, true  }; }
 // arrived, which only the caller knows.
 TEST(CompletionMapper, Non_Negative_Is_Success)
 {
-    EXPECT_EQ(map_completion(4096, buffered()), ResponseCode::Success);
-    EXPECT_EQ(map_completion(1, buffered()), ResponseCode::Success);
-    EXPECT_EQ(map_completion(0, buffered()), ResponseCode::Success);
-    EXPECT_EQ(map_completion(0, direct()), ResponseCode::Success);
+    EXPECT_EQ(map_completion(4096, buffered()), common::ResponseCode::Success);
+    EXPECT_EQ(map_completion(1, buffered()), common::ResponseCode::Success);
+    EXPECT_EQ(map_completion(0, buffered()), common::ResponseCode::Success);
+    EXPECT_EQ(map_completion(0, direct()), common::ResponseCode::Success);
 }
 
 // Attributable to this file. Other files, and other submissions, carry on.
@@ -36,8 +36,8 @@ TEST(CompletionMapper, Storage_Errors_Are_Per_File)
 {
     for (const long err : { EIO, ENXIO, ESTALE, ETIMEDOUT, ECONNRESET, EREMOTEIO })
     {
-        EXPECT_EQ(map_completion(-err, buffered()), ResponseCode::FileAccessError) << "errno " << err;
-        EXPECT_EQ(map_completion(-err, direct()), ResponseCode::FileAccessError) << "errno " << err;
+        EXPECT_EQ(map_completion(-err, buffered()), common::ResponseCode::FileAccessError) << "errno " << err;
+        EXPECT_EQ(map_completion(-err, direct()), common::ResponseCode::FileAccessError) << "errno " << err;
     }
 }
 
@@ -45,8 +45,8 @@ TEST(CompletionMapper, Storage_Errors_Are_Per_File)
 // investigate the wrong system.
 TEST(CompletionMapper, Cancelled_Is_Finished_Not_File_Access)
 {
-    EXPECT_EQ(map_completion(-ECANCELED, buffered()), ResponseCode::FinishedError);
-    EXPECT_EQ(map_completion(-ECANCELED, direct()), ResponseCode::FinishedError);
+    EXPECT_EQ(map_completion(-ECANCELED, buffered()), common::ResponseCode::FinishedError);
+    EXPECT_EQ(map_completion(-ECANCELED, direct()), common::ResponseCode::FinishedError);
 }
 
 // EINVAL means our alignment contract broke - but only on a direct fd. On a buffered one it means
@@ -58,7 +58,7 @@ TEST(CompletionMapper, Einval_Is_Mode_Aware)
 
     // Buffered EINVAL falls through to the default branch, which is FileAccessError. On a buffered fd
     // EINVAL is not about alignment, so there is no reason to call it our bug.
-    EXPECT_EQ(map_completion(-EINVAL, buffered()), ResponseCode::FileAccessError);
+    EXPECT_EQ(map_completion(-EINVAL, buffered()), common::ResponseCode::FileAccessError);
 }
 
 // The engine never opens or closes anything, so a bad fd can only be our own bookkeeping.
@@ -80,10 +80,10 @@ TEST(CompletionMapper, Our_Bugs_Are_Not_Storage_Errors)
 // predicate alone missed this - the mapper asserted here, and ASSERT is fatal in every build.
 TEST(CompletionMapper, Internal_Errors_Return_Unknown_Rather_Than_Throwing)
 {
-    EXPECT_EQ(map_completion(-EFAULT, buffered()), ResponseCode::UnknownError);
-    EXPECT_EQ(map_completion(-EBADF, buffered()), ResponseCode::UnknownError);
-    EXPECT_EQ(map_completion(-EFAULT, direct()), ResponseCode::UnknownError);
-    EXPECT_EQ(map_completion(-EINVAL, direct()), ResponseCode::UnknownError);
+    EXPECT_EQ(map_completion(-EFAULT, buffered()), common::ResponseCode::UnknownError);
+    EXPECT_EQ(map_completion(-EBADF, buffered()), common::ResponseCode::UnknownError);
+    EXPECT_EQ(map_completion(-EFAULT, direct()), common::ResponseCode::UnknownError);
+    EXPECT_EQ(map_completion(-EINVAL, direct()), common::ResponseCode::UnknownError);
 
     EXPECT_NO_THROW(map_completion(-EINVAL, direct()));
     EXPECT_NO_THROW(map_completion(-EBADF, direct()));
@@ -104,23 +104,23 @@ TEST(CompletionMapper, Internal_Errors_Return_Unknown_Rather_Than_Throwing)
 // the whole submission was abandoned. The synchronous reader has always reported it per file.
 TEST(CompletionMapper, Unrecognised_Errno_Is_Attributed_To_The_File)
 {
-    EXPECT_EQ(map_completion(-EISDIR, buffered()), ResponseCode::FileAccessError);
-    EXPECT_EQ(map_completion(-ENOSPC, buffered()), ResponseCode::FileAccessError);
-    EXPECT_EQ(map_completion(-EPERM, buffered()), ResponseCode::FileAccessError);
+    EXPECT_EQ(map_completion(-EISDIR, buffered()), common::ResponseCode::FileAccessError);
+    EXPECT_EQ(map_completion(-ENOSPC, buffered()), common::ResponseCode::FileAccessError);
+    EXPECT_EQ(map_completion(-EPERM, buffered()), common::ResponseCode::FileAccessError);
 }
 
 // UnknownError must be EARNED. Only the results we can prove are ours get it, and nothing else does.
 TEST(CompletionMapper, Only_Our_Own_Bugs_Are_Unknown_Errors)
 {
-    EXPECT_EQ(map_completion(-EFAULT, buffered()), ResponseCode::UnknownError);
-    EXPECT_EQ(map_completion(-EBADF, buffered()), ResponseCode::UnknownError);
-    EXPECT_EQ(map_completion(-EINVAL, direct()), ResponseCode::UnknownError);
+    EXPECT_EQ(map_completion(-EFAULT, buffered()), common::ResponseCode::UnknownError);
+    EXPECT_EQ(map_completion(-EBADF, buffered()), common::ResponseCode::UnknownError);
+    EXPECT_EQ(map_completion(-EINVAL, direct()), common::ResponseCode::UnknownError);
 
     // Everything else, including errnos nobody listed anywhere.
     for (const long err : { EISDIR, ENOSPC, EPERM, EACCES, ENOTDIR, ELOOP, EOVERFLOW })
     {
-        EXPECT_EQ(map_completion(-err, buffered()), ResponseCode::FileAccessError) << "errno " << err;
-        EXPECT_EQ(map_completion(-err, direct()), ResponseCode::FileAccessError) << "errno " << err;
+        EXPECT_EQ(map_completion(-err, buffered()), common::ResponseCode::FileAccessError) << "errno " << err;
+        EXPECT_EQ(map_completion(-err, direct()), common::ResponseCode::FileAccessError) << "errno " << err;
     }
 }
 
@@ -128,7 +128,7 @@ TEST(CompletionMapper, Only_Our_Own_Bugs_Are_Unknown_Errors)
 // is deliberately no row for it. Asserted so that adding one is a conscious act.
 TEST(CompletionMapper, Eintr_Has_No_Special_Row)
 {
-    EXPECT_EQ(map_completion(-EINTR, buffered()), ResponseCode::FileAccessError);
+    EXPECT_EQ(map_completion(-EINTR, buffered()), common::ResponseCode::FileAccessError);
 }
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

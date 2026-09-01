@@ -5,7 +5,7 @@
 #include <cerrno>
 #include <vector>
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 namespace
@@ -49,7 +49,7 @@ std::vector<Completion> drain(MockIoEngine & engine, WaitMode mode = WaitMode::N
     std::vector<Completion> out(max);
     unsigned count = 0;
 
-    EXPECT_EQ(engine.wait_for_completions(out.data(), max, count, mode), ResponseCode::Success);
+    EXPECT_EQ(engine.wait_for_completions(out.data(), max, count, mode), common::ResponseCode::Success);
 
     out.resize(count);
     return out;
@@ -62,7 +62,7 @@ TEST(MockIoEngine, StagedIsNotIssued)
     MockIoEngine engine(Depth);
     Destination dst;
 
-    EXPECT_EQ(engine.stage(0, FileRef{ 7, false }, 1024, Bytes, dst.buffer()), ResponseCode::Success);
+    EXPECT_EQ(engine.stage(0, FileRef{ 7, false }, 1024, Bytes, dst.buffer()), common::ResponseCode::Success);
 
     // stage() need not issue a syscall - that is why flush() exists - so nothing is in flight yet.
     EXPECT_EQ(engine.staged_count(), 1);
@@ -88,7 +88,7 @@ TEST(MockIoEngine, FlushIssuesEverythingByDefault)
     engine.stage(1, FileRef{ 1, false }, Bytes, Bytes, b.buffer());
 
     unsigned issued = 0;
-    EXPECT_EQ(engine.flush(issued), ResponseCode::Success);
+    EXPECT_EQ(engine.flush(issued), common::ResponseCode::Success);
     EXPECT_EQ(issued, 2);
 
     EXPECT_EQ(engine.staged_count(), 0);
@@ -110,13 +110,13 @@ TEST(MockIoEngine, PartialFlushIssuesAPrefixAndKeepsTheTail)
     engine.set_flush_limit(2);
 
     unsigned issued = 0;
-    EXPECT_EQ(engine.flush(issued), ResponseCode::Success);
+    EXPECT_EQ(engine.flush(issued), common::ResponseCode::Success);
     EXPECT_EQ(issued, 2);
     EXPECT_EQ(engine.in_flight(), (std::vector<RequestId>{ 0, 1 }));
     EXPECT_EQ(engine.staged(), (std::vector<RequestId>{ 2, 3 }));
 
     // The rest is retried on the next flush, in order.
-    EXPECT_EQ(engine.flush(issued), ResponseCode::Success);
+    EXPECT_EQ(engine.flush(issued), common::ResponseCode::Success);
     EXPECT_EQ(issued, 2);
     EXPECT_EQ(engine.in_flight(), (std::vector<RequestId>{ 0, 1, 2, 3 }));
     EXPECT_TRUE(engine.staged().empty());
@@ -132,7 +132,7 @@ TEST(MockIoEngine, StalledFlushIssuesNothingAndIsNotAnError)
     engine.set_flush_stalled(true);
 
     unsigned issued = 0;
-    EXPECT_EQ(engine.flush(issued), ResponseCode::Success);
+    EXPECT_EQ(engine.flush(issued), common::ResponseCode::Success);
     EXPECT_EQ(issued, 0);
     EXPECT_EQ(engine.staged_count(), 1);
     EXPECT_EQ(engine.in_flight_count(), 0);
@@ -142,7 +142,7 @@ TEST(MockIoEngine, StalledFlushIssuesNothingAndIsNotAnError)
     EXPECT_TRUE(drain(engine).empty());
 
     engine.set_flush_stalled(false);
-    EXPECT_EQ(engine.flush(issued), ResponseCode::Success);
+    EXPECT_EQ(engine.flush(issued), common::ResponseCode::Success);
     EXPECT_EQ(issued, 1);
 }
 
@@ -264,7 +264,7 @@ TEST(MockIoEngine, FailureTransfersNothing)
 
     const auto completions = drain(engine);
     ASSERT_EQ(completions.size(), 1);
-    // The raw errno, as a real engine reports it. Turning it into a ResponseCode is the caller's
+    // The raw errno, as a real engine reports it. Turning it into a common::ResponseCode is the caller's
     // job, so the mock must not do it here.
     EXPECT_EQ(completions[0].res, -EIO);
     EXPECT_EQ(completions[0].bytes_transferred(), 0u);
@@ -281,9 +281,9 @@ TEST(MockIoEngine, RefusedStageIsNotRecorded)
     MockIoEngine engine(Depth);
     Destination dst;
 
-    engine.set_stage_result(ResponseCode::UnknownError);
+    engine.set_stage_result(common::ResponseCode::UnknownError);
 
-    EXPECT_EQ(engine.stage(0, FileRef{ 1, false }, 0, Bytes, dst.buffer()), ResponseCode::UnknownError);
+    EXPECT_EQ(engine.stage(0, FileRef{ 1, false }, 0, Bytes, dst.buffer()), common::ResponseCode::UnknownError);
     EXPECT_EQ(engine.staged_count(), 0);
     EXPECT_TRUE(engine.history().empty());
 }
@@ -294,10 +294,10 @@ TEST(MockIoEngine, FlushCanFail)
     Destination dst;
 
     engine.stage(0, FileRef{ 1, false }, 0, Bytes, dst.buffer());
-    engine.set_flush_result(ResponseCode::UnknownError);
+    engine.set_flush_result(common::ResponseCode::UnknownError);
 
     unsigned issued = 0;
-    EXPECT_EQ(engine.flush(issued), ResponseCode::UnknownError);
+    EXPECT_EQ(engine.flush(issued), common::ResponseCode::UnknownError);
     EXPECT_EQ(issued, 0);
     EXPECT_EQ(engine.staged_count(), 1);
 }
@@ -406,7 +406,7 @@ TEST(MockIoEngine, DirectStageIsAcceptedWhenAligned)
     MockIoEngine engine(Depth, direct_limits());
     AlignedDestination dst(Block);
 
-    EXPECT_EQ(engine.stage(1, FileRef{ 3, true }, Block, Block, dst.buffer()), ResponseCode::Success);
+    EXPECT_EQ(engine.stage(1, FileRef{ 3, true }, Block, Block, dst.buffer()), common::ResponseCode::Success);
 
     EXPECT_EQ(engine.misaligned_direct_stages(), 0u);
     EXPECT_EQ(engine.staged_count(), 1u);
@@ -423,7 +423,7 @@ TEST(MockIoEngine, DirectStageIsRefusedWhenAnyValueIsMisaligned)
         MockIoEngine engine(Depth, direct_limits());
 
         EXPECT_NE(engine.stage(1, FileRef{ 3, true }, Block + 1, Block, dst.buffer()),
-                  ResponseCode::Success);
+                  common::ResponseCode::Success);
 
         EXPECT_EQ(engine.misaligned_direct_stages(), 1u);
 
@@ -437,7 +437,7 @@ TEST(MockIoEngine, DirectStageIsRefusedWhenAnyValueIsMisaligned)
         MockIoEngine engine(Depth, direct_limits());
 
         EXPECT_NE(engine.stage(1, FileRef{ 3, true }, Block, Block - 8, dst.buffer()),
-                  ResponseCode::Success);
+                  common::ResponseCode::Success);
 
         EXPECT_EQ(engine.misaligned_direct_stages(), 1u);
         EXPECT_EQ(engine.staged_count(), 0u);
@@ -448,7 +448,7 @@ TEST(MockIoEngine, DirectStageIsRefusedWhenAnyValueIsMisaligned)
         MockIoEngine engine(Depth, direct_limits());
 
         EXPECT_NE(engine.stage(1, FileRef{ 3, true }, Block, Block, dst.buffer() + 1),
-                  ResponseCode::Success);
+                  common::ResponseCode::Success);
 
         EXPECT_EQ(engine.misaligned_direct_stages(), 1u);
         EXPECT_EQ(engine.staged_count(), 0u);
@@ -463,7 +463,7 @@ TEST(MockIoEngine, BufferedStageIgnoresAlignment)
     AlignedDestination dst(Block);
 
     EXPECT_EQ(engine.stage(1, FileRef{ 3, false }, Block + 1, Block - 8, dst.buffer() + 1),
-              ResponseCode::Success);
+              common::ResponseCode::Success);
 
     EXPECT_EQ(engine.misaligned_direct_stages(), 0u);
     EXPECT_EQ(engine.staged_count(), 1u);
@@ -476,9 +476,9 @@ TEST(MockIoEngine, DefaultLimitsImposeNoAlignment)
     MockIoEngine engine(Depth);
     Destination dst;
 
-    EXPECT_EQ(engine.stage(1, FileRef{ 3, true }, 7, 13, dst.buffer() + 1), ResponseCode::Success);
+    EXPECT_EQ(engine.stage(1, FileRef{ 3, true }, 7, 13, dst.buffer() + 1), common::ResponseCode::Success);
 
     EXPECT_EQ(engine.misaligned_direct_stages(), 0u);
 }
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

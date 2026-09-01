@@ -8,7 +8,7 @@
 #include "posix_io/strategy/strategy.h"
 #include "common/response_code/response_code.h"
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 // Caller-assigned id, echoed back on the completion. Opaque to the engine: it is carried in
@@ -58,7 +58,7 @@ struct Completion
     //
     // io_uring and libaio both report a result this way, so the engines have nothing to convert.
     //
-    // RAW, and not a ResponseCode, because the engine cannot map it correctly on its own. Mapping
+    // RAW, and not a common::ResponseCode, because the engine cannot map it correctly on its own. Mapping
     // needs to know whether the fd was opened with O_DIRECT: EINVAL means an alignment bug on a
     // direct fd and something else on a buffered one (completion_mapper.h). At completion time the
     // engine holds only the id, and it keeps no per-file state - see FileRef above. The caller has
@@ -151,7 +151,7 @@ class IoEngine
     //
     // A non-Success return means nothing was staged and no completion will arrive; the caller has to
     // resolve the request itself.
-    virtual ResponseCode stage(RequestId id, FileRef file, size_t offset, size_t bytesize, char * buffer) = 0;
+    virtual common::ResponseCode stage(RequestId id, FileRef file, size_t offset, size_t bytesize, char * buffer) = 0;
 
     // Issue what is staged, in as few syscalls as possible, and report how many went out.
     //
@@ -160,7 +160,7 @@ class IoEngine
     // on this same thread, so spinning here deadlocks.
     //
     // So out_issued matters, and zero progress is backpressure, not an error.
-    virtual ResponseCode flush(unsigned & out_issued) = 0;
+    virtual common::ResponseCode flush(unsigned & out_issued) = 0;
 
     // Collect completions into a caller-owned array - nothing is allocated here.
     //
@@ -170,7 +170,7 @@ class IoEngine
     // An expired timeout is Success with out_count == 0, not an error - the same shape as finding
     // nothing ready. It is also the teardown wake-up: no other thread may touch the engine, so this
     // returning is the only way a waiting worker learns it should stop.
-    virtual ResponseCode wait_for_completions(Completion * out, unsigned max, unsigned & out_count,
+    virtual common::ResponseCode wait_for_completions(Completion * out, unsigned max, unsigned & out_count,
                                               WaitMode mode, unsigned timeout_ms = 0) = 0;
 
     // NO CANCELLATION, deliberately - there is no cancel_all() here.
@@ -216,4 +216,4 @@ size_t max_read_bytesize(size_t page_size);
 // This host's ceiling: max_read_bytesize(sysconf(_SC_PAGESIZE)).
 size_t max_read_bytesize();
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 namespace
@@ -186,4 +186,4 @@ TEST(Alignment, Diagnosis_Reports_Failed_Congruence)
     EXPECT_NE(message.find("congruent=no"), std::string::npos) << message;
 }
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

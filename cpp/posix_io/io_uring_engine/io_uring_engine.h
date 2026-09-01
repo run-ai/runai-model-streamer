@@ -7,7 +7,7 @@
 
 #include "posix_io/io_engine/io_engine.h"
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 // IoEngine over io_uring.
@@ -45,9 +45,9 @@ class IoUringEngine : public IoEngine
     // window can never exceed the queue.
     unsigned depth() const override;
 
-    ResponseCode stage(RequestId id, FileRef file, size_t offset, size_t bytesize, char * buffer) override;
-    ResponseCode flush(unsigned & out_issued) override;
-    ResponseCode wait_for_completions(Completion * out, unsigned max, unsigned & out_count,
+    common::ResponseCode stage(RequestId id, FileRef file, size_t offset, size_t bytesize, char * buffer) override;
+    common::ResponseCode flush(unsigned & out_issued) override;
+    common::ResponseCode wait_for_completions(Completion * out, unsigned max, unsigned & out_count,
                                       WaitMode mode, unsigned timeout_ms = 0) override;
 
     // Time spent inside io_uring_submit. Reported for the same reason libaio reports it, and so the
@@ -67,4 +67,4 @@ class IoUringEngine : public IoEngine
     unsigned _depth = 0;
 };
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

@@ -5,7 +5,7 @@
 #include "posix_io/io_engine/io_engine.h"
 #include "posix_io/strategy/strategy.h"
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 // Build the engine for this strategy, or return nullptr if the host cannot provide it - a blocked
@@ -26,4 +26,4 @@ namespace runai::llm::streamer::common::posix_io
 // depend on the interface - putting it there would be a dependency cycle.
 std::unique_ptr<IoEngine> make_io_engine(Strategy strategy, const AsyncIoConfig & config);
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

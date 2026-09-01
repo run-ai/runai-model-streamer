@@ -7,7 +7,7 @@
 
 #include "posix_io/strategy/strategy.h"
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 // The page sizes that matter, as constants - possible only because the page size is an argument.
@@ -85,4 +85,4 @@ TEST(Limits, DefaultAlignmentsAreOne)
     EXPECT_EQ(limits.buffer_alignment, 1);
 }
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

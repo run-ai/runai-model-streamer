@@ -16,7 +16,7 @@
 #include "utils/random/random.h"
 #include "utils/temp/file/file.h"
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 namespace
@@ -143,7 +143,7 @@ std::vector<Completion> reap(LibaioEngine & engine, unsigned count)
     {
         unsigned got = 0;
         EXPECT_EQ(engine.wait_for_completions(batch.data(), batch.size(), got, WaitMode::Block, 2000),
-                  ResponseCode::Success);
+                  common::ResponseCode::Success);
         out.insert(out.end(), batch.begin(), batch.begin() + got);
     }
 
@@ -166,10 +166,10 @@ TEST(LibaioEngine, Reads_A_Range)
     LibaioEngine engine(config_with(8));
 
     std::vector<char> got(1024);
-    ASSERT_EQ(engine.stage(7, fixture.ref(), 2048, got.size(), got.data()), ResponseCode::Success);
+    ASSERT_EQ(engine.stage(7, fixture.ref(), 2048, got.size(), got.data()), common::ResponseCode::Success);
 
     unsigned issued = 0;
-    ASSERT_EQ(engine.flush(issued), ResponseCode::Success);
+    ASSERT_EQ(engine.flush(issued), common::ResponseCode::Success);
     EXPECT_EQ(issued, 1);
 
     const auto completions = reap(engine, 1);
@@ -205,11 +205,11 @@ TEST(LibaioEngine, Submits_One_Read_Per_Call)
     for (unsigned i = 0; i < Reads; ++i)
     {
         ASSERT_EQ(engine.stage(300 + i, fixture.ref(), i * 512, 512, buffers[i].data()),
-                  ResponseCode::Success);
+                  common::ResponseCode::Success);
     }
 
     unsigned issued = 0;
-    ASSERT_EQ(engine.flush(issued), ResponseCode::Success);
+    ASSERT_EQ(engine.flush(issued), common::ResponseCode::Success);
 
     EXPECT_EQ(issued, Reads);
     EXPECT_EQ(engine.submit_stats().calls, Reads) << "one io_submit per read, always";
@@ -242,11 +242,11 @@ TEST(LibaioEngine, One_Wait_Returns_Every_Ready_Completion)
     std::vector<std::vector<char>> buffers(Reads, std::vector<char>(512));
     for (unsigned i = 0; i < Reads; ++i)
     {
-        ASSERT_EQ(engine.stage(i, fixture.ref(), i * 512, 512, buffers[i].data()), ResponseCode::Success);
+        ASSERT_EQ(engine.stage(i, fixture.ref(), i * 512, 512, buffers[i].data()), common::ResponseCode::Success);
     }
 
     unsigned issued = 0;
-    ASSERT_EQ(engine.flush(issued), ResponseCode::Success);
+    ASSERT_EQ(engine.flush(issued), common::ResponseCode::Success);
     ASSERT_EQ(issued, Reads);
 
     // Let every read finish, so that several really are ready at the same moment - which is the state
@@ -260,7 +260,7 @@ TEST(LibaioEngine, One_Wait_Returns_Every_Ready_Completion)
     unsigned count = 0;
     ASSERT_EQ(engine.wait_for_completions(completions.data(), completions.size(), count,
                                           WaitMode::NonBlocking),
-              ResponseCode::Success);
+              common::ResponseCode::Success);
 
     EXPECT_EQ(count, Reads) << "one call must collect every completion that is ready, not just the first";
 }
@@ -279,11 +279,11 @@ TEST(LibaioEngine, Iocbs_Are_Reused_Across_Many_Rounds)
     {
         std::vector<char> got(256);
         ASSERT_EQ(engine.stage(round, fixture.ref(), round * 256, got.size(), got.data()),
-                  ResponseCode::Success)
+                  common::ResponseCode::Success)
             << "stage refused at round " << round << " - an iocb was not returned to the free list";
 
         unsigned issued = 0;
-        ASSERT_EQ(engine.flush(issued), ResponseCode::Success);
+        ASSERT_EQ(engine.flush(issued), common::ResponseCode::Success);
         ASSERT_EQ(issued, 1);
 
         const auto completions = reap(engine, 1);
@@ -302,16 +302,16 @@ TEST(LibaioEngine, Staging_Past_The_Depth_Is_Refused_Rather_Than_Fatal)
     std::vector<std::vector<char>> buffers(Depth + 1, std::vector<char>(256));
     for (unsigned i = 0; i < Depth; ++i)
     {
-        ASSERT_EQ(engine.stage(i, fixture.ref(), 0, 256, buffers[i].data()), ResponseCode::Success);
+        ASSERT_EQ(engine.stage(i, fixture.ref(), 0, 256, buffers[i].data()), common::ResponseCode::Success);
     }
 
     // The caller's window makes this unreachable. It is reported rather than asserted because killing
     // the host process over a broken invariant is worse than failing one read.
     EXPECT_EQ(engine.stage(Depth, fixture.ref(), 0, 256, buffers[Depth].data()),
-              ResponseCode::UnknownError);
+              common::ResponseCode::UnknownError);
 
     unsigned issued = 0;
-    ASSERT_EQ(engine.flush(issued), ResponseCode::Success);
+    ASSERT_EQ(engine.flush(issued), common::ResponseCode::Success);
     reap(engine, Depth);
 }
 
@@ -330,20 +330,20 @@ TEST(LibaioEngine, A_Refused_Read_Does_Not_Block_The_Ones_Behind_It)
 
     std::vector<char> first(256), second(256), third(256);
 
-    ASSERT_EQ(engine.stage(1, fixture.ref(), 0, first.size(), first.data()), ResponseCode::Success);
+    ASSERT_EQ(engine.stage(1, fixture.ref(), 0, first.size(), first.data()), common::ResponseCode::Success);
     ASSERT_EQ(engine.stage(2, FileRef{ -1, false }, 0, second.size(), second.data()),
-              ResponseCode::Success);
-    ASSERT_EQ(engine.stage(3, fixture.ref(), 1024, third.size(), third.data()), ResponseCode::Success);
+              common::ResponseCode::Success);
+    ASSERT_EQ(engine.stage(3, fixture.ref(), 1024, third.size(), third.data()), common::ResponseCode::Success);
 
     // Pass one: the good head goes out, io_submit refuses the bad fd, and flush answers it as a
     // synthetic completion inside this same call. Success, because the flush itself did not fail -
     // a failure would make the worker abort every read on this engine.
     unsigned issued = 0;
-    ASSERT_EQ(engine.flush(issued), ResponseCode::Success);
+    ASSERT_EQ(engine.flush(issued), common::ResponseCode::Success);
     EXPECT_EQ(issued, 1) << "only the good head should have been issued";
 
     // Pass two: the read that was behind the bad one goes out normally - it was never stuck.
-    ASSERT_EQ(engine.flush(issued), ResponseCode::Success);
+    ASSERT_EQ(engine.flush(issued), common::ResponseCode::Success);
     EXPECT_EQ(issued, 1) << "the read behind the refused one must still go out";
 
     const auto completions = reap(engine, 3);
@@ -376,10 +376,10 @@ TEST(LibaioEngine, A_Short_Read_Is_Not_An_Error)
     // Ask for more than the file holds. The kernel returns what there was, as a small positive
     // number - which is why a caller may never read "no error" as "all the bytes arrived".
     std::vector<char> got(Bytesize * 2);
-    ASSERT_EQ(engine.stage(1, fixture.ref(), 0, got.size(), got.data()), ResponseCode::Success);
+    ASSERT_EQ(engine.stage(1, fixture.ref(), 0, got.size(), got.data()), common::ResponseCode::Success);
 
     unsigned issued = 0;
-    ASSERT_EQ(engine.flush(issued), ResponseCode::Success);
+    ASSERT_EQ(engine.flush(issued), common::ResponseCode::Success);
 
     const auto completions = reap(engine, 1);
     ASSERT_EQ(completions.size(), 1);
@@ -392,7 +392,7 @@ TEST(LibaioEngine, Flushing_Nothing_Is_Success)
     LibaioEngine engine(config_with(4));
 
     unsigned issued = 0;
-    EXPECT_EQ(engine.flush(issued), ResponseCode::Success);
+    EXPECT_EQ(engine.flush(issued), common::ResponseCode::Success);
     EXPECT_EQ(issued, 0);
     EXPECT_EQ(engine.submit_stats().calls, 0) << "an empty flush should not call io_submit at all";
 }
@@ -405,7 +405,7 @@ TEST(LibaioEngine, A_Non_Blocking_Wait_With_Nothing_In_Flight_Returns_At_Once)
     unsigned count = 7;
 
     EXPECT_EQ(engine.wait_for_completions(completions, 4, count, WaitMode::NonBlocking),
-              ResponseCode::Success);
+              common::ResponseCode::Success);
     EXPECT_EQ(count, 0);
 }
 
@@ -420,7 +420,7 @@ TEST(LibaioEngine, An_Expired_Wait_Is_Success_With_Nothing)
     // not look like an error. It is also the teardown wake-up: nothing else may touch the engine, so
     // this returning is the only way a waiting worker learns it should stop.
     EXPECT_EQ(engine.wait_for_completions(completions, 4, count, WaitMode::Block, 50),
-              ResponseCode::Success);
+              common::ResponseCode::Success);
     EXPECT_EQ(count, 0);
 }
 
@@ -453,10 +453,10 @@ TEST(LibaioEngine, Submit_Time_Is_Measured)
     LibaioEngine engine(config_with(4));
 
     std::vector<char> got(256);
-    ASSERT_EQ(engine.stage(1, fixture.ref(), 0, got.size(), got.data()), ResponseCode::Success);
+    ASSERT_EQ(engine.stage(1, fixture.ref(), 0, got.size(), got.data()), common::ResponseCode::Success);
 
     unsigned issued = 0;
-    ASSERT_EQ(engine.flush(issued), ResponseCode::Success);
+    ASSERT_EQ(engine.flush(issued), common::ResponseCode::Success);
     reap(engine, 1);
 
     // These numbers decide whether one thread was the right choice, or whether a submit thread has to
@@ -483,10 +483,10 @@ TEST(LibaioEngine, Reads_A_Direct_Range)
     AlignedBuffer buffer(Block);
     ASSERT_NE(buffer.base, nullptr);
 
-    ASSERT_EQ(engine.stage(1, fixture.ref(), Block, Block, buffer.base), ResponseCode::Success);
+    ASSERT_EQ(engine.stage(1, fixture.ref(), Block, Block, buffer.base), common::ResponseCode::Success);
 
     unsigned issued = 0;
-    ASSERT_EQ(engine.flush(issued), ResponseCode::Success);
+    ASSERT_EQ(engine.flush(issued), common::ResponseCode::Success);
 
     const auto completions = reap(engine, 1);
     ASSERT_EQ(completions.size(), 1);
@@ -517,10 +517,10 @@ TEST(LibaioEngine, A_Misaligned_Direct_Read_Fails_As_A_Completion)
     ASSERT_NE(buffer.base, nullptr);
 
     // An offset inside a block, which O_DIRECT does not allow.
-    ASSERT_EQ(engine.stage(1, fixture.ref(), 100, Block, buffer.base), ResponseCode::Success);
+    ASSERT_EQ(engine.stage(1, fixture.ref(), 100, Block, buffer.base), common::ResponseCode::Success);
 
     unsigned issued = 0;
-    ASSERT_EQ(engine.flush(issued), ResponseCode::Success);
+    ASSERT_EQ(engine.flush(issued), common::ResponseCode::Success);
     EXPECT_EQ(issued, 1) << "the kernel accepts the submission and reports the problem later";
 
     const auto completions = reap(engine, 1);
@@ -530,4 +530,4 @@ TEST(LibaioEngine, A_Misaligned_Direct_Read_Fails_As_A_Completion)
 }
 
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

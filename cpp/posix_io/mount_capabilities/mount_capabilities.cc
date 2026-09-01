@@ -18,7 +18,7 @@
 #include "common/exception/exception.h"
 #include "utils/logging/logging.h"
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 namespace
@@ -184,4 +184,4 @@ size_t MountCapabilities::size() const
     return _mounts.size();
 }
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

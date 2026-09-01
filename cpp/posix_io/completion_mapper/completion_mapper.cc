@@ -5,7 +5,7 @@
 
 #include "utils/logging/logging.h"
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 namespace
@@ -35,20 +35,20 @@ bool is_internal_error(long res, const FileRef & file)
     return err == EINVAL && file.direct;
 }
 
-ResponseCode map_completion(long res, const FileRef & file)
+common::ResponseCode map_completion(long res, const FileRef & file)
 {
     if (res >= 0)
     {
         // Including res == 0. Whether that is EOF depends on what the caller asked for and how much
         // has already arrived, which only the caller knows - so it decides, not this.
-        return ResponseCode::Success;
+        return common::ResponseCode::Success;
     }
 
     const long err = -res;
 
     if (err == ECANCELED)
     {
-        return ResponseCode::FinishedError;
+        return common::ResponseCode::FinishedError;
     }
 
     if (is_internal_error(res, file))
@@ -65,7 +65,7 @@ ResponseCode map_completion(long res, const FileRef & file)
         LOG(ERROR) << "Internal error: errno " << err << " on fd " << file.fd
                    << (file.direct ? " (direct)" : " (buffered)")
                    << " - an invariant of ours broke, not the storage";
-        return ResponseCode::UnknownError;
+        return common::ResponseCode::UnknownError;
     }
 
     // Everything else is this FILE's failure, and the caller may carry on with the rest.
@@ -87,7 +87,7 @@ ResponseCode map_completion(long res, const FileRef & file)
     // errnos used to sit in this place; it could not be complete, and EISDIR was one it missed.
     LOG(ERROR) << "Read failed with errno " << err << " on fd " << file.fd
                << (file.direct ? " (direct)" : " (buffered)") << " - reporting it against this file";
-    return ResponseCode::FileAccessError;
+    return common::ResponseCode::FileAccessError;
 }
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

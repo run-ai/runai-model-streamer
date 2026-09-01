@@ -9,7 +9,7 @@
 #include <cerrno>
 #include <cstring>
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 namespace
@@ -53,16 +53,16 @@ TEST(IoUringProbe, Agrees_With_The_Kernel)
 
     if (raw == 0)
     {
-        EXPECT_EQ(capability.error, ResponseCode::Success);
+        EXPECT_EQ(capability.error, common::ResponseCode::Success);
     }
     else
     {
-        EXPECT_NE(capability.error, ResponseCode::Success) << "unavailable must carry a reason";
+        EXPECT_NE(capability.error, common::ResponseCode::Success) << "unavailable must carry a reason";
 
         // A blocked syscall is an operator's problem; a missing one is nobody's. Reporting the
         // second when it is the first sends whoever reads the log to the wrong place.
-        const auto expected = (raw == EPERM || raw == EACCES) ? ResponseCode::FileAccessError
-                                                              : ResponseCode::UnknownError;
+        const auto expected = (raw == EPERM || raw == EACCES) ? common::ResponseCode::FileAccessError
+                                                              : common::ResponseCode::UnknownError;
         EXPECT_EQ(capability.error, expected);
     }
 }
@@ -73,11 +73,11 @@ TEST(IoUringProbe, Demotion_Keeps_The_Reason)
 {
     IoUringProbe probe;
 
-    probe.mark_unavailable(ResponseCode::FileAccessError);
+    probe.mark_unavailable(common::ResponseCode::FileAccessError);
 
     const auto capability = probe.capability();
     EXPECT_FALSE(capability.available);
-    EXPECT_EQ(capability.error, ResponseCode::FileAccessError);
+    EXPECT_EQ(capability.error, common::ResponseCode::FileAccessError);
 }
 
 // One way only. On a host where io_uring works, a demoted probe that re-probed would answer
@@ -91,12 +91,12 @@ TEST(IoUringProbe, Demotion_Is_Permanent)
     {
         // Already unavailable here, so demotion cannot be observed to stick. Not a skip: the
         // remaining assertions still hold, and they are the ones that matter on such a host.
-        probe.mark_unavailable(ResponseCode::UnknownError);
+        probe.mark_unavailable(common::ResponseCode::UnknownError);
         EXPECT_FALSE(probe.capability().available);
         return;
     }
 
-    probe.mark_unavailable(ResponseCode::UnknownError);
+    probe.mark_unavailable(common::ResponseCode::UnknownError);
 
     for (int i = 0; i < 3; ++i)
     {
@@ -110,10 +110,10 @@ TEST(IoUringProbe, Second_Demotion_Does_Not_Overwrite)
 {
     IoUringProbe probe;
 
-    probe.mark_unavailable(ResponseCode::FileAccessError);
-    probe.mark_unavailable(ResponseCode::UnknownError);
+    probe.mark_unavailable(common::ResponseCode::FileAccessError);
+    probe.mark_unavailable(common::ResponseCode::UnknownError);
 
-    EXPECT_EQ(probe.capability().error, ResponseCode::FileAccessError);
+    EXPECT_EQ(probe.capability().error, common::ResponseCode::FileAccessError);
 }
 
 // Instances are independent, which is what lets the tests above avoid touching process-wide state.
@@ -122,10 +122,10 @@ TEST(IoUringProbe, Instances_Do_Not_Share_State)
     IoUringProbe demoted;
     IoUringProbe fresh;
 
-    demoted.mark_unavailable(ResponseCode::UnknownError);
+    demoted.mark_unavailable(common::ResponseCode::UnknownError);
 
     EXPECT_FALSE(demoted.capability().available);
     EXPECT_EQ(fresh.capability().available, probe_io_uring().available);
 }
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

@@ -76,11 +76,11 @@ class InflightChunks
  public:
     // Record a chunk about to be staged, and return the id to stage it under. workload_id and
     // batch_index are how its completion finds the tasks it covers.
-    common::posix_io::RequestId add(const Chunk & chunk, uint64_t workload_id, unsigned batch_index);
+    posix_io::RequestId add(const Chunk & chunk, uint64_t workload_id, unsigned batch_index);
 
     // The entry for `id`, or nullptr if there is none - which is exactly how a late completion from an
     // abandoned request is recognised. Callers must check rather than assume.
-    const InflightChunk * find(common::posix_io::RequestId id) const;
+    const InflightChunk * find(posix_io::RequestId id) const;
 
     // Account one completion of `bytes_transferred` against `id`.
     //
@@ -89,32 +89,32 @@ class InflightChunks
     //
     // ASSERTs if `id` is not live: only the caller can know whether an unknown id is a stale
     // completion to drop or its own bookkeeping gone wrong, so it must check find() first.
-    Progress record(common::posix_io::RequestId id, size_t bytes_transferred);
+    Progress record(posix_io::RequestId id, size_t bytes_transferred);
 
     // Note the three scratch fields describe the CURRENT PASS, not the chunk. A chunk with a partial
     // head and a partial tail bounces twice, with a direct pass in between, and each sets them afresh.
 
     // What still has to be read for `id`: where to resume, how much is left, and where it goes. Only
     // meaningful after a Partial.
-    Chunk pending(common::posix_io::RequestId id) const;
+    Chunk pending(posix_io::RequestId id) const;
 
     // Remove `id` and return the chunk it was reading, so the caller can account its tasks.
-    Chunk release(common::posix_io::RequestId id);
+    Chunk release(posix_io::RequestId id);
 
     // Forget everything, for teardown. Ids are not rewound, so a completion for a dropped request
     // still finds nothing rather than colliding with a later one.
     // Record that this pass reads into `scratch`, and which part of it is wanted. Cleared by
     // clear_bounce() when the pass lands.
-    void set_bounce(common::posix_io::RequestId id, char * scratch, size_t skip, size_t wanted);
+    void set_bounce(posix_io::RequestId id, char * scratch, size_t skip, size_t wanted);
 
     // Forget the current pass's scratch, and return what it was so the caller can give it back. Null
     // when the pass was not bounced. Safe to call on every path, including failure - which is the
     // point, since a leaked buffer drains the pool.
-    char * clear_bounce(common::posix_io::RequestId id);
+    char * clear_bounce(posix_io::RequestId id);
 
     // Mutable access for the worker, which needs the scratch fields to copy out of. Const would mean
     // a second lookup to clear them.
-    InflightChunk * find_mutable(common::posix_io::RequestId id);
+    InflightChunk * find_mutable(posix_io::RequestId id);
 
     // Hand back every scratch buffer still held, then forget them. For teardown: clear() drops the
     // chunks, so without this the buffers would be lost and the pool empty for good.
@@ -127,9 +127,9 @@ class InflightChunks
  private:
     // Starts at 1 so that 0 is never a live id, leaving it usable as an unmistakable "not a real
     // request" value - the same reason object storage starts its counter at 1.
-    common::posix_io::RequestId _next_id = 1;
+    posix_io::RequestId _next_id = 1;
 
-    std::map<common::posix_io::RequestId, InflightChunk> _chunks;
+    std::map<posix_io::RequestId, InflightChunk> _chunks;
 };
 
 }; // namespace runai::llm::streamer::impl

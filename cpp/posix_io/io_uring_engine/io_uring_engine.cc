@@ -10,7 +10,7 @@
 #include "posix_io/alignment/alignment.h"
 #include "utils/logging/logging.h"
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 namespace
@@ -50,7 +50,7 @@ IoUringEngine::IoUringEngine(const AsyncIoConfig & config, size_t max_read_bytes
     {
         LOG(ERROR) << "io_uring_queue_init(" << config.depth << ") failed: "
                    << std::strerror(error_of(ret));
-        throw common::Exception(ResponseCode::UnknownError);
+        throw common::Exception(common::ResponseCode::UnknownError);
     }
 
     // What the ring REALLY is. io_uring rounds entries up to a power of two, so asking for 700 gives
@@ -114,7 +114,7 @@ unsigned IoUringEngine::depth() const
     return _depth;
 }
 
-ResponseCode IoUringEngine::stage(RequestId id, FileRef file, size_t offset, size_t bytesize, char * buffer)
+common::ResponseCode IoUringEngine::stage(RequestId id, FileRef file, size_t offset, size_t bytesize, char * buffer)
 {
     struct io_uring_sqe * sqe = io_uring_get_sqe(&_ring);
     if (sqe == nullptr)
@@ -130,7 +130,7 @@ ResponseCode IoUringEngine::stage(RequestId id, FileRef file, size_t offset, siz
         // those destinations (5.7).
         LOG(ERROR) << "io_uring submission queue full at " << _staged << " staged of " << _depth
                    << " - the in-flight window and the ring have disagreed";
-        return ResponseCode::UnknownError;
+        return common::ResponseCode::UnknownError;
     }
 
     io_uring_prep_read(sqe, file.fd, buffer, bytesize, offset);
@@ -149,16 +149,16 @@ ResponseCode IoUringEngine::stage(RequestId id, FileRef file, size_t offset, siz
     }
 
     ++_staged;
-    return ResponseCode::Success;
+    return common::ResponseCode::Success;
 }
 
-ResponseCode IoUringEngine::flush(unsigned & out_issued)
+common::ResponseCode IoUringEngine::flush(unsigned & out_issued)
 {
     out_issued = 0;
 
     if (_staged == 0)
     {
-        return ResponseCode::Success;
+        return common::ResponseCode::Success;
     }
 
     const uint64_t started = now_nanos();
@@ -183,11 +183,11 @@ ResponseCode IoUringEngine::flush(unsigned & out_issued)
         {
             LOG(DEBUG) << "io_uring_submit deferred " << _staged << " staged reads: "
                        << std::strerror(error);
-            return ResponseCode::Success;
+            return common::ResponseCode::Success;
         }
 
         LOG(ERROR) << "io_uring_submit failed: " << std::strerror(error);
-        return ResponseCode::UnknownError;
+        return common::ResponseCode::UnknownError;
     }
 
     out_issued = static_cast<unsigned>(ret);
@@ -197,10 +197,10 @@ ResponseCode IoUringEngine::flush(unsigned & out_issued)
                                   << " staged";
     _staged -= out_issued;
 
-    return ResponseCode::Success;
+    return common::ResponseCode::Success;
 }
 
-ResponseCode IoUringEngine::wait_for_completions(Completion * out, unsigned max, unsigned & out_count,
+common::ResponseCode IoUringEngine::wait_for_completions(Completion * out, unsigned max, unsigned & out_count,
                                                  WaitMode mode, unsigned timeout_ms)
 {
     out_count = 0;
@@ -232,7 +232,7 @@ ResponseCode IoUringEngine::wait_for_completions(Completion * out, unsigned max,
             if (error != ETIME && error != EINTR && error != EAGAIN)
             {
                 LOG(ERROR) << "io_uring_wait_cqe failed: " << std::strerror(error);
-                return ResponseCode::UnknownError;
+                return common::ResponseCode::UnknownError;
             }
         }
     }
@@ -255,7 +255,7 @@ ResponseCode IoUringEngine::wait_for_completions(Completion * out, unsigned max,
         // Passed through as the kernel gave it: bytes when >= 0, minus an errno when < 0. A short
         // read is a small positive number, so it does not look like an error here.
         //
-        // NOT mapped to a ResponseCode here. Mapping EINVAL correctly needs to know whether the fd
+        // NOT mapped to a common::ResponseCode here. Mapping EINVAL correctly needs to know whether the fd
         // was direct, and at this point only the id is available - the CQE carries nothing else, and
         // this engine keeps no per-file state. The caller knows the file, so the caller maps.
         completion.res = cqe->res;
@@ -274,7 +274,7 @@ ResponseCode IoUringEngine::wait_for_completions(Completion * out, unsigned max,
                      << " times - completions are taking the slow path";
     }
 
-    return ResponseCode::Success;
+    return common::ResponseCode::Success;
 }
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

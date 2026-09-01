@@ -8,7 +8,7 @@
 
 #include "posix_io/io_engine/io_engine.h"
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 
@@ -66,9 +66,9 @@ class LibaioEngine : public IoEngine
     // from AsyncIoConfig::depth, so the window can never exceed what the context holds.
     unsigned depth() const override;
 
-    ResponseCode stage(RequestId id, FileRef file, size_t offset, size_t bytesize, char * buffer) override;
-    ResponseCode flush(unsigned & out_issued) override;
-    ResponseCode wait_for_completions(Completion * out, unsigned max, unsigned & out_count,
+    common::ResponseCode stage(RequestId id, FileRef file, size_t offset, size_t bytesize, char * buffer) override;
+    common::ResponseCode flush(unsigned & out_issued) override;
+    common::ResponseCode wait_for_completions(Completion * out, unsigned max, unsigned & out_count,
                                       WaitMode mode, unsigned timeout_ms = 0) override;
 
     // For tests, and for the line logged when this engine is destroyed. Not carried up to
@@ -128,4 +128,4 @@ class LibaioEngine : public IoEngine
     unsigned _depth = 0;
 };
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

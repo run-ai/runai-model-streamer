@@ -7,7 +7,7 @@
 
 #include "utils/logging/logging.h"
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 namespace
@@ -20,9 +20,9 @@ constexpr int ProbeEvents = 1;
 // EAGAIN means the node's aio budget is used up - /proc/sys/fs/aio-max-nr is node wide and shared
 // with every other pod, so an operator can raise it. Anything else (ENOSYS above all) means this
 // kernel has no aio at all, which nobody can change from here.
-ResponseCode reason_for(int error)
+common::ResponseCode reason_for(int error)
 {
-    return error == EAGAIN ? ResponseCode::FileAccessError : ResponseCode::UnknownError;
+    return error == EAGAIN ? common::ResponseCode::FileAccessError : common::ResponseCode::UnknownError;
 }
 
 } // namespace
@@ -74,7 +74,7 @@ LibaioCapability LibaioProbe::capability()
     return _capability;
 }
 
-void LibaioProbe::mark_unavailable(ResponseCode reason)
+void LibaioProbe::mark_unavailable(common::ResponseCode reason)
 {
     std::unique_lock<std::mutex> lock(_mutex);
 
@@ -106,4 +106,4 @@ LibaioProbe & LibaioProbe::instance()
     return probe;
 }
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

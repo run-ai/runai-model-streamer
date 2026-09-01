@@ -5,7 +5,7 @@
 namespace runai::llm::streamer::impl
 {
 
-common::posix_io::RequestId InflightChunks::add(const Chunk & chunk, uint64_t workload_id, unsigned batch_index)
+posix_io::RequestId InflightChunks::add(const Chunk & chunk, uint64_t workload_id, unsigned batch_index)
 {
     const auto id = _next_id++;
 
@@ -17,13 +17,13 @@ common::posix_io::RequestId InflightChunks::add(const Chunk & chunk, uint64_t wo
     return id;
 }
 
-const InflightChunk * InflightChunks::find(common::posix_io::RequestId id) const
+const InflightChunk * InflightChunks::find(posix_io::RequestId id) const
 {
     const auto it = _chunks.find(id);
     return it == _chunks.end() ? nullptr : &it->second;
 }
 
-Progress InflightChunks::record(common::posix_io::RequestId id, size_t bytes_transferred)
+Progress InflightChunks::record(posix_io::RequestId id, size_t bytes_transferred)
 {
     const auto it = _chunks.find(id);
     ASSERT(it != _chunks.end()) << "no in-flight chunk for request " << id << " - check find() first";
@@ -53,7 +53,7 @@ Progress InflightChunks::record(common::posix_io::RequestId id, size_t bytes_tra
     return Progress::Partial;
 }
 
-Chunk InflightChunks::pending(common::posix_io::RequestId id) const
+Chunk InflightChunks::pending(posix_io::RequestId id) const
 {
     const auto it = _chunks.find(id);
     ASSERT(it != _chunks.end()) << "no in-flight chunk for request " << id;
@@ -69,7 +69,7 @@ Chunk InflightChunks::pending(common::posix_io::RequestId id) const
     return rest;
 }
 
-Chunk InflightChunks::release(common::posix_io::RequestId id)
+Chunk InflightChunks::release(posix_io::RequestId id)
 {
     const auto it = _chunks.find(id);
     ASSERT(it != _chunks.end()) << "no in-flight chunk for request " << id;
@@ -79,7 +79,7 @@ Chunk InflightChunks::release(common::posix_io::RequestId id)
     return chunk;
 }
 
-void InflightChunks::set_bounce(common::posix_io::RequestId id, char * scratch, size_t skip, size_t wanted)
+void InflightChunks::set_bounce(posix_io::RequestId id, char * scratch, size_t skip, size_t wanted)
 {
     const auto it = _chunks.find(id);
     ASSERT(it != _chunks.end()) << "no in-flight chunk for request " << id;
@@ -92,7 +92,7 @@ void InflightChunks::set_bounce(common::posix_io::RequestId id, char * scratch, 
     it->second.scratch_wanted = wanted;
 }
 
-char * InflightChunks::clear_bounce(common::posix_io::RequestId id)
+char * InflightChunks::clear_bounce(posix_io::RequestId id)
 {
     const auto it = _chunks.find(id);
     if (it == _chunks.end())
@@ -107,7 +107,7 @@ char * InflightChunks::clear_bounce(common::posix_io::RequestId id)
     return scratch;
 }
 
-InflightChunk * InflightChunks::find_mutable(common::posix_io::RequestId id)
+InflightChunk * InflightChunks::find_mutable(posix_io::RequestId id)
 {
     const auto it = _chunks.find(id);
     return it == _chunks.end() ? nullptr : &it->second;

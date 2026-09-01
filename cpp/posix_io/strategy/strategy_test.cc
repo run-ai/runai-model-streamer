@@ -8,7 +8,7 @@
 
 #include "common/exception/exception.h"
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 // Every enumerator, so a value added later without a name fails here rather than logging "unknown".
@@ -140,4 +140,4 @@ TEST(Strategy, Stream)
     EXPECT_EQ(ss.str(), "io_uring_buffered");
 }
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io

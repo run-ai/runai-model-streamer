@@ -5,7 +5,7 @@
 
 #include "utils/logging/logging.h"
 
-namespace runai::llm::streamer::common::posix_io
+namespace runai::llm::streamer::posix_io
 {
 
 namespace
@@ -57,9 +57,9 @@ size_t MockIoEngine::misaligned_direct_stages() const
     return _misaligned_direct_stages;
 }
 
-ResponseCode MockIoEngine::stage(RequestId id, FileRef file, size_t offset, size_t bytesize, char * buffer)
+common::ResponseCode MockIoEngine::stage(RequestId id, FileRef file, size_t offset, size_t bytesize, char * buffer)
 {
-    if (_stage_result != ResponseCode::Success)
+    if (_stage_result != common::ResponseCode::Success)
     {
         // Nothing is recorded: no completion will arrive, and the caller must resolve it itself.
         return _stage_result;
@@ -93,7 +93,7 @@ ResponseCode MockIoEngine::stage(RequestId id, FileRef file, size_t offset, size
                        << " remainder " << (reinterpret_cast<uintptr_t>(buffer) % buffer_block)
                        << " - the kernel would answer EINVAL";
 
-            return ResponseCode::UnknownError;
+            return common::ResponseCode::UnknownError;
         }
     }
 
@@ -113,14 +113,14 @@ ResponseCode MockIoEngine::stage(RequestId id, FileRef file, size_t offset, size
     _staged.push_back(id);
     _history.push_back(request);
 
-    return ResponseCode::Success;
+    return common::ResponseCode::Success;
 }
 
-ResponseCode MockIoEngine::flush(unsigned & out_issued)
+common::ResponseCode MockIoEngine::flush(unsigned & out_issued)
 {
     out_issued = 0;
 
-    if (_flush_result != ResponseCode::Success)
+    if (_flush_result != common::ResponseCode::Success)
     {
         return _flush_result;
     }
@@ -128,7 +128,7 @@ ResponseCode MockIoEngine::flush(unsigned & out_issued)
     if (_flush_stalled)
     {
         // Zero progress is backpressure, not an error: the caller must keep calling flush().
-        return ResponseCode::Success;
+        return common::ResponseCode::Success;
     }
 
     const size_t limit = (_flush_limit == 0) ? _staged.size() : std::min<size_t>(_flush_limit, _staged.size());
@@ -142,10 +142,10 @@ ResponseCode MockIoEngine::flush(unsigned & out_issued)
         ++out_issued;
     }
 
-    return ResponseCode::Success;
+    return common::ResponseCode::Success;
 }
 
-ResponseCode MockIoEngine::wait_for_completions(Completion * out, unsigned max, unsigned & out_count,
+common::ResponseCode MockIoEngine::wait_for_completions(Completion * out, unsigned max, unsigned & out_count,
                                                 WaitMode mode, unsigned timeout_ms)
 {
     // Before anything is harvested: a wait is when the kernel hands over what it has finished.
@@ -172,7 +172,7 @@ ResponseCode MockIoEngine::wait_for_completions(Completion * out, unsigned max, 
         ++out_count;
     }
 
-    return ResponseCode::Success;
+    return common::ResponseCode::Success;
 }
 
 void MockIoEngine::register_memory(char * base, size_t size)
@@ -232,12 +232,12 @@ void MockIoEngine::set_flush_stalled(bool stalled)
     _flush_stalled = stalled;
 }
 
-void MockIoEngine::set_stage_result(ResponseCode ret)
+void MockIoEngine::set_stage_result(common::ResponseCode ret)
 {
     _stage_result = ret;
 }
 
-void MockIoEngine::set_flush_result(ResponseCode ret)
+void MockIoEngine::set_flush_result(common::ResponseCode ret)
 {
     _flush_result = ret;
 }
@@ -345,4 +345,4 @@ void MockIoEngine::ready(RequestId id, long res)
     _live.erase(it);
 }
 
-}; // namespace runai::llm::streamer::common::posix_io
+}; // namespace runai::llm::streamer::posix_io
