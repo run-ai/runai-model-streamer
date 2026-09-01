@@ -425,7 +425,7 @@ def get_partition_policy() -> str:
     if partition_policy is not None:
         return partition_policy
     else:
-        return "chunks"
+        return "spans"
 
 def partition(file_stream_requests: List[FileChunks], n: int) -> List[List[Tuple[FileChunks, Dict[int, Tuple[int, int, int]]]]]:
     partition_policy = get_partition_policy()
