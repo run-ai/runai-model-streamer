@@ -202,21 +202,11 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     // Used to answer zero-sized ranges, which produce no chunk and so would otherwise be answered
     // without the file ever being touched. The file is opened and closed again - fd_for() opens it
     // properly later, when it knows whether O_DIRECT can be used.
-    // Queue this workload's chunks so that several files are read from at once, and return how many
-    // went in. Order only - destinations are already fixed, so nothing here moves a byte.
-    size_t enqueue_interleaved(Inflight & wl, uint64_t workload_id);
-
-    // The queue's round-robin key: one value per file, unique across workloads.
-    static uint64_t file_group(uint64_t workload_id, unsigned batch_index);
-
-    // How many files this worker reads from at once - the queue rotates over exactly this many.
-    std::size_t max_active_groups() const override;
+    static common::ResponseCode probe_open(const std::string & path);
 
     // Close the interval the current in-flight level lasted for. Called before every change to
     // _issued.
     void account_inflight();
-
-    static common::ResponseCode probe_open(const std::string & path);
 
     int fd_for(Inflight & wl, unsigned batch_index, size_t file_offset, const char * buffer,
                common::ResponseCode & out_error);

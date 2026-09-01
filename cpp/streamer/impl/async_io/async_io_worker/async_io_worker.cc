@@ -133,6 +133,8 @@ void AsyncIoWorker::enqueue(Workload && workload)
     wl.workload = std::move(workload);
     wl.fds.resize(wl.workload.batches().size());   // nothing is opened yet
 
+    size_t queued_chunks = 0;
+
     // Zero-sized ranges are answered here, before anything is queued: they appear in no chunk, so
     // nothing would ever complete for them.
     for (unsigned batch_index = 0; batch_index < wl.workload.batches().size(); ++batch_index)
@@ -188,9 +190,15 @@ void AsyncIoWorker::enqueue(Workload && workload)
             }
         }
 
+        for (const auto & chunk : batch.chunks)
+        {
+            const auto id = _chunks.add(chunk, workload_id, batch_index);
+            _queue->enqueue(QueuedChunk{ id, chunk.offset, chunk.bytesize, chunk.buffer }, 1);   // cost 1
+            ++queued_chunks;
+        }
     }
 
-    wl.remaining_chunks = enqueue_interleaved(wl, workload_id);
+    wl.remaining_chunks = queued_chunks;
 
     // Nothing to read: every task was zero-sized and has already been answered.
     if (wl.remaining_chunks == 0)
@@ -343,62 +351,6 @@ size_t AsyncIoWorker::land_bounced_pass(common::posix_io::RequestId id, size_t b
 
     _scratch->give(_chunks.clear_bounce(id));
     return useful;
-}
-
-std::size_t AsyncIoWorker::max_active_groups() const
-{
-    // Called just after capacity(), which is where _settings is resolved - so this is safe. The
-    // fallback is the floor rather than 0: unbounded would let the rotation spread over every file
-    // that happens to be pending, and past the measured knee that costs throughput.
-    return _settings.has_value() ? _settings->files_in_flight() : AsyncIoSettings::MinFiles;
-}
-
-uint64_t AsyncIoWorker::file_group(uint64_t workload_id, unsigned batch_index)
-{
-    // One number identifying a file within a workload, for the queue's rotation. Workload ids only
-    // ever increase and a batch index is small, so shifting keeps them apart without a table.
-    //
-    // 32 bits for the batch index is far more than a workload can hold - it is one per file - and
-    // leaves the workload id the room it needs, since it counts every submission for the life of the
-    // process.
-    return (workload_id << 32) | batch_index;
-}
-
-size_t AsyncIoWorker::enqueue_interleaved(Inflight & wl, uint64_t workload_id)
-{
-    // Queue chunks a few files at a time instead of finishing one file before starting the next.
-    //
-    // WHY. On an NFS mount one file's read stream uses one of the client's `nconnect` connections, so
-    // reading file by file leaves most of the mount idle whatever the queue depth is. Measured with
-    // fio on such a mount: 11.34 GB/s on one file against 19.12 on sixteen, and our own reader sat at
-    // 11.37 while holding 2.23 files open on average.
-    //
-    // ORDER ONLY, never placement. Every chunk already carries the destination Python chose, so this
-    // changes which read is submitted next and never where a byte lands. That matters: interleaving
-    // the RING LAYOUT would put a file boundary between consecutive ranges, which costs a pad each,
-    // and the pad budget would run out and drop the whole request to tight packing - losing O_DIRECT.
-    // Reordering here costs no pads at all.
-    //
-    // Groups of `width`, rotating inside a group, rather than rotating over every file at once. Past
-    // the measured knee more files stop helping and start contending, and a group keeps the reads
-    // within one file as close together as this allows.
-    // Plain file order. The QUEUE rotates between files and bounds how many are active, so the order
-    // chunks are handed to it does not decide file concurrency.
-    auto & batches = wl.workload.batches();
-    size_t queued = 0;
-
-    for (size_t batch_index = 0; batch_index < batches.size(); ++batch_index)
-    {
-        for (const auto & chunk : batches[batch_index].chunks)
-        {
-            const auto id = _chunks.add(chunk, workload_id, static_cast<unsigned>(batch_index));
-            _queue->enqueue(QueuedChunk{ id, chunk.offset, chunk.bytesize, chunk.buffer }, 1,
-                            file_group(workload_id, static_cast<unsigned>(batch_index)));
-            ++queued;
-        }
-    }
-
-    return queued;
 }
 
 common::ResponseCode AsyncIoWorker::probe_open(const std::string & path)
