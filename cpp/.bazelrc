@@ -4,17 +4,12 @@ build --cxxopt=-std=c++17
 # compile with '-fPIC'; this is needed for building in optimized mode (i.e. '-c opt').
 build --force_pic
 
-# OPTIMISE. Stated here rather than left to `-c opt`, because `-c opt` does NOT do it.
+# Build optimised by default. The -O2 itself lives in the toolchain's `opt` feature (see
+# toolchain/template/toolchain.bzl); this line only chooses the mode.
 #
-# The toolchain (@toolchain//:x86_64) defines no compilation-mode flags, so `fastbuild` and `opt`
-# emit the same command line - and that line carries no -O at all, which means gcc's default of -O0.
-# Measured: `bazel build -c opt` and `bazel build` produced byte-identical libstreamer.so, and adding
-# -O2 took it from 3,340,392 bytes to 1,492,888.
-#
-# So every build - every wheel, every benchmark, every release - was unoptimised until this line.
-# Left as an unconditional flag rather than a per-mode one so it cannot be lost the same way: there
-# is no mode here in which we want -O0, and a mode that silently does nothing is what caused this.
-build --copt=-O2
+# Needed because the default mode is fastbuild, which is unoptimised on purpose. 
+## Overridable: `bazel build -c dbg` still wins, because a command-line flag beats an rc file.
+build --compilation_mode=opt
 
 # Disable bzlmod Modules, as this workspace uses WORKSPACE
 # dependency management. See https://bazel.build/external/migration
