@@ -159,9 +159,20 @@ RUN curl -fsSL -o liburing-2.6.tar.gz https://github.com/axboe/liburing/archive/
 #   CFLAGS -I.       libaio has no ./configure, and its sources include <libaio.h> from src/
 #   copy, not make install   its install target also lays down libaio.so and its sonames; we want
 #                            only the archive
-RUN curl -fsSL -o libaio-0.3.113.tar.gz https://pagure.io/libaio/archive/libaio-0.3.113/libaio-libaio-0.3.113.tar.gz && \
+#   the URL     pagure.io was SUNSET in 2026 and is now a static snapshot. Its /archive/<ref>.tar.gz
+#               endpoint generated tarballs on demand, so it needs a running app and now returns 404
+#               for every project - including pagure's own. The git remote and releases.pagure.org
+#               are plain files and still serve, which is why this fetches a published release rather
+#               than a generated archive.
+#   the sha256  so the host stops being load-bearing. This exact tarball is served byte-identically by
+#               releases.pagure.org and by Debian
+#               (deb.debian.org/debian/pool/main/liba/libaio/libaio_0.3.113.orig.tar.gz), and its
+#               src/ matches the libaio-0.3.113 git tag. If this host disappears too, point the URL
+#               at any mirror - a wrong tarball then fails here instead of shipping.
+RUN curl -fsSL -o libaio-0.3.113.tar.gz https://releases.pagure.org/libaio/libaio-0.3.113.tar.gz && \
+    echo "2c44d1c5fd0d43752287c9ae1eb9c023f04ef848ea8d4aafa46e9aedb678200b  libaio-0.3.113.tar.gz" | sha256sum -c - && \
     tar zxf libaio-0.3.113.tar.gz && \
-    cd libaio-libaio-0.3.113 && \
+    cd libaio-0.3.113 && \
 
     AR=/usr/bin/x86_64-linux-gnu-ar \
     RANLIB=/usr/bin/x86_64-linux-gnu-ranlib \
@@ -182,7 +193,7 @@ RUN curl -fsSL -o libaio-0.3.113.tar.gz https://pagure.io/libaio/archive/libaio-
         make -C src clean > /dev/null && \
 
     cd - && \
-    rm -rf libaio-libaio-0.3.113 libaio-0.3.113.tar.gz
+    rm -rf libaio-0.3.113 libaio-0.3.113.tar.gz
 
 ADD aarch64-linux-gnu.cmake /opt/toolchains/aarch64-linux-gnu.cmake
 ADD x86_64-linux-gnu.cmake /opt/toolchains/x86_64-linux-gnu.cmake
@@ -243,7 +254,10 @@ RUN curl -fsSL -o libxml2-2.13.5.tar.xz https://download.gnome.org/sources/libxm
     RANLIB=/usr/bin/x86_64-linux-gnu-ranlib \
     CC=/usr/bin/x86_64-linux-gnu-gcc \
     NM=/usr/bin/x86_64-linux-gnu-nm \
-    CFLAGS="-fPIC" \
+    # -O2 is explicit because setting CFLAGS at all REPLACES autoconf's own default of "-g -O2".
+    # Passing only -fPIC therefore silently removed the optimisation. curl survives the same treatment
+    # a few blocks up only because its configure applies --enable-optimize itself; libxml2 does not.
+    CFLAGS="-fPIC -O2" \
     ./configure --host=x86_64-linux-gnu \
         --disable-shared --enable-static \
         --without-python --without-lzma --without-zlib \
@@ -258,7 +272,7 @@ RUN curl -fsSL -o libxml2-2.13.5.tar.xz https://download.gnome.org/sources/libxm
     RANLIB=/usr/bin/aarch64-linux-gnu-ranlib \
     CC=/usr/bin/aarch64-linux-gnu-gcc \
     NM=/usr/bin/aarch64-linux-gnu-nm \
-    CFLAGS="-fPIC" \
+    CFLAGS="-fPIC -O2" \
     ./configure --host=aarch64-linux-gnu \
         --disable-shared --enable-static \
         --without-python --without-lzma --without-zlib \
@@ -279,7 +293,15 @@ RUN git clone --recurse-submodules https://github.com/Azure/azure-sdk-for-cpp /o
     # Helper function to build Azure SDK components
     build_azure_sdk_components() { \
         local arch=$1 prefix=$2 source=$3 extra_opts=$4; \
+        # CMAKE_BUILD_TYPE is REQUIRED, not a nicety. With it unset cmake adds no optimisation flag at
+        # all and gcc falls back to its own default of -O0. Measured before this line: every function
+        # in libazure-core.a and libazure-storage-blobs.a opened with a frame-pointer prologue and
+        # spilled its arguments to the stack, which is what -O0 does and -O1 upwards does not.
+        #
+        # aws-sdk-cpp gets away with the same omission because it sets a default build type in its own
+        # CMakeLists. azure-sdk-for-cpp does not, so it has to be stated here.
         local common_opts="-DCMAKE_TOOLCHAIN_FILE=/opt/toolchains/${arch}-linux-gnu.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
             -DCMAKE_INSTALL_PREFIX=${prefix} \
             -DBUILD_SHARED_LIBS=OFF \
