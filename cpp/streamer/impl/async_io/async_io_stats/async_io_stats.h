@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-#include "common/posix_io/strategy/strategy.h"
+#include "posix_io/strategy/strategy.h"
 #include "common/submission/submission_id.h"
 
 namespace runai::llm::streamer::impl

@@ -5,8 +5,8 @@
 #include <vector>
 
 #include "common/exception/exception.h"
-#include "common/posix_io/io_uring_probe/io_uring_probe.h"
-#include "common/posix_io/libaio_probe/libaio_probe.h"
+#include "posix_io/io_uring_probe/io_uring_probe.h"
+#include "posix_io/libaio_probe/libaio_probe.h"
 #include "utils/logging/logging.h"
 
 namespace runai::llm::streamer::impl

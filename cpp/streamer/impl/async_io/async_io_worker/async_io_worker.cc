@@ -5,7 +5,7 @@
 
 #include "streamer/impl/async_io/async_io_worker/async_io_worker.h"
 
-#include "common/posix_io/completion_mapper/completion_mapper.h"
+#include "posix_io/completion_mapper/completion_mapper.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -16,7 +16,7 @@
 #include <cstring>
 #include <utility>
 
-#include "common/posix_io/alignment/alignment.h"
+#include "posix_io/alignment/alignment.h"
 #include "common/exception/exception.h"
 #include "utils/logging/logging.h"
 

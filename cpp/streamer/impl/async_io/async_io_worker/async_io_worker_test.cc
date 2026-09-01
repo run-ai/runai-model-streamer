@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-#include "common/posix_io/mock/mock_io_engine.h"
+#include "posix_io/mock/mock_io_engine.h"
 #include "streamer/impl/assigner/assigner.h"
 #include "streamer/impl/batches/batches.h"
 #include "common/exception/exception.h"

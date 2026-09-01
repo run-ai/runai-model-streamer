@@ -21,7 +21,7 @@
 #include "streamer/impl/request/request.h"
 #include "streamer/impl/submissions/submissions_mgr.h"
 #include "streamer/impl/pools/backend_pools.h"
-#include "common/posix_io/mount_capabilities/mount_capabilities.h"
+#include "posix_io/mount_capabilities/mount_capabilities.h"
 #include "streamer/impl/async_io/async_io_stats/async_io_stats.h"
 #include "streamer/impl/async_io/async_io_worker/async_io_worker.h"
 #include "streamer/impl/strategy_resolver/strategy_resolver.h"

@@ -23,7 +23,7 @@
 #include "streamer/impl/assigner/assigner.h"
 #include "streamer/impl/batches/batches.h"
 #include "common/exception/exception.h"
-#include "common/posix_io/alignment/alignment.h"
+#include "posix_io/alignment/alignment.h"
 #include "common/storage_uri/storage_uri.h"
 
 namespace runai::llm::streamer::impl

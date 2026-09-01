@@ -1,6 +1,6 @@
 #include "streamer/impl/streamer/streamer.h"
 
-#include "common/posix_io/alignment/alignment.h"
+#include "posix_io/alignment/alignment.h"
 
 #include <unistd.h>
 

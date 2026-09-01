@@ -1,17 +1,18 @@
 load("//:rules.bzl", "runai_cc_auto_library", "runai_cc_test")
 
 runai_cc_auto_library(
-    name = "async_io_stats",
+    name = "io_engine",
     deps = [
         "//posix_io/strategy",
-        "//common/submission",
+        "//common/response_code",
+        "//utils/logging",
     ],
 )
 
 runai_cc_test(
-    name = "async_io_stats_test",
-    srcs = ["async_io_stats_test.cc"],
+    name = "io_engine_test",
+    srcs = ["io_engine_test.cc"],
     deps = [
-        ":async_io_stats",
+        ":io_engine",
     ],
 )

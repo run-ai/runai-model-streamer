@@ -1,22 +1,24 @@
 load("//:rules.bzl", "runai_cc_auto_library", "runai_cc_test")
 
 runai_cc_auto_library(
-    name = "strategy_resolver",
+    name = "engine_factory",
     deps = [
         "//common/exception",
+        "//posix_io/io_engine",
+        "//posix_io/io_uring_engine",
         "//posix_io/io_uring_probe",
+        "//posix_io/libaio_engine",
         "//posix_io/libaio_probe",
         "//posix_io/strategy",
-        "//common/response_code",
         "//utils/logging",
     ],
 )
 
 runai_cc_test(
-    name = "strategy_resolver_test",
-    srcs = ["strategy_resolver_test.cc"],
+    name = "engine_factory_test",
+    srcs = ["engine_factory_test.cc"],
     deps = [
-        ":strategy_resolver",
-        "//utils/temp/env",
+        ":engine_factory",
+        "//posix_io/libaio_probe",
     ],
 )

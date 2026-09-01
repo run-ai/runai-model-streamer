@@ -5,7 +5,7 @@
 #include <memory>
 #include <string>
 
-#include "common/posix_io/io_engine/io_engine.h"
+#include "posix_io/io_engine/io_engine.h"
 #include "utils/temp/env/env.h"
 
 namespace runai::llm::streamer::impl

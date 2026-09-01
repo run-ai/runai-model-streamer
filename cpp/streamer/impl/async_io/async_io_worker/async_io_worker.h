@@ -9,10 +9,10 @@
 #include <optional>
 #include <vector>
 
-#include "common/posix_io/engine_factory/engine_factory.h"
-#include "common/posix_io/io_engine/io_engine.h"
-#include "common/posix_io/scratch_pool/scratch_pool.h"
-#include "common/posix_io/strategy/strategy.h"
+#include "posix_io/engine_factory/engine_factory.h"
+#include "posix_io/io_engine/io_engine.h"
+#include "posix_io/scratch_pool/scratch_pool.h"
+#include "posix_io/strategy/strategy.h"
 #include "common/response_code/response_code.h"
 
 #include "streamer/impl/async_io/async_io_settings/async_io_settings.h"

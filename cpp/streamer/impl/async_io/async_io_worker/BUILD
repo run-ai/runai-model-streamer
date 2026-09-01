@@ -3,12 +3,12 @@ load("//:rules.bzl", "runai_cc_auto_library", "runai_cc_test")
 runai_cc_auto_library(
     name = "async_io_worker",
     deps = [
-        "//common/posix_io/engine_factory",
-        "//common/posix_io/alignment",
-        "//common/posix_io/completion_mapper",
-        "//common/posix_io/io_engine",
-        "//common/posix_io/scratch_pool",
-        "//common/posix_io/strategy",
+        "//posix_io/engine_factory",
+        "//posix_io/alignment",
+        "//posix_io/completion_mapper",
+        "//posix_io/io_engine",
+        "//posix_io/scratch_pool",
+        "//posix_io/strategy",
         "//common/exception",
         "//streamer/impl/async_io/async_io_settings",
         "//streamer/impl/async_io/async_io_stats",
@@ -25,7 +25,7 @@ runai_cc_test(
     srcs = ["async_io_worker_test.cc"],
     deps = [
         ":async_io_worker",
-        "//common/posix_io/mock",
+        "//posix_io/mock",
         "//streamer/impl/assigner",
         "//streamer/impl/batches",
         "//utils/random",
