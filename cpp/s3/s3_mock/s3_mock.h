@@ -78,6 +78,10 @@ extern "C" size_t runai_mock_s3_max_concurrent();
 extern "C" size_t runai_mock_s3_requests();
 // Fail (with FileAccessError) the completion of any read whose path contains substr; "" / nullptr disables.
 extern "C" void runai_mock_s3_set_failing_path(const char* substr);
+// Fail the next `count` submitted reads at completion with `response_code`. A retry that reuses the same
+// request id is a new submission and consumes another count. Used to test application-level retries.
+extern "C" void runai_mock_s3_set_read_failures(unsigned count, common::backend_api::ResponseCode_t response_code);
+extern "C" size_t runai_mock_s3_total_read_requests();
 // Peak number of completion events returned by a single obj_wait_for_completions call since the last cleanup.
 extern "C" size_t runai_mock_s3_max_events_per_wait();
 // When enabled, obj_wait_for_completions appends a FinishedError sentinel event (handle 0) after the

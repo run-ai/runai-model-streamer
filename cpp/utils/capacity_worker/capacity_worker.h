@@ -79,7 +79,7 @@ class CapacityWorker : public Worker<Request>
 
     bool idle() const final override
     {
-        return _queue == nullptr || _queue->idle();
+        return _queue == nullptr || (_queue->idle() && !has_deferred_work());
     }
 
  protected:
@@ -105,16 +105,25 @@ class CapacityWorker : public Worker<Request>
     // Submit one chunk to the backend (fire the async read).
     virtual void submit(const Chunk & chunk) = 0;
 
+    // Let workers move deferred work into the capacity queue immediately before selecting the next chunks.
+    // A worker can combine this with enqueue_front() to prioritize ready retries over new work.
+    virtual void pre_pump() {}
+
     // Process the completions ready now: for each, _queue->complete(cost), route it to its owning request,
     // and finalize+drop the request once its last chunk lands. Blocks for at least one completion when the
     // window is full (nothing else to do); otherwise takes whatever is ready.
     virtual void drain_batch(std::atomic<bool> & stopped) = 0;
+
+    // Asynchronous workers may own scheduled work outside CapacityQueue (for example, jittered retries).
+    // Returning true keeps the pool draining even while the main window is temporarily empty.
+    virtual bool has_deferred_work() const { return false; }
 
     std::unique_ptr<CapacityQueue<Chunk>> _queue;   // created lazily once a request can size the window (see execute)
 
  private:
     void pump()
     {
+        pre_pump();
         while (auto chunk = _queue->try_take())
         {
             submit(*chunk);

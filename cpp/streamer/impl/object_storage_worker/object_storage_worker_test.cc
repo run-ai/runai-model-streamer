@@ -3,11 +3,13 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <chrono>
 #include <map>
 #include <memory>
 #include <numeric>
 #include <set>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -34,7 +36,11 @@ namespace
 // test can wait on the responder and assert per-file, per-request completion.
 struct Submission
 {
-    Submission(SubmissionId submission_id, unsigned num_files, std::shared_ptr<Config> config, std::shared_ptr<common::Responder> responder) :
+    Submission(SubmissionId submission_id,
+               unsigned num_files,
+               std::shared_ptr<Config> config,
+               std::shared_ptr<common::Responder> responder,
+               unsigned ranges_per_file = 0) :
         submission_id(submission_id),
         config(config),
         responder(responder),
@@ -47,7 +53,7 @@ struct Submission
         for (unsigned i = 0; i < num_files; ++i)
         {
             const auto size = utils::random::number(1000, 100000);
-            num_chunks[i] = utils::random::number(1, 20);
+            num_chunks[i] = ranges_per_file == 0 ? utils::random::number(1, 20) : ranges_per_file;
             EXPECT_LT(num_chunks[i], size);
             responder->increment(num_chunks[i]);
             total_bytes += size;
@@ -151,12 +157,23 @@ class ObjectStorageWorkerTest : public ::testing::Test
 
     // create a Config/Responder and a (num_files) submission; returns the workloads ready to dispatch. Stores
     // the config/responder/submission as members so the test can build a pool and wait on the responder.
-    std::vector<Workload> build(unsigned num_files, unsigned s3_concurrency)
+    std::vector<Workload> build(unsigned num_files, unsigned s3_concurrency, unsigned ranges_per_file = 0,
+                                size_t s3_block_bytesize = 0)
     {
         make_context(s3_concurrency);
-        submission = std::make_unique<Submission>(utils::random::number(), num_files, config, responder);
+        // Applied here, between the config and the cut: Batches divides the ranges using this value, so
+        // setting it after build() would leave the chunks already cut at the random default.
+        if (s3_block_bytesize != 0)
+        {
+            config->s3_block_bytesize = s3_block_bytesize;
+        }
+        submission = std::make_unique<Submission>(utils::random::number(), num_files, config, responder, ranges_per_file);
         return submission->build();
     }
+
+    // Bigger than any file Submission generates (it tops out at 100000 bytes), so one range is one
+    // chunk and a single injected failure lands on the only backend read.
+    static constexpr size_t SingleChunkBlockBytesize = 1024 * 1024;
 
     // set up config + responder without a submission (for tests that build several submissions themselves)
     void make_context(unsigned s3_concurrency)
@@ -192,9 +209,32 @@ class ObjectStorageWorkerTest : public ::testing::Test
     void set_sentinel(bool on)          { _dylib.dlsym<void(*)(bool)>("runai_mock_s3_set_append_finished_sentinel")(on); }
     void set_window(size_t bytes)       { _dylib.dlsym<void(*)(size_t)>("runai_mock_s3_set_inflight_window")(bytes); }
     void fail_paths_containing(const char * substr) { _dylib.dlsym<void(*)(const char*)>("runai_mock_s3_set_failing_path")(substr); }
+    void set_read_failures(unsigned count, common::ResponseCode code)
+    {
+        _dylib.dlsym<void(*)(unsigned, common::backend_api::ResponseCode_t)>("runai_mock_s3_set_read_failures")(count, code);
+    }
+    size_t total_read_requests()        { return _dylib.dlsym<size_t(*)()>("runai_mock_s3_total_read_requests")(); }
     size_t max_concurrent()             { return _dylib.dlsym<size_t(*)()>("runai_mock_s3_max_concurrent")(); }
     size_t requests()                   { return _dylib.dlsym<size_t(*)()>("runai_mock_s3_requests")(); }
     int clients()                       { return _dylib.dlsym<int(*)()>("runai_mock_s3_clients")(); }
+
+    // The chunks the worker will submit: exactly Batch::chunks, one backend read each.
+    //
+    // Read from the workload rather than recomputed from s3_block_bytesize. The cut happens upstream
+    // in Batches, and a test that re-derives it is asserting against its own copy of the rule instead
+    // of against the thing under test.
+    static size_t count_object_chunks(const std::vector<Workload> & workloads)
+    {
+        size_t result = 0;
+        for (const auto & workload : workloads)
+        {
+            for (const auto & batch : workload.batches())
+            {
+                result += batch.chunks.size();
+            }
+        }
+        return result;
+    }
 
     std::shared_ptr<Config> config;
     std::shared_ptr<common::Responder> responder;
@@ -413,6 +453,121 @@ TEST_F(ObjectStorageWorkerTest, Window_Bounded)
     const auto peak = max_concurrent();
     EXPECT_LE(peak, window_chunks);
     EXPECT_GT(peak, 0u);
+}
+
+// A terminal backend error marked retryable requeues only that ObjectChunk. Every already-completed chunk
+// stays complete: total backend submissions grow by exactly one, and all public responses remain Success.
+TEST_F(ObjectStorageWorkerTest, RetryableChunkIsRequeuedWithoutRestartingWorkload)
+{
+    auto workloads = build(1, 1);
+    const size_t initial_chunks = count_object_chunks(workloads);
+    config->object_storage_retry_timeout = std::chrono::seconds(5);
+    set_read_failures(1, common::ResponseCode::RetryableFileAccessError);
+
+    {
+        auto pool = make_pool(1);
+        push_all(pool, workloads);
+        for (unsigned i = 0; i < submission->total_requests(); ++i)
+        {
+            EXPECT_EQ(responder->pop().ret, common::ResponseCode::Success);
+        }
+    }
+
+    EXPECT_EQ(total_read_requests(), initial_chunks + 1);
+}
+
+// With the application retry timeout disabled, even an internal retryable marker is converted to the
+// original public FileAccessError and the worker does not submit another backend request.
+TEST_F(ObjectStorageWorkerTest, RetryableChunkFailsWithoutRetryWhenTimeoutDisabled)
+{
+    auto workloads = build(1, 1, 1, SingleChunkBlockBytesize);   // exactly one backend chunk
+    const size_t initial_chunks = count_object_chunks(workloads);
+    ASSERT_EQ(initial_chunks, 1u);
+    ASSERT_EQ(config->object_storage_retry_timeout.count(), 0);
+    set_read_failures(1, common::ResponseCode::RetryableFileAccessError);
+
+    {
+        auto pool = make_pool(1);
+        push_all(pool, workloads);
+        EXPECT_EQ(responder->pop().ret, common::ResponseCode::FileAccessError);
+    }
+
+    EXPECT_EQ(total_read_requests(), initial_chunks);
+}
+
+// A permanent storage error bypasses the application retry loop even when a retry deadline is configured.
+TEST_F(ObjectStorageWorkerTest, PermanentChunkErrorFailsWithoutRetry)
+{
+    auto workloads = build(1, 1);
+    const size_t initial_chunks = count_object_chunks(workloads);
+    config->object_storage_retry_timeout = std::chrono::seconds(5);
+    set_read_failures(1, common::ResponseCode::FileAccessError);
+
+    bool saw_file_access_error = false;
+    {
+        auto pool = make_pool(1);
+        push_all(pool, workloads);
+        for (unsigned i = 0; i < submission->total_requests(); ++i)
+        {
+            const auto ret = responder->pop().ret;
+            saw_file_access_error = saw_file_access_error || ret == common::ResponseCode::FileAccessError;
+            EXPECT_TRUE(ret == common::ResponseCode::Success || ret == common::ResponseCode::FileAccessError);
+        }
+    }
+
+    EXPECT_TRUE(saw_file_access_error);
+    EXPECT_EQ(total_read_requests(), initial_chunks);
+}
+
+// Once a chunk's retry deadline (started at its first backend submission) has expired, the internal
+// retryable marker is converted to the public FileAccessError and no new backend attempt is submitted.
+TEST_F(ObjectStorageWorkerTest, ExpiredChunkRetryDeadlineReturnsFileAccessError)
+{
+    auto workloads = build(1, 1, 1, SingleChunkBlockBytesize);   // exactly one backend chunk
+    config->object_storage_retry_timeout = std::chrono::seconds(1);
+    const size_t initial_chunks = count_object_chunks(workloads);
+    ASSERT_EQ(initial_chunks, 1u);
+    set_response_time(1100);   // the first attempt completes after its per-chunk deadline
+    set_read_failures(1, common::ResponseCode::RetryableFileAccessError);
+
+    bool saw_file_access_error = false;
+    {
+        auto pool = make_pool(1);
+        push_all(pool, workloads);
+        for (unsigned i = 0; i < submission->total_requests(); ++i)
+        {
+            const auto ret = responder->pop().ret;
+            saw_file_access_error = saw_file_access_error || ret == common::ResponseCode::FileAccessError;
+            EXPECT_NE(ret, common::ResponseCode::RetryableFileAccessError);
+        }
+    }
+
+    EXPECT_TRUE(saw_file_access_error);
+    EXPECT_EQ(total_read_requests(), initial_chunks);
+}
+
+// Time spent before ObjectStorageWorker first submits a chunk does not consume its retry budget. Even after
+// waiting longer than the configured timeout, the first retryable completion is requeued and succeeds.
+TEST_F(ObjectStorageWorkerTest, RetryDeadlineStartsAtFirstChunkSubmission)
+{
+    auto workloads = build(1, 1, 1, SingleChunkBlockBytesize);   // exactly one backend chunk
+    config->object_storage_retry_timeout = std::chrono::seconds(1);
+    const size_t initial_chunks = count_object_chunks(workloads);
+    ASSERT_EQ(initial_chunks, 1u);
+    set_read_failures(1, common::ResponseCode::RetryableFileAccessError);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+
+    {
+        auto pool = make_pool(1);
+        push_all(pool, workloads);
+        for (unsigned i = 0; i < submission->total_requests(); ++i)
+        {
+            EXPECT_EQ(responder->pop().ret, common::ResponseCode::Success);
+        }
+    }
+
+    EXPECT_EQ(total_read_requests(), initial_chunks + 1);
 }
 
 // New submissions pushed WHILE the consumer is draining earlier ones (from a separate thread) all complete:

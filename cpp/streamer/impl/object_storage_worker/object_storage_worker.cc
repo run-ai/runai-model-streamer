@@ -1,6 +1,8 @@
 #include "streamer/impl/object_storage_worker/object_storage_worker.h"
 
 #include <algorithm>
+#include <chrono>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -39,6 +41,7 @@ std::size_t ObjectStorageWorker::capacity(const Workload & first)
         const auto & batch = first.batches().front();
         _config = batch.config;
         _chunk_bytesize = std::max(static_cast<size_t>(1), _config->s3_block_bytesize);
+        _retry = ObjectStorageRetry(_config->object_storage_retry_timeout);
 
         // Request one completion at a time by default for prompt, per-completion window refill;
         // RUNAI_STREAMER_INTERNAL_MAX_RESPONSES can raise it (internal tuning / test knob).
@@ -151,7 +154,7 @@ void ObjectStorageWorker::enqueue(Workload && workload)
 
         Inflight & wl = wlit->second;
         wl.workload = std::move(workload);   // noexcept; the workload now lives in the _inflight entry
-        wl.chunk_tasks.resize(total_chunks);
+        wl.chunks.resize(total_chunks);
 
         size_t next_chunk = 0;
         // &batch below outlives this loop (it is stored in wl.tasks and used to route completions): the
@@ -184,8 +187,9 @@ void ObjectStorageWorker::enqueue(Workload && workload)
                     << "chunk of " << chunk.bytesize << " bytes exceeds " << _chunk_bytesize
                     << " - the task cut and the chunk size have diverged";
 
-                wl.chunk_tasks[next_chunk] = ChunkTasks{ task_base + chunk.first_task, chunk.task_count };
-                _queue->enqueue(ObjectChunk{ handle_base + next_chunk, chunk.offset, chunk.bytesize, chunk.buffer }, 1);
+                const ObjectChunk object_chunk{ handle_base + next_chunk, chunk.offset, chunk.bytesize, chunk.buffer };
+                wl.chunks[next_chunk] = ChunkState{ object_chunk, task_base + chunk.first_task, chunk.task_count, {} };
+                _queue->enqueue(object_chunk, 1);   // cost 1
                 ++next_chunk;
             }
         }
@@ -213,28 +217,38 @@ std::pair<ObjectStorageWorker::InflightMap::iterator, size_t> ObjectStorageWorke
     --it;
 
     const auto rel = handle - it->first;
-    if (rel >= it->second.chunk_tasks.size())
+    if (rel >= it->second.chunks.size())
     {
         return { _inflight.end(), 0 };   // falls in a gap between blocks / past this block
     }
-    return { it, rel };
+    return { it, static_cast<size_t>(rel) };
 }
 
 void ObjectStorageWorker::submit(const ObjectChunk & chunk)
 {
-    auto [wlit, chunk_index] = locate(chunk.handle);
+    auto [wlit, chunk_idx] = locate(chunk.handle);
     ASSERT(wlit != _inflight.end()) << "submitting a chunk with unknown handle " << chunk.handle;
 
-    const auto & span = wlit->second.chunk_tasks[chunk_index];
-    ASSERT(span.count > 0) << "chunk " << chunk.handle << " covers no tasks";
+    ChunkState & cs = wlit->second.chunks[chunk_idx];
+    ASSERT(cs.count > 0) << "chunk " << chunk.handle << " covers no tasks";
 
     // Every task in the span shares this one read, and a task belongs to exactly one chunk - so none
-    // of them can already have failed when this runs. The old "the owning task already failed, skip
+    // of them can already have failed when this runs. Master's "the owning task already failed, skip
     // the read" short-circuit existed because a task was split across several chunks and an early
     // failure could doom the rest; with one chunk per span there are no siblings to short-circuit.
-    TaskState & first = wlit->second.tasks[span.first];
+    TaskState & first = wlit->second.tasks[cs.first];
     ASSERT(first.error == common::ResponseCode::Success)
         << "task already failed before its only chunk was submitted";
+
+    // ObjectStorageRetry starts the deadline here, so queueing before the first backend attempt does not
+    // consume the chunk's retry budget. A delayed retry promoted after its deadline is rejected here.
+    if (_retry.enabled() && !_retry.begin_attempt(cs.retry))
+    {
+        LOG(WARNING) << "Object chunk " << chunk.handle << " exhausted RUNAI_STREAMER_S3_TIMEOUT after "
+                     << _retry.retry_count(cs.retry) << " application retries";
+        complete_chunk(wlit, chunk_idx, common::ResponseCode::FileAccessError);
+        return;
+    }
 
     try
     {
@@ -244,20 +258,20 @@ void ObjectStorageWorker::submit(const ObjectChunk & chunk)
     catch (const common::Exception & e)
     {
         // the read could not be issued: fail every task this chunk carried
-        complete_chunk(wlit, chunk_index, e.error());
+        complete_chunk(wlit, chunk_idx, e.error());
     }
     catch (...)
     {
-        complete_chunk(wlit, chunk_index, common::ResponseCode::UnknownError);
+        complete_chunk(wlit, chunk_idx, common::ResponseCode::UnknownError);
     }
 }
 
-void ObjectStorageWorker::complete_chunk(InflightMap::iterator wlit, size_t chunk_index, common::ResponseCode ret)
+void ObjectStorageWorker::complete_chunk(InflightMap::iterator wlit, size_t chunk_idx, common::ResponseCode ret)
 {
     _queue->complete(1);   // free the window slot so the next chunk can be submitted
 
     Inflight & wl = wlit->second;
-    const auto span = wl.chunk_tasks[chunk_index];
+    const auto & span = wl.chunks[chunk_idx];
 
     // One read carried all of these, so they share its outcome.
     for (unsigned i = 0; i < span.count; ++i)
@@ -292,6 +306,30 @@ void ObjectStorageWorker::complete_chunk(InflightMap::iterator wlit, size_t chun
     {
         finalize(wlit, common::ResponseCode::Success);
     }
+}
+
+void ObjectStorageWorker::promote_due_retries()
+{
+    const auto now = ObjectStorageRetry::Clock::now();
+    while (const auto handle = _retry.pop_due(now))
+    {
+        auto [wlit, chunk_idx] = locate(handle.value());
+        ASSERT(wlit != _inflight.end()) << "retrying a chunk with unknown handle " << handle.value();
+        _queue->enqueue_front(wlit->second.chunks[chunk_idx].chunk, 1);
+    }
+}
+
+void ObjectStorageWorker::pre_pump()
+{
+    if (_retry.enabled())
+    {
+        promote_due_retries();
+    }
+}
+
+bool ObjectStorageWorker::has_deferred_work() const
+{
+    return _retry.has_pending();
 }
 
 void ObjectStorageWorker::report_workload(Inflight & wl, common::ResponseCode code)
@@ -335,6 +373,8 @@ void ObjectStorageWorker::abort_all(common::ResponseCode code)
     // always locates to end(). The cost of the mid-life call is that sibling in-flight workloads on this
     // worker are failed too, and their still-outstanding reads may write to already-reported buffers - the
     // OOM caller is expected to abort on UnknownError and tear the streamer down.
+    _retry.clear();
+
     for (auto it = _inflight.begin(); it != _inflight.end(); )
     {
         auto next = std::next(it);
@@ -366,6 +406,23 @@ void ObjectStorageWorker::drain_batch(std::atomic<bool> & stopped)
         return;
     }
 
+    // With no backend attempt in flight, sleep in short slices while a retry is deferred so the thread does
+    // not busy-wait. CapacityWorker calls pump() immediately after this returns; pre_pump() then promotes a
+    // due retry to the front of the queue before any newly queued chunks are selected.
+    if (_queue->inflight() == 0)
+    {
+        if (_retry.enabled() && _retry.has_pending() && _queue->empty())
+        {
+            if (const auto retry_at = _retry.next_due())
+            {
+                const auto now = ObjectStorageRetry::Clock::now();
+                const auto until = std::min(retry_at.value(), now + std::chrono::milliseconds(20));
+                std::this_thread::sleep_until(until);
+            }
+        }
+        return;
+    }
+
     std::vector<common::backend_api::Response> responses;
     const auto r = _reader->async_response(responses, _max_responses);
     if (r != common::ResponseCode::Success)
@@ -392,7 +449,7 @@ void ObjectStorageWorker::drain_batch(std::atomic<bool> & stopped)
             break;
         }
 
-        auto [wlit, chunk_index] = locate(response.handle);
+        auto [wlit, chunk_idx] = locate(response.handle);
         if (wlit == _inflight.end())
         {
             // A late completion (see abort_all): a chunk whose workload was already erased by an abort_all
@@ -404,7 +461,35 @@ void ObjectStorageWorker::drain_batch(std::atomic<bool> & stopped)
             continue;
         }
 
-        complete_chunk(wlit, chunk_index, response.ret);
+        auto ret = response.ret;
+        if (ret == common::ResponseCode::RetryableFileAccessError)
+        {
+            ChunkState & cs = wlit->second.chunks[chunk_idx];
+
+            // No sibling guard here. Master also asked whether the owning task had already failed,
+            // because a task was split across several chunks and one failure doomed the rest -
+            // retrying such a chunk would be wasted work. Our cut gives a task exactly one chunk, so
+            // no other chunk can have failed its tasks first, and there is nothing to guard against.
+            //
+            // Worth knowing when reading a failure: a chunk here covers a WHOLE SPAN of tasks, so an
+            // exhausted budget fails all of them together. The retry matters more than it did, not
+            // less.
+            const auto retry = _retry.schedule(cs.retry, cs.chunk.handle);
+            if (retry.has_value())
+            {
+                // The failed attempt is no longer in flight; the logical chunk remains pending in _retry.
+                _queue->complete(1);
+                LOG(DEBUG) << "Retrying object chunk " << cs.chunk.handle << " (offset " << cs.chunk.offset
+                           << ", bytes " << cs.chunk.bytesize << ") after " << retry->delay.count()
+                           << " ms; application retry " << retry->retry_count;
+                progressed = true;
+                continue;
+            }
+            // The retry budget is disabled/exhausted. The internal marker must never escape to callers.
+            ret = common::ResponseCode::FileAccessError;
+        }
+
+        complete_chunk(wlit, chunk_idx, ret);
         progressed = true;
     }
 

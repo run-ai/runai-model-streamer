@@ -13,6 +13,7 @@
 #include "common/s3_credentials/s3_credentials.h"
 
 #include "streamer/impl/config/config.h"
+#include "streamer/impl/object_storage_worker/object_storage_retry.h"
 #include "streamer/impl/reader/reader.h"
 #include "streamer/impl/workload/workload.h"
 
@@ -73,9 +74,14 @@ class ObjectStorageWorker : public utils::CapacityWorker<Workload, ObjectChunk>
     // Fire one chunk's async read (or short-circuit a chunk whose task has already failed).
     void submit(const ObjectChunk & chunk) override;
 
+    // Promote due retries to the front of the capacity queue before the base selects chunks to submit.
+    void pre_pump() override;
+
     // Process one batch of completions: route each to its task, free its window slot, and finalize a
     // workload once its last task lands. On stop / a drained responder, fail every in-flight workload.
     void drain_batch(std::atomic<bool> & stopped) override;
+
+    bool has_deferred_work() const override;
 
  private:
     // Per-task runtime state, indexed by local task index (assigned 0..N-1 in enqueue order). Touched only
@@ -87,22 +93,28 @@ class ObjectStorageWorker : public utils::CapacityWorker<Workload, ObjectChunk>
         common::ResponseCode error = common::ResponseCode::Success;
     };
 
-    // The tasks one chunk covers, as indices into Inflight::tasks.
+    // One object read: the read itself, the tasks it covers as indices into Inflight::tasks, and its
+    // retry budget.
     //
     // A chunk is read once and completes every task in its span at that moment, so there is no
     // per-task chunk counter: a task belongs to exactly one chunk, because Batch::chunks are built
     // from the same cut that produced the tasks.
-    struct ChunkTasks
+    //
+    // The ObjectChunk is kept rather than just its span because a retry re-enqueues this exact read
+    // (see promote_due_retries).
+    struct ChunkState
     {
-        size_t   first = 0;
-        unsigned count = 0;
+        ObjectChunk chunk;
+        size_t   first = 0;                 // first task of the span
+        unsigned count = 0;                 // tasks in the span
+        ObjectStorageRetry::State retry;
     };
 
     // Per-in-flight-workload state, owned here and kept alive until the workload's last task finalizes.
     struct Inflight
     {
         Workload workload;                                         // owns the batches/responder/config
-        std::vector<ChunkTasks> chunk_tasks;                       // handle - handle_base -> the tasks it covers
+        std::vector<ChunkState> chunks;                            // handle - handle_base -> chunk state
         std::vector<TaskState> tasks;                              // per task (only non-zero-size tasks)
         std::map<unsigned, common::ResponseCode> error_by_file_index;   // first error per file (finalize)
         // Chunks, not tasks. Every chunk completes exactly once, and every task belongs to exactly one
@@ -122,7 +134,11 @@ class ObjectStorageWorker : public utils::CapacityWorker<Workload, ObjectChunk>
 
     // Account one completed chunk: free the window slot and report EVERY task it covered - one read
     // carries them all, so they succeed or fail together. Finalizes the workload once its last task lands.
-    void complete_chunk(InflightMap::iterator wlit, size_t chunk_index, common::ResponseCode ret);
+    void complete_chunk(InflightMap::iterator wlit, size_t chunk_idx, common::ResponseCode ret);
+
+    // Move retry entries whose jitter delay elapsed to the FRONT of the capacity queue, so a retry is
+    // preferred over a new submission.
+    void promote_due_retries();
 
     // Push each batch's aggregate result: the whole-workload `code` if non-Success, else the batch's own
     // per-file error (Success for files whose tasks all succeeded).
@@ -143,6 +159,7 @@ class ObjectStorageWorker : public utils::CapacityWorker<Workload, ObjectChunk>
     unsigned _max_responses = 1;
 
     InflightMap _inflight;
+    ObjectStorageRetry _retry;
 
     // Next async chunk handle. The backend requires a unique handle per in-flight request on a client, and
     // each worker has its own client - so a completion only ever returns to the worker that submitted it and

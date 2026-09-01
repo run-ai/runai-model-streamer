@@ -45,6 +45,13 @@ std::atomic<size_t> __mock_requests{0};
 // cross-attribute the mark when two clients reuse the same handle number.
 std::string __mock_failing_path;
 std::set<std::pair<common::backend_api::ObjectClientHandle_t, common::backend_api::ObjectRequestId_t>> __mock_failing_requests;
+// Per-attempt completion overrides for deterministic retry tests. The same chunk handle may appear more
+// than once sequentially; the override is consumed when its completion is returned, before a retry submits
+// that handle again.
+unsigned __mock_read_failures_remaining = 0;
+common::ResponseCode __mock_read_failure_code = common::ResponseCode::RetryableFileAccessError;
+size_t __mock_total_read_requests = 0;
+std::map<std::pair<common::backend_api::ObjectClientHandle_t, common::backend_api::ObjectRequestId_t>, common::ResponseCode> __mock_completion_overrides;
 // peak number of completion events returned by a single obj_wait_for_completions call,
 // for batch (max_responses > 1) tests
 std::atomic<size_t> __mock_max_events_per_wait{0};
@@ -164,6 +171,19 @@ void runai_mock_s3_set_failing_path(const char* substr)
     __mock_failing_path = (substr != nullptr) ? substr : "";
 }
 
+void runai_mock_s3_set_read_failures(unsigned count, common::backend_api::ResponseCode_t response_code)
+{
+    const auto guard = std::unique_lock<std::mutex>(__mutex);
+    __mock_read_failures_remaining = count;
+    __mock_read_failure_code = response_code;
+}
+
+size_t runai_mock_s3_total_read_requests()
+{
+    const auto guard = std::unique_lock<std::mutex>(__mutex);
+    return __mock_total_read_requests;
+}
+
 size_t runai_mock_s3_max_events_per_wait()
 {
     return __mock_max_events_per_wait.load();
@@ -280,6 +300,13 @@ common::backend_api::ResponseCode_t obj_request_read(
 
     ASSERT(__mock_client_requests.find(client_handle) != __mock_client_requests.end()) << "Client " << client_handle << " not found";
     __mock_client_requests[client_handle].insert(request_id);
+    ++__mock_total_read_requests;
+
+    if (__mock_read_failures_remaining > 0)
+    {
+        --__mock_read_failures_remaining;
+        __mock_completion_overrides[{client_handle, request_id}] = __mock_read_failure_code;
+    }
 
     // mark this request to fail at completion if its path matches the configured failing path
     if (!__mock_failing_path.empty() && path != nullptr && std::string(path).find(__mock_failing_path) != std::string::npos)
@@ -352,8 +379,19 @@ common::backend_api::ResponseCode_t obj_wait_for_completions(common::backend_api
     *out_num_events_retrieved = 0;
     for (auto it = client_requests.begin(); it != client_requests.end() && *out_num_events_retrieved < max_events_to_retrieve; )
     {
-        // a request marked via runai_mock_s3_set_failing_path fails; others get the global code
-        auto code = (__mock_failing_requests.erase({client_handle, *it}) != 0) ? common::ResponseCode::FileAccessError : r;
+        // A deterministic per-attempt override wins, then a path-marked failure, then the global code.
+        const auto key = std::make_pair(client_handle, *it);
+        auto override_it = __mock_completion_overrides.find(key);
+        auto code = r;
+        if (override_it != __mock_completion_overrides.end())
+        {
+            code = override_it->second;
+            __mock_completion_overrides.erase(override_it);
+        }
+        else if (__mock_failing_requests.erase(key) != 0)
+        {
+            code = common::ResponseCode::FileAccessError;
+        }
         event_buffer[*out_num_events_retrieved].request_id = *it;
         event_buffer[*out_num_events_retrieved].response_code = code;
         it = client_requests.erase(it);
@@ -519,6 +557,10 @@ void runai_mock_s3_cleanup()
     const auto guard = std::unique_lock<std::mutex>(__mutex);
     __mock_failing_path.clear();
     __mock_failing_requests.clear();
+    __mock_read_failures_remaining = 0;
+    __mock_read_failure_code = common::ResponseCode::RetryableFileAccessError;
+    __mock_total_read_requests = 0;
+    __mock_completion_overrides.clear();
     __mock_files.clear();
     __mock_last_client_config.clear();
     __mock_list_files_response = common::ResponseCode::Success;

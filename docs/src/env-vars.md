@@ -102,6 +102,53 @@ Boolean `0` or `1`
 
 `0`
 
+### RUNAI_STREAMER_S3_MAX_RETRIES
+
+Overrides the AWS S3 CRT retry limit for each ranged-read request. The value is
+the maximum number of native retry attempts after the initial request. These
+retries are completed by the AWS CRT before Run:ai receives the final result for
+the request.
+
+Setting this variable to `0` does not disable native retries; the AWS CRT treats
+`0` as its default retry limit. Leave the variable unset to preserve the complete
+AWS CRT default retry configuration.
+
+#### Values accepted
+
+Non-negative integer. Only a positive value overrides the AWS CRT retry limit.
+
+#### Default value
+
+AWS S3 CRT default retry policy
+
+### RUNAI_STREAMER_S3_TIMEOUT
+
+Controls the application-level retry window for each S3 chunk, in seconds. The
+window starts when the chunk is first submitted to S3, so time spent waiting in
+the worker queue before its first submission does not consume the retry window.
+
+After the AWS CRT finishes its native retries and reports a retryable failure,
+Run:ai schedules another attempt of only the failed chunk using exponential
+backoff with full jitter. A new attempt is scheduled only when its complete
+backoff ends before the chunk's deadline. The deadline does not cancel an S3
+request that is already in flight.
+
+Application retries cover transport failures, HTTP 5xx responses, HTTP 408 and
+HTTP 429. Permanent client errors such as HTTP 400, 401, 403 and 404 are returned
+immediately as `FileAccessError`.
+
+Set this variable to `0`, or leave it unset, to disable application-level
+retries. In that mode, the original `FileAccessError` is returned after the AWS
+CRT retry policy finishes.
+
+#### Values accepted
+
+Non-negative integer, in seconds
+
+#### Default value
+
+`0` (application-level retries disabled)
+
 ### RUNAI_STREAMER_GCS_CREDENTIAL_FILE
 
 Specifies the path to a credential file to use for GCS authentication.
@@ -209,4 +256,3 @@ String `0` or `1`
 #### Default value
 
 `0`
-

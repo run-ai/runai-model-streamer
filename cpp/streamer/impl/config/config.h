@@ -1,6 +1,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <string>
 
 #include <ostream>
@@ -23,8 +24,8 @@ namespace runai::llm::streamer::impl
 
 struct Config
 {
-    // fs_async_chunk_bytesize comes last, after the bool, only so existing callers that pass
-    // enforce_minimum positionally keep working.
+    // Everything after `enforce_minimum` is defaulted and comes after the bool, only so existing
+    // callers that pass enforce_minimum positionally keep working.
     Config(unsigned concurrency,
            unsigned s3_concurrency,
            size_t s3_block_bytesize,
@@ -32,7 +33,8 @@ struct Config
            bool enforce_minimum = true,
            size_t fs_async_chunk_bytesize = default_fs_async_chunk_bytesize,
            unsigned fs_async_queue_depth = default_fs_async_queue_depth,
-           std::string fs_strategy_candidates = default_fs_strategy_candidates);
+           std::string fs_strategy_candidates = default_fs_strategy_candidates,
+           unsigned long object_storage_retry_timeout_seconds = 0);
     Config(bool enforce_minimum = true);
 
     unsigned max_concurrency() const;
@@ -68,6 +70,10 @@ struct Config
     // In-flight requests for the whole node. What one process may hold is this divided by the number
     // of streamer processes on the node, which is not known this early - AsyncIoSettings does it.
     unsigned fs_async_queue_depth;
+
+    // Application-level retry budget for each object chunk, starting when that chunk is first submitted to
+    // the backend. Zero preserves fail-fast behavior after the storage plugin's native retry policy expires.
+    std::chrono::seconds object_storage_retry_timeout;
 };
 
 std::ostream & operator<<(std::ostream &, const Config &);

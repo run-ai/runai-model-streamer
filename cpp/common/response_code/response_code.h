@@ -28,6 +28,7 @@ enum class ResponseCode : int
     TimedOut,
     UnsupportedBackendMix,
     CredentialsAlreadySet,
+    RetryableFileAccessError,
 
     // Filesystem strategy problems. Two codes, because the operator has to do something different
     // for each one: set the value once, or add a candidate the host can serve.
@@ -36,7 +37,8 @@ enum class ResponseCode : int
     // That sent the reader to object storage for a problem that has nothing to do with it.
     //
     // APPENDED here, before __Max, so the numbers of the codes above do not move. They cross the C
-    // ABI, and a compiled caller holds the old numbers.
+    // ABI, and a compiled caller holds the old numbers. RetryableFileAccessError is already released
+    // and keeps its number, so these two follow it rather than displacing it.
     FsStrategyConflict,
     FsStrategyUnavailable,
 

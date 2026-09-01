@@ -6,6 +6,8 @@
         runai_mock_s3_max_concurrent;
         runai_mock_s3_requests;
         runai_mock_s3_set_failing_path;
+        runai_mock_s3_set_read_failures;
+        runai_mock_s3_total_read_requests;
         runai_mock_s3_max_events_per_wait;
         runai_mock_s3_set_append_finished_sentinel;
         runai_mock_s3_last_client_config_value;
