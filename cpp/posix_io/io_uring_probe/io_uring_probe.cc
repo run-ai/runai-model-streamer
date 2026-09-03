@@ -128,9 +128,17 @@ void IoUringProbe::mark_unavailable(common::ResponseCode reason)
     _capability.available = false;
     _capability.error = reason;
 
+    // Reports WHAT was disabled and why, and says nothing about the host.
+    //
+    // It used to add "the probe succeeded, so the host supports io_uring". That is true of the only
+    // production caller - make_io_engine consults capability() first and returns early unless it
+    // reports available - but this function never checks it, and the guard above deliberately falls
+    // through when _probed is false. The claim also belongs to the caller, which logs "io_uring is
+    // available but a ring of depth N could not be built" immediately before calling this. Two
+    // adjacent lines said the same thing and only one of them had checked it.
     LOG(WARNING) << "Disabling io_uring for the rest of this process: " << reason
-                 << ". The probe succeeded, so the host supports io_uring - building an engine at the"
-                 << " configured depth is what failed, and it will not succeed later";
+                 << ". A ring of the configured depth could not be built, and retrying will not"
+                 << " succeed later";
 }
 
 IoUringProbe & IoUringProbe::instance()

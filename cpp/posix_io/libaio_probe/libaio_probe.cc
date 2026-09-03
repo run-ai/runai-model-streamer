@@ -95,9 +95,13 @@ void LibaioProbe::mark_unavailable(common::ResponseCode reason)
     _capability.available = false;
     _capability.error = reason;
 
+    // Reports WHAT was disabled and why, and says nothing about the host - same reasoning as
+    // IoUringProbe::mark_unavailable. The "a one-event context worked, so the host supports aio"
+    // part was a claim this function never checks, and its caller already logs "libaio is available
+    // but a context for depth N could not be built" on the line before.
     LOG(WARNING) << "Disabling libaio for the rest of this process: " << reason
-                 << ". A one-event context worked, so the host supports aio - building one at the"
-                 << " configured depth is what failed, and the node's budget does not grow on its own";
+                 << ". A context of the configured depth could not be built, and the node's aio"
+                 << " budget does not grow on its own, so retrying will not succeed later";
 }
 
 LibaioProbe & LibaioProbe::instance()
