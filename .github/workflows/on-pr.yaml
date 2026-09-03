@@ -30,8 +30,20 @@ jobs:
         cacheFrom: ghcr.io/run-ai/runai-model-streamer/devcontainer
         push: never
         runCmd: |
+          # TEMPORARY diagnostic - can CI exercise io_uring? Two layers decide it: the runner
+          # kernel's sysctl, and the container's seccomp profile. devcontainer.json sets
+          # seccomp=unconfined and those runArgs reach here, so only the kernel layer is unknown.
+          # Remove this and the probe run below once the answer is in notes_async_io.md.
+          echo "io_uring_disabled = $(cat /proc/sys/kernel/io_uring_disabled 2>&1)"
+          grep -i Seccomp /proc/self/status || true
           make test && \
           PACKAGE_VERSION=${{ env.PACKAGE_VERSION }} make build
+          # TEMPORARY, and deliberately after the build so it cannot fail the PR. The probe test
+          # calls io_uring_setup through ::syscall directly, so it reports the kernel's own answer
+          # rather than the code under test. --nocache_test_results stops a cached PASSED from
+          # hiding the log line that carries the errno.
+          (cd cpp && bazel test //posix_io/io_uring_probe:io_uring_probe_test \
+              --test_output=all --nocache_test_results) || true
 
     - name: Upload streamer package to github action
       uses: actions/upload-artifact@v4
