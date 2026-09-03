@@ -30,8 +30,17 @@ build_mock:
 	bazel build mock:libstreamer-mock.so \
 		"--config=${ARCH}"
 
+# Extra flags for the test run. Empty by default, because a contributor's host may genuinely have no
+# io_uring and their tests should skip rather than fail.
+#
+# CI passes --test_env=RUNAI_STREAMER_REQUIRE_IO_URING=1 (see .github/workflows/on-pr.yaml). GitHub
+# runners DO have io_uring - measured on a PR run: kernel.io_uring_disabled is 0, and the container
+# has no seccomp filter at all because devcontainer.json's runArgs reach CI. So the io_uring tests
+# already run there, and without this flag a skip and a pass are the same green.
+BAZEL_TEST_FLAGS ?=
+
 test:
-	bazel test //...:all
+	bazel test //...:all $(BAZEL_TEST_FLAGS)
 
 # Same suite, but io_uring tests must RUN rather than skip.
 #

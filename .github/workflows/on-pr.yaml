@@ -30,7 +30,7 @@ jobs:
         cacheFrom: ghcr.io/run-ai/runai-model-streamer/devcontainer
         push: never
         runCmd: |
-          make test && \
+          make test BAZEL_TEST_FLAGS=--test_env=RUNAI_STREAMER_REQUIRE_IO_URING=1 && \
           PACKAGE_VERSION=${{ env.PACKAGE_VERSION }} make build
 
     - name: Upload streamer package to github action
