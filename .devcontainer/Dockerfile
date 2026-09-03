@@ -284,11 +284,19 @@ RUN NATIVE_ARCH=$(uname -m | sed 's/x86_64/x86_64/;s/aarch64/aarch64/') && \
 #                 sanitizers and interposition can see them
 #   ENABLE_SHARED=0  liburing has no ./configure --disable-shared; the switch is a make variable
 #
-# No sha256 check here, unlike libaio below. liburing publishes no release asset - only GitHub's
-# generated /archive/ tarball, which is rebuilt on demand and has changed bytes before for the same
-# tag. A pin on it would fail the image build one day for no real reason. libaio can be pinned
-# because releases.pagure.org serves an uploaded file.
+# CHECKSUMMED, like libaio below and like googletest in cpp/rules.bzl.
+#
+# An earlier version of this block skipped the check, reasoning that GitHub's generated /archive/
+# tarballs are rebuilt on demand and have changed bytes for an unchanged tag before. That reasoning
+# does not survive contact with what this repository already does: rules.bzl pins the sha256 of a
+# GitHub-generated archive for googletest and has been fine.
+#
+# The trade is the right way round. Without a pin, altered bytes are linked statically into
+# libstreamer.so and shipped, silently. With one, a regenerated archive fails the image build loudly -
+# and a loud failure that needs a one-line update beats an unverified dependency in a release
+# artifact.
 RUN curl -fsSL -o liburing-2.14.tar.gz https://github.com/axboe/liburing/archive/refs/tags/liburing-2.14.tar.gz && \
+    echo "5f80964108981c6ad979c735f0b4877d5f49914c2a062f8e88282f26bf61de0c  liburing-2.14.tar.gz" | sha256sum -c - && \
     tar zxf liburing-2.14.tar.gz && \
     cd liburing-liburing-2.14 && \
 
