@@ -45,7 +45,7 @@ std::size_t ObjectStorageWorker::capacity(const Workload & first)
 
         // Request one completion at a time by default for prompt, per-completion window refill;
         // RUNAI_STREAMER_INTERNAL_MAX_RESPONSES can raise it (internal tuning / test knob).
-        _max_responses = static_cast<unsigned>(std::max(1UL, utils::getenv<unsigned long>("RUNAI_STREAMER_INTERNAL_MAX_RESPONSES", 1UL)));
+        _max_responses = utils::getenv_positive<unsigned>("RUNAI_STREAMER_INTERNAL_MAX_RESPONSES", 1U);
 
         try
         {

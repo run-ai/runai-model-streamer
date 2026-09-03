@@ -23,7 +23,7 @@ BackendPools::BackendPools(Handler filesystem_handler,
     _object_storage_size(object_storage_size),
     // This limit is per PROCESS, not per node. Each engine has its own queue depth, so N engines mean
     // N times the depth of reads running at the device.
-    _max_async_engines(std::max(1UL, utils::getenv<unsigned long>("RUNAI_STREAMER_FS_MAX_ENGINES", 1UL)))
+    _max_async_engines(utils::getenv_positive<unsigned>("RUNAI_STREAMER_FS_MAX_ENGINES", 1U))
 {}
 
 void BackendPools::push(Pool pool, Workload && workload)

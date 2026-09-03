@@ -201,4 +201,48 @@ TEST(Getenv_Bool, NotBool)
     }
 }
 
+// A value too large for T must not wrap to ZERO, which is the one answer callers cannot use.
+//
+// Every caller of this used to floor its own value with std::max(1UL, ...) BEFORE storing it in an
+// `unsigned`, and that floor does not survive the narrowing: any non-zero multiple of 2^32 truncates
+// to 0. Zero was an integer division by zero in AsyncIoSettings and in the Azure client
+// configuration, and a fatal ASSERT in BackendPools.
+TEST(getenv_positive, Oversized_Values_Are_Capped_Not_Wrapped)
+{
+    const std::string name = "RUNAI_STREAMER_TEST_" + random::string();
+
+    // 2^32 exactly, the smallest value that truncates to zero rather than to something merely wrong.
+    {
+        temp::Env env(name, 4294967296UL);
+        EXPECT_EQ(getenv_positive<unsigned>(name, 1U), std::numeric_limits<unsigned>::max());
+    }
+
+    // And a multiple of it, so the test is not passing on one special case.
+    {
+        temp::Env env(name, 8589934592UL);
+        EXPECT_EQ(getenv_positive<unsigned>(name, 1U), std::numeric_limits<unsigned>::max());
+    }
+}
+
+// The floor still applies, and it applies AFTER the cap.
+TEST(getenv_positive, Zero_And_Unset_Take_The_Minimum)
+{
+    const std::string name = "RUNAI_STREAMER_TEST_" + random::string();
+
+    EXPECT_EQ(getenv_positive<unsigned>(name, 8U), 8U) << "unset must give the default";
+
+    temp::Env env(name, 0UL);
+    EXPECT_EQ(getenv_positive<unsigned>(name, 8U), 1U) << "zero must be floored, not passed through";
+    EXPECT_EQ(getenv_positive<unsigned>(name, 8U, 4U), 4U) << "an explicit minimum must win";
+}
+
+// An ordinary value passes through untouched - the guard must not change the normal case.
+TEST(getenv_positive, Ordinary_Values_Are_Unchanged)
+{
+    const std::string name = "RUNAI_STREAMER_TEST_" + random::string();
+
+    temp::Env env(name, 512UL);
+    EXPECT_EQ(getenv_positive<unsigned>(name, 1U), 512U);
+}
+
 } // namespace runai::llm::streamer::utils

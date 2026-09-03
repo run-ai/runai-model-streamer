@@ -10,7 +10,9 @@ namespace runai::llm::streamer::impl
 {
 
 AsyncIoSettings::AsyncIoSettings(const Config & config, size_t max_read_bytesize) :
-    _process_group_size(std::max(1UL, utils::getenv<unsigned long>("RUNAI_STREAMER_PROCESS_GROUP_SIZE", 1UL))),
+    // getenv_positive, not std::max on the raw value: the very next line DIVIDES by this, and a
+    // floor applied before the narrowing to `unsigned` does not survive it (env.h).
+    _process_group_size(utils::getenv_positive<unsigned>("RUNAI_STREAMER_PROCESS_GROUP_SIZE", 1U)),
     _depth(std::min(std::max(config.fs_async_queue_depth / _process_group_size, MinDepth), MaxDepth)),
     _chunk_bytesize(std::min(config.fs_async_chunk_bytesize, max_read_bytesize))
 {

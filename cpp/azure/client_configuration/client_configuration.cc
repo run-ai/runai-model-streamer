@@ -58,9 +58,11 @@ ClientConfiguration::ClientConfiguration()
     unsigned nprocs = std::thread::hardware_concurrency();
     LOG(SPAM) << "Hardware concurrency detected: " << nprocs;
     unsigned default_max_concurrency = nprocs == 0 ? 8U : 1U;
-    unsigned worker_concurrency = utils::getenv<unsigned long>("RUNAI_STREAMER_CONCURRENCY", 8UL);
+    // Both of these are DIVISORS below, and neither had any floor - a plain 0 in either variable
+    // was an integer division by zero, no 2^32 required (env.h).
+    unsigned worker_concurrency = utils::getenv_positive<unsigned>("RUNAI_STREAMER_CONCURRENCY", 8U);
     LOG(SPAM) << "Streamer worker concurrency: " << worker_concurrency;
-    unsigned process_group_size = utils::getenv<unsigned long>("RUNAI_STREAMER_PROCESS_GROUP_SIZE", 1UL);
+    unsigned process_group_size = utils::getenv_positive<unsigned>("RUNAI_STREAMER_PROCESS_GROUP_SIZE", 1U);
     LOG(SPAM) << "Process group size: " << process_group_size;
     max_concurrency = std::max(default_max_concurrency, nprocs * 2 / (worker_concurrency * process_group_size));
     LOG(DEBUG) << "Azure Blob Storage per-client concurrency is set to: " << max_concurrency;
