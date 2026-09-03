@@ -123,78 +123,6 @@ RUN curl -fsSL -o zlib-1.3.1.tar.gz https://github.com/madler/zlib/releases/down
     cd - && \
     rm -rf zlib-1.3.1 zlib-1.3.1.tar.gz
 
-# liburing, for the io_uring engine. Static only: it is linked into libstreamer.so, which exports an
-# explicit allowlist via streamer.ldscript, so these symbols stay hidden.
-#   --use-libc    route syscalls through libc wrappers instead of raw syscall instructions, so
-#                 sanitizers and interposition can see them
-#   ENABLE_SHARED=0  liburing has no ./configure --disable-shared; the switch is a make variable
-RUN curl -fsSL -o liburing-2.6.tar.gz https://github.com/axboe/liburing/archive/refs/tags/liburing-2.6.tar.gz && \
-    tar zxf liburing-2.6.tar.gz && \
-    cd liburing-liburing-2.6 && \
-
-    CC=/usr/bin/x86_64-linux-gnu-gcc \
-    ./configure --use-libc --prefix=/opt/x86_64-uring --libdir=/opt/x86_64-uring/lib && \
-        AR=/usr/bin/x86_64-linux-gnu-ar \
-        RANLIB=/usr/bin/x86_64-linux-gnu-ranlib \
-        CC=/usr/bin/x86_64-linux-gnu-gcc \
-        make -C src -j4 ENABLE_SHARED=0 CFLAGS="-fPIC -O2" > /dev/null && \
-        make install ENABLE_SHARED=0 > /dev/null && \
-        make clean > /dev/null && \
-
-    CC=/usr/bin/aarch64-linux-gnu-gcc \
-    ./configure --use-libc --prefix=/opt/aarch64-uring --libdir=/opt/aarch64-uring/lib && \
-        AR=/usr/bin/aarch64-linux-gnu-ar \
-        RANLIB=/usr/bin/aarch64-linux-gnu-ranlib \
-        CC=/usr/bin/aarch64-linux-gnu-gcc \
-        make -C src -j4 ENABLE_SHARED=0 CFLAGS="-fPIC -O2" > /dev/null && \
-        make install ENABLE_SHARED=0 > /dev/null && \
-        make clean > /dev/null && \
-
-    cd - && \
-    rm -rf liburing-liburing-2.6 liburing-2.6.tar.gz
-
-# libaio, for the fallback engine where io_uring is unavailable. Static only, same reasoning as
-# liburing. Its symbols carry .symver directives, which need no version nodes here because
-# streamer.ldscript ends "local: *" and localizes them.
-#   CFLAGS -I.       libaio has no ./configure, and its sources include <libaio.h> from src/
-#   copy, not make install   its install target also lays down libaio.so and its sonames; we want
-#                            only the archive
-#   the URL     pagure.io was SUNSET in 2026 and is now a static snapshot. Its /archive/<ref>.tar.gz
-#               endpoint generated tarballs on demand, so it needs a running app and now returns 404
-#               for every project - including pagure's own. The git remote and releases.pagure.org
-#               are plain files and still serve, which is why this fetches a published release rather
-#               than a generated archive.
-#   the sha256  so the host stops being load-bearing. This exact tarball is served byte-identically by
-#               releases.pagure.org and by Debian
-#               (deb.debian.org/debian/pool/main/liba/libaio/libaio_0.3.113.orig.tar.gz), and its
-#               src/ matches the libaio-0.3.113 git tag. If this host disappears too, point the URL
-#               at any mirror - a wrong tarball then fails here instead of shipping.
-RUN curl -fsSL -o libaio-0.3.113.tar.gz https://releases.pagure.org/libaio/libaio-0.3.113.tar.gz && \
-    echo "2c44d1c5fd0d43752287c9ae1eb9c023f04ef848ea8d4aafa46e9aedb678200b  libaio-0.3.113.tar.gz" | sha256sum -c - && \
-    tar zxf libaio-0.3.113.tar.gz && \
-    cd libaio-0.3.113 && \
-
-    AR=/usr/bin/x86_64-linux-gnu-ar \
-    RANLIB=/usr/bin/x86_64-linux-gnu-ranlib \
-    CC=/usr/bin/x86_64-linux-gnu-gcc \
-    make -C src CFLAGS="-fPIC -O2 -I." > /dev/null && \
-        mkdir -p /opt/x86_64-aio/lib /opt/x86_64-aio/include && \
-        cp src/libaio.a /opt/x86_64-aio/lib/ && \
-        cp src/libaio.h /opt/x86_64-aio/include/ && \
-        make -C src clean > /dev/null && \
-
-    AR=/usr/bin/aarch64-linux-gnu-ar \
-    RANLIB=/usr/bin/aarch64-linux-gnu-ranlib \
-    CC=/usr/bin/aarch64-linux-gnu-gcc \
-    make -C src CFLAGS="-fPIC -O2 -I." > /dev/null && \
-        mkdir -p /opt/aarch64-aio/lib /opt/aarch64-aio/include && \
-        cp src/libaio.a /opt/aarch64-aio/lib/ && \
-        cp src/libaio.h /opt/aarch64-aio/include/ && \
-        make -C src clean > /dev/null && \
-
-    cd - && \
-    rm -rf libaio-0.3.113 libaio-0.3.113.tar.gz
-
 ADD aarch64-linux-gnu.cmake /opt/toolchains/aarch64-linux-gnu.cmake
 ADD x86_64-linux-gnu.cmake /opt/toolchains/x86_64-linux-gnu.cmake
 RUN git clone --recurse-submodules --depth 1 --branch "1.11.584" https://github.com/aws/aws-sdk-cpp /opt/aws-sdk-cpp && \
@@ -342,4 +270,88 @@ RUN NATIVE_ARCH=$(uname -m | sed 's/x86_64/x86_64/;s/aarch64/aarch64/') && \
         ln -sf /opt/${NATIVE_ARCH}-azure/include/azure /usr/local/include/azure && \
         ln -sf /opt/${NATIVE_ARCH}-azure/lib/* /usr/local/lib/; \
     fi
+
+# liburing and libaio come LAST on purpose, after the three cloud SDKs.
+#
+# Docker invalidates every layer below the one that changed. These two are small, build in seconds,
+# and move faster than anything above them - liburing alone had eight releases while we sat on one
+# version. Placed higher, each bump would rebuild the AWS and Azure SDKs, which are the slowest steps
+# in this file and have no dependency on either library.
+#
+# liburing, for the io_uring engine. Static only: it is linked into libstreamer.so, which exports an
+# explicit allowlist via streamer.ldscript, so these symbols stay hidden.
+#   --use-libc    route syscalls through libc wrappers instead of raw syscall instructions, so
+#                 sanitizers and interposition can see them
+#   ENABLE_SHARED=0  liburing has no ./configure --disable-shared; the switch is a make variable
+#
+# No sha256 check here, unlike libaio below. liburing publishes no release asset - only GitHub's
+# generated /archive/ tarball, which is rebuilt on demand and has changed bytes before for the same
+# tag. A pin on it would fail the image build one day for no real reason. libaio can be pinned
+# because releases.pagure.org serves an uploaded file.
+RUN curl -fsSL -o liburing-2.14.tar.gz https://github.com/axboe/liburing/archive/refs/tags/liburing-2.14.tar.gz && \
+    tar zxf liburing-2.14.tar.gz && \
+    cd liburing-liburing-2.14 && \
+
+    CC=/usr/bin/x86_64-linux-gnu-gcc \
+    ./configure --use-libc --prefix=/opt/x86_64-uring --libdir=/opt/x86_64-uring/lib && \
+        AR=/usr/bin/x86_64-linux-gnu-ar \
+        RANLIB=/usr/bin/x86_64-linux-gnu-ranlib \
+        CC=/usr/bin/x86_64-linux-gnu-gcc \
+        make -C src -j4 ENABLE_SHARED=0 CFLAGS="-fPIC -O2" > /dev/null && \
+        make install ENABLE_SHARED=0 > /dev/null && \
+        make clean > /dev/null && \
+
+    CC=/usr/bin/aarch64-linux-gnu-gcc \
+    ./configure --use-libc --prefix=/opt/aarch64-uring --libdir=/opt/aarch64-uring/lib && \
+        AR=/usr/bin/aarch64-linux-gnu-ar \
+        RANLIB=/usr/bin/aarch64-linux-gnu-ranlib \
+        CC=/usr/bin/aarch64-linux-gnu-gcc \
+        make -C src -j4 ENABLE_SHARED=0 CFLAGS="-fPIC -O2" > /dev/null && \
+        make install ENABLE_SHARED=0 > /dev/null && \
+        make clean > /dev/null && \
+
+    cd - && \
+    rm -rf liburing-liburing-2.14 liburing-2.14.tar.gz
+
+# libaio, for the fallback engine where io_uring is unavailable. Static only, same reasoning as
+# liburing. Its symbols carry .symver directives, which need no version nodes here because
+# streamer.ldscript ends "local: *" and localizes them.
+#   CFLAGS -I.       libaio has no ./configure, and its sources include <libaio.h> from src/
+#   copy, not make install   its install target also lays down libaio.so and its sonames; we want
+#                            only the archive
+#   the URL     pagure.io was SUNSET in 2026 and is now a static snapshot. Its /archive/<ref>.tar.gz
+#               endpoint generated tarballs on demand, so it needs a running app and now returns 404
+#               for every project - including pagure's own. The git remote and releases.pagure.org
+#               are plain files and still serve, which is why this fetches a published release rather
+#               than a generated archive.
+#   the sha256  so the host stops being load-bearing. This exact tarball is served byte-identically by
+#               releases.pagure.org and by Debian
+#               (deb.debian.org/debian/pool/main/liba/libaio/libaio_0.3.113.orig.tar.gz), and its
+#               src/ matches the libaio-0.3.113 git tag. If this host disappears too, point the URL
+#               at any mirror - a wrong tarball then fails here instead of shipping.
+RUN curl -fsSL -o libaio-0.3.113.tar.gz https://releases.pagure.org/libaio/libaio-0.3.113.tar.gz && \
+    echo "2c44d1c5fd0d43752287c9ae1eb9c023f04ef848ea8d4aafa46e9aedb678200b  libaio-0.3.113.tar.gz" | sha256sum -c - && \
+    tar zxf libaio-0.3.113.tar.gz && \
+    cd libaio-0.3.113 && \
+
+    AR=/usr/bin/x86_64-linux-gnu-ar \
+    RANLIB=/usr/bin/x86_64-linux-gnu-ranlib \
+    CC=/usr/bin/x86_64-linux-gnu-gcc \
+    make -C src CFLAGS="-fPIC -O2 -I." > /dev/null && \
+        mkdir -p /opt/x86_64-aio/lib /opt/x86_64-aio/include && \
+        cp src/libaio.a /opt/x86_64-aio/lib/ && \
+        cp src/libaio.h /opt/x86_64-aio/include/ && \
+        make -C src clean > /dev/null && \
+
+    AR=/usr/bin/aarch64-linux-gnu-ar \
+    RANLIB=/usr/bin/aarch64-linux-gnu-ranlib \
+    CC=/usr/bin/aarch64-linux-gnu-gcc \
+    make -C src CFLAGS="-fPIC -O2 -I." > /dev/null && \
+        mkdir -p /opt/aarch64-aio/lib /opt/aarch64-aio/include && \
+        cp src/libaio.a /opt/aarch64-aio/lib/ && \
+        cp src/libaio.h /opt/aarch64-aio/include/ && \
+        make -C src clean > /dev/null && \
+
+    cd - && \
+    rm -rf libaio-0.3.113 libaio-0.3.113.tar.gz
 
