@@ -8,6 +8,13 @@
     // gives EPERM under the default profile and succeeds with this flag, while the host reports
     // kernel.io_uring_disabled=0. Without this the io_uring engine cannot be exercised at all.
     // libaio needs nothing; io_setup is already permitted.
+    //
+    // A narrower custom profile was considered and rejected. Docker has no "default plus these
+    // syscalls" syntax, so it means vendoring moby's ~1000-line default.json here, frozen at one
+    // Docker version. These runArgs also reach CI (on-pr.yaml runs devcontainers/ci with this
+    // config), so a profile that goes stale against a newer glibc breaks every PR build rather
+    // than one developer's container. The flag grants no capabilities: mount still fails without
+    // CAP_SYS_ADMIN, which is why MountProbe is an injectable seam.
     "runArgs": ["--security-opt", "seccomp=unconfined"],
     "features": {
         "ghcr.io/rocker-org/devcontainer-features/apt-packages:1": {
