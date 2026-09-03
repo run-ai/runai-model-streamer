@@ -29,8 +29,16 @@ struct IoUringCapability
     //   UnknownError    - no io_uring here at all: nobody can
     common::ResponseCode error = common::ResponseCode::Success;
 
-    // IORING_FEAT_EXT_ARG: a bounded wait costs no submission slot. Without it a timed wait needs a
-    // timeout SQE, which consumes one of the entries the caller asked for.
+    // IORING_FEAT_EXT_ARG (kernel 5.11): the timeout rides along on io_uring_enter, so a bounded
+    // wait costs no submission slot and posts no completion.
+    //
+    // Below 5.11 it is not merely a cost. liburing submits an IORING_OP_TIMEOUT SQE instead, and
+    // doing so flushes everything else staged in the ring - "we will do that on its behalf", in its
+    // own words (src/queue.c). Staged reads would then reach the kernel without passing through
+    // flush(), and the timeout posts a CQE our harvest cannot tell from a read.
+    //
+    // So this gates `available` rather than describing it: false means we decline io_uring. It is
+    // never true and unused.
     bool timed_wait_is_free = false;
 };
 

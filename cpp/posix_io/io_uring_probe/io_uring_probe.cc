@@ -66,11 +66,30 @@ IoUringCapability probe_io_uring()
         return capability;
     }
 
+    if (!capability.timed_wait_is_free)
+    {
+        // Every blocking wait we make is a bounded one (AsyncIoWorker passes WaitTimeoutMs), so
+        // without IORING_FEAT_EXT_ARG every one of them would submit a timeout SQE - flushing any
+        // staged read past flush() and its bookkeeping, and posting a CQE the harvest would route as
+        // if it were a read.
+        //
+        // This is where the design's kernel floor is enforced. 5.8 says the free path is always
+        // taken "at 5.7's >= 5.15 floor"; nothing checked it, so the real floor was IORING_OP_READ's
+        // 5.6, and 5.6 to 5.10 ran a path no test we can host will ever reach. Declining is what
+        // that note asked for - lowering the floor should be a decision, not an accident.
+        //
+        // UnknownError, like the op_read branch above: no operator can add EXT_ARG to a kernel
+        // that predates it. The default chain then picks libaio_direct on its own.
+        capability.error = common::ResponseCode::UnknownError;
+        LOG(WARNING) << "io_uring is not available: this kernel lacks IORING_FEAT_EXT_ARG (added in"
+                     << " 5.11), so every bounded wait would submit a timeout request into our own"
+                     << " ring";
+        return capability;
+    }
+
     capability.available = true;
 
-    LOG(INFO) << "io_uring is available"
-              << (capability.timed_wait_is_free ? "" : " (without IORING_FEAT_EXT_ARG: a bounded wait"
-                                                       " costs a submission slot)");
+    LOG(INFO) << "io_uring is available";
     return capability;
 }
 

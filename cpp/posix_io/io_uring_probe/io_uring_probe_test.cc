@@ -39,19 +39,43 @@ int raw_io_uring_setup_errno()
     return 0;
 }
 
+// Whether this kernel offers IORING_FEAT_EXT_ARG, asked of the kernel for the same reason as above:
+// an expectation must never be computed by the thing it is checking. probe_io_uring() reports the
+// same bit as `timed_wait_is_free`, and reading it from there would make the test vacuous.
+bool raw_has_ext_arg()
+{
+    struct io_uring_params params;
+    std::memset(&params, 0, sizeof(params));
+
+    const int fd = ::syscall(__NR_io_uring_setup, 8, &params);
+    if (fd < 0)
+    {
+        return false;
+    }
+
+    ::close(fd);
+    return (params.features & IORING_FEAT_EXT_ARG) != 0;
+}
+
 } // namespace
 
 // The probe must agree with the kernel - in both directions. In a container under Docker's default
 // seccomp profile this runs the unavailable branch; with seccomp=unconfined, the available one.
+//
+// A working io_uring_setup is necessary but NOT sufficient: below 5.11 the ring exists and we still
+// decline it, because a bounded wait there would submit a timeout SQE (see io_uring_probe.h). So the
+// expectation is gated on EXT_ARG too, which the probe reports separately. Reading that field back
+// from the probe would assert it against itself, so this asks the ring directly.
 TEST(IoUringProbe, Agrees_With_The_Kernel)
 {
     const int raw = raw_io_uring_setup_errno();
     const auto capability = probe_io_uring();
 
-    EXPECT_EQ(capability.available, raw == 0)
-        << "io_uring_setup errno was " << raw << " (" << std::strerror(raw) << ")";
+    EXPECT_EQ(capability.available, raw == 0 && raw_has_ext_arg())
+        << "io_uring_setup errno was " << raw << " (" << std::strerror(raw) << ")"
+        << ", IORING_FEAT_EXT_ARG " << (raw_has_ext_arg() ? "present" : "absent");
 
-    if (raw == 0)
+    if (raw == 0 && raw_has_ext_arg())
     {
         EXPECT_EQ(capability.error, common::ResponseCode::Success);
     }
