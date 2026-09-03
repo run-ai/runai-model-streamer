@@ -28,6 +28,16 @@ bool is_tmpfs(const std::string & path)
     return ::statfs(path.c_str(), &fs) == 0 && fs.f_type == TMPFS_MAGIC;
 }
 
+// The same question MountCapabilities answers - tmpfs OR ramfs (mount_capabilities.cc) - asked of
+// the filesystem for the same reason as above. is_tmpfs above is deliberately narrower: its caller
+// wants tmpfs specifically, because it is checking /dev/shm.
+bool raw_memory_backed(const std::string & path)
+{
+    struct statfs fs;
+    return ::statfs(path.c_str(), &fs) == 0 &&
+           (fs.f_type == TMPFS_MAGIC || fs.f_type == RAMFS_MAGIC);
+}
+
 dev_t device_of(const std::string & path)
 {
     struct stat st;
@@ -36,7 +46,7 @@ dev_t device_of(const std::string & path)
 
 } // namespace
 
-TEST(MountCapabilities, Regular_File_Is_Not_Memory_Backed)
+TEST(MountCapabilities, Regular_File_Agrees_With_The_Filesystem)
 {
     utils::temp::File file(utils::random::buffer(64));
     MountCapabilities mounts;
@@ -44,7 +54,16 @@ TEST(MountCapabilities, Regular_File_Is_Not_Memory_Backed)
     const auto capability = mounts.of_path(file.path);
 
     EXPECT_NE(capability.dev, 0);
-    EXPECT_FALSE(capability.memory_backed);
+
+    // NOT hardcoded to false, which is what this used to assert. temp::File defaults to "."
+    // (file.h), and under bazel that is the sandbox beneath the output base - so --output_user_root
+    // pointing at a tmpfs, a normal thing to do for speed, made a CORRECT answer fail the test.
+    //
+    // Checked against the filesystem in both directions instead of skipping on a memory-backed
+    // mount. A skip would give up the case entirely on such a host, and a skip reads exactly like a
+    // pass; this still asserts something everywhere, and on an ordinary filesystem it asserts what
+    // the old test did.
+    EXPECT_EQ(capability.memory_backed, raw_memory_backed(file.path));
 }
 
 // The probe that keeps tmpfs out of the O_DIRECT cell. Nothing else detects it: an O_DIRECT open
