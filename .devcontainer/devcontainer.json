@@ -3,11 +3,12 @@
     "build": {
         "dockerfile": "Dockerfile"
     },
-    // io_uring_setup/enter/register are not in Docker's default seccomp allowlist, so io_uring
-    // returns EPERM in a container even where the kernel permits it - measured here: the same binary
-    // gives EPERM under the default profile and succeeds with this flag, while the host reports
-    // kernel.io_uring_disabled=0. Without this the io_uring engine cannot be exercised at all.
-    // libaio needs nothing; io_setup is already permitted.
+    // Docker's default seccomp profile blocks io_uring_setup, io_uring_enter and io_uring_register
+    // (moby/moby#46762), so io_uring returns EPERM in a container even where the kernel permits it -
+    // measured here: the same binary gives EPERM under the default profile and succeeds with this
+    // flag, while the host reports kernel.io_uring_disabled=0. Without this the io_uring engine
+    // cannot be exercised at all. We call the first two; io_uring_register would only be needed if
+    // we ever register buffers. libaio needs nothing; io_setup is already permitted.
     //
     // A narrower custom profile was considered and rejected. Docker has no "default plus these
     // syscalls" syntax, so it means vendoring moby's ~1000-line default.json here, frozen at one
