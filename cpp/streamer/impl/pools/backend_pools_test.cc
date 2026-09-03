@@ -34,6 +34,13 @@ struct NoopWorker : utils::Worker<Workload>
     bool idle() const override { return true; }
 };
 
+// Two factories, because the two are no longer the same type: the filesystem async factory takes the
+// mount's measured block, the object-storage one takes nothing.
+std::unique_ptr<utils::Worker<Workload>> noop_async_factory(size_t /* block */)
+{
+    return std::make_unique<NoopWorker>();
+}
+
 std::unique_ptr<utils::Worker<Workload>> noop_factory()
 {
     return std::make_unique<NoopWorker>();
@@ -47,11 +54,11 @@ TEST(BackendPools, DefaultsToOneEngineForAllMounts)
 {
     utils::temp::UnsetEnv max_engines(std::string("RUNAI_STREAMER_FS_MAX_ENGINES"));
 
-    BackendPools pools(run, noop_factory, noop_factory, 2, 3);
+    BackendPools pools(run, noop_async_factory, noop_factory, 2, 3);
 
-    pools.push_async(makedev(8, 1), Workload{});
-    pools.push_async(makedev(8, 2), Workload{});
-    pools.push_async(makedev(259, 0), Workload{});
+    pools.push_async(makedev(8, 1), 0 /* block: not probed in this test */, Workload{});
+    pools.push_async(makedev(8, 2), 0 /* block: not probed in this test */, Workload{});
+    pools.push_async(makedev(259, 0), 0 /* block: not probed in this test */, Workload{});
 
     EXPECT_EQ(pools.async_engines(), 1u) << "the default cap is 1";
 }
@@ -61,15 +68,15 @@ TEST(BackendPools, EnginePerMountUpToTheCap)
 {
     utils::temp::Env max_engines(std::string("RUNAI_STREAMER_FS_MAX_ENGINES"), 4UL);
 
-    BackendPools pools(run, noop_factory, noop_factory, 2, 3);
+    BackendPools pools(run, noop_async_factory, noop_factory, 2, 3);
 
-    pools.push_async(makedev(8, 1), Workload{});
+    pools.push_async(makedev(8, 1), 0 /* block: not probed in this test */, Workload{});
     EXPECT_EQ(pools.async_engines(), 1u);
 
-    pools.push_async(makedev(8, 2), Workload{});
+    pools.push_async(makedev(8, 2), 0 /* block: not probed in this test */, Workload{});
     EXPECT_EQ(pools.async_engines(), 2u);
 
-    pools.push_async(makedev(259, 0), Workload{});
+    pools.push_async(makedev(259, 0), 0 /* block: not probed in this test */, Workload{});
     EXPECT_EQ(pools.async_engines(), 3u);
 }
 
@@ -86,9 +93,9 @@ TEST(BackendPools, AnOversizedEngineCapDoesNotWrapToZero)
 {
     utils::temp::Env max_engines(std::string("RUNAI_STREAMER_FS_MAX_ENGINES"), 4294967296UL);
 
-    BackendPools pools(run, noop_factory, noop_factory, 2, 3);
+    BackendPools pools(run, noop_async_factory, noop_factory, 2, 3);
 
-    pools.push_async(makedev(8, 1), Workload{});
+    pools.push_async(makedev(8, 1), 0 /* block: not probed in this test */, Workload{});
     EXPECT_EQ(pools.async_engines(), 1u) << "an engine must still be created";
 }
 
@@ -98,11 +105,11 @@ TEST(BackendPools, SameMountReusesItsEngine)
 {
     utils::temp::Env max_engines(std::string("RUNAI_STREAMER_FS_MAX_ENGINES"), 4UL);
 
-    BackendPools pools(run, noop_factory, noop_factory, 2, 3);
+    BackendPools pools(run, noop_async_factory, noop_factory, 2, 3);
 
     for (int i = 0; i < 5; ++i)
     {
-        pools.push_async(makedev(8, 1), Workload{});
+        pools.push_async(makedev(8, 1), 0 /* block: not probed in this test */, Workload{});
     }
 
     EXPECT_EQ(pools.async_engines(), 1u) << "one mount must never build a second engine";
@@ -114,15 +121,15 @@ TEST(BackendPools, PastTheCapMountsShare)
 {
     utils::temp::Env max_engines(std::string("RUNAI_STREAMER_FS_MAX_ENGINES"), 2UL);
 
-    BackendPools pools(run, noop_factory, noop_factory, 2, 3);
+    BackendPools pools(run, noop_async_factory, noop_factory, 2, 3);
 
-    pools.push_async(makedev(8, 1), Workload{});
-    pools.push_async(makedev(8, 2), Workload{});
+    pools.push_async(makedev(8, 1), 0 /* block: not probed in this test */, Workload{});
+    pools.push_async(makedev(8, 2), 0 /* block: not probed in this test */, Workload{});
     EXPECT_EQ(pools.async_engines(), 2u);
 
     // The third and fourth mounts must not create engines, and must not be refused either.
-    pools.push_async(makedev(8, 3), Workload{});
-    pools.push_async(makedev(8, 4), Workload{});
+    pools.push_async(makedev(8, 3), 0 /* block: not probed in this test */, Workload{});
+    pools.push_async(makedev(8, 4), 0 /* block: not probed in this test */, Workload{});
     EXPECT_EQ(pools.async_engines(), 2u) << "the cap must bound engines, not reject work";
 }
 
@@ -132,19 +139,19 @@ TEST(BackendPools, AsyncEnginesAreLazy)
 {
     utils::temp::Env max_engines(std::string("RUNAI_STREAMER_FS_MAX_ENGINES"), 4UL);
 
-    BackendPools pools(run, noop_factory, noop_factory, 2, 3);
+    BackendPools pools(run, noop_async_factory, noop_factory, 2, 3);
 
     EXPECT_EQ(pools.async_engines(), 0u);
     EXPECT_EQ(pools.pools_created(), 0u);
 
-    pools.push_async(makedev(8, 1), Workload{});
+    pools.push_async(makedev(8, 1), 0 /* block: not probed in this test */, Workload{});
     EXPECT_EQ(pools.async_engines(), 1u);
     EXPECT_EQ(pools.pools_created(), 1u) << "and it counts among the pools";
 }
 
 TEST(BackendPools, FilesystemPoolCreatedLazilyOnPush)
 {
-    BackendPools pools(run, noop_factory, noop_factory, /*filesystem_size=*/2, /*object_storage_size=*/3);
+    BackendPools pools(run, noop_async_factory, noop_factory, /*filesystem_size=*/2, /*object_storage_size=*/3);
 
     EXPECT_EQ(pools.pools_created(), 0u);
 
@@ -158,7 +165,7 @@ TEST(BackendPools, FilesystemPoolCreatedLazilyOnPush)
 
 TEST(BackendPools, ObjectStoragePoolCreatedByPluginLock)
 {
-    BackendPools pools(run, noop_factory, noop_factory, 2, 3);
+    BackendPools pools(run, noop_async_factory, noop_factory, 2, 3);
 
     EXPECT_EQ(pools.pools_created(), 0u);
 
@@ -174,7 +181,7 @@ TEST(BackendPools, ObjectStoragePoolCreatedByPluginLock)
 
 TEST(BackendPools, BothKindsCreateTwoPools)
 {
-    BackendPools pools(run, noop_factory, noop_factory, 2, 3);
+    BackendPools pools(run, noop_async_factory, noop_factory, 2, 3);
 
     pools.push(Pool::FileSystem, Workload{});
     EXPECT_EQ(pools.lock_object_plugin(BackendPools::Plugin::Azure), common::ResponseCode::Success);
@@ -183,7 +190,7 @@ TEST(BackendPools, BothKindsCreateTwoPools)
 
 TEST(BackendPools, ObjectPluginLockedToOne)
 {
-    BackendPools pools(run, noop_factory, noop_factory, 2, 3);
+    BackendPools pools(run, noop_async_factory, noop_factory, 2, 3);
 
     // first object-storage plugin wins; the same plugin is accepted; a different one is rejected
     EXPECT_EQ(pools.lock_object_plugin(BackendPools::Plugin::GCS), common::ResponseCode::Success);

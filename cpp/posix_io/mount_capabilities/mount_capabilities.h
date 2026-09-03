@@ -7,6 +7,8 @@
 #include <ostream>
 #include <string>
 
+#include "common/response_code/response_code.h"
+
 namespace runai::llm::streamer::posix_io
 {
 
@@ -92,6 +94,28 @@ class MountCapabilities
     // STATX_DIOALIGN can say, so that stays future work.
     DirectSupport direct_support(dev_t dev, const std::string & file_path);
 
+    // The SMALLEST block this mount will accept.
+    //
+    // Returns a CODE, not just the number, because "measured 0" and "could not measure" are different
+    // answers and the caller must act differently on them:
+    //
+    //   Success              out_block is this mount's requirement.
+    //   FileAccessError      the mount refuses O_DIRECT. out_block is 0, and it is remembered.
+    //   UnknownError         nothing could be probed - the path is missing or unreadable. NOTHING is
+    //                        remembered, so the NEXT submission measures again. A caller that treated
+    //                        this as a final answer would freeze a mount on a fallback for the life
+    //                        of the process, which matters for a long-lived streamer serving many
+    //                        submissions - checkpoint restore, not vLLM's single model load.
+    //
+    // Measured, not assumed. A block larger than the mount needs is not free: it pads more between
+    // ranges and bounces more of every chunk's head and tail. Measured on NFS under the `chunks`
+    // policy, a 64 KiB block against this mount's real 4 KiB cost 2.4x the load time - so the
+    // difference is worth a probe.
+    //
+    // Probed once per mount and cached, sharing that probe with direct_support(): a mount with no
+    // usable block cannot serve direct reads, so the two answers are one measurement.
+    common::ResponseCode direct_block(dev_t dev, const std::string & file_path, size_t & out_block);
+
     // How many distinct mounts have been seen. For tests and for logging how much the cache saved.
     size_t size() const;
 
@@ -101,7 +125,9 @@ class MountCapabilities
     MountCapability remember(dev_t dev, bool memory_backed);
 
     // Records a settled O_DIRECT answer and returns it, so callers read as one line.
-    DirectSupport remember_direct(dev_t dev, bool supported);
+    // Measure this mount's requirement: statx first, then an ascending trial-read ladder. Returns 0
+    // when no candidate works, which means the mount cannot serve direct reads at all.
+    size_t measure_direct_block(const std::string & file_path);
 
     mutable std::mutex _mutex;
     std::map<dev_t, MountCapability> _mounts;
@@ -115,7 +141,11 @@ class MountCapabilities
     //
     // Only settled answers: an Unknown probe writes nothing, so the next file on that mount asks
     // again. That is what stops one missing path from condemning a whole mount.
-    std::map<dev_t, bool> _direct;
+    // dev -> the measured direct-I/O block, or 0 for "this mount cannot serve direct reads".
+    //
+    // One entry answers both questions, because they come from one probe: a mount that has no usable
+    // block has no direct I/O either. Storing a bool as well would let the two disagree.
+    std::map<dev_t, size_t> _direct;
 };
 
 }; // namespace runai::llm::streamer::posix_io

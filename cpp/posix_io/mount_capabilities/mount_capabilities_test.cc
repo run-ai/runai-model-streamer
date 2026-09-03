@@ -1,9 +1,13 @@
 #include "posix_io/mount_capabilities/mount_capabilities.h"
 
+#include "posix_io/alignment/alignment.h"   // direct_block_size - what the probe reads at
+
 #include <gtest/gtest.h>
 
 #include <fcntl.h>
 #include <linux/magic.h>
+#include <cerrno>
+#include <cstdlib>
 #include <sys/stat.h>
 #include <sys/vfs.h>
 #include <unistd.h>
@@ -168,15 +172,33 @@ TEST(MountCapabilities, Bad_Fd_Throws)
 
 // The answer must come from the FILESYSTEM, not from the code under test, or a broken probe would
 // agree with itself. So this opens the file directly and compares.
-TEST(MountCapabilities, Direct_Support_Matches_A_Real_Open)
+//
+// The oracle OPENS AND READS, because that is what direct_support does now. An open alone answers a
+// narrower question: a mount whose real alignment is above DirectBlockSize opens without complaint
+// and then fails every read with EINVAL. Comparing against the open alone would call that mount
+// supported and disagree with the code under test on exactly the case the read was added for.
+TEST(MountCapabilities, Direct_Support_Matches_A_Real_Aligned_Read)
 {
     const auto data = utils::random::buffer(4096);
     utils::temp::File file(data);
 
+    bool really_supported = false;
     int fd = ::open(file.path.c_str(), O_RDONLY | O_DIRECT);
-    const bool really_supported = fd >= 0;
     if (fd >= 0)
     {
+        // direct_block_size(), NOT the DirectBlockSize constant. The probe reads at the CONFIGURED
+        // block, so an oracle pinned to the default would test a different size than the code under
+        // test as soon as RUNAI_STREAMER_DIRECT_BLOCK is set - and would then disagree with it on
+        // exactly the mounts this check exists for.
+        const size_t block = direct_block_size();
+
+        void * buffer = nullptr;
+        ASSERT_EQ(::posix_memalign(&buffer, block, block), 0);
+
+        const ssize_t got = ::pread(fd, buffer, block, 0);
+        really_supported = got >= 0 || errno != EINVAL;
+
+        ::free(buffer);
         ::close(fd);
     }
 
@@ -184,6 +206,79 @@ TEST(MountCapabilities, Direct_Support_Matches_A_Real_Open)
     const auto support = mounts.direct_support(device_of(file.path), file.path);
 
     EXPECT_EQ(support, really_supported ? DirectSupport::Yes : DirectSupport::No);
+}
+
+// The measured block must be usable, and must be the SMALLEST the mount accepts.
+//
+// Smallest is the whole point of measuring. A block larger than the mount needs pads more between
+// ranges and bounces more of every chunk's head and tail - measured on NFS under the chunks policy,
+// a 64 KiB block against a 4 KiB mount cost 2.4x the load time.
+TEST(MountCapabilities, Direct_Block_Is_The_Smallest_The_Mount_Accepts)
+{
+    const auto data = utils::random::buffer(64 * 1024);
+    utils::temp::File file(data);
+
+    MountCapabilities mounts;
+    size_t block = 0;
+    mounts.direct_block(device_of(file.path), file.path, block);
+
+    if (block == 0)
+    {
+        // No direct I/O here. That is an answer, and direct_support must agree with it.
+        EXPECT_EQ(mounts.direct_support(device_of(file.path), file.path), DirectSupport::No);
+        return;
+    }
+
+    // An override replaces the measurement, and is deliberately NOT the smallest workable block - so
+    // the minimality check below would be asserting the wrong property. Assert what an override
+    // promises instead: that it is obeyed exactly.
+    if (const size_t forced = direct_block_override(); forced != 0)
+    {
+        EXPECT_EQ(block, forced) << "RUNAI_STREAMER_DIRECT_BLOCK must replace the measurement";
+        return;
+    }
+
+    EXPECT_EQ(block & (block - 1), 0u) << "must be a power of two, or posix_memalign refuses it";
+    EXPECT_GE(block, 512u) << "no device reports a logical block below 512";
+    EXPECT_LE(block, 65536u) << "larger than any rung on the ladder, so it cannot have been measured";
+
+    // Asked of the kernel, not of the code under test: the reported block must actually work...
+    int fd = ::open(file.path.c_str(), O_RDONLY | O_DIRECT);
+    ASSERT_GE(fd, 0);
+
+    void * buffer = nullptr;
+    ASSERT_EQ(::posix_memalign(&buffer, block, block), 0);
+    const ssize_t got = ::pread(fd, buffer, block, 0);
+    EXPECT_TRUE(got >= 0 || errno != EINVAL) << "the reported block " << block << " is refused";
+    ::free(buffer);
+
+    // ...and no SMALLER power of two may work, or the measurement was not the smallest.
+    for (size_t smaller = 512; smaller < block; smaller <<= 1)
+    {
+        void * small = nullptr;
+        ASSERT_EQ(::posix_memalign(&small, smaller, smaller), 0);
+        const ssize_t r = ::pread(fd, small, smaller, 0);
+        const bool worked = r >= 0 || errno != EINVAL;
+        ::free(small);
+
+        EXPECT_FALSE(worked) << smaller << " also works, so " << block << " was not the smallest";
+    }
+
+    ::close(fd);
+}
+
+// The two answers come from ONE probe, so they cannot disagree: a mount with no usable block serves
+// no direct reads, and a mount with one does.
+TEST(MountCapabilities, Direct_Block_And_Direct_Support_Agree)
+{
+    utils::temp::File file(utils::random::buffer(4096));
+    MountCapabilities mounts;
+
+    size_t block = 0;
+    mounts.direct_block(device_of(file.path), file.path, block);
+    const auto support = mounts.direct_support(device_of(file.path), file.path);
+
+    EXPECT_EQ(block != 0, support == DirectSupport::Yes);
 }
 
 // One open per mount, however many files sit on it. A model's shards share a mount, so without the

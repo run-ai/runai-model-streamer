@@ -36,8 +36,10 @@ constexpr unsigned WaitTimeoutMs = 50;
 
 } // namespace
 
-AsyncIoWorker::AsyncIoWorker(posix_io::Strategy strategy, EngineFactory factory) :
+AsyncIoWorker::AsyncIoWorker(posix_io::Strategy strategy, size_t block, EngineFactory factory) :
     _strategy(strategy),
+    _block(block != 0 ? block : posix_io::MaxProbeBlock),
+    _block_measured(block != 0),
     _factory(std::move(factory))
 {
     ASSERT(posix_io::is_async(strategy))
@@ -79,6 +81,8 @@ std::size_t AsyncIoWorker::capacity(const Workload & first)
     config.depth = _settings->depth();
     config.chunk_bytesize = _settings->chunk_bytesize();
 
+    config.direct_block = _block;
+
     _engine = _factory(_strategy, config);
     if (_engine == nullptr)
     {
@@ -89,6 +93,18 @@ std::size_t AsyncIoWorker::capacity(const Workload & first)
                    << " dispatched for";
         _engine_error = common::ResponseCode::UnknownError;
         throw common::Exception(common::ResponseCode::UnknownError);
+    }
+
+    // The number every congruence test and every direct pass on this mount will use. Reported because
+    // it is measured rather than fixed, so it can differ between mounts in one process and between
+    // hosts - and because when direct reads quietly stop happening, a block larger than the caller's
+    // padding is the first thing to check.
+    if (posix_io::is_direct(_strategy))
+    {
+        LOG(INFO) << "Direct-I/O block for this mount: " << _block << " bytes"
+                  << (_block_measured ? " (measured)"
+                                      : " (provisional - no file could be probed yet; a later"
+                                        " submission that can measure will replace it)");
     }
 
     LOG(INFO) << "Async io worker ready: " << _strategy << ", " << *_settings;
@@ -102,7 +118,7 @@ std::size_t AsyncIoWorker::capacity(const Workload & first)
     if (posix_io::is_direct(_strategy))
     {
         _scratch = std::make_unique<posix_io::ScratchPool>(
-            _engine->depth(), posix_io::block_size(_engine->limits()));
+            _engine->depth(), _block);
     }
 
     return _engine->depth();
@@ -124,6 +140,24 @@ void AsyncIoWorker::discard(Workload && workload)
 
 void AsyncIoWorker::enqueue(Workload && workload)
 {
+    // Adopt a measurement this worker did not have when its engine was built.
+    //
+    // The first submission may have been unable to probe the mount - every path missing or unreadable
+    // - leaving _block provisional. A later submission that could measure carries the answer here.
+    // Without this a long-lived streamer would keep the provisional block for the life of the
+    // process: wrong for checkpoint restore, and merely invisible for a single model load.
+    //
+    // Only ever shrinks, because the provisional value is the ladder's top rung - so the scratch
+    // buffers already allocated are big enough and nothing is resized.
+    if (!_block_measured && workload.direct_block != 0)
+    {
+        LOG(INFO) << "Adopting a measured direct-I/O block of " << workload.direct_block
+                  << " for this mount, replacing the provisional " << _block;
+
+        _block = workload.direct_block;
+        _block_measured = true;
+    }
+
     const auto workload_id = _next_workload_id++;
 
     auto [it, inserted] = _inflight.emplace(workload_id, Inflight{});
@@ -214,11 +248,18 @@ bool AsyncIoWorker::wants_direct(size_t file_offset, const char * buffer) const
         return false;
     }
 
+    // This mount already refused an aligned direct read. Opening direct again would cost one failed
+    // read per file to learn the same thing - see the EINVAL branch in the completion loop.
+    if (_direct_refused)
+    {
+        return false;
+    }
+
     // Congruence, not alignment. A caller can align its buffer and still be out of step with the file,
     // because the file offset is fixed by the file's own layout. When that happens no part of the
     // region can be read directly, so O_DIRECT would copy every byte on this one thread. Buffered I/O
     // copies too, and the kernel does it, and adds readahead - so buffered wins.
-    const auto block = posix_io::block_size(_engine->limits());
+    const auto block = _block;
 
     if (!posix_io::is_congruent(file_offset, buffer, block))
     {
@@ -374,6 +415,53 @@ common::ResponseCode AsyncIoWorker::probe_open(const std::string & path)
     return readable ? common::ResponseCode::Success : common::ResponseCode::FileAccessError;
 }
 
+bool AsyncIoWorker::demote_to_buffered(const InflightChunk & entry)
+{
+    const auto wlit = _inflight.find(entry.workload_id);
+    if (wlit == _inflight.end() || entry.batch_index >= wlit->second.fds.size())
+    {
+        // The workload was finalized while this read was out, so there is nothing left to re-stage
+        // against. Let the caller report the error instead.
+        return false;
+    }
+
+    BatchFd & batch_fd = wlit->second.fds[entry.batch_index];
+    const auto & path = wlit->second.workload.batches()[entry.batch_index].path;
+
+    const int fd = ::open(path.c_str(), O_RDONLY);
+    if (fd < 0)
+    {
+        // The direct fd worked well enough to be refused for alignment, so a buffered open failing
+        // here is a surprise. Report the original error rather than inventing one.
+        LOG(ERROR) << "Cannot reopen " << path << " buffered after a direct read was refused: "
+                   << std::strerror(errno);
+        return false;
+    }
+
+    // Closed only once the replacement exists, so a failure above leaves the batch usable.
+    if (batch_fd.fd >= 0)
+    {
+        ::close(batch_fd.fd);
+    }
+
+    batch_fd.fd = fd;
+    batch_fd.direct = false;
+
+    // Remembered for the whole mount, not just this file - see _direct_refused. One engine per mount
+    // means this worker serves exactly one, so the next file skips the direct open entirely.
+    if (!_direct_refused)
+    {
+        _direct_refused = true;
+
+        LOG(WARNING) << "Direct reads refused with EINVAL on " << path << " at block "
+                     << _block << ". This mount needs a larger"
+                     << " alignment than we assume, so this engine now reads buffered - still"
+                     << " asynchronous, but without O_DIRECT";
+    }
+
+    return true;
+}
+
 int AsyncIoWorker::fd_for(Inflight & wl, unsigned batch_index, size_t file_offset, const char * buffer,
                           common::ResponseCode & out_error)
 {
@@ -501,7 +589,7 @@ void AsyncIoWorker::stage_pending(posix_io::RequestId id)
     // which may mean reading one block into scratch and copying the wanted part out.
     auto pass = DirectPass{ pending.offset, pending.bytesize, pending.buffer, nullptr, 0, 0 };
 
-    if (direct && !plan_direct_pass(pending, posix_io::block_size(_engine->limits()), pass))
+    if (direct && !plan_direct_pass(pending, _block, pass))
     {
         // No scratch was free. Not expected - there is one per in-flight read - but failing the whole
         // read over it would be worse than reading a little less this pass.
@@ -646,13 +734,34 @@ void AsyncIoWorker::drain_batch(std::atomic<bool> & stopped)
             // (completion_mapper.h). The engine holds only the id when a completion arrives, so it
             // cannot tell the two apart. This worker can: it opened the file and recorded how.
             const auto file = file_of(*entry);
-            const auto code = posix_io::map_completion(completion.res, file);
 
-            // Give the scratch back before failing, or the pool drains one buffer per failed read.
+            // Give the scratch back first, whichever way this goes, or the pool drains one buffer per
+            // failed read. A buffered re-stage never bounces, so clearing it is right there too.
             if (char * scratch = _chunks.clear_bounce(completion.id))
             {
                 _scratch->give(scratch);
             }
+
+            // EINVAL on a DIRECT fd is the kernel refusing our alignment - the mount, or this file,
+            // needs a larger block than DirectBlockSize assumes. Nothing was read, so the chunk is
+            // untouched and the same bytes can be re-issued buffered.
+            //
+            // Re-staged rather than failed. This used to become UnknownError, which is the one code
+            // that tells a caller to abort the WHOLE submission, so one misaligned range ended a
+            // model load. The caller asked for bytes, not for a particular syscall.
+            //
+            // It is also not necessarily our bug: statx(2) defines both direct-I/O alignments per
+            // FILE, so a mount that answered correctly can still be wrong for one file.
+            if (file.direct && completion.res == -EINVAL && demote_to_buffered(*entry))
+            {
+                stage_pending(completion.id);
+                continue;
+            }
+
+            // Mapped HERE, not in the engine, because mapping needs the file. The engine holds only
+            // the id when a completion arrives, so it cannot tell a direct EINVAL from a buffered one
+            // (completion_mapper.h). This worker can: it opened the file and recorded how.
+            const auto code = posix_io::map_completion(completion.res, file);
 
             complete_chunk(completion.id, code);
             continue;

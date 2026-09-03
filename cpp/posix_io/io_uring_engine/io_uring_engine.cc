@@ -70,8 +70,11 @@ IoUringEngine::IoUringEngine(const AsyncIoConfig & config, size_t max_read_bytes
     // Reporting 1 here would be much worse than wasteful. The caller tests congruence against this
     // number, and everything is congruent modulo 1 - so every file would be opened with O_DIRECT and
     // every unaligned read would then fail with EINVAL.
-    _limits.offset_alignment = DirectBlockSize;
-    _limits.buffer_alignment = DirectBlockSize;
+    // The MOUNT's measured block when the caller supplied one, else the process-wide default.
+    const size_t block = config.direct_block != 0 ? config.direct_block : direct_block_size();
+
+    _limits.offset_alignment = block;
+    _limits.buffer_alignment = block;
 
     LOG(INFO) << "io_uring ready: " << _depth << " submission entries"
               << (_depth == config.depth ? "" : " (rounded up from the configured depth)")

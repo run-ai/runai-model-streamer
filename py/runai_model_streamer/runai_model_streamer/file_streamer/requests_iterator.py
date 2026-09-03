@@ -7,6 +7,8 @@ import numpy as np
 import os
 import humanize
 
+from runai_model_streamer.libstreamer.libstreamer import runai_probe_direct_block_size
+
 import logging
 
 logger = logging.getLogger(__name__)
@@ -110,10 +112,21 @@ class FilesRequest:
 
 # The block size a direct read must line up with.
 #
-# 4096, not measured. The kernel reports the real value through statx STATX_DIOALIGN, but that needs
-# kernel 6.1 and the streamer supports 5.15. 4096 covers both sizes in use (512 and 4096), and lining
-# up more than needed only wastes a little space.
-DIRECT_IO_BLOCK = 4096
+# ASKED OF THE LIBRARY, never restated here. This side pads the ring so each range's destination is
+# congruent with its file offset; the library tests that congruence against its own number. A second
+# copy could drift, and the mismatch would raise nothing - destinations would simply stop being
+# congruent and direct reads would quietly become buffered ones.
+#
+# Not per path. Alignment belongs to the mount, and different mounts are served by different engines -
+# but congruence at a power of two implies congruence at every smaller one, so this one value covers
+# every mount a request touches. The library treats it as a ceiling it stays under.
+#
+# Resolved at import, like the library handle it comes from (libstreamer/__init__.py opens the .so at
+# module scope). It must not change under a running streamer: the ring is laid out against it once.
+# The layout block, resolved PER REQUEST from the mounts the paths actually live on - see
+# direct_block_for() in the library. This module-level value is only the fallback used when no
+# streamer handle is available to ask with, and equals the host page size.
+DIRECT_IO_BLOCK = os.sysconf("SC_PAGESIZE")
 
 # The size of a transparent huge page on x86_64 and on aarch64 with 4 KiB pages.
 #
@@ -267,7 +280,12 @@ def _align_up(address: int, block: int) -> int:
 
 
 class FilesRequestsIteratorWithBuffer:
-    def __init__(self, buffer_size: int, num_buffers: int, files_chunks: List[FileChunks]) -> None:
+    def __init__(self, buffer_size: int, num_buffers: int, files_chunks: List[FileChunks],
+                 direct_block: int = DIRECT_IO_BLOCK) -> None:
+        # This request's block, measured by the library from the mounts these paths live on. Held per
+        # instance, not per module: two requests can touch different mounts, and a value fixed at
+        # import could only ever be a guess about the first one.
+        self.direct_block = direct_block
         self.files_requests_iterator = FilesRequestsIterator(buffer_size, files_chunks)
         self.buffer_size = buffer_size
         self.num_buffers = num_buffers
@@ -303,7 +321,7 @@ class FilesRequestsIteratorWithBuffer:
         # are off. 2 MiB is a multiple of 4096, so the direct-read rule holds either way - see
         # HUGE_PAGE for what the larger alignment buys and _huge_pages_enabled() for the switch.
         alignment = _pool_alignment()
-        self._slot_size = buffer_size + DIRECT_IO_BLOCK * _max_pads_per_buffer()
+        self._slot_size = buffer_size + self.direct_block * _max_pads_per_buffer()
         self._raw = np.empty(self._slot_size * num_buffers + alignment, dtype=np.uint8)
         shift = (-self._raw.ctypes.data) % alignment
         self.pool = self._raw[shift: shift + self._slot_size * num_buffers]
@@ -335,7 +353,7 @@ class FilesRequestsIteratorWithBuffer:
                 if aligned:
                     # 0 when they already line up, which is the usual case after the first range of a
                     # file.
-                    cursor += (offset - cursor) % DIRECT_IO_BLOCK
+                    cursor += (offset - cursor) % self.direct_block
 
                 if cursor + size > limit:
                     return None
@@ -456,14 +474,16 @@ class FilesRequestsIteratorWithBuffer:
         memory_mode: MemoryCapMode,
         files_chunks: List[FileChunks],
         user_memory_limit: Optional[int] = None,
+        direct_block: int = DIRECT_IO_BLOCK,
     ) -> FilesRequestsIteratorWithBuffer:
         buffer_size, num_buffers = _ring_sizing(memory_mode, files_chunks, user_memory_limit)
-        return FilesRequestsIteratorWithBuffer(buffer_size, num_buffers, files_chunks)
+        return FilesRequestsIteratorWithBuffer(buffer_size, num_buffers, files_chunks, direct_block)
 
     @staticmethod
     def with_memory_mode(
         files_chunks: List[FileChunks],
         memory_limit: Optional[int] = None,
+        direct_block: int = DIRECT_IO_BLOCK,
     ) -> FilesRequestsIteratorWithBuffer:
         """memory_limit, when given, overrides the environment.
 
@@ -473,7 +493,7 @@ class FilesRequestsIteratorWithBuffer:
             configured = os.getenv(RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME)
             memory_limit = int(configured if configured is not None else DEFAULT_MEMORY_LIMIT_STRING)
         return FilesRequestsIteratorWithBuffer.with_memory_cap(
-            _get_memory_mode(memory_limit), files_chunks, memory_limit
+            _get_memory_mode(memory_limit), files_chunks, memory_limit, direct_block
         )
 
 class FilesRequestsIterator:

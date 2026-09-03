@@ -48,13 +48,18 @@ class BackendPools
     using Handler = utils::ThreadPool<Workload>::Handler;
     using WorkerFactory = utils::ThreadPool<Workload>::WorkerFactory;
 
+    // The filesystem async factory takes the mount's measured direct-I/O block, because one engine
+    // serves one mount and its Limits must describe THAT mount rather than a process-wide guess.
+    // 0 means no file on the mount could be probed; the worker then falls back.
+    using AsyncWorkerFactory = std::function<std::unique_ptr<utils::Worker<Workload>>(size_t block)>;
+
     // filesystem_handler: the stateless synchronous handler for the filesystem pool.
     // object_storage_factory: builds a per-worker ObjectStorageWorker for the object-storage pool (async,
     // each worker owns its in-flight window).
     // filesystem_async_factory builds the AsyncIoWorker; its pool is always one thread, so no size is
     // taken for it.
     BackendPools(Handler filesystem_handler,
-                 WorkerFactory filesystem_async_factory,
+                 AsyncWorkerFactory filesystem_async_factory,
                  WorkerFactory object_storage_factory,
                  unsigned filesystem_size,
                  unsigned object_storage_size);
@@ -83,7 +88,7 @@ class BackendPools
     // that routes completions and counts free slots, so a mount cannot move while it still has reads
     // running. A stuck mount therefore keeps its engine forever. That is the separation working, not
     // a leak.
-    void push_async(dev_t device, Workload && workload);
+    void push_async(dev_t device, size_t block, Workload && workload);
 
     // Lock object storage to a single plugin and create the ObjectStorage pool (once). The first
     // object-storage submission records the plugin and builds the pool; a later submission with a different
@@ -111,7 +116,7 @@ class BackendPools
 
  private:
     Handler _filesystem_handler;
-    WorkerFactory _filesystem_async_factory;
+    AsyncWorkerFactory _filesystem_async_factory;
     WorkerFactory _object_storage_factory;
     unsigned _filesystem_size;
     unsigned _object_storage_size;

@@ -186,4 +186,45 @@ TEST(Alignment, Diagnosis_Reports_Failed_Congruence)
     EXPECT_NE(message.find("congruent=no"), std::string::npos) << message;
 }
 
+// The block a caller configures is honoured only when it can actually be used.
+//
+// Every rejected value here breaks something concrete: posix_memalign in ScratchPool refuses an
+// alignment that is not a power of two or is below sizeof(void *), and the congruence maths takes a
+// maximum of two alignments assuming both are powers of two.
+TEST(DirectBlock, Usable_Values_Are_Honoured)
+{
+    EXPECT_EQ(usable_direct_block(512), 512u);
+    EXPECT_EQ(usable_direct_block(4096), 4096u);
+    EXPECT_EQ(usable_direct_block(16384), 16384u);
+    EXPECT_EQ(usable_direct_block(65536), 65536u);
+}
+
+TEST(DirectBlock, Unusable_Values_Fall_Back_To_The_Default)
+{
+    // Below 512: no device reports a smaller logical block, and 1, 2 and 4 are also below
+    // sizeof(void *), which posix_memalign refuses outright.
+    EXPECT_EQ(usable_direct_block(0), DirectBlockSize);
+    EXPECT_EQ(usable_direct_block(1), DirectBlockSize);
+    EXPECT_EQ(usable_direct_block(256), DirectBlockSize);
+
+    // Not powers of two.
+    EXPECT_EQ(usable_direct_block(3000), DirectBlockSize);
+    EXPECT_EQ(usable_direct_block(4097), DirectBlockSize);
+
+    // Falls back rather than failing: a mistyped block must not stop a model loading.
+    EXPECT_EQ(usable_direct_block(511), DirectBlockSize);
+}
+
+// What the engines and routing actually read. It must be usable by its own rules, or ScratchPool
+// would fail to allocate and every congruence test would be measured against something invalid.
+TEST(DirectBlock, The_Resolved_Block_Is_Itself_Usable)
+{
+    const auto block = direct_block_size();
+
+    EXPECT_EQ(usable_direct_block(block), block) << "the resolved block " << block
+                                                 << " does not satisfy the rules it was chosen by";
+    EXPECT_EQ(block & (block - 1), 0u) << "must be a power of two";
+    EXPECT_GE(block, 512u);
+}
+
 }; // namespace runai::llm::streamer::posix_io

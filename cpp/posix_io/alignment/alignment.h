@@ -23,12 +23,21 @@ struct Requested
 // one number covers all three checks. Over-aligning is always correct. It only wastes a little.
 size_t block_size(const Limits & limits);
 
-// The block size we assume a direct read needs.
+// The block size we assume a direct read needs, and the default for direct_block_size() below.
 //
-// 4096, assumed rather than measured. statx reports the real numbers through STATX_DIOALIGN, which
+// 65536, assumed rather than measured. statx reports the real numbers through STATX_DIOALIGN, which
 // arrived in kernel 6.1 while our floor is 5.15 - and it is missing from the build headers here even
-// on a 6.8 kernel. 4096 is a safe superset of every block size in use (512 and 4096). Over-aligning
-// can only waste a little; it can never fail.
+// on a 6.8 kernel.
+//
+// Raised from 4096. That covered every block size in use at the time (512 and 4096) and nothing more.
+// 16K-logical-block NVMe is arriving, and on such a device an O_DIRECT open SUCCEEDS and every read
+// then fails with EINVAL - so the assumption fails on exactly the storage a fast loader is bought for.
+// 64 KB covers 512, 4K, 16K, 32K and 64K at once.
+//
+// Over-aligning cannot fail, and here it is close to free. The streamer places its own destination
+// buffers (see the note on is_congruent below), so congruence is arranged rather than hoped for, and
+// the cost is bounded by the head and tail blocks of each chunk - under 2% of an 8 MB chunk at this
+// size. See design_measured_alignment.md.
 //
 // Read by two places that must agree:
 //
@@ -43,7 +52,49 @@ size_t block_size(const Limits & limits);
 // If an engine ever measures the real value with statx, it will report something equal or NARROWER
 // than this, and routing stays correct: it would refuse a few files that could have been read
 // directly, sending them to the synchronous reader. Slower for those files, never wrong.
-constexpr size_t DirectBlockSize = 4096;
+constexpr size_t DirectBlockSize = 65536;
+
+// The block actually used, which is DirectBlockSize unless RUNAI_STREAMER_DIRECT_BLOCK overrides it.
+//
+// A knob rather than a constant for two reasons. It lets a benchmark compare block sizes without a
+// rebuild, and it lets an operator drop back if a mount turns out to prefer a smaller one.
+//
+// Read ONCE and cached: it is consulted per read, and an environment lookup on that path would be
+// visible. It also must not change under a running streamer - routing decided congruence against one
+// value and the worker must plan passes against the same one.
+//
+// Rejected values fall back to DirectBlockSize with a warning rather than failing: a mistyped block
+// should not stop a model loading, and every rejected value would break posix_memalign in ScratchPool
+// or the congruence maths.
+//
+// PYTHON READS THE SAME VARIABLE (requests_iterator.py, DIRECT_IO_BLOCK). The two must agree: Python
+// pads the ring to make destinations congruent, and if it padded to a different block than this one
+// tests against, congruence would fail and direct reads would quietly stop happening.
+size_t direct_block_size();
+
+// The largest block a mount probe will ever return, and therefore the value a worker runs at while it
+// has no measurement.
+//
+// Provisional-at-the-maximum is what makes a later measurement safe to adopt: it can only be smaller,
+// so buffers sized for this one are big enough for it and nothing has to be reallocated.
+constexpr size_t MaxProbeBlock = 65536;
+
+// The rules direct_block_size() applies to a configured value, separated so they can be tested.
+//
+// Returns `configured` when it is usable - a power of two, at least 512 - and DirectBlockSize
+// otherwise, with a warning. Exposed because direct_block_size() caches its answer for the life of
+// the process, so a test cannot reach these rules through the environment.
+size_t usable_direct_block(unsigned long configured);
+
+// The operator's explicit block, or 0 when RUNAI_STREAMER_DIRECT_BLOCK is unset.
+//
+// An OVERRIDE, not a default: when set it replaces the per-mount measurement entirely. That is what
+// makes it an escape hatch - a way to pin the block when a measurement is wrong or when comparing
+// values - and it is how the benchmark holds one arm at 4096 while another measures.
+//
+// Distinct from direct_block_size(), which answers "what do we use when nothing was measured" and so
+// cannot tell an explicit 65536 from the default.
+size_t direct_block_override();
 
 // Can ANY part of this read be done directly?
 //

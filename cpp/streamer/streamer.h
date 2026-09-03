@@ -129,6 +129,38 @@ _RUNAI_EXTERN_C int runai_response(
 
 _RUNAI_EXTERN_C const char * runai_response_str(int response_code);
 
+// The block a caller must lay destinations out at for THESE paths, so reads can be served with
+// O_DIRECT.
+//
+// NOT A GETTER. It opens a file and READS on each distinct mount, walking 512, 4096, 16384, 65536
+// until one is accepted - because the requirement belongs to the mount and no kernel below 6.1 will
+// report it. Cached per mount on this streamer, so a 200-shard model costs one probe.
+//
+// FILESYSTEM paths only - object-storage URIs are skipped, since they name no mount and never reach
+// O_DIRECT. A submission cannot legally mix the two (runai_request rejects that with
+// UnsupportedBackendMix), but this is called before any submission exists, so URIs are skipped rather
+// than treated as an error.
+//
+// Path-aware because the answer is per mount, and a request can span several. It returns the LARGEST
+// any of them requires: congruence at a power of two implies congruence at every smaller one, so one
+// number satisfies them all, while each mount may still use a smaller block internally.
+//
+// Never use a larger block than this reports. Over-padding is not free - measured on NFS under the
+// `chunks` partition policy, a 64 KiB layout against a 4 KiB mount cost 2.4x the load time.
+//
+//  out_block  always set. On Success it is measured. On UnknownError nothing could be probed - every
+//             path missing or unreadable - and it holds the host page size so the caller can still
+//             lay out its buffers. Ask again on the next submission rather than caching that value:
+//             a long-lived streamer would otherwise keep it for the life of the process.
+//
+// ret is Success, or UnknownError when nothing could be measured. It does not fail a submission.
+_RUNAI_EXTERN_C int runai_probe_direct_block_size(
+    void *        streamer,
+    const char ** paths,
+    unsigned      num_paths,
+    size_t *      out_block
+);
+
 // List files at the given object storage prefix.
 //
 // streamer is a handle from runai_start; listing reuses its object-storage clients, backend handle and

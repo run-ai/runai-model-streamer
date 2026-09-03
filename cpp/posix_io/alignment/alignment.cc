@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <sstream>
 
+#include "utils/env/env.h"
 #include "utils/logging/logging.h"
 
 namespace runai::llm::streamer::posix_io
@@ -20,6 +21,64 @@ size_t usable(size_t block)
 }
 
 } // namespace
+
+size_t usable_direct_block(unsigned long configured)
+{
+    // A power of two, and at least 512 - the smallest logical block any device reports. Anything else
+    // breaks posix_memalign in ScratchPool, and the congruence maths assumes powers of two when it
+    // takes a maximum of the two alignments.
+    const bool power_of_two = configured != 0 && (configured & (configured - 1)) == 0;
+
+    if (!power_of_two || configured < 512)
+    {
+        LOG(WARNING) << "Ignoring RUNAI_STREAMER_DIRECT_BLOCK=" << configured
+                     << ": it must be a power of two and at least 512. Using " << DirectBlockSize;
+        return DirectBlockSize;
+    }
+
+    if (configured != DirectBlockSize)
+    {
+        LOG(INFO) << "Direct-read block set to " << configured << " by RUNAI_STREAMER_DIRECT_BLOCK."
+                  << " Python must read the same value, or destinations stop being congruent and"
+                  << " direct reads quietly stop";
+    }
+
+    return static_cast<size_t>(configured);
+}
+
+size_t direct_block_override()
+{
+    static const size_t resolved = []() -> size_t
+    {
+        if (!utils::env_exists("RUNAI_STREAMER_DIRECT_BLOCK"))
+        {
+            return 0;   // no override; mounts are measured
+        }
+
+        const auto block = usable_direct_block(
+            utils::getenv<unsigned long>("RUNAI_STREAMER_DIRECT_BLOCK", DirectBlockSize));
+
+        LOG(INFO) << "RUNAI_STREAMER_DIRECT_BLOCK=" << block << " overrides the per-mount measurement"
+                  << " for every mount in this process";
+        return block;
+    }();
+
+    return resolved;
+}
+
+size_t direct_block_size()
+{
+    // Resolved once. A static local is initialised on first use and is thread-safe since C++11, which
+    // matters because several workers can reach this at the same time.
+    //
+    // That caching is also why the RULES live in usable_direct_block() above rather than in this
+    // lambda: the first call in a process wins, so a test cannot drive them through the environment.
+    // A pure function can be tested directly, and this wrapper is then too small to be wrong.
+    static const size_t resolved =
+        usable_direct_block(utils::getenv<unsigned long>("RUNAI_STREAMER_DIRECT_BLOCK", DirectBlockSize));
+
+    return resolved;
+}
 
 size_t block_size(const Limits & limits)
 {

@@ -616,7 +616,11 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
         # Crossing into b.txt sends the file offset BACKWARDS (16 -> 10) while the cursor only moves
         # forward, so re-syncing costs nearly a whole block. That is the worst case, and it is why the
         # slot reserves room for many pads rather than a few bytes.
-        self.assertEqual(files_requests.range_dsts, [base + 16, base + 4106, base + 4107])
+        # Expressed in terms of the block, not as 4106: the re-sync lands at the next address
+        # congruent with file offset 10, which is 10 + one whole block past the base. Hardcoding it
+        # tied this test to a 4096 block, and it broke the moment the block was raised.
+        resync = 10 + DIRECT_IO_BLOCK
+        self.assertEqual(files_requests.range_dsts, [base + 16, base + resync, base + resync + 1])
         self.assert_congruent(files_requests)
         self.assertEqual(files_requests.file_base, [0, 1])
 

@@ -128,7 +128,12 @@ struct Driver
     // worker tests congruence against it: at 1, everything is congruent and the decision is vacuous.
     // The real engine reports 4096.
     explicit Driver(Strategy strategy = Strategy::IoUringBuffered, size_t block = 4096) :
+        // `block` is passed BOTH as the mount's measured block and as the mock engine's Limits, so
+        // the two agree - which is what production gets, since the engine is built from the same
+        // number. Passing 0 here would leave the worker provisional at MaxProbeBlock while the mock
+        // advertised something smaller, and every congruence test would then disagree with the setup.
         worker(strategy,
+               block,
                [this, block](Strategy, const posix_io::AsyncIoConfig & config)
                {
                    posix_io::Limits limits;
@@ -533,6 +538,56 @@ TEST(AsyncIoWorker, Stop_Answers_Every_Range)
 //
 // The mock records what each request was staged with, which is the only way to see the decision: both
 // modes return the same bytes.
+// EINVAL on a direct read is re-staged buffered, not failed.
+//
+// It used to become UnknownError - the one code that tells a caller to abort the WHOLE submission -
+// so a single mount needing a larger block than DirectBlockSize ended a model load. Nothing was read
+// when the kernel refuses for alignment, so the same bytes can simply be re-issued without O_DIRECT.
+TEST(AsyncIoWorker, Direct_Refused_For_Alignment_Is_Retried_Buffered)
+{
+    std::vector<char> raw(2 * ChunkSize + 4096);
+    char * const aligned = raw.data() + ((-reinterpret_cast<uintptr_t>(raw.data())) % 4096);
+
+    Fixture fixture({ ChunkSize });
+    Driver driver(Strategy::IoUringDirect);
+
+    fixture.request[0].ranges[0].dst = aligned;
+
+    driver.execute(fixture.workload());
+    ASSERT_EQ(driver.engine->staged_count(), 1u);
+
+    const auto first = driver.engine->staged().front();
+    ASSERT_TRUE(driver.engine->request(first).file.direct) << "the setup must produce a DIRECT read";
+
+    // Issued before it can be completed - the mock refuses to complete what was never given to it.
+    driver.issue();
+
+    // The kernel refusing our alignment. Positive errno, as a real engine reports it.
+    driver.engine->fail(first, EINVAL);
+    driver.route();
+
+    // Re-staged rather than answered. staged() empties on issue, so a request sitting there now is
+    // the retry; history() holds both, which is what proves there were two.
+    ASSERT_EQ(driver.engine->staged_count(), 1u) << "the chunk must be re-issued, not failed";
+    ASSERT_EQ(driver.engine->history().size(), 2u) << "exactly one retry, not a loop";
+
+    const auto second = driver.engine->staged().back();
+    EXPECT_FALSE(driver.engine->request(second).file.direct)
+        << "the retry must drop O_DIRECT, or it would be refused again";
+    EXPECT_EQ(driver.engine->request(second).offset, driver.engine->request(first).offset)
+        << "nothing was read, so the retry must start where the direct read did";
+
+    // And it completes normally.
+    driver.issue();
+    driver.engine->complete(second);
+    driver.route();
+
+    const auto responses = drain_responses(*fixture.responder, 1);
+    ASSERT_EQ(responses.size(), 1u) << "a range refused for alignment must still be answered";
+    EXPECT_EQ(responses[0].ret, common::ResponseCode::Success)
+        << "the buffered retry succeeded, so the caller asked for bytes and got them";
+}
+
 TEST(AsyncIoWorker, Direct_Only_When_Congruent)
 {
     // The destination must be page aligned AND in step with the file offset. Reading from offset 0

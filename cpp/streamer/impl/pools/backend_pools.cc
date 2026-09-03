@@ -12,7 +12,7 @@ namespace runai::llm::streamer::impl
 {
 
 BackendPools::BackendPools(Handler filesystem_handler,
-                           WorkerFactory filesystem_async_factory,
+                           AsyncWorkerFactory filesystem_async_factory,
                            WorkerFactory object_storage_factory,
                            unsigned filesystem_size,
                            unsigned object_storage_size) :
@@ -48,7 +48,7 @@ void BackendPools::push(Pool pool, Workload && workload)
     _filesystem_pool->push(std::move(workload));
 }
 
-void BackendPools::push_async(dev_t device, Workload && workload)
+void BackendPools::push_async(dev_t device, size_t block, Workload && workload)
 {
     utils::ThreadPool<Workload> * pool = nullptr;
 
@@ -68,7 +68,10 @@ void BackendPools::push_async(dev_t device, Workload && workload)
             // ring or a thread for it. Nothing has to be AGREED first, unlike object storage's plugin
             // lock - the strategy was settled before dispatch, and a mount needs no agreement at all.
             // (The mutex above guards the map, not a decision.)
-            auto created = std::make_unique<utils::ThreadPool<Workload>>(_filesystem_async_factory, 1);
+            // The block is bound HERE, when this mount's engine is created, and never changes for
+            // it - which is right, because the engine serves this one mount for its whole life.
+            auto created = std::make_unique<utils::ThreadPool<Workload>>(
+                [factory = _filesystem_async_factory, block]() { return factory(block); }, 1);
             pool = created.get();
             _async_pools.emplace(device, std::move(created));
             _async_by_device.emplace(device, pool);

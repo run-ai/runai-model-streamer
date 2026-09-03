@@ -1,3 +1,5 @@
+#include "posix_io/alignment/alignment.h"
+
 #include <fcntl.h>
 #include <fnmatch.h>
 #include <stdio.h>
@@ -311,6 +313,22 @@ extern "C" int runai_response(
         state.submissions.erase(it);
     }
     return r;
+}
+
+// The mock reads nothing, so it probes nothing. It reports the process-wide default, which is what
+// the Python ring pads with in tests - a measured answer would need a real mount and a real read.
+extern "C" int runai_probe_direct_block_size(void * streamer, const char ** paths, unsigned num_paths,
+                                             size_t * out_block)
+{
+    (void)streamer; (void)paths; (void)num_paths;
+
+    if (out_block == nullptr)
+    {
+        return static_cast<int>(runai::llm::streamer::common::ResponseCode::InvalidParameterError);
+    }
+
+    *out_block = runai::llm::streamer::posix_io::direct_block_size();
+    return static_cast<int>(runai::llm::streamer::common::ResponseCode::Success);
 }
 
 extern "C" const char * runai_response_str(int response_code)

@@ -118,6 +118,17 @@ struct AsyncIoConfig
     // Bytes per request. Any large power of two satisfies offset_alignment. Not the synchronous
     // reader's block size: that 2 MiB floor suits a reader wanting fewer, larger reads.
     size_t chunk_bytesize = 0;
+
+    // The direct-I/O block this engine's MOUNT requires, measured by MountCapabilities. 0 means no
+    // file on it could be probed, and the engine keeps the process-wide default.
+    //
+    // Carried here rather than looked up, because one engine serves one mount and the number is
+    // fixed for its life - and because the engine has no way to ask: it never sees a path.
+    //
+    // Measured because a block larger than the mount needs is not free. It pads more between ranges
+    // and bounces more of every chunk's head and tail; on NFS under the chunks policy a 64 KiB block
+    // against a 4 KiB mount cost 2.4x the load time.
+    size_t direct_block = 0;
 };
 
 // The asynchronous I/O engine: io_uring or libaio, direct or buffered.

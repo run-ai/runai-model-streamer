@@ -158,8 +158,8 @@ TEST(IoUringEngine, Limits_Describe_A_Direct_Read)
     const IoUringEngine engine(config_with(8));
     const auto limits = engine.limits();
 
-    EXPECT_EQ(limits.offset_alignment, DirectBlockSize);
-    EXPECT_EQ(limits.buffer_alignment, DirectBlockSize);
+    EXPECT_EQ(limits.offset_alignment, direct_block_size());
+    EXPECT_EQ(limits.buffer_alignment, direct_block_size());
     EXPECT_EQ(limits.max_read_bytesize, max_read_bytesize());
 }
 
@@ -384,7 +384,8 @@ namespace
 // exists, so it carries its own block size; if the two drift apart, routing and the worker disagree
 // about which files can be read directly and nothing fails - the reads just take a path nobody
 // intended.
-constexpr size_t Block = DirectBlockSize;
+// Follows the engine rather than the default - see the same note in libaio_engine_test.
+const size_t Block = direct_block_size();
 
 // Like Fixture, but the fd is opened with O_DIRECT.
 //

@@ -143,8 +143,11 @@ LibaioEngine::LibaioEngine(const AsyncIoConfig & config, size_t max_read_bytesiz
     // Reporting 1 would be far worse than wasteful. The caller tests congruence against this number,
     // and everything is congruent modulo 1, so every file would be opened with O_DIRECT and every
     // unaligned read would then fail with EINVAL.
-    _limits.offset_alignment = DirectBlockSize;
-    _limits.buffer_alignment = DirectBlockSize;
+    // The MOUNT's measured block when the caller supplied one, else the process-wide default.
+    const size_t block = config.direct_block != 0 ? config.direct_block : direct_block_size();
+
+    _limits.offset_alignment = block;
+    _limits.buffer_alignment = block;
 
     LOG(INFO) << "libaio ready: " << _depth << " events, " << SubmitBatch << " read per io_submit";
 }

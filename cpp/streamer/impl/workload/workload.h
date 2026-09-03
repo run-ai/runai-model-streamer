@@ -16,6 +16,14 @@ namespace runai::llm::streamer::impl
 // to the ObjectStorageWorker pool, which reads the batches via batches() and owns the async scheduling.
 struct Workload
 {
+    // The mount's measured direct-I/O block, or 0 when it could not be measured for this submission.
+    //
+    // Carried per WORKLOAD, not fixed when the engine is built. A submission whose files were all
+    // unreadable yields 0, and the engine then runs provisionally; the next submission measures again
+    // and the worker adopts the answer. Without this a long-lived streamer - checkpoint restore, many
+    // submissions on one streamer - would keep a provisional block for the life of the process.
+    size_t direct_block = 0;
+
     Workload() = default;
     Workload(Workload &&) = default;
     Workload & operator=(Workload &&) = default;

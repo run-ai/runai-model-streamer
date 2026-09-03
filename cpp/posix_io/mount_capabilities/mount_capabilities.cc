@@ -11,11 +11,17 @@
 #include <unistd.h>
 #include <sys/sysmacros.h>   // major/minor - moved out of sys/types.h in glibc 2.28
 #include <sys/vfs.h>
+#include <sys/syscall.h>
+
+#include <algorithm>
+#include <vector>
 
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 
 #include "common/exception/exception.h"
+#include "posix_io/alignment/alignment.h"
 #include "utils/logging/logging.h"
 
 namespace runai::llm::streamer::posix_io
@@ -32,6 +38,92 @@ namespace
 bool is_memory_backed(const struct statfs & fs)
 {
     return fs.f_type == TMPFS_MAGIC || fs.f_type == RAMFS_MAGIC;
+}
+
+
+// STATX_DIOALIGN, asked of the kernel directly.
+//
+// glibc's struct statx here ends at stx_mnt_id - the direct-I/O fields are missing from the build
+// headers even on a 6.8 kernel - so this declares the layout it needs and calls the syscall. Same
+// approach io_uring_probe_test uses to ask the kernel without going through a wrapper.
+//
+// Returns 0 when the kernel cannot answer: below 6.1, on a filesystem that does not implement it, or
+// when it reports direct I/O as unsupported (both alignments zero). The caller then measures instead.
+#ifndef STATX_DIOALIGN
+#define STATX_DIOALIGN 0x00002000U
+#endif
+
+struct DioAlign
+{
+    size_t mem = 0;
+    size_t offset = 0;
+};
+
+DioAlign statx_dio_align(const std::string & path)
+{
+    // Only the two fields matter, but the struct must be the size the kernel expects to write.
+    struct StatxCompat
+    {
+        uint32_t mask, blksize;
+        uint64_t attributes;
+        uint32_t nlink, uid, gid;
+        uint16_t mode, spare0[1];
+        uint64_t ino, size, blocks, attributes_mask;
+        struct { int64_t tv_sec; uint32_t tv_nsec; int32_t pad; } atime, btime, ctime, mtime;
+        uint32_t rdev_major, rdev_minor, dev_major, dev_minor;
+        uint64_t mnt_id;
+        uint32_t dio_mem_align, dio_offset_align;
+        uint64_t spare[12];
+    } buf;
+
+    std::memset(&buf, 0, sizeof(buf));
+
+    if (::syscall(__NR_statx, AT_FDCWD, path.c_str(), 0, STATX_DIOALIGN, &buf) != 0)
+    {
+        return {};
+    }
+
+    if ((buf.mask & STATX_DIOALIGN) == 0)
+    {
+        return {};   // the kernel did not fill these in
+    }
+
+    return { buf.dio_mem_align, buf.dio_offset_align };
+}
+
+// MaxProbeBlock comes from alignment.h: it is the ladder's top rung AND what a worker runs at while
+// it has no measurement, so the two must be the same number.
+
+// Can this fd serve a direct read of exactly `block` bytes, at that alignment?
+//
+// A real read, because that is the only answer that cannot be wrong. A file shorter than a block
+// returns a short read rather than EINVAL, which still proves the alignment was accepted.
+//
+// The buffer is placed at `base + block`, NOT at whatever posix_memalign(block) returns. That matters:
+// posix_memalign only promises AT LEAST the requested alignment, so asking for 512 can hand back a
+// page-aligned address - and then a mount that really needs 4096 would accept the read and the ladder
+// would report 512. Measured on this container: posix_memalign(512) returned an address that happened
+// to be 512 mod 4096, so the answer was right by luck rather than by construction.
+//
+// base is aligned to MaxProbeBlock, so base + block is aligned to `block` and, because block divides
+// MaxProbeBlock, is NOT aligned to 2 * block. That is the strictest test of this candidate.
+bool direct_read_at(int fd, size_t block)
+{
+    void * base = nullptr;
+    if (::posix_memalign(&base, MaxProbeBlock, 2 * MaxProbeBlock) != 0)
+    {
+        return false;
+    }
+
+    char * const buffer = static_cast<char *>(base) + block;
+
+    const ssize_t got = ::pread(fd, buffer, block, 0);
+    const int error = errno;
+
+    ::free(base);
+
+    // EINVAL is the alignment answer. Anything else belongs to this file or this moment.
+    return got >= 0 || error != EINVAL;
 }
 
 } // namespace
@@ -69,15 +161,6 @@ MountCapability MountCapabilities::remember(dev_t dev, bool memory_backed)
     return it->second;
 }
 
-DirectSupport MountCapabilities::remember_direct(dev_t dev, bool supported)
-{
-    std::unique_lock<std::mutex> lock(_mutex);
-
-    // try_emplace, like remember(): two threads can probe the same mount at once and reach the same
-    // answer, so the first one wins and the second is a no-op.
-    _direct.try_emplace(dev, supported);
-    return supported ? DirectSupport::Yes : DirectSupport::No;
-}
 
 MountCapability MountCapabilities::of_path(const std::string & path)
 {
@@ -138,44 +221,167 @@ MountCapability MountCapabilities::of_fd(int fd)
     return remember(st.st_dev, is_memory_backed(fs));
 }
 
-DirectSupport MountCapabilities::direct_support(dev_t dev, const std::string & file_path)
+namespace
 {
+
+// Can this fd serve a read at the alignment the REST of the tree assumes?
+//
+// The open alone answers a narrower question than routing asks. Routing does not only need O_DIRECT
+// to exist on this mount - every congruence test in the tree is written against DirectBlockSize
+// (alignment.h), and that number is assumed rather than measured. A mount whose real alignment is
+// larger opens without complaint and then fails EVERY read with EINVAL.
+//
+// There is no recovery from that. fd_for falls back to a buffered open only when the OPEN fails
+// (async_io_worker.cc); once a direct fd exists, an EINVAL at completion is classified as an internal
+// error and returned as UnknownError, which aborts the whole submission.
+//
+// So the probe reads one block. STATX_DIOALIGN would answer directly and is unusable for the two
+// reasons in the header, and a trial read needs no kernel version at all.
+//
+// A file shorter than a block is fine: that is a short read, not EINVAL.
+bool direct_read_works(int fd)
+{
+    void * buffer = nullptr;
+    const size_t block = direct_block_size();
+
+    if (::posix_memalign(&buffer, block, block) != 0)
     {
-        std::unique_lock<std::mutex> lock(_mutex);
-        const auto it = _direct.find(dev);
-        if (it != _direct.end())
+        // Our own allocation failed, which says nothing about the mount. Assume it works and let a
+        // real read report the truth, rather than sending a whole mount to the synchronous reader.
+        return true;
+    }
+
+    const ssize_t got = ::pread(fd, buffer, block, 0);
+    const int error = errno;
+
+    ::free(buffer);
+
+    // Only EINVAL means "wrong alignment". Anything else is about this file or this moment - EOF on
+    // an empty file reads 0, and a permission or IO error belongs to the file, not the mount.
+    return got >= 0 || error != EINVAL;
+}
+
+} // namespace
+
+size_t MountCapabilities::measure_direct_block(const std::string & file_path)
+{
+    // The kernel's own answer first: exact, and no I/O.
+    //
+    // Two numbers, and they govern different things - stx_dio_mem_align the buffer address,
+    // stx_dio_offset_align the file offset AND the transfer length. We test congruence with a single
+    // block, so take the larger; congruence at a power of two implies congruence at every smaller one.
+    const auto reported = statx_dio_align(file_path);
+    if (reported.mem != 0 && reported.offset != 0)
+    {
+        const size_t block = std::max(reported.mem, reported.offset);
+
+        LOG(DEBUG) << "statx reports direct-I/O alignment for " << file_path << ": memory "
+                   << reported.mem << ", offset and length " << reported.offset;
+        return block;
+    }
+
+    // No statx answer - below 6.1, or a filesystem that does not implement it. Measure by reading.
+    const int fd = ::open(file_path.c_str(), O_RDONLY | O_DIRECT);
+    if (fd < 0)
+    {
+        return 0;   // the caller already distinguishes "mount refuses" from "cannot tell"
+    }
+
+    // ASCENDING, and the first success wins. The smallest workable block is the one we want: a larger
+    // one pads more between ranges and bounces more of every chunk's head and tail. 512 is the
+    // smallest logical block any device reports; 65536 covers every size announced so far.
+    static const std::vector<size_t> ladder{ 512, 4096, 16384, 65536 };
+
+    for (const size_t candidate : ladder)
+    {
+        if (direct_read_at(fd, candidate))
         {
-            return it->second ? DirectSupport::Yes : DirectSupport::No;
+            ::close(fd);
+            return candidate;
         }
     }
 
-    // Opened and closed, nothing read. The open is the whole test: a filesystem with no O_DIRECT
-    // refuses here, and one that has it does not.
+    ::close(fd);
+
+    // Opens but reads at no size we would use. Treated as no direct I/O at all, which is what the
+    // caller already handles - rather than inventing a block and failing every read with EINVAL.
+    return 0;
+}
+
+DirectSupport MountCapabilities::direct_support(dev_t dev, const std::string & file_path)
+{
+    size_t block = 0;
+    switch (direct_block(dev, file_path, block))
+    {
+    case common::ResponseCode::Success:         return DirectSupport::Yes;
+    case common::ResponseCode::FileAccessError: return DirectSupport::No;
+    default:                                    return DirectSupport::Unknown;
+    }
+}
+
+common::ResponseCode MountCapabilities::direct_block(dev_t dev, const std::string & file_path,
+                                                     size_t & out_block)
+{
+    out_block = 0;
+
+    {
+        const auto guard = std::unique_lock<std::mutex>(_mutex);
+        const auto it = _direct.find(dev);
+        if (it != _direct.end())
+        {
+            out_block = it->second;
+            return out_block != 0 ? common::ResponseCode::Success : common::ResponseCode::FileAccessError;
+        }
+    }
+
+    // Probing a memory-backed mount is pointless: tmpfs accepts an O_DIRECT open and fails at read
+    // time, so the ladder would walk every rung to learn what statfs already said.
     const int fd = ::open(file_path.c_str(), O_RDONLY | O_DIRECT);
-    if (fd >= 0)
+    if (fd < 0)
     {
-        ::close(fd);
-        return remember_direct(dev, true);
+        const int error = errno;
+
+        if (error == EINVAL || error == EOPNOTSUPP)
+        {
+            // The mount itself refuses O_DIRECT. That belongs to the mount, so it is remembered.
+            LOG(INFO) << "Mount " << major(dev) << ":" << minor(dev) << " does not support O_DIRECT ("
+                      << std::strerror(error) << ")";
+            const auto guard = std::unique_lock<std::mutex>(_mutex);
+            _direct.try_emplace(dev, 0);
+            return common::ResponseCode::FileAccessError;
+        }
+
+        // Anything else is about the FILE - it is missing, or we may not read it. Nothing is
+        // remembered, so the next file answers instead of one bad path condemning the mount.
+        // Deliberately NOT remembered, so the next file - or the next submission - measures again.
+        LOG(DEBUG) << "Cannot tell whether " << file_path << " supports O_DIRECT: "
+                   << std::strerror(error);
+        return common::ResponseCode::UnknownError;
+    }
+    ::close(fd);
+
+    // An override replaces the MEASUREMENT, not the capability check above. It must not turn a
+    // missing file or a directory into "this mount serves direct reads" - the open decides that, and
+    // it has already run. See direct_block_override().
+    const size_t forced = direct_block_override();
+    const size_t block = forced != 0 ? forced : measure_direct_block(file_path);
+
+    const auto guard = std::unique_lock<std::mutex>(_mutex);
+    _direct.try_emplace(dev, block);
+
+    if (block != 0)
+    {
+        LOG(INFO) << "Mount " << major(dev) << ":" << minor(dev) << " serves direct reads at a block"
+                  << " of " << block << " bytes";
+    }
+    else
+    {
+        LOG(INFO) << "Mount " << major(dev) << ":" << minor(dev) << " accepts an O_DIRECT open but"
+                  << " serves no aligned read we would use";
     }
 
-    // Captured before anything else can overwrite it.
-    const int error = errno;
-
-    if (error == EINVAL || error == EOPNOTSUPP)
-    {
-        // The mount itself refuses O_DIRECT. This is the answer libaio needs, and it belongs to the
-        // mount rather than to this file, so it is remembered.
-        LOG(INFO) << "Mount " << major(dev) << ":" << minor(dev) << " does not support O_DIRECT ("
-                  << std::strerror(error) << ")";
-        return remember_direct(dev, false);
-    }
-
-    // Anything else is about the FILE, not the mount - it is missing, or we may not read it. Saying
-    // "no O_DIRECT here" would send every other file on the same mount to the synchronous reader
-    // because of this one path. Nothing is remembered, so the next file answers instead.
-    LOG(DEBUG) << "Cannot tell whether " << file_path << " supports O_DIRECT: "
-               << std::strerror(error);
-    return DirectSupport::Unknown;
+    out_block = _direct.at(dev);
+    return out_block != 0 ? common::ResponseCode::Success : common::ResponseCode::FileAccessError;
 }
 
 size_t MountCapabilities::size() const

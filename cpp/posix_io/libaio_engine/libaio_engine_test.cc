@@ -26,7 +26,9 @@ namespace
 // block size. If the two ever differ, routing and the worker disagree about which files can be read
 // directly, and nothing fails - the reads just take a path nobody intended. Tying the tests to the
 // constant is what turns that into a build failure.
-constexpr size_t Block = DirectBlockSize;
+// Follows the engine rather than the default, so the test still lines up if
+// RUNAI_STREAMER_DIRECT_BLOCK overrides it. const, not constexpr: it is read at runtime now.
+const size_t Block = direct_block_size();
 
 // These tests have no availability gate, unlike the io_uring ones.
 //
@@ -471,7 +473,10 @@ TEST(LibaioEngine, Submit_Time_Is_Measured)
 
 TEST(LibaioEngine, Reads_A_Direct_Range)
 {
-    constexpr size_t Bytesize = 64 * 1024;
+    // Sized FROM the block, not to a fixed 64 KB. It reads one block starting one block in, so a file
+    // of exactly one block would put that read at EOF - which is what a hardcoded size did once the
+    // block was raised to 64 KB.
+    const size_t Bytesize = 4 * Block;
 
     DirectFixture fixture(Bytesize);
     if (!fixture.supported())

@@ -52,6 +52,7 @@ RUNAI_STREAMER_1.0 {
         runai_request;
         runai_response;
         runai_response_str;
+        runai_probe_direct_block_size;
         runai_list_files;
     local: *;
 };

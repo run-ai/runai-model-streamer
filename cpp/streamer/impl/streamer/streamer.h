@@ -62,6 +62,13 @@ struct Streamer
     using DirectProbe =
         std::function<posix_io::DirectSupport(dev_t, const std::string &)>;
 
+    // This mount's measured direct-I/O block, replaceable for the same reason as DirectProbe: the
+    // real answer is whatever the build machine's filesystem reports, so a test that used it would
+    // assert against a different number depending on where it ran. 0 means "serves no direct reads".
+    //
+    // Production passes nothing and MountCapabilities::direct_block answers.
+    using DirectBlockProbe = std::function<size_t(dev_t, const std::string &)>;
+
     // What a test may answer instead of the machine.
     //
     // Grouped rather than taken as three more parameters. Each is a std::function, so positionally
@@ -80,6 +87,7 @@ struct Streamer
         // Whether a mount serves O_DIRECT. The true answer is whatever the build machine offers, so a
         // test using it would pass or fail depending on where it ran.
         DirectProbe direct;
+        DirectBlockProbe direct_block;
 
         // Whether a strategy can be served here. Needed because every strategy is available on a
         // normal host, so there is no candidate a test can use to reach a failed resolution.
@@ -169,6 +177,20 @@ struct Streamer
       const std::vector<std::string> & allow_patterns,
       const std::vector<std::string> & ignore_patterns);
 
+    // The block a caller must lay destinations out at for THESE paths: the largest any of their
+    // mounts requires.
+    //
+    // Not per path, and it does not need to be. Congruence at a power of two implies congruence at
+    // every smaller one, so one number satisfies every mount a request touches even though each mount
+    // gets its own engine and may use a smaller block internally.
+    //
+    // Success        out_block is measured. FileAccessError from a mount that refuses O_DIRECT
+    //                contributes nothing, which is right: it imposes no padding requirement.
+    // UnknownError   nothing could be measured. out_block is the host page size - a layout value, so
+    //                the caller can still place its buffers - and the caller should ask again next
+    //                submission rather than treat it as final.
+    common::ResponseCode direct_block_for(const std::vector<std::string> & paths, size_t & out_block);
+
  private:
     // Try to parse path as an object storage URI; returns nullptr for a filesystem path
     std::shared_ptr<common::s3::StorageUri> try_parse_uri(const std::string & path);
@@ -193,8 +215,14 @@ struct Streamer
     //
     // This never fails a submission. If a directory cannot be read, that file goes to the synchronous
     // reader, which is where it would have gone anyway.
+    //
+    // out_blocks is dense with out_devices: the direct-I/O block measured for that mount, or 0 when
+    // no file on it could be probed. It travels to the engine so its Limits describe the mount it
+    // actually serves rather than a process-wide assumption.
+ private:
     std::vector<int> file_groups(const std::vector<FileRanges> & request,
-                                 std::vector<dev_t> & out_devices);
+                                 std::vector<dev_t> & out_devices,
+                                 std::vector<size_t> & out_blocks);
 
     // Can this file be read directly, on this mount? Asked only for libaio, and per file.
     //

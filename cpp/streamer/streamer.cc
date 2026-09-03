@@ -8,6 +8,7 @@
 #include "common/response_code/response_code.h"
 #include "common/s3_credentials/s3_credentials.h"
 #include "streamer/impl/streamer/streamer.h"
+#include "posix_io/alignment/alignment.h"
 
 namespace runai::llm::streamer
 {
@@ -255,6 +256,42 @@ _RUNAI_EXTERN_C int runai_response(
 }
 
 const char * unexpected_error = "Unexpected error occured";
+
+_RUNAI_EXTERN_C int runai_probe_direct_block_size(
+    void *        streamer,
+    const char ** paths,
+    unsigned      num_paths,
+    size_t *      out_block)
+{
+    try
+    {
+        auto s = static_cast<impl::Streamer *>(streamer);
+        if (s == nullptr || out_block == nullptr || (num_paths != 0 && paths == nullptr))
+        {
+            return static_cast<int>(common::ResponseCode::InvalidParameterError);
+        }
+
+        std::vector<std::string> list;
+        list.reserve(num_paths);
+        for (unsigned i = 0; i < num_paths; ++i)
+        {
+            if (paths[i] != nullptr)
+            {
+                list.emplace_back(paths[i]);
+            }
+        }
+
+        return static_cast<int>(s->direct_block_for(list, *out_block));
+    }
+    catch (const common::Exception & e)
+    {
+        return static_cast<int>(e.error());
+    }
+    catch (...)
+    {
+    }
+    return static_cast<int>(common::ResponseCode::UnknownError);
+}
 
 _RUNAI_EXTERN_C const char * runai_response_str(int response_code)
 {

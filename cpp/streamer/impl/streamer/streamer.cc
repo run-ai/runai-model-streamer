@@ -1,5 +1,7 @@
 #include "streamer/impl/streamer/streamer.h"
 
+#include <unistd.h>
+
 #include <fnmatch.h>
 
 #include <atomic>
@@ -49,9 +51,11 @@ Streamer::Streamer(Config config, Environment environment) :
         // the async worker owns an IoEngine built for the resolved strategy. Reading the strategy
         // here is safe: this factory runs when the pool is created, which is the first push, which is
         // after resolution. Captures the resolver by value, never `this`.
-        [resolver = _strategy_resolver, workers = _async_workers]() -> std::unique_ptr<utils::Worker<Workload>>
+        // `block` is the mount's measured direct-I/O block, supplied by BackendPools when it creates
+        // this mount's engine. 0 means no file on it could be probed, and the worker falls back.
+        [resolver = _strategy_resolver, workers = _async_workers](size_t block) -> std::unique_ptr<utils::Worker<Workload>>
         {
-            auto worker = std::make_unique<AsyncIoWorker>(resolver->resolved());
+            auto worker = std::make_unique<AsyncIoWorker>(resolver->resolved(), block);
 
             // Registered here, where the concrete type is still known. The pool stores it as a
             // Worker<Workload>, which knows nothing of counters, so this is the last point at which
@@ -331,8 +335,10 @@ common::ResponseCode Streamer::async_request(
     // The devices are kept alongside: a workload's group is an index into this, and the st_dev it
     // names is the key its engine is chosen by.
     std::vector<dev_t> group_devices;
-    const std::vector<int> group_by_file = object_storage ? std::vector<int>{}
-                                                          : file_groups(request, group_devices);
+    std::vector<size_t> group_blocks;
+    const std::vector<int> group_by_file = object_storage
+                                         ? std::vector<int>{}
+                                         : file_groups(request, group_devices, group_blocks);
     Assigner assigner(request, _config, group_by_file);
 
     std::vector<Workload> workloads(assigner.num_workloads());
@@ -439,7 +445,8 @@ common::ResponseCode Streamer::async_request(
                         << "async workload " << next << " has group " << group
                         << " but only " << group_devices.size() << " mounts were probed";
 
-                    _pools.push_async(group_devices[group], std::move(workloads[next]));
+                    workloads[next].direct_block = group_blocks[group];
+                    _pools.push_async(group_devices[group], group_blocks[group], std::move(workloads[next]));
                 }
             }
         }
@@ -569,11 +576,90 @@ bool Streamer::is_object_storage_submission(const std::vector<FileRanges> & requ
     return false;
 }
 
+common::ResponseCode Streamer::direct_block_for(const std::vector<std::string> & paths,
+                                                size_t & out_block)
+{
+    out_block = 0;
+
+    size_t largest = 0;
+    bool measured = false;
+
+    for (const auto & path : paths)
+    {
+        // Filesystem paths only. An object-storage URI names no mount and never reaches O_DIRECT, and
+        // stat'ing "s3:/" would probe the current directory's mount and report an answer belonging to
+        // something else entirely.
+        //
+        // A submission cannot legally mix the two - lock_object_plugin rejects that with
+        // UnsupportedBackendMix - but this runs BEFORE any submission is validated, so it takes the
+        // list as given rather than assuming the caller has been checked.
+        if (try_parse_uri(path) != nullptr)
+        {
+            continue;
+        }
+
+        // The DIRECTORY, as file_groups does: capability belongs to the mount, and this works for a
+        // file that does not exist yet where stat'ing the file itself would fail.
+        const auto slash = path.find_last_of('/');
+        const std::string directory = (slash == std::string::npos) ? std::string(".")
+                                    : (slash == 0 ? std::string("/") : path.substr(0, slash));
+
+        try
+        {
+            const auto capability = _environment.mount ? _environment.mount(directory)
+                                                       : _mounts.of_path(directory);
+
+            // A memory-backed mount has no device to bypass, so it imposes no alignment at all.
+            if (capability.memory_backed)
+            {
+                continue;
+            }
+
+            size_t block = 0;
+            if (_mounts.direct_block(capability.dev, path, block) == common::ResponseCode::Success)
+            {
+                largest = std::max(largest, block);
+                measured = true;
+            }
+        }
+        catch (const common::Exception &)
+        {
+            // An unstattable directory tells us nothing about alignment. Skip it; another path may
+            // answer, and if none do the fallback below applies.
+            continue;
+        }
+    }
+
+    if (!measured)
+    {
+        // A LAYOUT value, so the caller can still place its buffers. The host page size: on x86 that
+        // is 4096, and on a large-page host the caller's pool is already aligned to it, so nothing is
+        // over-padded relative to what the allocator gives anyway.
+        //
+        // UnknownError, not Success, so the caller knows to ask again next submission instead of
+        // treating this as the mount's answer.
+        out_block = static_cast<size_t>(::sysconf(_SC_PAGESIZE));
+
+        LOG(INFO) << "No filesystem mount among " << paths.size() << " path(s) could be measured;"
+                  << " laying out at"
+                  << " the host page size of " << out_block << " bytes for now";
+        return common::ResponseCode::UnknownError;
+    }
+
+    out_block = largest;
+
+    LOG(INFO) << "Destinations for these " << paths.size() << " path(s) must be laid out at "
+              << out_block << " bytes - the largest any of their mounts requires";
+    return common::ResponseCode::Success;
+}
+
 std::vector<int> Streamer::file_groups(const std::vector<FileRanges> & request,
-                                       std::vector<dev_t> & out_devices)
+                                       std::vector<dev_t> & out_devices,
+                                       std::vector<size_t> & out_blocks)
 {
     std::vector<int> group_by_file(request.size(), -1);
     out_devices.clear();
+    out_blocks.clear();
 
     if (!posix_io::is_async(_strategy_resolver->resolved()))
     {
@@ -622,6 +708,9 @@ std::vector<int> Streamer::file_groups(const std::vector<FileRanges> & request,
                     group = static_cast<int>(out_devices.size());
                     by_device.emplace(capability.dev, group);
                     out_devices.push_back(capability.dev);
+
+                    // 0 until a file on this mount answers the probe - see the loop below.
+                    out_blocks.push_back(0);
                 }
             }
         }
@@ -669,6 +758,33 @@ std::vector<int> Streamer::file_groups(const std::vector<FileRanges> & request,
             continue;   // the synchronous reader serves it
         }
 
+        // This mount's block, measured once and carried to the engine that will serve it.
+        //
+        // Taken from the first file that ANSWERS, not the first file. A path that does not exist yet
+        // leaves direct_block at 0 and caches nothing, so asking only the first file would freeze
+        // this mount's engine on a fallback because of one missing shard.
+        //
+        // Measured for every direct strategy, not only libaio. reads_directly() below is still gated
+        // on libaio - routing a file AWAY is what only libaio may do - but io_uring needs the number
+        // just as much, and it has no other chance to learn it before its engine is built.
+        if (out_blocks[group] == 0 && posix_io::is_direct(_strategy_resolver->resolved()))
+        {
+            if (_environment.direct_block)
+            {
+                out_blocks[group] = _environment.direct_block(out_devices[group], path);
+            }
+            else
+            {
+                // The code is ignored on purpose here: a mount that refuses O_DIRECT and one that
+                // could not be probed both leave the block at 0, and both mean "no measurement to
+                // carry". What must NOT happen is caching the failure, and direct_block already
+                // does not - so the next submission measures again.
+                size_t block = 0;
+                (void)_mounts.direct_block(out_devices[group], path, block);
+                out_blocks[group] = block;
+            }
+        }
+
         // PER FILE, so it cannot be answered from the directory cache above: congruence depends on
         // this file's own offsets and destinations, and two shards in one directory can differ.
         if (check_direct && !reads_directly(request[i], out_devices[group]))
@@ -684,7 +800,25 @@ std::vector<int> Streamer::file_groups(const std::vector<FileRanges> & request,
 
 bool Streamer::reads_directly(const FileRanges & file, dev_t device)
 {
-    const auto block = posix_io::DirectBlockSize;
+    // THIS MOUNT's block, measured, not the process-wide assumption.
+    //
+    // The number decides congruence, and congruence decides whether a file is read directly at all -
+    // so testing against a block larger than the mount needs rejects files the mount would have
+    // served. On a mount that accepts 512, testing at 65536 makes congruence 128 times harder.
+    //
+    // Zero means the mount serves no direct reads; the direct_support() check below then routes the
+    // file away, so any value works here and the loop simply finds nothing congruent.
+    size_t measured = 0;
+    if (_environment.direct_block)
+    {
+        measured = _environment.direct_block(device, file.path);
+    }
+    else
+    {
+        (void)_mounts.direct_block(device, file.path, measured);
+    }
+
+    const auto block = measured != 0 ? measured : posix_io::direct_block_size();
 
     for (const auto & range : file.ranges)
     {

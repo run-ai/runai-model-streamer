@@ -1,4 +1,5 @@
 import unittest
+import hashlib
 import os
 import torch
 import torch.distributed as dist
@@ -273,6 +274,19 @@ class TestDistributedStreamer(unittest.TestCase):
         Identical filler would hide the failure this test exists for: a rank could yield another
         rank's tensor under the wrong identity and the bytes would still compare equal.
         """
+        # The property this fixture is FOR, asserted rather than assumed. The previous encoding
+        # claimed it in a comment and did not have it, and nothing noticed - a swap between two
+        # colliding chunks was indistinguishable from a correct read.
+        payloads = {}
+        for file_index in range(files):
+            for chunk_index in range(chunks_per_file):
+                payload = self._expected_bytes(file_index, chunk_index, chunk_size)
+                clash = payloads.get(payload)
+                assert clash is None, (
+                    f"chunks {clash} and {(file_index, chunk_index)} have identical bytes, so a swap "
+                    f"between them would pass every assertion in this test")
+                payloads[payload] = (file_index, chunk_index)
+
         if self.rank == 0:
             requests = []
             for file_index in range(files):
@@ -301,7 +315,17 @@ class TestDistributedStreamer(unittest.TestCase):
     def _expected_bytes(file_index: int, chunk_index: int, size: int) -> bytes:
         # Sensitive to both coordinates and to the position within the chunk, so a swap between any
         # two chunks changes the bytes.
-        return bytes((file_index * 37 + chunk_index * 91 + offset) % 256 for offset in range(size))
+        #
+        # HASHED, not a linear combination. This was `(file_index * 37 + chunk_index * 91 + offset)
+        # % 256`, and 37*2 + 91*2 is exactly 256 - so (f, c) and (f+2, c+2) produced identical bytes.
+        # At files=3, chunks_per_file=8 that was six colliding pairs, (0,0)/(2,2) through (0,5)/(2,7):
+        # 18 distinct payloads for 24 chunks. A swap between any of those pairs passed the byte
+        # comparison, which is the single failure this test exists to detect.
+        #
+        # Any linear scheme mod 256 has this problem somewhere; a digest has no such structure to
+        # exploit. `+ offset` keeps the within-chunk position sensitivity the linear version had.
+        digest = hashlib.blake2b(f"{file_index}:{chunk_index}".encode(), digest_size=32).digest()
+        return bytes((digest[offset % 32] + offset) % 256 for offset in range(size))
 
     def test_1_broadcast_metadata_identifies_tensors_a_rank_never_read(self):
         """A rank must yield the right tensor for chunks it did not read itself.

@@ -59,10 +59,16 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     //
     // Injectable so tests can drive the worker with MockIoEngine - the same shape as
     // ObjectStorageWorker's credentials provider, and for the same reason. Production passes nothing.
+    // The mount's measured direct-I/O block, bound when this worker's engine is created. One engine
+    // serves one mount, so this is fixed for the worker's life. 0 means no file could be probed, and
+    // the process-wide default stands in.
     using EngineFactory = std::function<std::unique_ptr<posix_io::IoEngine>(
                               posix_io::Strategy, const posix_io::AsyncIoConfig &)>;
 
+    // `block` is the mount's measured direct-I/O block, or 0 when no file on it could be probed -
+    // in which case the worker runs provisionally and adopts a later workload's measurement.
     explicit AsyncIoWorker(posix_io::Strategy strategy,
+                           size_t block = 0,
                            EngineFactory factory = posix_io::make_io_engine);
     ~AsyncIoWorker() override;
 
@@ -268,6 +274,11 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     // only the id, so this worker does it.
     posix_io::FileRef file_of(const InflightChunk & entry) const;
 
+    // Reopen this batch's file WITHOUT O_DIRECT after the kernel refused a direct read, so the same
+    // bytes can be re-staged. False when there is nothing left to re-stage against, or the buffered
+    // open itself failed - the caller then reports the original error.
+    bool demote_to_buffered(const InflightChunk & entry);
+
     size_t land_bounced_pass(posix_io::RequestId id, size_t bytes_transferred);
 
     void finalize(InflightMap::iterator it, common::ResponseCode code);
@@ -279,6 +290,33 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     void abort_all(common::ResponseCode code);
 
     const posix_io::Strategy _strategy;
+
+    // This mount's direct-I/O block. NOT const: it starts provisional when the first submission could
+    // not measure the mount, and is adopted from a later workload that could.
+    //
+    // Provisional means MaxProbeBlock - the largest the ladder can ever return - so adopting a real
+    // measurement can only make it SMALLER. That is what makes adoption safe after the fact: the
+    // scratch buffers were sized for the provisional value, so they are big enough for any measured
+    // one, and no reallocation is needed.
+    //
+    // The alternative was to freeze the provisional value for the life of the engine. That is a bug
+    // for a long-lived streamer serving many submissions - checkpoint restore - where the first
+    // submission's files may be unreadable and every later one is fine.
+    size_t _block;
+
+    // False until a real measurement has been adopted. Only then does _block stop being provisional.
+    bool _block_measured = false;
+
+    // Set when the kernel refused a DIRECT read with EINVAL, so later files open buffered instead of
+    // repeating an attempt we already know fails.
+    //
+    // A plain member is enough, and is deliberately NOT a MountCapabilities lookup. This worker owns
+    // one engine, and BackendPools creates one engine per mount - so a per-worker flag IS a per-mount
+    // memo, with no plumbing. The worker holds no MountCapabilities and needs none.
+    //
+    // One direction only, like IoUringProbe::mark_unavailable. A mount that refused an aligned direct
+    // read will not start accepting one while we run, and re-trying would cost a failed read per file.
+    bool _direct_refused = false;
     const EngineFactory _factory;
 
     // Why the engine could not be built, for discard() to report. Reset after use so the next workload

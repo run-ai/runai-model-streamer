@@ -4,6 +4,7 @@ runai_cc_auto_library(
     name = "alignment",
     deps = [
         "//posix_io/io_engine",
+        "//utils/env",
         "//utils/logging",
     ],
 )
