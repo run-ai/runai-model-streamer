@@ -9,8 +9,42 @@
 namespace runai::llm::streamer::posix_io
 {
 
+namespace
+{
+
+// posix_memalign accepts an alignment only if it is a power of two AND a multiple of sizeof(void *).
+// Measured on this platform: 1, 2 and 4 all return EINVAL, and so does any non-power-of-two such as
+// 3000. Only 8 and above, at a power of two, are accepted.
+//
+// This used to be `block == 0 ? 1 : block`, and 1 is the one value that cannot allocate. block_size()
+// hands out 1 as its "no rule to follow" fallback (alignment.cc), so the fallback meant to keep
+// things working was exactly the input that made this constructor throw UnknownError - blaming the
+// allocation, when nothing was wrong with the request.
+//
+// Unreachable today: the pool is built only for a direct strategy (async_io_worker.cc), and both
+// direct engines report DirectBlockSize. But the fallback exists for the case where an engine
+// reports no rule, so it must not be the value that fails.
+//
+// Rounded UP, never down. _block is also the SIZE of each buffer, not only its alignment, and a
+// bounced pass needs a whole block - so a short buffer would be a worse bug than a misaligned one.
+size_t allocatable(size_t block)
+{
+    size_t alignment = sizeof(void *);
+
+    // The `!= 0` stops a shift overflow from looping forever on an absurd block. An allocation that
+    // large fails in posix_memalign below, which reports it properly.
+    while (alignment < block && alignment != 0)
+    {
+        alignment <<= 1;
+    }
+
+    return alignment == 0 ? sizeof(void *) : alignment;
+}
+
+} // namespace
+
 ScratchPool::ScratchPool(size_t count, size_t block) :
-    _block(block == 0 ? 1 : block),
+    _block(allocatable(block)),
     _memory(nullptr, &std::free)
 {
     if (count == 0)

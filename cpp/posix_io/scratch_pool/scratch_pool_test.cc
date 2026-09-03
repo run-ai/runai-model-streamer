@@ -100,4 +100,31 @@ TEST(ScratchPool, Empty_Pool_Is_Legal)
     EXPECT_EQ(pool.take(), nullptr);
 }
 
+
+// A block posix_memalign cannot use must not become a failure to allocate.
+//
+// block_size() hands out 1 when an engine reports no alignment rule (alignment.cc), and
+// posix_memalign rejects 1 - it needs a power of two that is at least sizeof(void *). So the
+// fallback meant to keep things working was the one input that threw.
+//
+// Parameterised over the values that fail the syscall: below sizeof(void *), and not a power of two.
+TEST(ScratchPool, A_Block_The_Allocator_Rejects_Still_Builds)
+{
+    for (const size_t block : { size_t(0), size_t(1), size_t(2), size_t(4), size_t(3000) })
+    {
+        ScratchPool pool(4, block);
+
+        char * buffer = pool.take();
+        ASSERT_NE(buffer, nullptr) << "no buffer for block " << block;
+
+        // Rounded UP, so a buffer is never shorter than the block that was asked for - a bounced
+        // pass reads a whole block into it.
+        EXPECT_GE(pool.block(), block) << "block " << block << " was rounded DOWN";
+
+        // And still usable as an alignment, which is the whole point.
+        EXPECT_EQ(reinterpret_cast<uintptr_t>(buffer) % pool.block(), 0u)
+            << "buffer is not aligned to the normalised block for " << block;
+    }
+}
+
 }; // namespace runai::llm::streamer::posix_io
