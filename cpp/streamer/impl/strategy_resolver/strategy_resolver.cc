@@ -79,9 +79,29 @@ common::ResponseCode StrategyResolver::set_candidates(const std::string & candid
             return common::ResponseCode::Success;
         }
 
-        LOG(ERROR) << "Filesystem strategy is already resolved from '" << _resolved_from.value()
-                   << "' (using " << _resolved.value() << "); create a new streamer to use '"
-                   << candidates << "'";
+        // _resolved is checked separately from _resolved_from - they are NOT set together. A failed
+        // resolve() records the list it walked and leaves _resolved empty, so reading it here threw
+        // std::bad_optional_access on exactly that path. The throw then met the catch(...) in
+        // runai_set_fs_strategy and turned this specific, recoverable code into UnknownError, which
+        // tells the caller to abort everything.
+        //
+        // It only ever fired with a log sink enabled: should_process_log() requires __print or
+        // __file, so with neither set the message is never built and the value never read. That is
+        // to say it appeared only when someone turned logging on to investigate - see the `env` on
+        // this package's test target, which keeps a sink enabled so the case stays covered.
+        if (_resolved.has_value())
+        {
+            LOG(ERROR) << "Filesystem strategy is already resolved from '" << _resolved_from.value()
+                       << "' (using " << _resolved.value() << "); create a new streamer to use '"
+                       << candidates << "'";
+        }
+        else
+        {
+            LOG(ERROR) << "Filesystem strategy is already resolved from '" << _resolved_from.value()
+                       << "', and that resolution FAILED, so no strategy is in use; create a new"
+                       << " streamer to use '" << candidates << "'";
+        }
+
         return common::ResponseCode::FsStrategyConflict;
     }
 
