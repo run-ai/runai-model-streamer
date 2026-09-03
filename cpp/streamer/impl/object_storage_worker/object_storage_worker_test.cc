@@ -285,7 +285,9 @@ TEST_F(ObjectStorageWorkerTest, Small_Ranges_Are_Packed_Into_One_Read)
     constexpr unsigned num_ranges = 40;
     constexpr size_t range_size = 100;
 
-    // s3_block_bytesize is the 4th argument; enforce_minimum=false keeps it from being floored at 5 MiB.
+    // s3_block_bytesize is the 3rd argument, and the 4th is fs_sync_read_block_bytesize, which this
+    // test does not care about. enforce_minimum=false is what keeps s3_chunk from being floored at
+    // 5 MiB.
     config = std::make_shared<Config>(1, 1, s3_chunk, 1024, false);
     responder = std::make_shared<common::Responder>(0);
 
