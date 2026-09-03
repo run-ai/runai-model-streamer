@@ -265,13 +265,34 @@ common::ResponseCode IoUringEngine::wait_for_completions(Completion * out, unsig
 
     io_uring_cq_advance(&_ring, out_count);
 
-    // Overflow means the CQ filled while we were not reaping; the kernel then spills to a slower
-    // side path rather than losing anything. Not an error, but it says the window and the reap rate
-    // have drifted apart, and it is invisible otherwise.
-    if (_ring.cq.koverflow != nullptr && *_ring.cq.koverflow != 0)
+    // A NON-ZERO value here means the kernel DROPPED completions. It is not a "reaping too slowly"
+    // signal, which is what this check used to claim.
+    //
+    // io_cqring_add_overflow() (io_uring/io_uring.c) increments cq_overflow on ONE branch only - the
+    // one whose own comment is "we need to drop it on the floor" - and sets IO_CHECK_CQ_DROPPED_BIT
+    // with it. The ordinary NODROP spill takes the other branch: it queues the CQE on
+    // cq_overflow_list and sets IORING_SQ_CQ_OVERFLOW, leaving this counter untouched. So the benign
+    // case never appears here. io_uring_cq_has_overflow() is what reports that one.
+    //
+    // It should be unreachable. The kernel sizes the CQ at twice the SQ (cq_entries = 2 *
+    // sq_entries, and we pass no setup flags), while the worker's window credit caps reads in flight
+    // at the engine's depth, which IS sq.ring_entries. At most `depth` completions can be pending
+    // against room for 2 * depth. A short-read re-stage keeps the credit it already holds, so it
+    // cannot push past the window either.
+    //
+    // Which is why this is an ERROR rather than a warning: reaching it means that invariant broke,
+    // or the kernel could not allocate under memory pressure. Both lose a read that nothing will
+    // ever account for - _issued never decrements for it, and quiesce() waits on _issued reaching
+    // zero.
+    //
+    // Cumulative, and the kernel never resets it. Report only what is new: the worker reaps in a
+    // loop, so testing against zero would log this on every pass for the rest of the run.
+    if (_ring.cq.koverflow != nullptr && *_ring.cq.koverflow > _overflow_reported)
     {
-        LOG(WARNING) << "io_uring completion queue overflowed " << *_ring.cq.koverflow
-                     << " times - completions are taking the slow path";
+        LOG(ERROR) << "io_uring DROPPED " << (*_ring.cq.koverflow - _overflow_reported)
+                   << " completions (" << *_ring.cq.koverflow << " since this ring was created)"
+                   << " - those reads will never be answered";
+        _overflow_reported = *_ring.cq.koverflow;
     }
 
     return common::ResponseCode::Success;

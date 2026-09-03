@@ -60,6 +60,15 @@ class IoUringEngine : public IoEngine
     // seen these; only flush() makes them real.
     unsigned _staged = 0;
 
+    // Last value seen in cq.koverflow, which counts completions the KERNEL DROPPED (see the reap
+    // loop for why that is not the same as the benign NODROP spill). The counter only grows and is
+    // never reset, so remembering it keeps the report to one line per new drop instead of one per
+    // reap.
+    //
+    // unsigned, not our usual uint64_t for a growing counter: it mirrors the kernel's __u32
+    // cq_overflow, and a wider type here would only invite a comparison against a different width.
+    unsigned _overflow_reported = 0;
+
     SubmitStats _submit_stats;
 
     struct io_uring _ring;
