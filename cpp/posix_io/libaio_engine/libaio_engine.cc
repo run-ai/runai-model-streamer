@@ -430,8 +430,12 @@ common::ResponseCode LibaioEngine::wait_for_completions(Completion * out, unsign
         // reports a timeout by returning 0 events, not by failing.
         if (error != EINTR)
         {
+            // This CONTEXT is gone. Not UnknownError: nothing of ours is in doubt, the streamer stays
+            // usable, and this mount is still readable by the synchronous reader. io_uring reports the
+            // same condition with the same code - the caller must not be able to tell the engines
+            // apart.
             LOG(ERROR) << "io_getevents failed: " << std::strerror(error);
-            return common::ResponseCode::UnknownError;
+            return common::ResponseCode::FsAsyncEngineError;
         }
 
         return common::ResponseCode::Success;

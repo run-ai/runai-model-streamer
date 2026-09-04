@@ -189,8 +189,11 @@ common::ResponseCode IoUringEngine::flush(unsigned & out_issued)
             return common::ResponseCode::Success;
         }
 
+        // This RING is gone, and nothing of ours is in doubt - so not UnknownError, which would tell
+        // the caller to abort everything and treat it as a bug in the streamer. One engine serves one
+        // mount, and that mount is still readable synchronously.
         LOG(ERROR) << "io_uring_submit failed: " << std::strerror(error);
-        return common::ResponseCode::UnknownError;
+        return common::ResponseCode::FsAsyncEngineError;
     }
 
     out_issued = static_cast<unsigned>(ret);
@@ -234,8 +237,10 @@ common::ResponseCode IoUringEngine::wait_for_completions(Completion * out, unsig
             // returning is the only way a waiting worker learns it should stop.
             if (error != ETIME && error != EINTR && error != EAGAIN)
             {
+                // The ring cannot be waited on any more. Reported as this engine failing rather than
+                // as an internal error, for the same reason as the submit path above.
                 LOG(ERROR) << "io_uring_wait_cqe failed: " << std::strerror(error);
-                return common::ResponseCode::UnknownError;
+                return common::ResponseCode::FsAsyncEngineError;
             }
         }
     }
