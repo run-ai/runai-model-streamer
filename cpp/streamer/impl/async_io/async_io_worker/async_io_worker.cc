@@ -18,6 +18,7 @@
 
 #include "posix_io/alignment/alignment.h"
 #include "common/exception/exception.h"
+#include "utils/fd/fd.h"
 #include "utils/logging/logging.h"
 
 namespace runai::llm::streamer::impl
@@ -140,6 +141,19 @@ void AsyncIoWorker::discard(Workload && workload)
 
 void AsyncIoWorker::enqueue(Workload && workload)
 {
+    // Nothing new is read through a dead engine - see abort_all.
+    //
+    // Reported rather than dropped: these responses are owed whatever state the engine is in, and
+    // dropping them hangs the consumer. Reported HERE rather than through discard(), because the base
+    // only calls discard() when the window failed to come up, and this window came up long ago.
+    if (_engine_dead)
+    {
+        Inflight wl;
+        wl.workload = std::move(workload);
+        report_workload(wl, _engine_error);
+        return;
+    }
+
     // Adopt a measurement this worker did not have when its engine was built.
     //
     // The first submission may have been unable to probe the mount - every path missing or unreadable
@@ -429,20 +443,18 @@ common::ResponseCode AsyncIoWorker::probe_open(const std::string & path)
     // Buffered, always. The question here is only whether the file can be opened, and O_DIRECT would
     // add a second reason to fail that has nothing to do with the file existing - some mounts refuse
     // it outright.
-    const int fd = ::open(path.c_str(), O_RDONLY);
+    const int fd = utils::Fd::open_for_read(path);
     if (fd < 0)
     {
         LOG(ERROR) << "Failed to open " << path << " : " << std::strerror(errno);
         return common::ResponseCode::FileAccessError;   // this file's failure, not the storage's
     }
 
-    // The same check fd_for makes, so a path answers the same way whether or not its ranges have
-    // bytes in them. Without this a directory would be Success for a zero-sized range and
-    // FileAccessError for every other range of the same path.
-    const bool readable = readable_file(fd, path);
-
+    // The type check is inside open_for_read, so it has already run - which is what makes a path answer
+    // the same way whether or not its ranges have bytes in them. Without it a directory would be
+    // Success for a zero-sized range and FileAccessError for every other range of the same path.
     ::close(fd);
-    return readable ? common::ResponseCode::Success : common::ResponseCode::FileAccessError;
+    return common::ResponseCode::Success;
 }
 
 bool AsyncIoWorker::demote_to_buffered(const InflightChunk & entry)
@@ -458,7 +470,7 @@ bool AsyncIoWorker::demote_to_buffered(const InflightChunk & entry)
     BatchFd & batch_fd = wlit->second.fds[entry.batch_index];
     const auto & path = wlit->second.workload.batches()[entry.batch_index].path;
 
-    const int fd = ::open(path.c_str(), O_RDONLY);
+    const int fd = utils::Fd::open_for_read(path);
     if (fd < 0)
     {
         // The direct fd worked well enough to be refused for alignment, so a buffered open failing
@@ -546,7 +558,7 @@ int AsyncIoWorker::fd_for(Inflight & wl, unsigned batch_index, size_t file_offse
 
     if (wants_direct(file_offset, buffer))
     {
-        entry.fd = ::open(path.c_str(), O_RDONLY | O_DIRECT);
+        entry.fd = utils::Fd::open_for_read(path, O_DIRECT);
         if (entry.fd >= 0)
         {
             entry.direct = true;
@@ -560,7 +572,7 @@ int AsyncIoWorker::fd_for(Inflight & wl, unsigned batch_index, size_t file_offse
                      << "); reading it buffered";
     }
 
-    entry.fd = ::open(path.c_str(), O_RDONLY);
+    entry.fd = utils::Fd::open_for_read(path);
     if (entry.fd < 0)
     {
         LOG(ERROR) << "Failed to open " << path << " : " << std::strerror(errno);
@@ -571,47 +583,7 @@ int AsyncIoWorker::fd_for(Inflight & wl, unsigned batch_index, size_t file_offse
 
     entry.direct = false;
 
-    if (!readable_file(entry.fd, path))
-    {
-        ::close(entry.fd);
-        entry.fd = -1;
-        entry.error = common::ResponseCode::FileAccessError;
-        out_error = entry.error;
-        return -1;
-    }
-
     return entry.fd;
-}
-
-bool AsyncIoWorker::readable_file(int fd, const std::string & path)
-{
-    struct stat st;
-
-    if (::fstat(fd, &st) != 0)
-    {
-        LOG(ERROR) << "Failed to stat " << path << " : " << std::strerror(errno);
-        return false;
-    }
-
-    if (!S_ISDIR(st.st_mode))
-    {
-        return true;
-    }
-
-    // open(O_RDONLY) succeeds on a directory, so without this check the read is staged and each reader
-    // finds out somewhere different. Measured: libaio refuses the whole io_submit with EINVAL,
-    // io_uring accepts the read and completes it with -EINVAL, and the synchronous reader gets EISDIR
-    // from pread.
-    //
-    // Answering here makes all three say the same thing, and say it in words.
-    //
-    // It also removes a dependency on an accident. A directory cannot be opened with O_DIRECT, so its
-    // fd is always buffered, and map_completion turns EINVAL on a buffered fd into FileAccessError -
-    // one file fails and the rest carry on. On a DIRECT fd the same EINVAL means an alignment bug and
-    // maps to UnknownError, which aborts the whole submission. We would be relying on the kernel to
-    // keep refusing O_DIRECT on directories.
-    LOG(ERROR) << path << " is a directory, not a file";
-    return false;
 }
 
 void AsyncIoWorker::stage_pending(posix_io::RequestId id)
@@ -1029,6 +1001,30 @@ void AsyncIoWorker::quiesce()
 
 void AsyncIoWorker::abort_all(common::ResponseCode code)
 {
+    // A mid-life failure ENDS this engine. It is never used again.
+    //
+    // Only two things reach here with a code other than FinishedError, and neither recovers:
+    // io_uring_submit or io_getevents failing with something that is not backpressure. The ring or the
+    // context is gone, and no later call can bring it back.
+    //
+    // Reusing it would also be unsafe rather than merely futile. Requests already staged in the engine
+    // are not issued and not dropped, and they hold descriptor numbers that finalize() below is about
+    // to close - numbers the next open on this worker will be handed straight back. A later flush would
+    // then read a DIFFERENT file into memory the caller has since reused. Never flushing again is what
+    // closes that.
+    //
+    // FinishedError is the shutdown path and marks nothing: the engine is being destroyed anyway, and
+    // io_uring_queue_exit discards whatever is staged in it.
+    if (code != common::ResponseCode::FinishedError && !_engine_dead)
+    {
+        _engine_dead = true;
+        _engine_error = code;
+
+        LOG(ERROR) << "The asynchronous reader for this mount failed permanently (" << code
+                   << "). Every submission still in flight here is failed now, and later ones are"
+                   << " answered with the same code rather than retried on a dead engine";
+    }
+
     // Drops pending entries and releases their credit in one step - draining through
     // try_take()/complete() would stop at the full-window boundary. First, so nothing new is staged
     // while we wait.

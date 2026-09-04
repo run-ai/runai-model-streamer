@@ -214,13 +214,6 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     int fd_for(Inflight & wl, unsigned batch_index, size_t file_offset, const char * buffer,
                common::ResponseCode & out_error);
 
-    // Is this open fd something we can read ranges from? One fstat, on a file we just opened.
-    //
-    // It exists for directories. open(O_RDONLY) succeeds on one, and the failure then surfaces deep in
-    // whichever engine is running, in a different place for each. Answering it here costs one syscall
-    // per file and says what is actually wrong - see the body for the second reason.
-    static bool readable_file(int fd, const std::string & path);
-
     // Whether this file should be opened with O_DIRECT.
     //
     // Two things must both hold: the strategy asked for it, and a direct read is possible at all. The
@@ -324,6 +317,13 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     // Why the engine could not be built, for discard() to report. Reset after use so the next workload
     // retries - though a failure here is permanent in practice.
     common::ResponseCode _engine_error = common::ResponseCode::UnknownError;
+
+    // Set once the engine has failed for good, mid-run. Every later workload is answered with
+    // _engine_error instead of being staged - see abort_all for why reuse is unsafe and not merely
+    // pointless.
+    //
+    // NOT set on the shutdown path: there the engine is destroyed immediately afterwards.
+    bool _engine_dead = false;
 
     // Block-sized buffers for the partial blocks at the edges of a region. Empty on a buffered
     // engine, which never bounces.

@@ -16,6 +16,7 @@ runai_cc_auto_library(
         "//streamer/impl/batch",
         "//streamer/impl/workload",
         "//utils/capacity_worker",
+        "//utils/fd",
         "//utils/logging",
     ],
 )

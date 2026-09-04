@@ -1233,4 +1233,62 @@ TEST(AsyncIoWorker, A_Block_Larger_Than_The_Scratch_Buffers_Is_Refused)
         << " reads into";
 }
 
+// An engine that failed mid-run is never used again, and later submissions are answered rather than
+// staged into it.
+//
+// io_uring_submit and io_getevents failing with something that is not backpressure are the only ways
+// here, and neither recovers. Retrying would also be unsafe: requests staged before the failure are
+// neither issued nor dropped, and they hold descriptor numbers finalize() has since closed - which the
+// next open takes straight back.
+TEST(AsyncIoWorker, A_Dead_Engine_Is_Not_Reused)
+{
+    Fixture fixture({ ChunkSize });
+    Driver driver;
+
+    driver.execute(fixture.workload());
+    ASSERT_EQ(driver.engine->staged_count(), 1u);
+
+    // The engine's ring is gone. Nothing staged in it will ever be issued.
+    driver.engine->set_flush_result(common::ResponseCode::FsAsyncEngineError);
+    driver.issue();
+
+    const auto first = drain_responses(*fixture.responder, 1);
+    ASSERT_EQ(first.size(), 1u);
+    EXPECT_EQ(first[0].ret, common::ResponseCode::FsAsyncEngineError)
+        << "the in-flight submission is failed with the engine's own code, not UnknownError";
+
+    // A second submission arrives after the failure. It must be answered, and it must not reach the
+    // engine - staging into a ring that is never flushed again would leave it holding the caller's
+    // buffers for good.
+    const auto staged_before = driver.engine->history().size();
+
+    Fixture second({ ChunkSize });
+    driver.execute(second.workload());
+
+    EXPECT_EQ(driver.engine->history().size(), staged_before)
+        << "a workload was staged into an engine that has already failed";
+
+    const auto answers = drain_responses(*second.responder, 1);
+    ASSERT_EQ(answers.size(), 1u) << "a submission after the failure must still be answered";
+    EXPECT_EQ(answers[0].ret, common::ResponseCode::FsAsyncEngineError);
+}
+
+// Shutdown is not a failure, so it must not mark the engine dead - there is nothing left to protect,
+// and the code the caller sees has to stay FinishedError.
+TEST(AsyncIoWorker, Stopping_Reports_Finished_Rather_Than_An_Engine_Failure)
+{
+    Fixture fixture({ ChunkSize });
+    Driver driver;
+
+    driver.execute(fixture.workload());
+    ASSERT_EQ(driver.engine->staged_count(), 1u);
+
+    driver.stopped = true;
+    driver.issue();
+
+    const auto responses = drain_responses(*fixture.responder, 1);
+    ASSERT_EQ(responses.size(), 1u);
+    EXPECT_EQ(responses[0].ret, common::ResponseCode::FinishedError);
+}
+
 }; // namespace runai::llm::streamer::impl
