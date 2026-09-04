@@ -11,6 +11,7 @@ from runai_model_streamer.libstreamer.libstreamer import (
     runai_list_files,
 )
 from runai_model_streamer.file_streamer.requests_iterator import (
+    DIRECT_IO_BLOCK,
     FilesRequestsIteratorWithBuffer,
     FilesRequest,
     FileChunks,
