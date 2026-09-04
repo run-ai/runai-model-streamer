@@ -186,19 +186,37 @@ TEST(MountCapabilities, Direct_Support_Matches_A_Real_Aligned_Read)
     int fd = ::open(file.path.c_str(), O_RDONLY | O_DIRECT);
     if (fd >= 0)
     {
-        // direct_block_size(), NOT the DirectBlockSize constant. The probe reads at the CONFIGURED
-        // block, so an oracle pinned to the default would test a different size than the code under
-        // test as soon as RUNAI_STREAMER_DIRECT_BLOCK is set - and would then disagree with it on
-        // exactly the mounts this check exists for.
-        const size_t block = direct_block_size();
+        // ANY rung the mount accepts proves direct reads work here, because that is the question
+        // direct_support answers: not "does this one block work" but "can this mount serve direct
+        // reads at all".
+        //
+        // Reading at one fixed block was wrong twice over. Pinned to DirectBlockSize it drifted the
+        // moment the block became configurable; pinned to direct_block_size() it still asks about the
+        // PROCESS-WIDE block while direct_support now measures PER MOUNT. Set
+        // RUNAI_STREAMER_DIRECT_BLOCK=512 on a mount that needs 4096 and the two disagree: the
+        // override makes direct_block answer Yes, while a 512-byte read returns EINVAL.
+        //
+        // The ladder is restated here rather than shared with the implementation on purpose. An
+        // oracle that imported the values it is checking would agree with a wrong implementation.
+        for (const size_t block : { size_t(512), size_t(4096), size_t(16384), size_t(65536) })
+        {
+            void * buffer = nullptr;
+            if (::posix_memalign(&buffer, block, block) != 0)
+            {
+                continue;
+            }
 
-        void * buffer = nullptr;
-        ASSERT_EQ(::posix_memalign(&buffer, block, block), 0);
+            const ssize_t got = ::pread(fd, buffer, block, 0);
+            const bool worked = got >= 0 || errno != EINVAL;
+            ::free(buffer);
 
-        const ssize_t got = ::pread(fd, buffer, block, 0);
-        really_supported = got >= 0 || errno != EINVAL;
+            if (worked)
+            {
+                really_supported = true;
+                break;
+            }
+        }
 
-        ::free(buffer);
         ::close(fd);
     }
 
