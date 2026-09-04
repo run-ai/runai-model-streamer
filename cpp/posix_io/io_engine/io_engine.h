@@ -166,6 +166,15 @@ class IoEngine
 
     // Issue what is staged, in as few syscalls as possible, and report how many went out.
     //
+    // out_issued counts the reads a COMPLETION WILL ARRIVE FOR, which is not always the same as the
+    // reads the kernel accepted. A read the kernel refuses outright still owes the caller an answer,
+    // and an engine that reports it as a completion must count it here too.
+    //
+    // That is the invariant the caller depends on: it adds out_issued to its in-flight count and
+    // subtracts one per completion reaped, so every completion must have been counted exactly once.
+    // An undercount is silent - quiesce() waits for that count to reach zero before reporting, so it
+    // can declare a destination free while the kernel still holds it.
+    //
     // Whatever could not be issued stays staged and is retried, in order, on the next call. Never
     // blocks or spins waiting for capacity: only reaping completions frees capacity, and reaping runs
     // on this same thread, so spinning here deadlocks.

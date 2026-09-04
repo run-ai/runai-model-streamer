@@ -310,10 +310,25 @@ common::ResponseCode LibaioEngine::flush(unsigned & out_issued)
             _pending.erase(_pending.begin());
             _free.push_back(head);
 
-            // Success, and out_issued keeps whatever earlier batches in this same call already
-            // issued - those reads are in flight and the worker must count them. The rest of the
-            // queue is retried on the next flush. This always finishes, because each pass removes
-            // one read.
+            // COUNTED, even though the kernel took nothing.
+            //
+            // out_issued is what the caller adds to its in-flight count, and it takes that count back
+            // down by one for every completion it reaps. A completion IS coming for this read - it is
+            // sitting in _submit_failures - so leaving it out here makes the two disagree.
+            //
+            // The caller then either asserts, if this completion arrives while nothing else is
+            // outstanding, or quietly ends up one too low. The second is worse: quiesce() waits for
+            // the count to reach zero before reporting, so an undercount can report a range while the
+            // kernel still holds its destination.
+            //
+            // It also puts this engine back in step with io_uring, where a request the kernel rejects
+            // still consumes a submission entry, so io_uring_submit counts it and a completion arrives
+            // for it. One mapper serves both engines only while they agree on this.
+            ++out_issued;
+
+            // Success: the flush itself did not fail, and failing it would make the worker abort every
+            // read on this engine. The rest of the queue is retried on the next flush. This always
+            // finishes, because each pass removes one read.
             return common::ResponseCode::Success;
         }
 

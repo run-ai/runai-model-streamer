@@ -340,12 +340,19 @@ TEST(LibaioEngine, A_Refused_Read_Does_Not_Block_The_Ones_Behind_It)
     // Pass one: the good head goes out, io_submit refuses the bad fd, and flush answers it as a
     // synthetic completion inside this same call. Success, because the flush itself did not fail -
     // a failure would make the worker abort every read on this engine.
+    //
+    // TWO, not one. The refused read is counted even though the kernel took nothing, because a
+    // completion is coming for it. This assertion used to read `EXPECT_EQ(issued, 1)` with the note
+    // "only the good head should have been issued" - true of the kernel, and wrong for the caller,
+    // which uses this number to know how many completions to expect. See flush() in io_engine.h.
     unsigned issued = 0;
     ASSERT_EQ(engine.flush(issued), common::ResponseCode::Success);
-    EXPECT_EQ(issued, 1) << "only the good head should have been issued";
+    unsigned total_issued = issued;
+    EXPECT_EQ(issued, 2) << "the good head, plus the refused read that will be answered anyway";
 
     // Pass two: the read that was behind the bad one goes out normally - it was never stuck.
     ASSERT_EQ(engine.flush(issued), common::ResponseCode::Success);
+    total_issued += issued;
     EXPECT_EQ(issued, 1) << "the read behind the refused one must still go out";
 
     const auto completions = reap(engine, 3);
@@ -366,6 +373,13 @@ TEST(LibaioEngine, A_Refused_Read_Does_Not_Block_The_Ones_Behind_It)
     ASSERT_NE(behind, nullptr);
     EXPECT_EQ(behind->bytes_transferred(), third.size());
     EXPECT_EQ(third, fixture.expected_at(1024, third.size()));
+
+    // THE invariant, asserted rather than left implied: one completion for every read counted as
+    // issued. The caller adds the first number to its in-flight count and subtracts the second, one
+    // completion at a time, so any gap between them either trips its assertion or - worse, and
+    // silently - leaves the count low, and quiesce() reports while the kernel still holds a buffer.
+    EXPECT_EQ(total_issued, completions.size())
+        << "every completion must have been counted by a flush, or the caller's in-flight count drifts";
 }
 
 TEST(LibaioEngine, A_Short_Read_Is_Not_An_Error)
