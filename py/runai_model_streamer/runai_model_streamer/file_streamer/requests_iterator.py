@@ -5,6 +5,7 @@ import bisect
 import enum
 import numpy as np
 import os
+import re
 import humanize
 
 from runai_model_streamer.libstreamer.libstreamer import runai_probe_direct_block_size
@@ -243,8 +244,29 @@ def _request_huge_pages(array: np.ndarray) -> None:
         logger.debug("[RunAI Streamer] Could not request huge pages: %s", exception)
 
 
-def _mapping_memory(address: int) -> Optional[Tuple[int, int]]:
-    """(resident bytes, huge-page bytes) for the mapping holding `address`, or None if unreadable.
+# A smaps entry header: "7f0e1c000000-7f0e1c021000 rw-p 00000000 00:00 0 [heap]".
+#
+# Anchored on the hex range, because that is the only part every header has and no other line in the
+# file starts with. Anything else - a field count, a "-" test - can be true of a pathname.
+_SMAPS_HEADER = re.compile(r"^([0-9a-f]+)-([0-9a-f]+) ")
+
+
+def _mapping_memory(address: int, length: int) -> Optional[Tuple[int, int]]:
+    """(resident bytes, huge-page bytes) for the mappings covering [address, address + length).
+
+    EVERY overlapping mapping, not the one holding the first byte. A pool is one allocation but not
+    always one VMA: madvise() on a sub-range SPLITS the mapping, and this module madvises the
+    huge-page-aligned interior of its own pool - so after one such call the arena carries splits, and a
+    later allocation inside it is covered by several VMAs.
+
+    Measured: a 16 MiB pool laid out as a 128 KiB VMA followed by an 18 MiB one. Reading only the first
+    reported 131072 bytes resident for a pool that was fully written, which put it below the one-huge-
+    page floor the caller uses to decide there is something to judge - so the huge-page report went
+    quiet for good, with nothing to show for it.
+
+    A VMA may reach beyond the range, and its Rss then counts memory that is not ours. That is accepted:
+    the numbers answer "has anything been written" and "is any of it huge-page backed", and neither is
+    made wrong by a neighbour inside the same arena.
 
     Reads the mapping's own smaps entry rather than the machine-wide counter in /proc/meminfo, which
     everything else on the node also moves.
@@ -255,21 +277,40 @@ def _mapping_memory(address: int) -> Optional[Tuple[int, int]]:
 
     Linux only, and /proc may not be mounted, so the caller treats None as "no answer" rather than as
     a failure."""
+    end = address + length
+
     try:
-        current = None
-        resident = None
+        current = False
+        found = False
+        resident = 0
+        backed = 0
+
         with open("/proc/self/smaps") as smaps:
             for line in smaps:
-                head = line.split()
-                if len(head) >= 5 and "-" in head[0] and ":" not in head[0]:
-                    low, high = (int(part, 16) for part in head[0].split("-"))
-                    current = low <= address < high
-                    resident = None
-                elif current and line.startswith("Rss:"):
-                    resident = int(line.split()[1]) * 1024
-                elif current and line.startswith("AnonHugePages:"):
-                    return (resident or 0, int(line.split()[1]) * 1024)
-        return None
+                header = _SMAPS_HEADER.match(line)
+
+                # A HEADER, matched on the hex range itself rather than by counting fields. The field
+                # count was a heuristic, and a header line that did not match it would leave `current`
+                # pointing at the previous mapping - reporting an unrelated mapping's numbers with no
+                # sign that anything went wrong.
+                if header is not None:
+                    low = int(header.group(1), 16)
+                    high = int(header.group(2), 16)
+                    current = low < end and high > address
+                    found = found or current
+                    continue
+
+                if not current:
+                    continue
+
+                # Accumulated across every overlapping mapping, and never returned early: the last one
+                # is only known when the file ends.
+                if line.startswith("Rss:"):
+                    resident += int(line.split()[1]) * 1024
+                elif line.startswith("AnonHugePages:"):
+                    backed += int(line.split()[1]) * 1024
+
+        return (resident, backed) if found else None
     except OSError:
         return None
 
@@ -388,7 +429,7 @@ class FilesRequestsIteratorWithBuffer:
         if self._huge_pages_reported:
             return
 
-        measured = _mapping_memory(self.buffer_addresses[buffer_index])
+        measured = _mapping_memory(self.buffer_addresses[buffer_index], self._slot_size)
         if measured is None:
             self._huge_pages_reported = True    # /proc is not readable here; it never will be
             return

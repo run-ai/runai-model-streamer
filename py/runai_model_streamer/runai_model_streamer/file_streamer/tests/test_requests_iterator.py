@@ -764,6 +764,27 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
         self.assertEqual(len(view), 3)
 
 
+def _resident_bytes(address: int, length: int) -> int:
+    """How many bytes of [address, address+length) the kernel currently holds in memory.
+
+    mincore(2), so it is the kernel's own answer for the same range that _mapping_memory reads out of
+    /proc/self/smaps. Two independent routes to one number: if they disagree, the text parsing is
+    wrong, and if they agree the machine simply reclaimed the pages."""
+    import ctypes
+
+    page = os.sysconf("SC_PAGESIZE")
+    start = address - (address % page)
+    span = length + (address - start)
+    pages = (span + page - 1) // page
+
+    libc = ctypes.CDLL("libc.so.6", use_errno=True)
+    vec = (ctypes.c_ubyte * pages)()
+    if libc.mincore(ctypes.c_void_p(start), ctypes.c_size_t(span), vec) != 0:
+        raise OSError(ctypes.get_errno(), "mincore failed")
+
+    return sum(1 for byte in vec if byte & 1) * page
+
+
 class TestPoolHugePages(unittest.TestCase):
     """The pool base and the huge-page hint.
 
@@ -873,17 +894,45 @@ class TestPoolHugePages(unittest.TestCase):
     def test_mapping_memory_tolerates_a_bad_address(self):
         # It reads /proc/self/smaps, which may not exist. An address in no mapping must come back as
         # "no answer" rather than raising - the caller treats None as unknown.
-        self.assertIsNone(_mapping_memory(0x1))
+        self.assertIsNone(_mapping_memory(0x1, 4096))
 
     def test_mapping_memory_reports_resident_bytes(self):
         # Rss is what says whether anything has been written. Without it a pool nobody has touched
         # reads as "no huge pages" and looks broken, which is how this check first cried wolf.
+        #
+        # What is asserted is our PARSE, checked against the kernel's own answer for the same memory.
+        # How much stays resident is the host's decision, not ours.
+        #
+        # This used to require half the pool, and CI reported 128 KiB of a 16 MiB pool. Reproduced
+        # against the real library: the pool covered TWO mappings, 128 KiB then 18 MiB, and only the
+        # first was read. Our own madvise() on a sub-range is what splits them.
+        #
+        # mincore is the oracle because it answers the same question with no text to parse, so a
+        # disagreement is our parse and not the machine reclaiming pages.
         pool = self._pool()
         pool.pool[:] = 1
-        measured = _mapping_memory(pool.pool.ctypes.data)
+
+        # Either side of the smaps read, so a host actively reclaiming these pages moves the band
+        # rather than failing the test. A wrong mapping is out by orders of magnitude and still fails.
+        before = _resident_bytes(pool.pool.ctypes.data, pool.pool.nbytes)
+
+        measured = _mapping_memory(pool.pool.ctypes.data, pool.pool.nbytes)
         self.assertIsNotNone(measured)
         resident, _ = measured
-        self.assertGreaterEqual(resident, pool.pool.nbytes // 2)
+
+        after = _resident_bytes(pool.pool.ctypes.data, pool.pool.nbytes)
+
+        low = min(before, after) // 2
+        high = max(before, after) * 2 + 64 * 1024
+
+        self.assertTrue(
+            low <= resident <= high,
+            f"smaps reports {resident} bytes resident for this mapping, while mincore reports "
+            f"{before}..{after} for the same range - the parse is reading a different mapping")
+
+        # And something must be resident: distinguishing "written" from "untouched" is the only thing
+        # the caller uses this number for.
+        self.assertGreater(resident, 0)
 
     @patch.dict(os.environ, {RUNAI_STREAMER_HUGE_PAGES_ENV_VAR_NAME: "1"})
     def test_an_untouched_pool_is_not_judged(self):
