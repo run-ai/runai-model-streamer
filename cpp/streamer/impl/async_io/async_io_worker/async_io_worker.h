@@ -59,9 +59,6 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     //
     // Injectable so tests can drive the worker with MockIoEngine - the same shape as
     // ObjectStorageWorker's credentials provider, and for the same reason. Production passes nothing.
-    // The mount's measured direct-I/O block, bound when this worker's engine is created. One engine
-    // serves one mount, so this is fixed for the worker's life. 0 means no file could be probed, and
-    // the process-wide default stands in.
     using EngineFactory = std::function<std::unique_ptr<posix_io::IoEngine>(
                               posix_io::Strategy, const posix_io::AsyncIoConfig &)>;
 

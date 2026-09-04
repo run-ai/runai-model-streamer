@@ -1641,4 +1641,54 @@ TEST(Async, AchievedDepthOutlivesTheReads)
     EXPECT_EQ(counters.bytes_read, data.size());
 }
 
+// direct_block_for answers from the INJECTED probe when a test set one.
+//
+// Every measurement site has to honour the same seam. This one did not, so a test could answer for
+// file_groups and reads_directly and still get the build machine's real block back from this API -
+// a number that changes with the filesystem the tests happen to run on.
+//
+// The two mounts answer differently on purpose. A request spanning both must report the LARGER, since
+// congruence at a power of two implies congruence at every smaller one, so one number satisfies both.
+TEST(Streamer, Direct_Block_For_Uses_The_Injected_Probe)
+{
+    const auto data = utils::random::buffer(100);
+
+    // Two directories, because the probe answers per directory - two files in one would share a mount
+    // and the larger-of-the-two check would prove nothing.
+    utils::temp::Dir dir_one;
+    utils::temp::Dir dir_two;
+    utils::temp::File one(dir_one.path, utils::random::string(), data);
+    utils::temp::File two(dir_two.path, utils::random::string(), data);
+
+    const std::string first = dir_one.path;
+    const dev_t device_one = makedev(8, 1);
+    const dev_t device_two = makedev(8, 2);
+
+    // Values no real mount would report, so a number that leaked in from the machine is obvious.
+    constexpr size_t BlockOne = 8192;
+    constexpr size_t BlockTwo = 32768;
+
+    Streamer streamer(Config(), Streamer::Environment{
+                      .mount = [first, device_one, device_two](const std::string & directory) -> posix_io::MountCapability
+                      {
+                          return posix_io::MountCapability{ directory == first ? device_one : device_two, false };
+                      },
+                      .direct = {},
+                      .direct_block = [device_one, BlockOne, BlockTwo](dev_t device, const std::string &) -> size_t
+                      {
+                          return device == device_one ? BlockOne : BlockTwo;
+                      },
+    });
+
+    size_t block = 0;
+    EXPECT_EQ(streamer.direct_block_for({ one.path }, block), common::ResponseCode::Success);
+    EXPECT_EQ(block, BlockOne);
+
+    EXPECT_EQ(streamer.direct_block_for({ two.path }, block), common::ResponseCode::Success);
+    EXPECT_EQ(block, BlockTwo);
+
+    EXPECT_EQ(streamer.direct_block_for({ one.path, two.path }, block), common::ResponseCode::Success);
+    EXPECT_EQ(block, BlockTwo) << "a request spanning both mounts must be laid out at the larger";
+}
+
 }; // namespace runai::llm::streamer::impl

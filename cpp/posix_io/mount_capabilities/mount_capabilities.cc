@@ -269,43 +269,6 @@ MountCapability MountCapabilities::of_fd(int fd)
 namespace
 {
 
-// Can this fd serve a read at the alignment the REST of the tree assumes?
-//
-// The open alone answers a narrower question than routing asks. Routing does not only need O_DIRECT
-// to exist on this mount - every congruence test in the tree is written against DirectBlockSize
-// (alignment.h), and that number is assumed rather than measured. A mount whose real alignment is
-// larger opens without complaint and then fails EVERY read with EINVAL.
-//
-// There is no recovery from that. fd_for falls back to a buffered open only when the OPEN fails
-// (async_io_worker.cc); once a direct fd exists, an EINVAL at completion is classified as an internal
-// error and returned as UnknownError, which aborts the whole submission.
-//
-// So the probe reads one block. STATX_DIOALIGN would answer directly and is unusable for the two
-// reasons in the header, and a trial read needs no kernel version at all.
-//
-// A file shorter than a block is fine: that is a short read, not EINVAL.
-bool direct_read_works(int fd)
-{
-    void * buffer = nullptr;
-    const size_t block = direct_block_size();
-
-    if (::posix_memalign(&buffer, block, block) != 0)
-    {
-        // Our own allocation failed, which says nothing about the mount. Assume it works and let a
-        // real read report the truth, rather than sending a whole mount to the synchronous reader.
-        return true;
-    }
-
-    const ssize_t got = ::pread(fd, buffer, block, 0);
-    const int error = errno;
-
-    ::free(buffer);
-
-    // Only EINVAL means "wrong alignment". Anything else is about this file or this moment - EOF on
-    // an empty file reads 0, and a permission or IO error belongs to the file, not the mount.
-    return got >= 0 || error != EINVAL;
-}
-
 } // namespace
 
 size_t MountCapabilities::measure_direct_block(const std::string & file_path)

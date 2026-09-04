@@ -615,8 +615,23 @@ common::ResponseCode Streamer::direct_block_for(const std::vector<std::string> &
                 continue;
             }
 
+            // The injected probe when a test set one, as file_groups and reads_directly do. Without
+            // this, a test that answers for the other two sites still gets the build machine's real
+            // block here - so what this API reports would depend on where the test ran.
             size_t block = 0;
-            if (_mounts.direct_block(capability.dev, path, block) == common::ResponseCode::Success)
+            if (_environment.direct_block)
+            {
+                block = _environment.direct_block(capability.dev, path);
+            }
+            else
+            {
+                (void)_mounts.direct_block(capability.dev, path, block);
+            }
+
+            // Non-zero is the answer, whichever side produced it. The injected probe reports 0 for
+            // "serves no direct reads" and has no response code, so the value decides rather than the
+            // code - which is also true of the real one: it only reports Success with a block above 0.
+            if (block != 0)
             {
                 largest = std::max(largest, block);
                 measured = true;
