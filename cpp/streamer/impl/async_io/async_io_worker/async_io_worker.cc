@@ -438,13 +438,47 @@ bool AsyncIoWorker::demote_to_buffered(const InflightChunk & entry)
         return false;
     }
 
-    // Closed only once the replacement exists, so a failure above leaves the batch usable.
+    // The old descriptor number is reused, not closed.
+    //
+    // Some requests of this batch may already be staged. stage() writes the fd number into the
+    // submission entry. The kernel reads that number later, when the entry is submitted. So a request
+    // staged a moment ago still points at this descriptor.
+    //
+    // That happens in this very loop. An earlier completion can re-stage its chunk, after a short read
+    // or after its own demotion. Those entries wait for the next flush().
+    //
+    // Closing here would break them. The next flush would fail with EBADF.
+    //
+    // Leaving the old descriptor open is not enough either. Those requests would run direct again, on
+    // a mount that just refused a direct read. Their EINVAL would arrive after batch_fd.direct is
+    // false. The code below only re-stages a read that failed on a DIRECT file, so it would skip them.
+    // The error would map to FileAccessError and the file would fail.
+    //
+    // dup2 solves both. It points this number at the buffered open, in one step. Already staged
+    // requests then run buffered and land.
+    //
+    // Their shape is still the direct one - block aligned, and possibly bounced through scratch. A
+    // buffered read of that shape is harmless, and land_bounced_pass copies the wanted part out.
     if (batch_fd.fd >= 0)
     {
-        ::close(batch_fd.fd);
+        if (::dup2(fd, batch_fd.fd) < 0)
+        {
+            // Nothing has changed yet, so the batch still has its working direct descriptor. Report
+            // the original error rather than leaving the batch in a state neither branch describes.
+            LOG(ERROR) << "Cannot replace the direct descriptor for " << path << " with a buffered"
+                       << " one: " << std::strerror(errno);
+            ::close(fd);
+            return false;
+        }
+
+        // batch_fd.fd now refers to the buffered open, so this one is a duplicate.
+        ::close(fd);
+    }
+    else
+    {
+        batch_fd.fd = fd;
     }
 
-    batch_fd.fd = fd;
     batch_fd.direct = false;
 
     // Remembered for the whole mount, not just this file - see _direct_refused. One engine per mount

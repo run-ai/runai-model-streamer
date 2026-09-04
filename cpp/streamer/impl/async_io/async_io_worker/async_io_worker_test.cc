@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <dirent.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -586,6 +587,82 @@ TEST(AsyncIoWorker, Direct_Refused_For_Alignment_Is_Retried_Buffered)
     ASSERT_EQ(responses.size(), 1u) << "a range refused for alignment must still be answered";
     EXPECT_EQ(responses[0].ret, common::ResponseCode::Success)
         << "the buffered retry succeeded, so the caller asked for bytes and got them";
+}
+
+// A demotion must not break requests of the same file that are already staged against the old
+// descriptor.
+//
+// stage() writes the fd into the submission entry, and the kernel only reads it at submit time. So a
+// request staged earlier in the SAME completion loop - by a short read, or by an earlier demotion -
+// carries the old descriptor and is issued on the next flush. Two ways to get that wrong:
+//
+//   - closing the descriptor: the read fails with EBADF, and on libaio io_submit refuses the whole
+//     batch, which aborts the submission;
+//   - keeping it open but unchanged: the read is issued DIRECT again on a mount that just refused a
+//     direct read, and its EINVAL arrives after batch_fd.direct is false - so the re-stage branch is
+//     skipped and it maps to FileAccessError, failing the file.
+//
+// Both are checked here, on the descriptor the staged request actually holds.
+TEST(AsyncIoWorker, Demotion_Keeps_Already_Staged_Requests_Working)
+{
+    std::vector<char> raw(3 * ChunkSize + 4096);
+    char * const aligned = raw.data() + ((-reinterpret_cast<uintptr_t>(raw.data())) % 4096);
+
+    // Two chunks of one file, so they share a batch and therefore a descriptor.
+    Fixture fixture({ ChunkSize, ChunkSize });
+    Driver driver(Strategy::IoUringDirect);
+
+    fixture.request[0].ranges[0].dst = aligned;
+    fixture.request[0].ranges[1].dst = aligned + ChunkSize;
+
+    driver.execute(fixture.workload());
+    ASSERT_EQ(driver.engine->staged_count(), 2u) << "two chunks, one per range";
+
+    const auto staged = driver.engine->staged();
+    const auto first = staged.front();
+    const auto second = staged.back();
+
+    ASSERT_TRUE(driver.engine->request(first).file.direct) << "the setup must produce DIRECT reads";
+    ASSERT_TRUE(driver.engine->request(second).file.direct);
+    ASSERT_EQ(driver.engine->request(first).file.fd, driver.engine->request(second).file.fd)
+        << "both chunks are the same file, so they must share one descriptor";
+
+    driver.issue();
+
+    // Ordered on purpose. The short read re-stages `first` while the file is still direct, and only
+    // then does `second` demote it - which is exactly the case where a staged request is left holding
+    // a descriptor someone else is about to replace.
+    driver.engine->complete_short(first, ChunkSize / 2);
+    driver.engine->fail(second, EINVAL);
+    driver.route();
+
+    ASSERT_EQ(driver.engine->staged_count(), 2u) << "the short read and the refused read both re-stage";
+
+    // The descriptor the re-staged remainder of `first` will be issued against.
+    const int fd = driver.engine->request(driver.engine->staged().front()).file.fd;
+
+    const int flags = ::fcntl(fd, F_GETFL);
+    ASSERT_NE(flags, -1) << "the descriptor a staged request holds was closed by the demotion,"
+                         << " so its next flush would fail with EBADF";
+    EXPECT_EQ(flags & O_DIRECT, 0)
+        << "the descriptor is still direct, so this read would be refused for alignment again -"
+        << " and by then the file is marked buffered, so it would fail rather than re-stage";
+
+    // And the whole thing still answers.
+    driver.issue();
+    driver.engine->complete_all();
+    driver.route();
+
+    const auto responses = drain_responses(*fixture.responder, 2);
+    for (const auto & response : responses)
+    {
+        EXPECT_EQ(response.ret, common::ResponseCode::Success);
+    }
+
+    // Read from `aligned`, not fixture.buffer: the destinations were redirected there above.
+    const std::vector<char> got(aligned, aligned + 2 * ChunkSize);
+    EXPECT_EQ(got, fixture.expected_at(0, 2 * ChunkSize))
+        << "every byte must still land, whichever descriptor carried it";
 }
 
 TEST(AsyncIoWorker, Direct_Only_When_Congruent)
