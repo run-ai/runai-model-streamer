@@ -406,38 +406,41 @@ TEST(MountCapabilities, Tmpfs_Can_Never_Be_Probed_For_A_Block)
 
     fd = ::open(path.c_str(), O_RDONLY | O_DIRECT);
 
+    // ONE tail for both branches. Written as if/else rather than an early return because everything
+    // below applies to both, and duplicating it is how the two got out of step: the refused branch
+    // unlinked the file before asking of_path about it, and of_path stats the path first, so it threw
+    // instead of asserting.
     if (fd < 0)
     {
-        // This kernel refuses at open, so a probe never gets to ask. Reported, not asserted - the
+        // This kernel refuses at open, so a probe never gets to ask. Recorded, not asserted - the
         // other branch is equally acceptable.
         RecordProperty("tmpfs_o_direct_open", "refused");
-        ::unlink(path.c_str());
-        MountCapabilities mounts;
-        EXPECT_TRUE(mounts.of_path(path).memory_backed);
-        return;
+    }
+    else
+    {
+        RecordProperty("tmpfs_o_direct_open", "accepted");
+
+        // Aligned by construction, the way the other tests here do it, so nothing can fail between
+        // creating the file and removing it.
+        std::vector<char> raw(3 * 4096);
+        char * const buffer = raw.data() + ((-reinterpret_cast<uintptr_t>(raw.data())) % 4096);
+
+        // A filesystem doing real direct I/O at 4096 rejects each of these with EINVAL. tmpfs, having
+        // opened the fd, must accept at least one - otherwise it is enforcing an alignment it cannot
+        // honour, and the ladder would be entitled to believe it.
+        const bool tolerated = ::pread(fd, buffer + 1, 4096, 0) >= 0   // unaligned buffer
+                            || ::pread(fd, buffer, 4095, 0) >= 0       // odd length
+                            || ::pread(fd, buffer, 4096, 1) >= 0;      // odd offset
+
+        ::close(fd);
+
+        EXPECT_TRUE(tolerated)
+            << "tmpfs both accepted an O_DIRECT open and enforced alignment on this kernel;"
+            << " a probe would now return a meaningful block for it";
     }
 
-    RecordProperty("tmpfs_o_direct_open", "accepted");
-
-    void * base = nullptr;
-    ASSERT_EQ(::posix_memalign(&base, 4096, 3 * 4096), 0);
-    char * const aligned = static_cast<char *>(base);
-
-    // A filesystem doing real direct I/O at 4096 rejects each of these with EINVAL. tmpfs, having
-    // opened the fd, must accept at least one - otherwise it is enforcing an alignment it cannot
-    // honour, and the ladder would be entitled to believe it.
-    const bool tolerated = ::pread(fd, aligned + 1, 4096, 0) >= 0   // unaligned buffer
-                        || ::pread(fd, aligned, 4095, 0) >= 0       // odd length
-                        || ::pread(fd, aligned, 4096, 1) >= 0;      // odd offset
-
-    ::free(base);
-    ::close(fd);
-
-    EXPECT_TRUE(tolerated)
-        << "tmpfs both accepted an O_DIRECT open and enforced alignment on this kernel;"
-        << " a probe would now return a meaningful block for it";
-
-    // The half that holds on every kernel, and the one the routing actually uses.
+    // The half that holds on every kernel, and the one the routing actually uses. Asked while the
+    // file still exists.
     MountCapabilities mounts;
     EXPECT_TRUE(mounts.of_path(path).memory_backed);
 
