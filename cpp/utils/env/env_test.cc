@@ -142,11 +142,46 @@ TEST(Getenv_Unsigned_long, Sanity)
     EXPECT_EQ(getenv<unsigned long>(env.name, random::number<unsigned long>()), value);
 }
 
+// A negative value is refused, not wrapped.
+//
+// This test used to assert the opposite - that "-1" gives ULONG_MAX - which is what std::stoul does
+// and what the code did. It reads as a deliberate huge number all the way down: nothing after the
+// parse can tell the two apart, because stoul also reports the whole string consumed.
+//
+// The damage is at the callers. RUNAI_STREAMER_CONCURRENCY=-1 narrows to UINT_MAX at Config and asks
+// for four billion threads. RUNAI_STREAMER_PROCESS_GROUP_SIZE=-1 is a divisor, so Azure concurrency
+// falls to one and the async queue depth falls to its minimum - slow, with no error anywhere.
+//
+// So it throws, exactly as "a" does, and runai_start turns that into InvalidParameterError.
 TEST(Getenv_Unsigned_long, Negative)
+{
+    for (const auto text : { "-1", "-4", " -1" })
+    {
+        temp::Env env(text);
+
+        EXPECT_THROW(getenv<unsigned long>(env.name), std::exception) << text;
+        EXPECT_THROW(getenv<unsigned long>(env.name, random::number()), std::exception) << text;
+
+        unsigned long value = 0;
+        EXPECT_THROW(try_getenv<unsigned long>(env.name, /* out */ value), std::exception) << text;
+    }
+}
+
+// A negative value must not survive as a huge count either - the cap in getenv_positive would turn
+// ULONG_MAX into the maximum of T, which is as wrong as the value it came from.
+TEST(Getenv_Positive, Negative)
 {
     temp::Env env("-1");
 
-    EXPECT_EQ(getenv<unsigned long>(env.name), ULONG_MAX);
+    EXPECT_THROW(getenv_positive<unsigned>(env.name, 8U), std::exception);
+}
+
+// A plus sign is a sign, not a minus. It must still parse.
+TEST(Getenv_Unsigned_long, Explicitly_Positive)
+{
+    temp::Env env("+8");
+
+    EXPECT_EQ(getenv<unsigned long>(env.name), 8UL);
 }
 
 TEST(Getenv_Unsigned_long, NotUnsignedLong)

@@ -45,6 +45,19 @@ TEST(AsyncIoSettings, Depth_Is_Divided_By_The_Process_Group)
     EXPECT_EQ(settings.depth(), 64) << "the device sees 8 x this, which is the configured 512";
 }
 
+// A negative process group size is refused at startup, not treated as a huge one.
+//
+// std::stoul used to wrap "-1" to ULONG_MAX, and getenv_positive capped that to UINT_MAX. As a
+// divisor that is silent and expensive: the depth falls to its minimum, so the engine keeps every
+// cost of asynchronous reading and none of the benefit. The reader would look configured and be
+// serial.
+TEST(AsyncIoSettings, Negative_Process_Group_Is_Refused)
+{
+    utils::temp::Env group(std::string("RUNAI_STREAMER_PROCESS_GROUP_SIZE"), std::string("-1"));
+
+    EXPECT_THROW(AsyncIoSettings(config_with(8 << 20, 512)), std::exception);
+}
+
 // A depth of zero admits nothing, so a small node-wide value over many processes must floor at one
 // rather than silently disabling the engine.
 // The division can round to zero, and a depth of 1 or 2 is a serial reader paying for the whole
