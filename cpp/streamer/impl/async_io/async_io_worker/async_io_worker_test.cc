@@ -1331,4 +1331,31 @@ TEST(AsyncIoWorker, A_Failed_Reopen_Fails_Only_That_File)
         << "a file that vanished is this file's failure; UnknownError would end the whole submission";
 }
 
+// An engine that could never be built is reported like one that died later, not as an internal error.
+//
+// The two are the same thing to a caller: this mount is not read asynchronously, and the synchronous
+// pool serves it. UnknownError would say something else entirely - abort every submission and restart
+// the streamer - for a condition with a working fallback.
+TEST(AsyncIoWorker, An_Engine_That_Cannot_Be_Built_Is_Not_An_Internal_Error)
+{
+    Fixture fixture({ ChunkSize });
+
+    bool told = false;
+    AsyncIoWorker worker(Strategy::IoUringBuffered, 4096,
+                         [](Strategy, const posix_io::AsyncIoConfig &) -> std::unique_ptr<posix_io::IoEngine>
+                         {
+                             return nullptr;   // this host cannot serve the strategy it was given
+                         },
+                         [&told]() { told = true; });
+
+    std::atomic<bool> stopped{ false };
+    worker.execute(fixture.workload(), stopped);
+
+    const auto responses = drain_responses(*fixture.responder, 1);
+    ASSERT_EQ(responses.size(), 1u) << "a workload that never got a window must still be answered";
+    EXPECT_EQ(responses[0].ret, common::ResponseCode::FsAsyncEngineError);
+
+    EXPECT_TRUE(told) << "the streamer must learn the mount is dead, or it keeps routing here";
+}
+
 }; // namespace runai::llm::streamer::impl

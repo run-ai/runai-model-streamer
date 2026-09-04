@@ -91,11 +91,17 @@ std::size_t AsyncIoWorker::capacity(const Workload & first)
     {
         // Permanent, not transient: a blocked io_uring stays blocked. Reaching this means the
         // dispatcher created an async pool for a host that cannot serve one, which is a bug in
-        // strategy resolution rather than a condition to recover from.
+        // strategy resolution.
+        //
+        // FsAsyncEngineError, not UnknownError. It IS very likely our bug, but the outcome the caller
+        // needs is the same as for an engine that dies later: this mount is not read asynchronously,
+        // everything else is unaffected, and the files are still readable by the synchronous pool.
+        // UnknownError would tell the caller to abort everything and restart the streamer instead.
         LOG(ERROR) << "No engine for " << _strategy << " - this host cannot serve the strategy it was"
-                   << " dispatched for";
-        _engine_error = common::ResponseCode::UnknownError;
-        throw common::Exception(common::ResponseCode::UnknownError);
+                   << " dispatched for. This mount is read by the synchronous reader from here on";
+
+        engine_is_dead(common::ResponseCode::FsAsyncEngineError);
+        throw common::Exception(common::ResponseCode::FsAsyncEngineError);
     }
 
     // The number every congruence test and every direct pass on this mount will use. Reported because
@@ -120,8 +126,27 @@ std::size_t AsyncIoWorker::capacity(const Workload & first)
     // bounces, so a buffered engine builds none.
     if (posix_io::is_direct(_strategy))
     {
-        _scratch = std::make_unique<posix_io::ScratchPool>(
-            _engine->depth(), _block);
+        try
+        {
+            _scratch = std::make_unique<posix_io::ScratchPool>(
+                _engine->depth(), _block);
+        }
+        catch (const common::Exception &)
+        {
+            // The engine came up but its scratch did not - an allocation this size failing is a
+            // resource condition, not a bug of ours.
+            //
+            // Answered like an engine that could not be built at all, because that is what it is to
+            // everyone outside: this mount is not read asynchronously, and the synchronous pool serves
+            // it instead. Without this the throw would reach discard(), which reports _engine_error -
+            // still UnknownError here, since the engine itself was fine.
+            LOG(ERROR) << "No scratch pool for " << _strategy << " at depth " << _engine->depth()
+                       << " and a block of " << _block << " bytes. This mount is read by the"
+                       << " synchronous reader from here on";
+
+            engine_is_dead(common::ResponseCode::FsAsyncEngineError);
+            throw common::Exception(common::ResponseCode::FsAsyncEngineError);
+        }
     }
 
     return _engine->depth();
@@ -457,6 +482,27 @@ common::ResponseCode AsyncIoWorker::probe_open(const std::string & path)
     // Success for a zero-sized range and FileAccessError for every other range of the same path.
     ::close(fd);
     return common::ResponseCode::Success;
+}
+
+void AsyncIoWorker::engine_is_dead(common::ResponseCode code)
+{
+    if (_engine_dead)
+    {
+        return;   // the first reason is the real one; later ones are consequences
+    }
+
+    _engine_dead = true;
+    _engine_error = code;
+
+    // Told AFTER the flag is set, so nothing can route a new workload here in between. The listener
+    // only records the mount; it does not touch this worker.
+    //
+    // Two callers, deliberately sharing this: an engine that could never be built and one that failed
+    // later are the same thing to everyone outside - this mount is no longer read asynchronously.
+    if (_on_engine_dead)
+    {
+        _on_engine_dead();
+    }
 }
 
 common::ResponseCode AsyncIoWorker::demote_to_buffered(const InflightChunk & entry)
@@ -1039,21 +1085,12 @@ void AsyncIoWorker::abort_all(common::ResponseCode code)
     //
     // FinishedError is the shutdown path and marks nothing: the engine is being destroyed anyway, and
     // io_uring_queue_exit discards whatever is staged in it.
-    if (code != common::ResponseCode::FinishedError && !_engine_dead)
+    if (code != common::ResponseCode::FinishedError)
     {
-        _engine_dead = true;
-        _engine_error = code;
+        LOG(ERROR) << "The asynchronous reader for this mount failed permanently (" << code << ")."
+                   << " Every submission still in flight here is failed now";
 
-        LOG(ERROR) << "The asynchronous reader for this mount failed permanently (" << code
-                   << "). Every submission still in flight here is failed now, and this mount is read"
-                   << " by the synchronous reader from here on";
-
-        // Told once, and AFTER the flag is set, so nothing can route a new workload to this engine in
-        // between. The listener only records the mount; it does not touch this worker.
-        if (_on_engine_dead)
-        {
-            _on_engine_dead();
-        }
+        engine_is_dead(code);
     }
 
     // Drops pending entries and releases their credit in one step - draining through

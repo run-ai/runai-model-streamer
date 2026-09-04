@@ -276,6 +276,10 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     // Success when the descriptor was replaced and the caller should re-stage. Otherwise the code to
     // answer the chunk with: FileAccessError when the reopen failed, which belongs to the file, and
     // UnknownError when the workload has already gone, which belongs to us.
+    // Record that this engine will never serve another read, and tell the streamer so the mount drops
+    // to the synchronous reader. Idempotent: the first reason is kept.
+    void engine_is_dead(common::ResponseCode code);
+
     common::ResponseCode demote_to_buffered(const InflightChunk & entry);
 
     size_t land_bounced_pass(posix_io::RequestId id, size_t bytes_transferred);
