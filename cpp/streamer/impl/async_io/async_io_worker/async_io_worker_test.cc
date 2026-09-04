@@ -11,10 +11,12 @@
 #include <atomic>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
+#include "posix_io/alignment/alignment.h"
 #include "posix_io/mock/mock_io_engine.h"
 #include "streamer/impl/assigner/assigner.h"
 #include "streamer/impl/batches/batches.h"
@@ -128,13 +130,18 @@ struct Driver
     // `block` is what the engine advertises as its direct-read alignment. It matters because the
     // worker tests congruence against it: at 1, everything is congruent and the decision is vacuous.
     // The real engine reports 4096.
-    explicit Driver(Strategy strategy = Strategy::IoUringBuffered, size_t block = 4096) :
-        // `block` is passed BOTH as the mount's measured block and as the mock engine's Limits, so
-        // the two agree - which is what production gets, since the engine is built from the same
-        // number. Passing 0 here would leave the worker provisional at MaxProbeBlock while the mock
-        // advertised something smaller, and every congruence test would then disagree with the setup.
+    //
+    // `mount_block` is what the WORKER is told the mount measured. They are the same number in production and by default here, because the engine is
+    // built from the mount's block.
+    //
+    // They are separated only for the adoption tests, which need the worker to start with no
+    // measurement (mount_block 0 -> provisional MaxProbeBlock) while the engine still advertises a
+    // usable alignment. Passing 0 for BOTH would make the engine advertise an alignment of 0, and
+    // every congruence test divides by it.
+    explicit Driver(Strategy strategy = Strategy::IoUringBuffered, size_t block = 4096,
+                    std::optional<size_t> mount_block = std::nullopt) :
         worker(strategy,
-               block,
+               mount_block.value_or(block),
                [this, block](Strategy, const posix_io::AsyncIoConfig & config)
                {
                    posix_io::Limits limits;
@@ -1147,6 +1154,83 @@ TEST(AsyncIoWorker, Blocks_Once_The_Window_Is_Full)
     EXPECT_EQ(driver.engine->last_wait_mode(), WaitMode::Block)
         << "with the window full there is no more to submit, so waiting is the only move";
     EXPECT_GT(driver.engine->last_wait_timeout_ms(), 0u) << "an unbounded wait has no way to notice stopped";
+}
+
+// A worker that started with no measurement adopts one a later submission carries.
+//
+// The case is a long-lived streamer - checkpoint restore - whose first submission could probe nothing,
+// because every path was missing or unreadable. Without adoption it would keep the provisional block
+// for the life of the process.
+//
+// The destination is congruent at 4096 and NOT at the provisional MaxProbeBlock, so the two answers
+// differ: refused direct before adoption, read direct after it.
+TEST(AsyncIoWorker, A_Measured_Block_Is_Adopted_When_The_Engine_Can_Serve_It)
+{
+    std::vector<char> raw(3 * posix_io::MaxProbeBlock);
+    char * const at_block = raw.data()
+                          + ((-reinterpret_cast<uintptr_t>(raw.data())) % posix_io::MaxProbeBlock)
+                          + ChunkSize;   // 4096-aligned, deliberately NOT MaxProbeBlock-aligned
+
+    Fixture fixture({ ChunkSize });
+    // No mount measurement, so the worker starts provisional; the engine still advertises 4096.
+    Driver driver(Strategy::IoUringDirect, ChunkSize, 0);
+
+    fixture.request[0].ranges[0].dst = at_block;
+
+    auto workload = fixture.workload();
+    workload.direct_block = ChunkSize;   // what a later submission measured
+
+    driver.execute(std::move(workload));
+    ASSERT_EQ(driver.engine->staged_count(), 1u);
+
+    const auto staged = driver.engine->staged().front();
+    EXPECT_TRUE(driver.engine->request(staged).file.direct)
+        << "after adopting 4096 this destination is congruent, so the read must be direct";
+}
+
+// A measured block LARGER than the engine was built for is refused.
+//
+// The scratch pool is sized and aligned once, in capacity(), to the block in force then. A bounced
+// pass reads a whole block into one of its buffers, so adopting a larger block would have the kernel
+// write past the end of one.
+//
+// The old code adopted it unconditionally, arguing that the provisional value is the ladder's top rung
+// so a measurement could only shrink. That covers the ladder and not statx, which reports whatever the
+// filesystem says.
+TEST(AsyncIoWorker, A_Block_Larger_Than_The_Scratch_Buffers_Is_Refused)
+{
+    constexpr size_t Reported = 2 * posix_io::MaxProbeBlock;
+
+    // Aligned to the REPORTED block, not just the provisional one. Reading from offset 0, that makes
+    // the destination congruent either way - so if the larger block were adopted, the pass really
+    // would be planned at it and really would read into a scratch buffer half its size. Aligning only
+    // to MaxProbeBlock would break congruence at the larger block and send the file to a buffered
+    // read, which passes this test without ever demonstrating the overflow.
+    std::vector<char> raw(3 * Reported);
+    char * const aligned = raw.data() + ((-reinterpret_cast<uintptr_t>(raw.data())) % Reported);
+
+    Fixture fixture({ ChunkSize });
+    // Provisional at MaxProbeBlock, which is also what the engine advertises - so the setup agrees
+    // with itself and the only variable is the block the workload reports.
+    Driver driver(Strategy::IoUringDirect, posix_io::MaxProbeBlock, 0);
+
+    fixture.request[0].ranges[0].dst = aligned;
+
+    auto workload = fixture.workload();
+    workload.direct_block = Reported;   // more than the scratch buffers hold
+
+    driver.execute(std::move(workload));
+    ASSERT_EQ(driver.engine->staged_count(), 1u);
+
+    // The chunk is smaller than a block, so this is the tail case: one whole block into scratch. Its
+    // size is the block actually in force, which is what makes the refusal observable - and the size
+    // the kernel would have written into a buffer of MaxProbeBlock bytes.
+    const auto staged = driver.engine->staged().front();
+    EXPECT_TRUE(driver.engine->request(staged).file.direct)
+        << "the setup must produce a DIRECT read, or the bounce never happens and this proves nothing";
+    EXPECT_EQ(driver.engine->request(staged).bytesize, posix_io::MaxProbeBlock)
+        << "the pass was planned at the reported block, which is larger than the scratch buffer it"
+        << " reads into";
 }
 
 }; // namespace runai::llm::streamer::impl

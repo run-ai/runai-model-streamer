@@ -147,15 +147,45 @@ void AsyncIoWorker::enqueue(Workload && workload)
     // Without this a long-lived streamer would keep the provisional block for the life of the
     // process: wrong for checkpoint restore, and merely invisible for a single model load.
     //
-    // Only ever shrinks, because the provisional value is the ladder's top rung - so the scratch
-    // buffers already allocated are big enough and nothing is resized.
+    // A block the scratch pool cannot serve is REFUSED, not adopted.
+    //
+    // The pool is sized and aligned once, in capacity(), to the block in force when the engine was
+    // built. A bounced pass reads a whole block into one of its buffers, so adopting a larger block
+    // would have the kernel write past the end of one - and the buffers would no longer be aligned to
+    // it either, since the base was aligned to the old block.
+    //
+    // This used to be argued away: the provisional value is the ladder's top rung, so a measurement
+    // could only shrink. That covers the ladder and not statx, which reports whatever the filesystem
+    // says and is bounded by nothing here. Today no filesystem reports more than 64 KiB, which is
+    // equal to the provisional value rather than below it - no margin at all.
+    //
+    // Keeping the smaller block is safe. Direct reads on a mount that needs more fail with EINVAL, and
+    // demote_to_buffered re-stages them buffered.
     if (!_block_measured && workload.direct_block != 0)
     {
-        LOG(INFO) << "Adopting a measured direct-I/O block of " << workload.direct_block
-                  << " for this mount, replacing the provisional " << _block;
+        if (_scratch != nullptr && workload.direct_block > _scratch->block())
+        {
+            // Once. _block_measured stays false, so this branch is re-entered on every submission and
+            // a later one reporting a block this engine CAN serve is still adopted.
+            if (!_block_too_large_reported)
+            {
+                _block_too_large_reported = true;
 
-        _block = workload.direct_block;
-        _block_measured = true;
+                LOG(WARNING) << "This mount reports a direct-I/O block of " << workload.direct_block
+                             << ", larger than the " << _scratch->block() << " this engine was built"
+                             << " for. Keeping the smaller one. The first direct read here will be"
+                             << " refused with EINVAL and this engine then reads buffered - still"
+                             << " asynchronous, but without O_DIRECT";
+            }
+        }
+        else
+        {
+            LOG(INFO) << "Adopting a measured direct-I/O block of " << workload.direct_block
+                      << " for this mount, replacing the provisional " << _block;
+
+            _block = workload.direct_block;
+            _block_measured = true;
+        }
     }
 
     const auto workload_id = _next_workload_id++;

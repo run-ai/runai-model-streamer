@@ -25,6 +25,7 @@ runai_cc_test(
     srcs = ["async_io_worker_test.cc"],
     deps = [
         ":async_io_worker",
+        "//posix_io/alignment",
         "//posix_io/mock",
         "//streamer/impl/assigner",
         "//streamer/impl/batches",

@@ -291,10 +291,9 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     // This mount's direct-I/O block. NOT const: it starts provisional when the first submission could
     // not measure the mount, and is adopted from a later workload that could.
     //
-    // Provisional means MaxProbeBlock - the largest the ladder can ever return - so adopting a real
-    // measurement can only make it SMALLER. That is what makes adoption safe after the fact: the
-    // scratch buffers were sized for the provisional value, so they are big enough for any measured
-    // one, and no reallocation is needed.
+    // Provisional means MaxProbeBlock - the largest the LADDER can ever return. A measurement from
+    // statx is bounded by nothing here, so adoption checks the scratch pool rather than assuming the
+    // value can only shrink; see enqueue().
     //
     // The alternative was to freeze the provisional value for the life of the engine. That is a bug
     // for a long-lived streamer serving many submissions - checkpoint restore - where the first
@@ -303,6 +302,12 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
 
     // False until a real measurement has been adopted. Only then does _block stop being provisional.
     bool _block_measured = false;
+
+    // Set once a measurement was refused for being larger than the scratch buffers. It only silences
+    // the warning: _block_measured stays false, so a later submission reporting a block this engine
+    // CAN serve is still adopted. Without it the same line would be logged on every submission for
+    // the life of the process.
+    bool _block_too_large_reported = false;
 
     // Set when the kernel refused a DIRECT read with EINVAL, so later files open buffered instead of
     // repeating an attempt we already know fails.
