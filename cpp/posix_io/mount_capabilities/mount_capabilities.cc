@@ -126,6 +126,51 @@ bool direct_read_at(int fd, size_t block)
     return got >= 0 || error != EINVAL;
 }
 
+// What direct_read_at above assumes of EVERY rung it is given, checked at build time.
+//
+// Four properties, and each one is silent if it breaks:
+//
+//   - a power of two, or posix_memalign rejects it and the rung reports "no" for every mount;
+//   - a divisor of MaxProbeBlock, or base + block is not aligned to block, and the probe then asks a
+//     weaker question than the rung it claims to be testing;
+//   - not larger than MaxProbeBlock, or the read writes [block, 2 * block) past the end of a
+//     2 * MaxProbeBlock allocation - a heap overflow;
+//   - strictly larger than the rung before it, because the caller takes the first acceptance as the
+//     smallest usable block, which is only true of a sorted ladder.
+//
+// A rung of 131072 breaks the third, and is the plausible addition: larger logical blocks are what
+// this whole path exists for. Inserting 2048 in the wrong place breaks the fourth, and would make the
+// answer wrong rather than crash - the worse failure of the two.
+//
+// The last rung must also BE MaxProbeBlock, not merely fit under it. A worker runs at MaxProbeBlock
+// while it waits for a measurement, so a ladder that stopped at 16384 could never confirm the value
+// already in use, and every mount needing more would be reported as serving no direct reads at all.
+template <size_t N>
+constexpr bool ladder_is_usable(const std::array<size_t, N> & rungs)
+{
+    for (size_t i = 0; i < N; ++i)
+    {
+        const size_t rung = rungs[i];
+
+        if (rung == 0 || (rung & (rung - 1)) != 0)
+        {
+            return false;
+        }
+
+        if (rung > MaxProbeBlock || MaxProbeBlock % rung != 0)
+        {
+            return false;
+        }
+
+        if (i != 0 && rung <= rungs[i - 1])
+        {
+            return false;
+        }
+    }
+
+    return N != 0 && rungs[N - 1] == MaxProbeBlock;
+}
+
 } // namespace
 
 std::ostream & operator<<(std::ostream & os, const MountCapability & capability)
@@ -303,17 +348,15 @@ size_t MountCapabilities::measure_direct_block(const std::string & file_path)
     // Reachable only when BOTH hold: statx cannot answer (below kernel 6.1, or a filesystem that does
     // not implement STATX_DIOALIGN), AND that filesystem is lenient about alignment. Phase 1's EINVAL
     // fallback does not help here either - a lenient filesystem never returns EINVAL, which is the
-    // whole problem. See design_measured_alignment.md.
-    // The top rung IS MaxProbeBlock, not a literal that happens to equal it.
+    // whole problem.
     //
-    // direct_read_at writes `block` bytes at base + block inside a 2 * MaxProbeBlock allocation, so
-    // the write covers [block, 2 * block) and fits only while block <= MaxProbeBlock. A rung of
-    // 131072 - a plausible addition, since larger logical blocks are what this whole path is for -
-    // would write entirely past the allocation. The static_assert makes that a build failure rather
-    // than a heap overflow found later.
+    // The top rung IS MaxProbeBlock, not a literal that happens to equal it, so lowering that constant
+    // cannot leave a rung behind that overruns the probe buffer. ladder_is_usable checks that and the
+    // rest of what direct_read_at needs, on every rung.
     static constexpr std::array<size_t, 4> ladder{ 512, 4096, 16384, MaxProbeBlock };
-    static_assert(ladder[ladder.size() - 1] <= MaxProbeBlock,
-                  "a rung above MaxProbeBlock would overrun the buffer direct_read_at allocates");
+    static_assert(ladder_is_usable(ladder),
+                  "a rung must be a power of two, divide MaxProbeBlock, and come after the rung below"
+                  " it; the last rung must be MaxProbeBlock");
 
     for (const size_t candidate : ladder)
     {
@@ -357,8 +400,16 @@ common::ResponseCode MountCapabilities::direct_block(dev_t dev, const std::strin
         }
     }
 
-    // Probing a memory-backed mount is pointless: tmpfs accepts an O_DIRECT open and fails at read
-    // time, so the ladder would walk every rung to learn what statfs already said.
+    // A memory-backed mount must never reach here, and this function cannot notice if one does.
+    //
+    // MEASURED on tmpfs, kernel 6.8: an O_DIRECT open succeeds AND every read is accepted - an
+    // unaligned buffer, an odd length, an odd offset, all of them. tmpfs enforces nothing, because
+    // there is no device to bypass; the pages are the page cache. So the ladder's first rung
+    // "succeeds" and this reports 512 for a filesystem that cannot do direct I/O at all.
+    //
+    // The callers keep that out: Streamer::file_groups and Streamer::direct_block_for both test
+    // memory_backed and skip such a mount before asking. The statfs magic check is the only thing that
+    // works here, because a probe by definition cannot detect a filesystem that accepts everything.
     const int fd = ::open(file_path.c_str(), O_RDONLY | O_DIRECT);
     if (fd < 0)
     {

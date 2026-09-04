@@ -118,7 +118,8 @@ TEST(MountCapabilities, Regular_File_Agrees_With_The_Filesystem)
 }
 
 // The probe that keeps tmpfs out of the O_DIRECT cell. Nothing else detects it: an O_DIRECT open
-// SUCCEEDS on tmpfs and fails later at read time, so statfs magic is the only working test.
+// SUCCEEDS on tmpfs, and so does every read through it - see
+// Tmpfs_Can_Never_Be_Probed_For_A_Block below. So statfs magic is the only working test.
 TEST(MountCapabilities, Tmpfs_Is_Memory_Backed)
 {
     if (!is_tmpfs("/dev/shm"))
@@ -359,6 +360,88 @@ TEST(MountCapabilities, Direct_Block_Is_The_Smallest_The_Mount_Accepts)
     }
 
     ::close(fd);
+}
+
+// A probe cannot recognise tmpfs, on any kernel - so statfs magic has to.
+//
+// This test was written to reach the ladder. tmpfs is the one mount here where statx reports no
+// DIOALIGN, so a probe would fall through to it. Measured on kernel 6.8, tmpfs then accepts EVERY
+// direct read - unaligned buffer, odd length, odd offset. It enforces nothing, because there is no
+// device to bypass. The ladder's first rung succeeds and the answer is 512 for a filesystem with no
+// direct I/O at all.
+//
+// That behaviour is KERNEL-DEPENDENT and this test does not assert it. Older kernels refuse the
+// O_DIRECT open itself, because the VFS rejected an open on a mapping with no direct_IO operation.
+// Both outcomes are fine for us and neither is something we control.
+//
+// What IS asserted is the property both outcomes share, and the one the routing depends on: a read
+// can never report that tmpfs does direct I/O at some block. Either the open fails, or a badly
+// aligned read is accepted. The remaining case - tmpfs opens AND enforces alignment - is the one that
+// would make the ladder's answer meaningful there, and if a kernel ever does that, this fails and the
+// comments around it need rewriting.
+//
+// The always-true half is the last check: memory_backed. Streamer::file_groups and
+// Streamer::direct_block_for both test it and skip such a mount, which is what keeps any of this off
+// the direct path.
+//
+// One consequence for the ladder: it stays UNEXERCISED here. statx answers on every real mount, and
+// tmpfs is skipped upstream.
+TEST(MountCapabilities, Tmpfs_Can_Never_Be_Probed_For_A_Block)
+{
+    if (!is_tmpfs("/dev/shm"))
+    {
+        GTEST_SKIP() << "/dev/shm is not tmpfs here";
+    }
+
+    const std::string path = "/dev/shm/runai_tmpfs_direct_" + utils::random::string();
+    int fd = ::open(path.c_str(), O_CREAT | O_RDWR, 0600);
+    ASSERT_GE(fd, 0);
+    const auto data = utils::random::buffer(256 * 1024);
+    ASSERT_EQ(::write(fd, data.data(), data.size()), static_cast<ssize_t>(data.size()));
+    ::close(fd);
+
+    // Nothing upstream of the ladder answers here, which is what would leave the ladder deciding.
+    EXPECT_FALSE(raw_statx_dio_align(path).answered)
+        << "statx now answers on tmpfs, so this reasoning needs revisiting";
+
+    fd = ::open(path.c_str(), O_RDONLY | O_DIRECT);
+
+    if (fd < 0)
+    {
+        // This kernel refuses at open, so a probe never gets to ask. Reported, not asserted - the
+        // other branch is equally acceptable.
+        RecordProperty("tmpfs_o_direct_open", "refused");
+        ::unlink(path.c_str());
+        MountCapabilities mounts;
+        EXPECT_TRUE(mounts.of_path(path).memory_backed);
+        return;
+    }
+
+    RecordProperty("tmpfs_o_direct_open", "accepted");
+
+    void * base = nullptr;
+    ASSERT_EQ(::posix_memalign(&base, 4096, 3 * 4096), 0);
+    char * const aligned = static_cast<char *>(base);
+
+    // A filesystem doing real direct I/O at 4096 rejects each of these with EINVAL. tmpfs, having
+    // opened the fd, must accept at least one - otherwise it is enforcing an alignment it cannot
+    // honour, and the ladder would be entitled to believe it.
+    const bool tolerated = ::pread(fd, aligned + 1, 4096, 0) >= 0   // unaligned buffer
+                        || ::pread(fd, aligned, 4095, 0) >= 0       // odd length
+                        || ::pread(fd, aligned, 4096, 1) >= 0;      // odd offset
+
+    ::free(base);
+    ::close(fd);
+
+    EXPECT_TRUE(tolerated)
+        << "tmpfs both accepted an O_DIRECT open and enforced alignment on this kernel;"
+        << " a probe would now return a meaningful block for it";
+
+    // The half that holds on every kernel, and the one the routing actually uses.
+    MountCapabilities mounts;
+    EXPECT_TRUE(mounts.of_path(path).memory_backed);
+
+    ::unlink(path.c_str());
 }
 
 // The two answers come from ONE probe, so they cannot disagree: a mount with no usable block serves
