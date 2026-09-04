@@ -14,7 +14,7 @@
 #include <sys/syscall.h>
 
 #include <algorithm>
-#include <vector>
+#include <array>
 
 #include <cerrno>
 #include <cstdlib>
@@ -304,7 +304,16 @@ size_t MountCapabilities::measure_direct_block(const std::string & file_path)
     // not implement STATX_DIOALIGN), AND that filesystem is lenient about alignment. Phase 1's EINVAL
     // fallback does not help here either - a lenient filesystem never returns EINVAL, which is the
     // whole problem. See design_measured_alignment.md.
-    static const std::vector<size_t> ladder{ 512, 4096, 16384, 65536 };
+    // The top rung IS MaxProbeBlock, not a literal that happens to equal it.
+    //
+    // direct_read_at writes `block` bytes at base + block inside a 2 * MaxProbeBlock allocation, so
+    // the write covers [block, 2 * block) and fits only while block <= MaxProbeBlock. A rung of
+    // 131072 - a plausible addition, since larger logical blocks are what this whole path is for -
+    // would write entirely past the allocation. The static_assert makes that a build failure rather
+    // than a heap overflow found later.
+    static constexpr std::array<size_t, 4> ladder{ 512, 4096, 16384, MaxProbeBlock };
+    static_assert(ladder[ladder.size() - 1] <= MaxProbeBlock,
+                  "a rung above MaxProbeBlock would overrun the buffer direct_read_at allocates");
 
     for (const size_t candidate : ladder)
     {
