@@ -1,5 +1,7 @@
 #include "streamer/streamer.h"
 
+#include <unistd.h>
+
 #include <memory>
 #include <string>
 #include <vector>
@@ -263,10 +265,29 @@ _RUNAI_EXTERN_C int runai_probe_direct_block_size(
     unsigned      num_paths,
     size_t *      out_block)
 {
+    if (out_block == nullptr)
+    {
+        return static_cast<int>(common::ResponseCode::InvalidParameterError);
+    }
+
+    // Written BEFORE anything that can fail, so EVERY exit leaves a usable block.
+    //
+    // The caller lays out its ring from this number and divides by it. The Python binding treats a
+    // zero as a broken promise and refuses to stream, so an exit that returns an error code without
+    // writing here turns an inconclusive probe into a failed model load.
+    //
+    // That is the opposite of what this API is for. It reports a code AND a block: a mount that could
+    // not be measured costs a page-aligned layout now and is asked again on the next submission.
+    // Streamer::direct_block_for keeps that promise on all of its own exits; this wrapper has to keep
+    // it on the ones before and around the call.
+    //
+    // The host page size, as the same fallback direct_block_for uses when nothing could be measured.
+    *out_block = static_cast<size_t>(::sysconf(_SC_PAGESIZE));
+
     try
     {
         auto s = static_cast<impl::Streamer *>(streamer);
-        if (s == nullptr || out_block == nullptr || (num_paths != 0 && paths == nullptr))
+        if (s == nullptr || (num_paths != 0 && paths == nullptr))
         {
             return static_cast<int>(common::ResponseCode::InvalidParameterError);
         }
