@@ -10,6 +10,11 @@
 #include <cstdlib>
 #include <sys/stat.h>
 #include <sys/vfs.h>
+#include <sys/syscall.h>
+
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
 #include <unistd.h>
 
 #include <string>
@@ -40,6 +45,48 @@ bool raw_memory_backed(const std::string & path)
     struct statfs fs;
     return ::statfs(path.c_str(), &fs) == 0 &&
            (fs.f_type == TMPFS_MAGIC || fs.f_type == RAMFS_MAGIC);
+}
+
+// STATX_DIOALIGN asked of the kernel directly, so the test knows which answer the implementation
+// could have had. Declared here rather than shared with mount_capabilities.cc for the usual reason:
+// an oracle that imports the code it checks agrees with a wrong implementation.
+#ifndef STATX_DIOALIGN
+#define STATX_DIOALIGN 0x00002000U
+#endif
+
+struct RawDioAlign
+{
+    bool answered = false;
+    size_t mem = 0;
+    size_t offset = 0;
+};
+
+RawDioAlign raw_statx_dio_align(const std::string & path)
+{
+    struct StatxCompat
+    {
+        uint32_t mask, blksize;
+        uint64_t attributes;
+        uint32_t nlink, uid, gid;
+        uint16_t mode, spare0[1];
+        uint64_t ino, size, blocks, attributes_mask;
+        struct { int64_t tv_sec; uint32_t tv_nsec; int32_t pad; } atime, btime, ctime, mtime;
+        uint32_t rdev_major, rdev_minor, dev_major, dev_minor;
+        uint64_t mnt_id;
+        uint32_t dio_mem_align, dio_offset_align;
+        uint64_t spare[12];
+    } buf;
+
+    std::memset(&buf, 0, sizeof(buf));
+
+    if (::syscall(__NR_statx, AT_FDCWD, path.c_str(), 0, STATX_DIOALIGN, &buf) != 0 ||
+        (buf.mask & STATX_DIOALIGN) == 0 ||
+        buf.dio_mem_align == 0 || buf.dio_offset_align == 0)
+    {
+        return {};
+    }
+
+    return { true, buf.dio_mem_align, buf.dio_offset_align };
 }
 
 dev_t device_of(const std::string & path)
@@ -270,16 +317,45 @@ TEST(MountCapabilities, Direct_Block_Is_The_Smallest_The_Mount_Accepts)
     EXPECT_TRUE(got >= 0 || errno != EINVAL) << "the reported block " << block << " is refused";
     ::free(buffer);
 
-    // ...and no SMALLER power of two may work, or the measurement was not the smallest.
-    for (size_t smaller = 512; smaller < block; smaller <<= 1)
-    {
-        void * small = nullptr;
-        ASSERT_EQ(::posix_memalign(&small, smaller, smaller), 0);
-        const ssize_t r = ::pread(fd, small, smaller, 0);
-        const bool worked = r >= 0 || errno != EINVAL;
-        ::free(small);
+    // Which property holds depends on WHERE the number came from, so ask the kernel the same
+    // question the implementation asks.
+    const auto reported = raw_statx_dio_align(file.path);
 
-        EXPECT_FALSE(worked) << smaller << " also works, so " << block << " was not the smallest";
+    if (reported.answered)
+    {
+        // statx answered, so assert the EXACT value rather than minimality. This is the stronger
+        // check: the implementation must take max(mem, offset), because one block has to satisfy
+        // both the buffer and the offset/length rules.
+        //
+        // Minimality would be the WRONG property here. statx reports what the filesystem REQUIRES,
+        // and a lenient filesystem may still accept a smaller read - by falling back to buffered I/O
+        // rather than by being aligned - which would fail a minimality assertion on a correct answer.
+        EXPECT_EQ(block, std::max<size_t>(reported.mem, reported.offset))
+            << "statx reported mem=" << reported.mem << " offset=" << reported.offset;
+    }
+    else
+    {
+        // No statx answer, so the ladder produced this - and the ladder returns the FIRST rung that
+        // works, so by construction nothing smaller may work.
+        //
+        // Only meaningful above the ladder's floor. At 512 this loop has no iterations at all, and an
+        // earlier version of this test asserted minimality in exactly that vacuous way on every host
+        // where the floor is the answer - claiming to check something it never ran.
+        if (block == 512)
+        {
+            GTEST_SKIP() << "the ladder returned its floor, so there is no smaller rung to rule out";
+        }
+
+        for (size_t smaller = 512; smaller < block; smaller <<= 1)
+        {
+            void * small = nullptr;
+            ASSERT_EQ(::posix_memalign(&small, smaller, smaller), 0);
+            const ssize_t r = ::pread(fd, small, smaller, 0);
+            const bool worked = r >= 0 || errno != EINVAL;
+            ::free(small);
+
+            EXPECT_FALSE(worked) << smaller << " also works, so " << block << " was not the smallest";
+        }
     }
 
     ::close(fd);

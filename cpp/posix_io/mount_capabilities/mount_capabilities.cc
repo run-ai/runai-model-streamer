@@ -290,6 +290,20 @@ size_t MountCapabilities::measure_direct_block(const std::string & file_path)
     // ASCENDING, and the first success wins. The smallest workable block is the one we want: a larger
     // one pads more between ranges and bounces more of every chunk's head and tail. 512 is the
     // smallest logical block any device reports; 65536 covers every size announced so far.
+    //
+    // A GUESS, and weaker than statx above. It assumes the filesystem REFUSES a badly aligned read.
+    // Most do - measured on this container's overlay, a wrong offset, a wrong length and a wrong
+    // buffer address are each rejected with EINVAL. But a lenient filesystem accepts the read and
+    // quietly serves it buffered instead, with no error.
+    //
+    // On such a filesystem the first rung always "works", so this returns 512 for a mount that really
+    // needs 4096. Nothing fails: we would believe reads are direct while the kernel copies through
+    // its cache, and the log would agree with us. Slower than we think, and silent about it.
+    //
+    // Reachable only when BOTH hold: statx cannot answer (below kernel 6.1, or a filesystem that does
+    // not implement STATX_DIOALIGN), AND that filesystem is lenient about alignment. Phase 1's EINVAL
+    // fallback does not help here either - a lenient filesystem never returns EINVAL, which is the
+    // whole problem. See design_measured_alignment.md.
     static const std::vector<size_t> ladder{ 512, 4096, 16384, 65536 };
 
     for (const size_t candidate : ladder)
