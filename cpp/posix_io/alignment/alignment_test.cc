@@ -2,6 +2,9 @@
 
 #include <gtest/gtest.h>
 
+#include "common/exception/exception.h"
+#include "utils/temp/env/env.h"
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -199,20 +202,44 @@ TEST(DirectBlock, Usable_Values_Are_Honoured)
     EXPECT_EQ(usable_direct_block(65536), 65536u);
 }
 
-TEST(DirectBlock, Unusable_Values_Fall_Back_To_The_Default)
+TEST(DirectBlock, Unusable_Values_Are_REJECTED)
 {
+    // Rejected, not replaced. An earlier version fell back to DirectBlockSize with a warning, which
+    // hides the very typo this validation exists to catch: an operator who asks for 3000 gets 65536,
+    // and nothing they would read says so. Every other malformed numeric variable already fails
+    // runai_start with InvalidParameterError, and this now matches.
+    //
     // Below 512: no device reports a smaller logical block, and 1, 2 and 4 are also below
     // sizeof(void *), which posix_memalign refuses outright.
-    EXPECT_EQ(usable_direct_block(0), DirectBlockSize);
-    EXPECT_EQ(usable_direct_block(1), DirectBlockSize);
-    EXPECT_EQ(usable_direct_block(256), DirectBlockSize);
+    EXPECT_THROW(usable_direct_block(0), common::Exception);
+    EXPECT_THROW(usable_direct_block(1), common::Exception);
+    EXPECT_THROW(usable_direct_block(256), common::Exception);
+    EXPECT_THROW(usable_direct_block(511), common::Exception);
 
     // Not powers of two.
-    EXPECT_EQ(usable_direct_block(3000), DirectBlockSize);
-    EXPECT_EQ(usable_direct_block(4097), DirectBlockSize);
+    EXPECT_THROW(usable_direct_block(3000), common::Exception);
+    EXPECT_THROW(usable_direct_block(4097), common::Exception);
+}
 
-    // Falls back rather than failing: a mistyped block must not stop a model loading.
-    EXPECT_EQ(usable_direct_block(511), DirectBlockSize);
+// A value that is not a NUMBER is rejected too, and by the same route.
+//
+// getenv<unsigned long> raises on "abc" and on an empty string, and its ASSERT is fatal on trailing
+// garbage like "4096x". Those throws are deliberately NOT caught: an earlier version swallowed them
+// and returned the default, which meant a mistyped variable was served silently - and, when the throw
+// escaped instead, left the block at 0 and ended as a ZeroDivisionError in Python, nowhere near its
+// cause.
+//
+// Exercised through configured_direct_block() because the throw happens at the READ.
+// direct_block_size() and direct_block_override() both cache, so neither can be driven twice.
+TEST(DirectBlock, A_Value_That_Is_Not_A_Number_Is_Rejected)
+{
+    for (const auto * bad : { "abc", "", "4096x", " " })
+    {
+        utils::temp::Env env(std::string("RUNAI_STREAMER_DIRECT_BLOCK"), std::string(bad));
+
+        EXPECT_ANY_THROW((void)configured_direct_block())
+            << "'" << bad << "' must be rejected, not quietly replaced by the default";
+    }
 }
 
 // What the engines and routing actually read. It must be usable by its own rules, or ScratchPool

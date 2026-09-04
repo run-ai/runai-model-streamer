@@ -244,6 +244,15 @@ def runai_probe_direct_block_size(streamer, paths: List[str]) -> int:
             "Could not measure the direct-I/O block: %s. Laying out at %d bytes",
             runai_response_str(error_code), block.value)
 
+    # A zero must never leave this function, and must not be papered over either. The caller divides
+    # by this when placing ranges, so a zero becomes a ZeroDivisionError far from its cause - but
+    # substituting a value would hide a library that broke its own contract. It promises a usable
+    # block on every path, including the ones where it could not measure.
+    if block.value == 0:
+        raise RuntimeError(
+            f"the streamer reported a direct-I/O block of 0 for {len(paths)} path(s), which cannot be "
+            f"used to place destinations ({runai_response_str(error_code)})")
+
     return block.value
 
 

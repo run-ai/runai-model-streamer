@@ -1,5 +1,7 @@
 #include "streamer/impl/config/config.h"
 
+#include "posix_io/alignment/alignment.h"
+
 #include <utility>
 
 #include <algorithm>
@@ -24,6 +26,15 @@ Config::Config(unsigned concurrency, unsigned s3_concurrency, size_t s3_block_by
     fs_async_queue_depth(fs_async_queue_depth),
     object_storage_retry_timeout(object_storage_retry_timeout_seconds)
 {
+    // Resolved here, with the other configuration, so a malformed RUNAI_STREAMER_DIRECT_BLOCK fails
+    // like every other malformed variable: runai_start builds a Config first and turns any failure
+    // into InvalidParameterError, while a failure in the Streamer that follows becomes UnknownError.
+    //
+    // It has to be forced, because the value lives behind a cached static and is otherwise resolved
+    // lazily on the first read - so a typo would surface mid-load, as a failed read, with nothing
+    // naming the variable that caused it.
+    (void)posix_io::direct_block_size();
+
     ASSERT(concurrency) << " threadpool size must be a positive number";
     ASSERT(s3_block_bytesize) << "s3 chunk bytesize must be positive";
 

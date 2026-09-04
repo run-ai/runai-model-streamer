@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cstdint>
 #include <sstream>
+#include <string>
 
+#include "common/exception/exception.h"
 #include "utils/env/env.h"
 #include "utils/logging/logging.h"
 
@@ -22,6 +24,20 @@ size_t usable(size_t block)
 
 } // namespace
 
+// RUNAI_STREAMER_DIRECT_BLOCK as a number, or DirectBlockSize when it is not set.
+//
+// A value that is not a number THROWS, deliberately, and is not caught: std::stoul raises on "abc"
+// and on an empty string, and a fatal ASSERT fires on trailing garbage like "4096x".
+//
+// That is what every other numeric variable already does - RUNAI_STREAMER_CONCURRENCY=abc makes
+// runai_start return InvalidParameterError - and a typo must not be answered by quietly serving a
+// different value. An operator who mistypes this is told at start, rather than getting a block they
+// did not ask for and a load that is slower for reasons nothing reports.
+unsigned long configured_direct_block()
+{
+    return utils::getenv<unsigned long>("RUNAI_STREAMER_DIRECT_BLOCK", DirectBlockSize);
+}
+
 size_t usable_direct_block(unsigned long configured)
 {
     // A power of two, and at least 512 - the smallest logical block any device reports. Anything else
@@ -31,9 +47,13 @@ size_t usable_direct_block(unsigned long configured)
 
     if (!power_of_two || configured < 512)
     {
-        LOG(WARNING) << "Ignoring RUNAI_STREAMER_DIRECT_BLOCK=" << configured
-                     << ": it must be a power of two and at least 512. Using " << DirectBlockSize;
-        return DirectBlockSize;
+        // REJECTED, not replaced. An earlier version fell back to DirectBlockSize with a warning, and
+        // that hides the typo it exists to catch: the operator asked for 3000, got 65536, and nothing
+        // they would read says so. Failing here surfaces as InvalidParameterError from runai_start,
+        // which is what every other malformed variable already does.
+        LOG(ERROR) << "RUNAI_STREAMER_DIRECT_BLOCK=" << configured << " is not usable: it must be a"
+                   << " power of two and at least 512";
+        throw common::Exception(common::ResponseCode::InvalidParameterError);
     }
 
     if (configured != DirectBlockSize)
@@ -55,8 +75,7 @@ size_t direct_block_override()
             return 0;   // no override; mounts are measured
         }
 
-        const auto block = usable_direct_block(
-            utils::getenv<unsigned long>("RUNAI_STREAMER_DIRECT_BLOCK", DirectBlockSize));
+        const auto block = usable_direct_block(configured_direct_block());
 
         LOG(INFO) << "RUNAI_STREAMER_DIRECT_BLOCK=" << block << " overrides the per-mount measurement"
                   << " for every mount in this process";
@@ -74,8 +93,7 @@ size_t direct_block_size()
     // That caching is also why the RULES live in usable_direct_block() above rather than in this
     // lambda: the first call in a process wins, so a test cannot drive them through the environment.
     // A pure function can be tested directly, and this wrapper is then too small to be wrong.
-    static const size_t resolved =
-        usable_direct_block(utils::getenv<unsigned long>("RUNAI_STREAMER_DIRECT_BLOCK", DirectBlockSize));
+    static const size_t resolved = usable_direct_block(configured_direct_block());
 
     return resolved;
 }

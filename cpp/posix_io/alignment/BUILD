@@ -14,5 +14,7 @@ runai_cc_test(
     srcs = ["alignment_test.cc"],
     deps = [
         ":alignment",
+        "//utils/temp/env",
+        "//common/exception",
     ],
 )

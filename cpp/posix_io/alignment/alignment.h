@@ -86,6 +86,14 @@ constexpr size_t MaxProbeBlock = 65536;
 // the process, so a test cannot reach these rules through the environment.
 size_t usable_direct_block(unsigned long configured);
 
+// RUNAI_STREAMER_DIRECT_BLOCK as a number, or DirectBlockSize when it is absent or is not a number.
+//
+// Separate from usable_direct_block(), which judges a value that already parsed. Reading THROWS on a
+// non-numeric value - std::stoul on "abc" or "", a fatal ASSERT on "4096x" - and that exception used
+// to escape the mount probe and end as a ZeroDivisionError in Python. Exposed so the fallback can be
+// tested; direct_block_size() and direct_block_override() both cache, so neither can be.
+unsigned long configured_direct_block();
+
 // The operator's explicit block, or 0 when RUNAI_STREAMER_DIRECT_BLOCK is unset.
 //
 // An OVERRIDE, not a default: when set it replaces the per-mount measurement entirely. That is what
