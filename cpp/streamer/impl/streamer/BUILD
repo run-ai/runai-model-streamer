@@ -26,6 +26,7 @@ runai_cc_test(
     name = "streamer_test",
     srcs = ["streamer_test.cc"],
     deps = [
+        "//posix_io/mock",
         ":streamer",
         "//utils/random",
         "//utils/fd",

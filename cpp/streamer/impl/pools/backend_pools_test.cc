@@ -36,7 +36,7 @@ struct NoopWorker : utils::Worker<Workload>
 
 // Two factories, because the two are no longer the same type: the filesystem async factory takes the
 // mount's measured block, the object-storage one takes nothing.
-std::unique_ptr<utils::Worker<Workload>> noop_async_factory(size_t /* block */)
+std::unique_ptr<utils::Worker<Workload>> noop_async_factory(dev_t /* device */, size_t /* block */)
 {
     return std::make_unique<NoopWorker>();
 }

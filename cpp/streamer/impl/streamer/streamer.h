@@ -5,6 +5,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -88,6 +89,12 @@ struct Streamer
         // test using it would pass or fail depending on where it ran.
         DirectProbe direct;
         DirectBlockProbe direct_block;
+
+        // The engine each async worker builds. Without it a test cannot make an engine FAIL: the real
+        // ones only fail when the ring or the context is gone, which no test can arrange, and the
+        // behaviour that follows a failure - the mount dropping to the synchronous reader - is the part
+        // most worth testing.
+        AsyncIoWorker::EngineFactory engine;
 
         // Whether a strategy can be served here. Needed because every strategy is available on a
         // normal host, so there is no candidate a test can use to reach a failed resolution.
@@ -309,6 +316,10 @@ struct Streamer
     AsyncIoStats _stats;
 
     // Empty in production, where the machine answers directly.
+    //
+    // Declared BEFORE _pools, and that order is load-bearing: the async pool's factory reads
+    // _environment.engine when it is constructed, and this member is initialised by moving the
+    // constructor's argument - so a capture taken from the argument instead would be empty.
     Environment _environment;
 
     // Every async worker built by the pool factory, so their counters can be summed.
@@ -317,6 +328,29 @@ struct Streamer
     // the factory captures it by value and never `this`, so the registry outlives the workers whatever
     // the destruction order.
     std::shared_ptr<AsyncIoWorkers> _async_workers = std::make_shared<AsyncIoWorkers>();
+
+    // Mounts whose asynchronous engine has failed for good.
+    //
+    // An engine failure is permanent and belongs to ONE mount: the ring or the context is gone, and no
+    // later call brings it back. But the files are still readable - the synchronous pool needs none of
+    // that machinery - so this is a demotion, not a loss. file_groups() consults it and routes such a
+    // mount to the synchronous reader for the rest of the process.
+    //
+    // Written by a worker thread and read by whichever thread submits, so it owns its own mutex.
+    //
+    // shared_ptr and declared BEFORE _pools, for the same reason as the registry above: the factory
+    // captures it by value, never `this`, so it outlives the workers whatever the destruction order.
+    class DeadMounts
+    {
+     public:
+        void add(dev_t device);
+        bool contains(dev_t device) const;
+
+     private:
+        mutable std::mutex _mutex;
+        std::set<dev_t> _devices;
+    };
+    std::shared_ptr<DeadMounts> _dead_mounts = std::make_shared<DeadMounts>();
 
     std::unique_ptr<S3Cleanup> _s3;
     // Lazily-created worker pools, one per backend kind. Occupies the slot the single ThreadPool used

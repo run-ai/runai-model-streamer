@@ -1,5 +1,7 @@
 #include "streamer/impl/streamer/streamer.h"
 
+#include "posix_io/mock/mock_io_engine.h"
+
 #include "posix_io/alignment/alignment.h"
 
 #include <unistd.h>
@@ -1689,6 +1691,78 @@ TEST(Streamer, Direct_Block_For_Uses_The_Injected_Probe)
 
     EXPECT_EQ(streamer.direct_block_for({ one.path, two.path }, block), common::ResponseCode::Success);
     EXPECT_EQ(block, BlockTwo) << "a request spanning both mounts must be laid out at the larger";
+}
+
+// A mount whose engine dies is read by the SYNCHRONOUS reader from then on, and the bytes are right.
+//
+// This is the end of the chain the pieces below only cover separately: the worker marks its engine
+// dead, tells the streamer which mount it served, and file_groups stops routing that mount to it.
+// Each link was where the bugs in this area lived, so the test drives all three.
+//
+// The engine is injected because a real one fails only when its ring or context is gone, which a test
+// cannot arrange - and what follows the failure is the part worth pinning.
+TEST(Async, ADeadEngineDropsItsMountToTheSynchronousReader)
+{
+    const auto data = utils::random::buffer(8192);
+    utils::temp::File first(data);
+    utils::temp::File second(data);
+
+    Streamer::Environment environment;
+    environment.availability = [](posix_io::Strategy) { return common::ResponseCode::Success; };
+    environment.direct = [](dev_t, const std::string &) { return posix_io::DirectSupport::No; };
+
+    // Every engine this streamer builds refuses to issue anything - the ring is gone before the first
+    // read goes out.
+    environment.engine = [](posix_io::Strategy, const posix_io::AsyncIoConfig & config)
+        -> std::unique_ptr<posix_io::IoEngine>
+    {
+        posix_io::Limits limits;
+        limits.max_read_bytesize = posix_io::max_read_bytesize();
+        limits.offset_alignment = posix_io::DirectBlockSize;
+        limits.buffer_alignment = posix_io::DirectBlockSize;
+
+        auto engine = std::make_unique<posix_io::MockIoEngine>(config.depth, limits);
+        engine->set_flush_result(common::ResponseCode::FsAsyncEngineError);
+        return engine;
+    };
+
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("io_uring_buffered"));
+    Streamer streamer(Config(), std::move(environment));
+
+    // First submission: it reaches the dead engine and fails with the engine's own code - not
+    // UnknownError, which would tell the caller to abort everything over one broken ring.
+    {
+        std::vector<char> dst(data.size());
+        std::vector<FileRanges> request(1);
+        request[0].path = first.path;
+        request[0].ranges.push_back(ReadRange{ 0, data.size(), dst.data() });
+
+        SubmissionId submission_id = 0;
+        ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+        EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::FsAsyncEngineError);
+    }
+
+    // Second submission on the same mount: no longer routed to the async pool at all, and it reads.
+    {
+        std::vector<char> dst(data.size());
+        std::vector<FileRanges> request(1);
+        request[0].path = second.path;
+        request[0].ranges.push_back(ReadRange{ 0, data.size(), dst.data() });
+
+        SubmissionId submission_id = 0;
+        ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+        EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success)
+            << "the storage is healthy - only the ring was lost, so this must still read";
+
+        SubmissionStats stats;
+        ASSERT_TRUE(streamer.stats().find(submission_id, stats));
+        ASSERT_EQ(stats.files.size(), 1u);
+        EXPECT_EQ(stats.files[0].strategy, posix_io::Strategy::SyncBuffered)
+            << "the mount must have dropped to the synchronous reader";
+
+        EXPECT_EQ(std::vector<uint8_t>(dst.begin(), dst.end()), data)
+            << "a demotion is a performance decision, never a correctness one";
+    }
 }
 
 }; // namespace runai::llm::streamer::impl

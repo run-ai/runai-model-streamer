@@ -53,9 +53,19 @@ Streamer::Streamer(Config config, Environment environment) :
         // after resolution. Captures the resolver by value, never `this`.
         // `block` is the mount's measured direct-I/O block, supplied by BackendPools when it creates
         // this mount's engine. 0 means no file on it could be probed, and the worker falls back.
-        [resolver = _strategy_resolver, workers = _async_workers](size_t block) -> std::unique_ptr<utils::Worker<Workload>>
+        // engine comes from _environment, NOT from the `environment` parameter. _environment is declared
+        // before _pools, so it is initialised first - and it was initialised by MOVING the parameter,
+        // which leaves environment.engine empty. Capturing the parameter here compiles, runs, and
+        // silently builds the real engine instead of the injected one.
+        [resolver = _strategy_resolver, workers = _async_workers, dead = _dead_mounts,
+         engine = _environment.engine]
+        (dev_t device, size_t block) -> std::unique_ptr<utils::Worker<Workload>>
         {
-            auto worker = std::make_unique<AsyncIoWorker>(resolver->resolved(), block);
+            // The worker reports its own death here, and the streamer stops routing this mount to it -
+            // see DeadMounts. Captured by value, never `this`.
+            auto worker = std::make_unique<AsyncIoWorker>(resolver->resolved(), block,
+                                                          engine ? engine : posix_io::make_io_engine,
+                                                          [dead, device]() { dead->add(device); });
 
             // Registered here, where the concrete type is still known. The pool stores it as a
             // Worker<Workload>, which knows nothing of counters, so this is the last point at which
@@ -152,6 +162,18 @@ common::ResponseCode Streamer::async_read(const std::string & path, size_t file_
     }
 
     return ret;
+}
+
+void Streamer::DeadMounts::add(dev_t device)
+{
+    const auto guard = std::unique_lock<std::mutex>(_mutex);
+    _devices.insert(device);
+}
+
+bool Streamer::DeadMounts::contains(dev_t device) const
+{
+    const auto guard = std::unique_lock<std::mutex>(_mutex);
+    return _devices.count(device) != 0;
 }
 
 common::ResponseCode Streamer::CredentialsState::set(const common::s3::Credentials & credentials)
@@ -706,26 +728,43 @@ std::vector<int> Streamer::file_groups(const std::vector<FileRanges> & request,
             const auto capability = _environment.mount ? _environment.mount(directory)
                                                        : _mounts.of_path(directory);
 
-            // tmpfs and ramfs are pure memcpy with no device to overlap, so depth buys nothing and
-            // parallelism does - the 16-thread pool is the right reader for them (5.12).
-            if (!capability.memory_backed)
+            // A mount whose engine has already failed goes to the synchronous reader, for the rest of
+            // the process.
+            //
+            // The failure is permanent and it is about the RING, not the storage - io_uring_submit or
+            // io_getevents gone, with the files still perfectly readable. So this is a demotion rather
+            // than a loss: slower, and it needs none of the machinery that broke. Leaving the mount
+            // routed here instead would answer every later submission with FsAsyncEngineError, which
+            // is the same outcome as failing the load.
+            //
+            // Tested before memory_backed and before any probe, because both cost syscalls to answer a
+            // question already settled.
+            //
+            // Left at -1 rather than returned early, so the answer still lands in by_directory below -
+            // otherwise a 200-shard model on a dead mount would stat its directory 200 times.
+            if (!_dead_mounts->contains(capability.dev))
             {
-                // One group per MOUNT, so directories sharing a mount share an engine. Groups are
-                // numbered in first-seen order, which is what makes them dense indices into
-                // out_devices.
-                const auto device = by_device.find(capability.dev);
-                if (device != by_device.end())
+                // tmpfs and ramfs are pure memcpy with no device to overlap, so depth buys nothing and
+                // parallelism does - the 16-thread pool is the right reader for them (5.12).
+                if (!capability.memory_backed)
                 {
-                    group = device->second;
-                }
-                else
-                {
-                    group = static_cast<int>(out_devices.size());
-                    by_device.emplace(capability.dev, group);
-                    out_devices.push_back(capability.dev);
+                    // One group per MOUNT, so directories sharing a mount share an engine. Groups are
+                    // numbered in first-seen order, which is what makes them dense indices into
+                    // out_devices.
+                    const auto device = by_device.find(capability.dev);
+                    if (device != by_device.end())
+                    {
+                        group = device->second;
+                    }
+                    else
+                    {
+                        group = static_cast<int>(out_devices.size());
+                        by_device.emplace(capability.dev, group);
+                        out_devices.push_back(capability.dev);
 
-                    // 0 until a file on this mount answers the probe - see the loop below.
-                    out_blocks.push_back(0);
+                        // 0 until a file on this mount answers the probe - see the loop below.
+                        out_blocks.push_back(0);
+                    }
                 }
             }
         }

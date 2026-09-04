@@ -37,11 +37,13 @@ constexpr unsigned WaitTimeoutMs = 50;
 
 } // namespace
 
-AsyncIoWorker::AsyncIoWorker(posix_io::Strategy strategy, size_t block, EngineFactory factory) :
+AsyncIoWorker::AsyncIoWorker(posix_io::Strategy strategy, size_t block, EngineFactory factory,
+                             std::function<void()> on_engine_dead) :
     _strategy(strategy),
     _block(block != 0 ? block : posix_io::MaxProbeBlock),
     _block_measured(block != 0),
-    _factory(std::move(factory))
+    _factory(std::move(factory)),
+    _on_engine_dead(std::move(on_engine_dead))
 {
     ASSERT(posix_io::is_async(strategy))
         << strategy << " is served by the synchronous pool, not by an engine";
@@ -457,14 +459,15 @@ common::ResponseCode AsyncIoWorker::probe_open(const std::string & path)
     return common::ResponseCode::Success;
 }
 
-bool AsyncIoWorker::demote_to_buffered(const InflightChunk & entry)
+common::ResponseCode AsyncIoWorker::demote_to_buffered(const InflightChunk & entry)
 {
     const auto wlit = _inflight.find(entry.workload_id);
     if (wlit == _inflight.end() || entry.batch_index >= wlit->second.fds.size())
     {
         // The workload was finalized while this read was out, so there is nothing left to re-stage
-        // against. Let the caller report the error instead.
-        return false;
+        // against, and nothing left to report to either. UnknownError, as before: this says our own
+        // bookkeeping and the engine disagree about what is outstanding.
+        return common::ResponseCode::UnknownError;
     }
 
     BatchFd & batch_fd = wlit->second.fds[entry.batch_index];
@@ -473,11 +476,19 @@ bool AsyncIoWorker::demote_to_buffered(const InflightChunk & entry)
     const int fd = utils::Fd::open_for_read(path);
     if (fd < 0)
     {
-        // The direct fd worked well enough to be refused for alignment, so a buffered open failing
-        // here is a surprise. Report the original error rather than inventing one.
+        // THIS FILE's failure, not ours.
+        //
+        // It is a surprise - the direct fd worked well enough to be refused for alignment - but every
+        // way it happens belongs to the environment: the file was unlinked or renamed since, the
+        // process or the node ran out of descriptors, NFS went stale, or the permissions changed.
+        //
+        // Reporting the original EINVAL instead would map it as a direct-fd alignment failure, which
+        // is_internal_error calls ours, and that becomes UnknownError - a code that aborts the whole
+        // submission and tells the operator to file a bug against the streamer. For a file that was
+        // deleted while we read it.
         LOG(ERROR) << "Cannot reopen " << path << " buffered after a direct read was refused: "
                    << std::strerror(errno);
-        return false;
+        return common::ResponseCode::FileAccessError;
     }
 
     // The old descriptor number is reused, not closed.
@@ -510,7 +521,7 @@ bool AsyncIoWorker::demote_to_buffered(const InflightChunk & entry)
             LOG(ERROR) << "Cannot replace the direct descriptor for " << path << " with a buffered"
                        << " one: " << std::strerror(errno);
             ::close(fd);
-            return false;
+            return common::ResponseCode::FileAccessError;
         }
 
         // batch_fd.fd now refers to the buffered open, so this one is a duplicate.
@@ -535,7 +546,7 @@ bool AsyncIoWorker::demote_to_buffered(const InflightChunk & entry)
                      << " asynchronous, but without O_DIRECT";
     }
 
-    return true;
+    return common::ResponseCode::Success;
 }
 
 int AsyncIoWorker::fd_for(Inflight & wl, unsigned batch_index, size_t file_offset, const char * buffer,
@@ -788,9 +799,22 @@ void AsyncIoWorker::drain_batch(std::atomic<bool> & stopped)
             //
             // It is also not necessarily our bug: statx(2) defines both direct-I/O alignments per
             // FILE, so a mount that answered correctly can still be wrong for one file.
-            if (file.direct && completion.res == -EINVAL && demote_to_buffered(*entry))
+            if (file.direct && completion.res == -EINVAL)
             {
-                stage_pending(completion.id);
+                const auto demoted = demote_to_buffered(*entry);
+                if (demoted == common::ResponseCode::Success)
+                {
+                    stage_pending(completion.id);
+                    continue;
+                }
+
+                // Answered with what the DEMOTION hit, not with the original EINVAL.
+                //
+                // Mapping the EINVAL here would run it through is_internal_error on a still-direct
+                // file, which calls it ours and returns UnknownError - ending the whole submission
+                // because one file could not be reopened. demote_to_buffered already knows whether the
+                // cause was the file (FileAccessError) or our own bookkeeping (UnknownError).
+                complete_chunk(completion.id, demoted);
                 continue;
             }
 
@@ -1021,8 +1045,15 @@ void AsyncIoWorker::abort_all(common::ResponseCode code)
         _engine_error = code;
 
         LOG(ERROR) << "The asynchronous reader for this mount failed permanently (" << code
-                   << "). Every submission still in flight here is failed now, and later ones are"
-                   << " answered with the same code rather than retried on a dead engine";
+                   << "). Every submission still in flight here is failed now, and this mount is read"
+                   << " by the synchronous reader from here on";
+
+        // Told once, and AFTER the flag is set, so nothing can route a new workload to this engine in
+        // between. The listener only records the mount; it does not touch this worker.
+        if (_on_engine_dead)
+        {
+            _on_engine_dead();
+        }
     }
 
     // Drops pending entries and releases their credit in one step - draining through

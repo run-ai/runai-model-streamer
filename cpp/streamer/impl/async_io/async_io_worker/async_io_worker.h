@@ -64,9 +64,13 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
 
     // `block` is the mount's measured direct-I/O block, or 0 when no file on it could be probed -
     // in which case the worker runs provisionally and adopts a later workload's measurement.
+    // `on_engine_dead` is called once, from this worker's thread, when the engine fails for good. The
+    // streamer uses it to route this mount to the synchronous reader from then on - the files are
+    // still readable, it is only the ring that is gone. Empty in tests that do not care.
     explicit AsyncIoWorker(posix_io::Strategy strategy,
                            size_t block = 0,
-                           EngineFactory factory = posix_io::make_io_engine);
+                           EngineFactory factory = posix_io::make_io_engine,
+                           std::function<void()> on_engine_dead = {});
     ~AsyncIoWorker() override;
 
     // Bytes copied out of a scratch buffer, over this worker's life.
@@ -267,7 +271,12 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     // Reopen this batch's file WITHOUT O_DIRECT after the kernel refused a direct read, so the same
     // bytes can be re-staged. False when there is nothing left to re-stage against, or the buffered
     // open itself failed - the caller then reports the original error.
-    bool demote_to_buffered(const InflightChunk & entry);
+    // Reopen this batch's file buffered after the kernel refused a direct read.
+    //
+    // Success when the descriptor was replaced and the caller should re-stage. Otherwise the code to
+    // answer the chunk with: FileAccessError when the reopen failed, which belongs to the file, and
+    // UnknownError when the workload has already gone, which belongs to us.
+    common::ResponseCode demote_to_buffered(const InflightChunk & entry);
 
     size_t land_bounced_pass(posix_io::RequestId id, size_t bytes_transferred);
 
@@ -324,6 +333,9 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     //
     // NOT set on the shutdown path: there the engine is destroyed immediately afterwards.
     bool _engine_dead = false;
+
+    // Told once, when _engine_dead is set. See the constructor.
+    std::function<void()> _on_engine_dead;
 
     // Block-sized buffers for the partial blocks at the edges of a region. Empty on a buffered
     // engine, which never bounces.

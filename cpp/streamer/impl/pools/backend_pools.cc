@@ -71,7 +71,7 @@ void BackendPools::push_async(dev_t device, size_t block, Workload && workload)
             // The block is bound HERE, when this mount's engine is created, and never changes for
             // it - which is right, because the engine serves this one mount for its whole life.
             auto created = std::make_unique<utils::ThreadPool<Workload>>(
-                [factory = _filesystem_async_factory, block]() { return factory(block); }, 1);
+                [factory = _filesystem_async_factory, device, block]() { return factory(device, block); }, 1);
             pool = created.get();
             _async_pools.emplace(device, std::move(created));
             _async_by_device.emplace(device, pool);

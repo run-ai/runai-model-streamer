@@ -1291,4 +1291,44 @@ TEST(AsyncIoWorker, Stopping_Reports_Finished_Rather_Than_An_Engine_Failure)
     EXPECT_EQ(responses[0].ret, common::ResponseCode::FinishedError);
 }
 
+// A failed reopen fails the FILE, not the whole submission.
+//
+// The kernel refuses a direct read, so the worker reopens the file buffered - and that open can fail
+// for reasons that are entirely the environment's: the file was unlinked since, descriptors ran out,
+// NFS went stale, permissions changed.
+//
+// It used to fall through and map the original EINVAL against a still-direct file. is_internal_error
+// calls that ours, so it became UnknownError - the one code that tells a caller to abort everything
+// and treat it as a bug in the streamer. For a file somebody deleted mid-read.
+TEST(AsyncIoWorker, A_Failed_Reopen_Fails_Only_That_File)
+{
+    std::vector<char> raw(2 * ChunkSize + 4096);
+    char * const aligned = raw.data() + ((-reinterpret_cast<uintptr_t>(raw.data())) % 4096);
+
+    Fixture fixture({ ChunkSize });
+    Driver driver(Strategy::IoUringDirect);
+
+    fixture.request[0].ranges[0].dst = aligned;
+
+    driver.execute(fixture.workload());
+    ASSERT_EQ(driver.engine->staged_count(), 1u);
+
+    const auto first = driver.engine->staged().front();
+    ASSERT_TRUE(driver.engine->request(first).file.direct) << "the setup must produce a DIRECT read";
+
+    driver.issue();
+
+    // The file disappears between the direct open and the completion, so the buffered reopen cannot
+    // succeed. This is the case the old code called an internal error.
+    ASSERT_EQ(::unlink(fixture.file.path.c_str()), 0);
+
+    driver.engine->fail(first, EINVAL);
+    driver.route();
+
+    const auto responses = drain_responses(*fixture.responder, 1);
+    ASSERT_EQ(responses.size(), 1u);
+    EXPECT_EQ(responses[0].ret, common::ResponseCode::FileAccessError)
+        << "a file that vanished is this file's failure; UnknownError would end the whole submission";
+}
+
 }; // namespace runai::llm::streamer::impl

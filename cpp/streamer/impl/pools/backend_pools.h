@@ -51,7 +51,10 @@ class BackendPools
     // The filesystem async factory takes the mount's measured direct-I/O block, because one engine
     // serves one mount and its Limits must describe THAT mount rather than a process-wide guess.
     // 0 means no file on the mount could be probed; the worker then falls back.
-    using AsyncWorkerFactory = std::function<std::unique_ptr<utils::Worker<Workload>>(size_t block)>;
+    // `device` is the mount this engine will serve. Passed so the caller can bind per-mount state to
+    // the worker it builds - the streamer uses it to learn which mount to stop routing here when the
+    // engine dies.
+    using AsyncWorkerFactory = std::function<std::unique_ptr<utils::Worker<Workload>>(dev_t device, size_t block)>;
 
     // filesystem_handler: the stateless synchronous handler for the filesystem pool.
     // object_storage_factory: builds a per-worker ObjectStorageWorker for the object-storage pool (async,
