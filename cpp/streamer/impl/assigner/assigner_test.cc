@@ -4,6 +4,7 @@
 #include <memory>
 #include <vector>
 #include <string>
+#include <map>
 #include <set>
 #include "streamer/impl/assigner/assigner.h"
 #include "streamer/impl/config/config.h"
@@ -81,6 +82,191 @@ TEST_F(AssignerTest, File_Without_Ranges)
 
     const Assigner assigner(request, config);
     EXPECT_TRUE(assigner.transfers().empty());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Grouping by pool - a submission's filesystem files can be served by two pools (S6b)
+// ---------------------------------------------------------------------------------------------
+
+// Every byte assigned exactly once, whatever the grouping. The internal asserts check this too, but
+// they only fire in the Assigner's own terms - this checks it from outside, per workload.
+static size_t bytes_in_workload(const Assigner & assigner, unsigned workload_index)
+{
+    size_t total = 0;
+    for (const auto & transfer : assigner.transfers())
+    {
+        for (const auto & task : transfer.tasks)
+        {
+            if (task.workload_index == workload_index)
+            {
+                total += task.size;
+            }
+        }
+    }
+    return total;
+}
+
+// The default is what every caller but the streamer passes, and it must divide exactly as before -
+// otherwise the existing tests around it stop meaning anything.
+TEST_F(AssignerTest, No_Async_Files_Divides_As_Before)
+{
+    char * const base = fake_base();
+    std::vector<FileRanges> request;
+    request.push_back(contiguous_file("/a", 0, { 4 << 20, 4 << 20 }, base));
+
+    const Assigner with_default(request, config);
+    const Assigner with_empty(request, config, {});
+
+    EXPECT_EQ(with_default.num_workloads(), with_empty.num_workloads());
+    for (unsigned i = 0; i < with_default.num_workloads(); ++i)
+    {
+        EXPECT_LT(with_default.group_of_workload(i), 0);
+    }
+}
+
+// The async pool has one worker, so its files need exactly one workload however many bytes they hold.
+TEST_F(AssignerTest, Async_Files_Get_One_Workload)
+{
+    config->concurrency = 16;
+
+    char * const base = fake_base();
+    std::vector<FileRanges> request;
+    request.push_back(contiguous_file("/a", 0, std::vector<size_t>(64, 4 << 20), base));   // 256 MiB
+
+    const Assigner assigner(request, config, { 0 });
+
+    EXPECT_EQ(assigner.num_workloads(), 1u) << "one worker cannot use more than one workload";
+    EXPECT_EQ(assigner.group_of_workload(0), 0);
+}
+
+// The two groups are divided separately, and their workload indices must not collide - the dispatcher
+// routes by index, so a collision would send a file to the wrong pool.
+TEST_F(AssignerTest, Mixed_Submission_Splits_Into_Two_Groups)
+{
+    config->concurrency = 4;
+
+    char * const base = fake_base();
+    std::vector<FileRanges> request;
+    request.push_back(contiguous_file("/sync", 0, std::vector<size_t>(8, 4 << 20), base));            // file 0
+    request.push_back(contiguous_file("/async", 0, std::vector<size_t>(8, 4 << 20), base + (1 << 30)));  // file 1
+
+    const Assigner assigner(request, config, { -1, 0 });
+
+    ASSERT_GT(assigner.num_workloads(), 1u);
+
+    unsigned sync_workloads = 0;
+    unsigned async_workloads = 0;
+    for (unsigned i = 0; i < assigner.num_workloads(); ++i)
+    {
+        ((assigner.group_of_workload(i) >= 0) ? async_workloads : sync_workloads) += 1;
+    }
+
+    EXPECT_EQ(async_workloads, 1u) << "the async pool has one worker";
+    EXPECT_GT(sync_workloads, 1u) << "the synchronous group should still spread";
+
+    // Every task of a workload must belong to the group that workload was assigned to - a task of the
+    // wrong file in an async workload would be read by the wrong pool.
+    for (const auto & transfer : assigner.transfers())
+    {
+        for (const auto & task : transfer.tasks)
+        {
+            EXPECT_EQ((assigner.group_of_workload(task.workload_index) >= 0), transfer.file_index == 1)
+                << "file " << transfer.file_index << " landed in the wrong group";
+        }
+    }
+
+    // And nothing was lost between the groups.
+    size_t total = 0;
+    for (unsigned i = 0; i < assigner.num_workloads(); ++i)
+    {
+        total += bytes_in_workload(assigner, i);
+    }
+    EXPECT_EQ(total, static_cast<size_t>(16) * (4 << 20));
+}
+
+// The reason groups are per mount rather than one for all async files: a workload goes to exactly one
+// engine, so two mounts sharing a workload would defeat the isolation the split exists for.
+TEST_F(AssignerTest, Each_Mount_Gets_Its_Own_Workload)
+{
+    config->concurrency = 8;
+
+    char * const base = fake_base();
+    std::vector<FileRanges> request;
+    request.push_back(contiguous_file("/mnt/a/f", 0, std::vector<size_t>(4, 4 << 20), base));
+    request.push_back(contiguous_file("/mnt/b/f", 0, std::vector<size_t>(4, 4 << 20), base + (1 << 30)));
+
+    const Assigner assigner(request, config, { 0, 1 });   // two distinct mounts
+
+    EXPECT_EQ(assigner.num_async_groups(), 2u);
+
+    // Every workload belongs to exactly one group, and each group has exactly one workload.
+    std::map<int, unsigned> workloads_per_group;
+    for (unsigned i = 0; i < assigner.num_workloads(); ++i)
+    {
+        workloads_per_group[assigner.group_of_workload(i)] += 1;
+    }
+    EXPECT_EQ(workloads_per_group[0], 1u);
+    EXPECT_EQ(workloads_per_group[1], 1u);
+
+    // And no workload holds tasks from two mounts - the assertion that actually matters.
+    std::map<unsigned, std::set<unsigned>> files_per_workload;
+    for (const auto & transfer : assigner.transfers())
+    {
+        for (const auto & task : transfer.tasks)
+        {
+            files_per_workload[task.workload_index].insert(transfer.file_index);
+        }
+    }
+    for (const auto & [workload, files] : files_per_workload)
+    {
+        EXPECT_EQ(files.size(), 1u) << "workload " << workload << " mixes mounts";
+    }
+}
+
+// Several files on the SAME mount share one workload - the group is per mount, not per file.
+TEST_F(AssignerTest, Files_Sharing_A_Mount_Share_A_Workload)
+{
+    char * const base = fake_base();
+    std::vector<FileRanges> request;
+    request.push_back(contiguous_file("/mnt/a/one", 0, { 4 << 20 }, base));
+    request.push_back(contiguous_file("/mnt/a/two", 0, { 4 << 20 }, base + (1 << 30)));
+    request.push_back(contiguous_file("/mnt/a/three", 0, { 4 << 20 }, base + (2 << 30)));
+
+    const Assigner assigner(request, config, { 0, 0, 0 });
+
+    EXPECT_EQ(assigner.num_async_groups(), 1u);
+
+    std::set<unsigned> async_workloads;
+    for (const auto & transfer : assigner.transfers())
+    {
+        for (const auto & task : transfer.tasks)
+        {
+            if (assigner.group_of_workload(task.workload_index) >= 0)
+            {
+                async_workloads.insert(task.workload_index);
+            }
+        }
+    }
+    EXPECT_EQ(async_workloads.size(), 1u) << "one mount, one engine, one workload";
+}
+
+// A file's original index is what response attribution uses, so grouping must not renumber files.
+TEST_F(AssignerTest, Grouping_Preserves_File_Indices)
+{
+    char * const base = fake_base();
+    std::vector<FileRanges> request;
+    request.push_back(contiguous_file("/a", 0, { 1 << 20 }, base));
+    request.push_back(contiguous_file("/b", 0, { 1 << 20 }, base + (1 << 30)));
+    request.push_back(contiguous_file("/c", 0, { 1 << 20 }, base + (2 << 30)));
+
+    const Assigner assigner(request, config, { -1, 0, -1 });
+
+    std::set<unsigned> file_indices;
+    for (const auto & transfer : assigner.transfers())
+    {
+        file_indices.insert(transfer.file_index);
+    }
+    EXPECT_EQ(file_indices, (std::set<unsigned>{ 0, 1, 2 }));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -213,7 +399,7 @@ TEST_F(AssignerTest, Transfer_Split_Across_Workers)
     config->concurrency = 8;
 
     char * const base = fake_base();
-    const size_t size = config->fs_block_bytesize * 64;
+    const size_t size = config->fs_sync_read_block_bytesize * 64;
 
     std::vector<FileRanges> request;
     request.push_back(contiguous_file(utils::random::string(), 0, { size }, base));
@@ -319,7 +505,7 @@ TEST_F(AssignerTest, Valid_Inputs)
         EXPECT_EQ(assigner.get_num_workers(), (is_object_storage ? config->s3_concurrency : config->concurrency));
 
         const auto concurrency = is_object_storage ? config->s3_concurrency : config->concurrency;
-        const auto block_bytesize = is_object_storage ? config->s3_block_bytesize : config->fs_block_bytesize;
+        const auto block_bytesize = is_object_storage ? config->s3_block_bytesize : config->fs_sync_read_block_bytesize;
         const size_t expected_workers = std::max(std::min(total_size / block_bytesize, static_cast<size_t>(concurrency)), 1UL);
         ASSERT_EQ(worker_indices.size(), static_cast<unsigned>(expected_workers));
         ASSERT_EQ(assigner.num_workloads(), static_cast<unsigned>(expected_workers));
@@ -390,7 +576,7 @@ TEST_F(AssignerTest, Zero_Size_Ranges)
 
     EXPECT_EQ(assigner.get_num_workers(), config->concurrency);
 
-    const size_t expected_workers = std::max(std::min(total_size / config->fs_block_bytesize, static_cast<size_t>(config->concurrency)), 1UL);
+    const size_t expected_workers = std::max(std::min(total_size / config->fs_sync_read_block_bytesize, static_cast<size_t>(config->concurrency)), 1UL);
     ASSERT_EQ(worker_indices.size(), static_cast<unsigned>(expected_workers));
     ASSERT_EQ(assigner.num_workloads(), static_cast<unsigned>(expected_workers));
 }

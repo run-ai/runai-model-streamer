@@ -43,6 +43,9 @@ constexpr std::array<const char *, static_cast<size_t>(ResponseCode::__Max)> __m
     "Streamer is locked to a single object-storage backend (S3/GCS/Azure); mixing object-storage backends in one streamer or submission is not supported",
     "Credentials were already set to a different value; create a new streamer to use different credentials",
     "Retryable object storage file access error",
+    "The filesystem read strategy was already set to a different value; set RUNAI_STREAMER_FS_STRATEGY, or call runai_set_fs_strategy, once before the first request",
+    "None of the filesystem read strategies in the list can be served on this host; add sync_buffered to the list to allow the synchronous reader",
+    "The asynchronous filesystem reader for this mount failed and will not be used again; the storage itself is healthy, and re-requesting these ranges reads them through the synchronous reader",
 };
 
 const char * description(int response_code)

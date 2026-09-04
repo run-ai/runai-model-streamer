@@ -47,6 +47,29 @@ _RUNAI_EXTERN_C int runai_set_credentials(
     unsigned num_params
 );
 
+// Choose how filesystem reads are served: an ORDERED PREFERENCE LIST of strategy names, best first,
+// e.g. "io_uring_buffered,sync_buffered". The first the host can provide wins; the rest are rejected
+// with a logged reason.
+//
+// Names: io_uring_direct, io_uring_buffered, libaio_direct, sync_buffered. An unknown name, a
+// duplicate or an empty entry returns InvalidParameterError - a typo must not silently become a
+// fallback nobody asked for. A list the host cannot serve is an error too, not a quiet fall-through
+// to the synchronous reader; include sync_buffered to allow that explicitly.
+//
+// Streamer-scoped and SET ONCE, like runai_set_credentials: the same value again returns Success, a
+// different value returns FsStrategyConflict. A list this host cannot serve returns
+// FsStrategyUnavailable. The list is resolved on the first filesystem
+// submission, and any different value after that is rejected too - by then an engine has been built
+// for the resolved answer. Create a new streamer to use a different strategy.
+//
+// Optional. Without it the streamer reads RUNAI_STREAMER_FS_STRATEGY, defaulting to the synchronous
+// reader. Object-storage reads are unaffected: the strategy names a filesystem engine, and a
+// submission that reads object storage never consults it.
+_RUNAI_EXTERN_C int runai_set_fs_strategy(
+    void * streamer,
+    const char * candidates
+);
+
 // Multi-request submit: read multiple files concurrently.
 //
 // A submission is a list of files; each file carries a list of RANGES to read. A range is an
@@ -105,6 +128,38 @@ _RUNAI_EXTERN_C int runai_response(
 );
 
 _RUNAI_EXTERN_C const char * runai_response_str(int response_code);
+
+// The block a caller must lay destinations out at for THESE paths, so reads can be served with
+// O_DIRECT.
+//
+// NOT A GETTER. It opens a file and READS on each distinct mount, walking 512, 4096, 16384, 65536
+// until one is accepted - because the requirement belongs to the mount and no kernel below 6.1 will
+// report it. Cached per mount on this streamer, so a 200-shard model costs one probe.
+//
+// FILESYSTEM paths only - object-storage URIs are skipped, since they name no mount and never reach
+// O_DIRECT. A submission cannot legally mix the two (runai_request rejects that with
+// UnsupportedBackendMix), but this is called before any submission exists, so URIs are skipped rather
+// than treated as an error.
+//
+// Path-aware because the answer is per mount, and a request can span several. It returns the LARGEST
+// any of them requires: congruence at a power of two implies congruence at every smaller one, so one
+// number satisfies them all, while each mount may still use a smaller block internally.
+//
+// Never use a larger block than this reports. Over-padding is not free - measured on NFS under the
+// `chunks` partition policy, a 64 KiB layout against a 4 KiB mount cost 2.4x the load time.
+//
+//  out_block  always set. On Success it is measured. On UnknownError nothing could be probed - every
+//             path missing or unreadable - and it holds the host page size so the caller can still
+//             lay out its buffers. Ask again on the next submission rather than caching that value:
+//             a long-lived streamer would otherwise keep it for the life of the process.
+//
+// ret is Success, or UnknownError when nothing could be measured. It does not fail a submission.
+_RUNAI_EXTERN_C int runai_probe_direct_block_size(
+    void *        streamer,
+    const char ** paths,
+    unsigned      num_paths,
+    size_t *      out_block
+);
 
 // List files at the given object storage prefix.
 //

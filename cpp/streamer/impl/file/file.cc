@@ -12,8 +12,10 @@ namespace runai::llm::streamer::impl
 
 File::File(const std::string & path, const Config & config) :
     Reader(Reader::Mode::Sync),
-    _fd(::open(path.c_str(), O_RDONLY)),
-    _block_size(config.fs_block_bytesize)
+    // Not a bare open: a FIFO would block this thread forever, and a directory would fail later with
+    // a different error than the asynchronous readers give (utils::Fd::open_for_read).
+    _fd(utils::Fd::open_for_read(path)),
+    _block_size(config.fs_sync_read_block_bytesize)
 {
     if (_fd.fd() == -1)
     {

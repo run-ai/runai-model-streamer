@@ -5,6 +5,8 @@ import os
 from unittest.mock import patch
 from runai_model_streamer.file_streamer.file_streamer import FileStreamer
 from runai_model_streamer.file_streamer.requests_iterator import (
+    DIRECT_IO_BLOCK,
+    FilesRequestsIteratorWithBuffer,
     MemoryCapMode,
     FileChunks,
     RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME,
@@ -351,6 +353,42 @@ class TestBindings(unittest.TestCase):
 
     def tearDown(self):
         shutil.rmtree(self.temp_dir)
+
+
+class TestObjectStorageSkipsTheProbe(unittest.TestCase):
+    """An object-storage submission must not probe for a direct-I/O block.
+
+    There is no mount behind an s3:// path, so there is nothing to measure. It takes the other branch
+    and uses the page size for layout.
+
+    Every other test here streams local files, so this branch had no coverage at all - which is how a
+    plain NameError on DIRECT_IO_BLOCK reached review. The name was used but never imported, so any
+    object-storage submission raised before it read a byte.
+    """
+
+    def test_object_storage_uses_the_default_block_and_does_not_probe(self):
+        seen = {}
+
+        def capture(requests, memory_limit, direct_block):
+            seen["direct_block"] = direct_block
+            raise _Stop()
+
+        with FileStreamer() as fs:
+            with patch.object(FileStreamer, "handle_object_store",
+                              side_effect=lambda path, streamer, credentials: path), \
+                 patch("runai_model_streamer.file_streamer.file_streamer.runai_probe_direct_block_size") as probe, \
+                 patch.object(FilesRequestsIteratorWithBuffer, "with_memory_mode", side_effect=capture):
+                # Stopped as soon as the block is decided: building the ring and submitting would need
+                # a real bucket, and the block is the whole question here.
+                with self.assertRaises(_Stop):
+                    fs.stream_files([FileChunks.contiguous(17, "s3://bucket/model.safetensors", 0, [8])])
+
+        self.assertEqual(seen["direct_block"], DIRECT_IO_BLOCK)
+        probe.assert_not_called()
+
+
+class _Stop(Exception):
+    """Ends stream_files once the value under test has been captured."""
 
 
 if __name__ == "__main__":

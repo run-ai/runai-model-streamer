@@ -17,6 +17,7 @@
 #include "streamer/impl/config/config.h"
 #include "streamer/impl/task/task.h"
 #include "streamer/impl/reader/reader.h"
+#include "streamer/impl/async_io/chunk_splitter/chunk_splitter.h"
 
 namespace runai::llm::streamer::impl
 {
@@ -51,6 +52,15 @@ struct Batch
   Batch(Batch &&) = default;
   Batch & operator=(Batch &&) = default;
 
+  // chunk_bytesize is the size the BACKEND will request - s3_block_bytesize for object storage, the
+  // file system's async chunk size otherwise. It is also where the tasks were cut, so the chunks below
+  // cover whole tasks. Batches passes the one value it used for both.
+  //
+  // NO DEFAULT, deliberately. A default would let a caller construct a Batch without saying which
+  // backend it is for, and quietly get the wrong grouping - which is precisely the bug that shipped
+  // when Batches cut object-storage tasks at the file system chunk size. Requiring the argument makes
+  // every construction state it, so the mistake is a compile error rather than a silent misgrouping
+  // that still passes every test.
   Batch(SubmissionId submission_id,
         unsigned workload_index,
         unsigned file_index,
@@ -58,7 +68,8 @@ struct Batch
         const common::s3::S3ClientWrapper::Params & params,
         const Tasks && tasks,
         std::shared_ptr<common::Responder> responder,
-        std::shared_ptr<const Config> config);
+        std::shared_ptr<const Config> config,
+        size_t chunk_bytesize);
 
   // total number of requested bytes
   size_t total_bytes() const;
@@ -94,6 +105,14 @@ struct Batch
   const common::s3::S3ClientWrapper::Params object_storage_params;
 
   const Tasks tasks;
+
+  // One read request each, covering whole tasks. Built here rather than by each worker: the grouping
+  // is decided when the tasks are cut, so re-deriving it per backend is how two implementations of
+  // one rule drift apart.
+  //
+  // Covers only the NON-EMPTY tasks. A zero-sized range owes a response but reads nothing, so its
+  // task appears in no chunk and must be completed at enqueue - see chunk_splitter.h.
+  const std::vector<Chunk> chunks;
 
   // range in file
   Range range;

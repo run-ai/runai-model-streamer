@@ -1,12 +1,24 @@
 #include "streamer/impl/streamer/streamer.h"
 
+#include "posix_io/mock/mock_io_engine.h"
+
+#include "posix_io/alignment/alignment.h"
+
 #include <unistd.h>
 
 #include <gtest/gtest.h>
+
+#include <sys/syscall.h>
+#include <sys/sysmacros.h>
+#include <unistd.h>
+
+#include <cstring>
+#include <cstdlib>
 #include <atomic>
 #include <string>
 #include <utility>
 #include <vector>
+#include <map>
 #include <set>
 
 #include "common/exception/exception.h"
@@ -15,6 +27,7 @@
 #include "utils/random/random.h"
 #include "utils/fd/fd.h"
 #include "utils/thread/thread.h"
+#include "utils/temp/env/env.h"
 #include "utils/temp/file/file.h"
 
 namespace runai::llm::streamer::impl
@@ -54,10 +67,49 @@ std::set<unsigned> range_indices(unsigned n)
     return indices;
 }
 
+
+// The kernel directly - not IoUringProbe and not StrategyResolver, both of which are on the path
+// under test here.
+bool ring_works()
+{
+    struct params_stub { char opaque[512]; } params;
+    std::memset(&params, 0, sizeof(params));
+
+    const int fd = ::syscall(425 /* __NR_io_uring_setup */, 8, &params);
+    if (fd < 0)
+    {
+        return false;
+    }
+    ::close(fd);
+    return true;
+}
+
 // short wait used to assert a fresh/empty responder delivers nothing (it times out rather than blocking)
 constexpr unsigned EMPTY_WAIT_MS = 50;
 
 } // namespace
+
+
+// Say that one strategy cannot be served here, and let the probes answer for the rest.
+//
+// Needed because every strategy is available on a normal host: sync_buffered always, libaio nearly
+// always, io_uring wherever seccomp permits. Without this there is no candidate that reliably fails,
+// so a submission that must be refused for want of a reader cannot be built.
+//
+// These tests named `libaio_direct` for that, which held only while libaio had no engine. They broke
+// the day it got one, which is the right way round: a test resting on a feature being MISSING should
+// fail when it arrives.
+Streamer::Environment without(posix_io::Strategy unavailable)
+{
+    Streamer::Environment environment;
+    environment.availability = [unavailable](posix_io::Strategy strategy)
+    {
+        return strategy == unavailable ? common::ResponseCode::FsStrategyUnavailable
+                                       : common::ResponseCode::Success;
+    };
+    return environment;
+}
+
 
 TEST(Creation, Default)
 {
@@ -86,6 +138,425 @@ TEST(Creation, Sanity)
 //
 // A directory is the cheapest real read failure available: open(O_RDONLY) succeeds on it, and the read
 // then fails with EISDIR - no fault injection needed.
+// S6a's whole point: a real submission served by the io_uring engine rather than the synchronous
+// reader, with the same bytes out.
+//
+// The strategy assertion is what makes this test mean anything. Both paths return identical data, so
+// checking only the bytes would pass just as well if the request quietly went to the threadpool.
+TEST(Async, ReadsThroughIoUringWhenResolvedToIt)
+{
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("io_uring_buffered,sync_buffered"));
+
+    const auto data = utils::random::buffer(1 << 20);
+    utils::temp::File file(data);
+
+    const unsigned ranges = 8;
+    const size_t range_size = data.size() / ranges;
+
+    std::vector<char> dst(data.size());
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    for (unsigned i = 0; i < ranges; ++i)
+    {
+        request[0].ranges.push_back(ReadRange{ i * range_size, range_size, dst.data() + i * range_size });
+    }
+
+    Streamer streamer;   // reads RUNAI_STREAMER_FS_STRATEGY through Config
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+
+    std::set<unsigned> seen;
+    for (unsigned i = 0; i < ranges; ++i)
+    {
+        const auto received = recv(streamer);
+        EXPECT_EQ(received.response.ret, common::ResponseCode::Success);
+        EXPECT_EQ(received.response.submission_id, submission_id);
+        seen.insert(received.response.index);
+    }
+    EXPECT_EQ(seen, range_indices(ranges));
+
+    // Which path actually served it. On a host without a ring the list falls through to
+    // sync_buffered, and this test then covers the fallback instead - still a real assertion.
+    const bool expect_async = ring_works();
+
+    EXPECT_EQ(streamer.fs_strategy(),
+              expect_async ? posix_io::Strategy::IoUringBuffered
+                           : posix_io::Strategy::SyncBuffered);
+
+    // What was CHOSEN above; what was USED here. Without this, a dispatch that ignored the resolved
+    // strategy and sent everything to the threadpool would pass every assertion in this test.
+    EXPECT_EQ(streamer.async_pool_used(), expect_async);
+
+    EXPECT_EQ(std::vector<char>(dst.begin(), dst.end()),
+              std::vector<char>(data.begin(), data.end()));
+}
+
+// The record answers "which reader served which file" for a submission that used two of them. That
+// question only exists because a submission can now be split, and nothing else answers it.
+TEST(Async, StatsRecordTheStrategyPerFile)
+{
+    if (!ring_works())
+    {
+        GTEST_SKIP() << "io_uring unavailable, so every file would report the same reader";
+    }
+
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("io_uring_buffered,sync_buffered"));
+
+    const auto data = utils::random::buffer(4096);
+
+    utils::temp::Dir disk_dir;
+    utils::temp::File on_disk(disk_dir.path, utils::random::string(), data);
+    utils::temp::File in_memory("/dev/shm", utils::random::string(), data);
+
+    // One directory is memory backed, so it goes to the synchronous reader whatever the strategy says.
+    const std::string memory_dir = "/dev/shm";
+    Streamer streamer(Config(), Streamer::Environment{
+                      .mount = [memory_dir](const std::string & directory) -> posix_io::MountCapability
+                      {
+                          return posix_io::MountCapability{ makedev(8, 1), directory == memory_dir };
+                      },
+    });
+
+    std::vector<char> dst1(data.size());
+    std::vector<char> dst2(data.size());
+
+    std::vector<FileRanges> request(2);
+    request[0].path = on_disk.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), dst1.data() });
+    request[1].path = in_memory.path;
+    request[1].ranges.push_back(ReadRange{ 0, data.size(), dst2.data() });
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+
+    for (unsigned i = 0; i < 2; ++i)
+    {
+        EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+    }
+
+    SubmissionStats stats;
+    ASSERT_TRUE(streamer.stats().find(submission_id, stats));
+    ASSERT_EQ(stats.files.size(), 2u);
+
+    EXPECT_EQ(stats.files[0].path, on_disk.path);
+    EXPECT_EQ(stats.files[0].strategy, posix_io::Strategy::IoUringBuffered);
+
+    EXPECT_EQ(stats.files[1].path, in_memory.path);
+    EXPECT_EQ(stats.files[1].strategy, posix_io::Strategy::SyncBuffered)
+        << "a memory-backed file must be recorded as read by the synchronous reader";
+}
+
+// A submission that never ran must not appear. Otherwise the record would claim work that never
+// happened.
+TEST(Async, StatsSkipARejectedSubmission)
+{
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("libaio_direct"));
+
+    const auto data = utils::random::buffer(4096);
+    utils::temp::File file(data);
+
+    std::vector<char> dst(data.size());
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), dst.data() });
+
+    Streamer streamer(Config(), without(posix_io::Strategy::LibaioDirect));
+
+    SubmissionId submission_id = 0;
+    ASSERT_NE(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+
+    EXPECT_TRUE(streamer.stats().submissions().empty());
+}
+
+// A submission spanning two mounts: the path from st_dev, through the per-mount group, to a separate
+// engine each. Unreachable on a real host without two filesystems - this container has one non-tmpfs
+// mount and no CAP_SYS_ADMIN to make another - so the mount probe is injected.
+TEST(Async, TwoMountsGetTwoEngines)
+{
+    if (!ring_works())
+    {
+        GTEST_SKIP() << "io_uring unavailable, so nothing reaches the async pools";
+    }
+
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("io_uring_buffered,sync_buffered"));
+    utils::temp::Env engines(std::string("RUNAI_STREAMER_FS_MAX_ENGINES"), 4UL);
+
+    const auto data = utils::random::buffer(1 << 20);
+
+    // Two DIRECTORIES, because the probe answers per directory. Both files in one directory would
+    // share a mount, and this test would pass while proving nothing.
+    utils::temp::Dir dir_one;
+    utils::temp::Dir dir_two;
+    utils::temp::File one(dir_one.path, utils::random::string(), data);
+    utils::temp::File two(dir_two.path, utils::random::string(), data);
+
+    // Both files really live on one filesystem; the probe says otherwise, which is the point.
+    const std::string first = dir_one.path;
+    Streamer streamer(Config(), Streamer::Environment{
+                      .mount = [first](const std::string & directory) -> posix_io::MountCapability
+                      {
+                          return posix_io::MountCapability{ directory == first ? makedev(8, 1) : makedev(8, 2), false };
+                      },
+    });
+
+    std::vector<char> dst1(data.size());
+    std::vector<char> dst2(data.size());
+
+    std::vector<FileRanges> request(2);
+    request[0].path = one.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), dst1.data() });
+    request[1].path = two.path;
+    request[1].ranges.push_back(ReadRange{ 0, data.size(), dst2.data() });
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+
+    for (unsigned i = 0; i < 2; ++i)
+    {
+        EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+    }
+
+    // What makes this test mean anything. Without per-mount engines both files share one.
+    EXPECT_EQ(streamer.async_engines(), 2u);
+
+    EXPECT_EQ(std::vector<char>(dst1.begin(), dst1.end()), std::vector<char>(data.begin(), data.end()));
+    EXPECT_EQ(std::vector<char>(dst2.begin(), dst2.end()), std::vector<char>(data.begin(), data.end()));
+}
+
+// Two directories on the SAME mount share one engine - groups are keyed on st_dev, not on the path.
+TEST(Async, TwoDirectoriesOnOneMountShareAnEngine)
+{
+    if (!ring_works())
+    {
+        GTEST_SKIP() << "io_uring unavailable, so nothing reaches the async pools";
+    }
+
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("io_uring_buffered,sync_buffered"));
+    utils::temp::Env engines(std::string("RUNAI_STREAMER_FS_MAX_ENGINES"), 4UL);
+
+    const auto data = utils::random::buffer(4096);
+
+    utils::temp::Dir dir_one;
+    utils::temp::Dir dir_two;
+    utils::temp::File one(dir_one.path, utils::random::string(), data);
+    utils::temp::File two(dir_two.path, utils::random::string(), data);
+
+    // Different directories, one device.
+    Streamer streamer(Config(), Streamer::Environment{
+                      .mount = [](const std::string &) -> posix_io::MountCapability
+                      {
+                          return posix_io::MountCapability{ makedev(8, 1), false };
+                      },
+    });
+
+    std::vector<char> dst1(data.size());
+    std::vector<char> dst2(data.size());
+
+    std::vector<FileRanges> request(2);
+    request[0].path = one.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), dst1.data() });
+    request[1].path = two.path;
+    request[1].ranges.push_back(ReadRange{ 0, data.size(), dst2.data() });
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+
+    for (unsigned i = 0; i < 2; ++i)
+    {
+        EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+    }
+
+    EXPECT_EQ(streamer.async_engines(), 1u) << "one filesystem must not get two engines";
+}
+
+// The setter is what makes the strategy controllable without an environment variable. It must take
+// effect on the submission that follows it - resolution happens on the first request, not at
+// construction, precisely so a setter has its chance.
+TEST(Async, SetFsStrategyTakesEffect)
+{
+    utils::temp::UnsetEnv strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"));
+
+    const auto data = utils::random::buffer(1 << 20);
+    utils::temp::File file(data);
+
+    std::vector<char> dst(data.size());
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), dst.data() });
+
+    Streamer streamer;   // the environment says nothing, so the default is the synchronous reader
+
+    ASSERT_EQ(streamer.set_fs_strategy("io_uring_buffered,sync_buffered"), common::ResponseCode::Success);
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+    EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+
+    const bool expect_async = ring_works();
+    EXPECT_EQ(streamer.fs_strategy(),
+              expect_async ? posix_io::Strategy::IoUringBuffered
+                           : posix_io::Strategy::SyncBuffered);
+    EXPECT_EQ(streamer.async_pool_used(), expect_async);
+
+    EXPECT_EQ(std::vector<char>(dst.begin(), dst.end()),
+              std::vector<char>(data.begin(), data.end()));
+}
+
+// Set once, like credentials - and rejected after resolution even for a FIRST call, because by then an
+// engine exists for the resolved answer. A setter that reported success and changed nothing would be
+// worse than one that refuses.
+TEST(Async, SetFsStrategyIsRejectedAfterTheFirstRequest)
+{
+    utils::temp::UnsetEnv strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"));
+
+    const auto data = utils::random::buffer(4096);
+    utils::temp::File file(data);
+
+    std::vector<char> dst(data.size());
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), dst.data() });
+
+    Streamer streamer;
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+    EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+
+    // Read what resolved rather than naming it. The default list prefers io_uring and falls back, so
+    // the answer depends on the host - and this test is about the SETTER's rules, not about which
+    // strategy won.
+    const auto resolved = streamer.fs_strategy();
+
+    // Something the resolution cannot have produced, so the rejection is about the rule and not about
+    // a value that happened to differ.
+    const char * different = resolved == posix_io::Strategy::IoUringBuffered ? "sync_buffered"
+                                                                             : "io_uring_buffered";
+
+    // Nothing was ever set, so there is no earlier value to conflict with - only the resolution.
+    EXPECT_NE(streamer.set_fs_strategy(different), common::ResponseCode::Success);
+    EXPECT_EQ(streamer.fs_strategy(), resolved) << "a refused set must not change the strategy";
+
+    // The value already in force is still accepted, since it changes nothing. It is the LIST that was
+    // resolved from, not the single strategy that won: the resolver compares candidate lists, so
+    // passing the winner's name alone would read as a different request and be refused.
+    EXPECT_EQ(streamer.set_fs_strategy(Config::default_fs_strategy_candidates), common::ResponseCode::Success);
+}
+
+// A typo must not become a fallback nobody asked for.
+TEST(Async, SetFsStrategyRejectsAnUnknownName)
+{
+    Streamer streamer;
+    EXPECT_EQ(streamer.set_fs_strategy("io_uring_bufferd"), common::ResponseCode::InvalidParameterError);
+}
+
+// tmpfs is pure memcpy: there is no device to overlap, so depth buys nothing and parallelism does.
+// It goes to the 16-thread pool however the strategy resolved - which is the routing rule that needs
+// the mount probe at all.
+TEST(Async, TmpfsGoesToTheSynchronousPool)
+{
+    if (::system("test \"$(stat -f -c %T /dev/shm)\" = tmpfs") != 0)
+    {
+        GTEST_SKIP() << "/dev/shm is not tmpfs here, so there is no memory-backed mount to route from";
+    }
+
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("io_uring_buffered,sync_buffered"));
+
+    const auto data = utils::random::buffer(1 << 20);
+    utils::temp::File file("/dev/shm", utils::random::string(), data);
+
+    std::vector<char> dst(data.size());
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), dst.data() });
+
+    Streamer streamer;
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+    EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+
+    // The strategy still resolves to io_uring - the mount decides the POOL, not the strategy.
+    if (ring_works())
+    {
+        EXPECT_EQ(streamer.fs_strategy(), posix_io::Strategy::IoUringBuffered);
+    }
+
+    EXPECT_FALSE(streamer.async_pool_used())
+        << "a tmpfs file must not be read through the ring";
+
+    EXPECT_EQ(std::vector<char>(dst.begin(), dst.end()),
+              std::vector<char>(data.begin(), data.end()));
+}
+
+// The default list prefers io_uring_direct, so on a host that can serve it the async path is what a
+// caller gets without asking. Pinned because the default is a performance decision: it should change
+// deliberately, with a measurement, not by someone editing the list for an unrelated reason.
+//
+// Skipped rather than branched where the ring is missing: the fallback entries are covered by
+// StrategyResolver's own tests, and asserting "something else resolved" here would pass for the wrong
+// reason on a host where io_uring is merely broken.
+TEST(Async, DefaultStrategyPrefersIoUringDirect)
+{
+    if (!ring_works())
+    {
+        GTEST_SKIP() << "io_uring unavailable, so the default cannot resolve to it here";
+    }
+
+    utils::temp::UnsetEnv strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"));
+
+    const auto data = utils::random::buffer(4096);
+    utils::temp::File file(data);
+
+    std::vector<char> dst(data.size());
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), dst.data() });
+
+    Streamer streamer;
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+    EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+
+    EXPECT_EQ(streamer.fs_strategy(), posix_io::Strategy::IoUringDirect);
+    EXPECT_TRUE(streamer.async_pool_used()) << "the default resolves to an async strategy, so the pool must be built";
+}
+
+// An unservable list is an error, not a quiet fall-through to the synchronous reader - and it must
+// fail the REQUEST, since that is the only place the caller can see it.
+TEST(Async, UnservableStrategyFailsTheRequest)
+{
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("libaio_direct"));
+
+    const auto data = utils::random::buffer(4096);
+    utils::temp::File file(data);
+
+    std::vector<char> dst(data.size());
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), dst.data() });
+
+    Streamer streamer(Config(), without(posix_io::Strategy::LibaioDirect));
+
+    SubmissionId submission_id = 123;   // must be cleared, so a stale id cannot be mistaken for a real one
+
+    // NOT merely "!= Success". Ignoring the resolution failure also produces a non-Success code -
+    // dispatch asserts on the unresolved strategy and the catch block reports UnknownError - but that
+    // happens AFTER the submission is registered and its responses counted, and UnknownError tells
+    // the caller to abort everything rather than just this request. The specific code is what
+    // separates a clean refusal from a late collapse.
+    EXPECT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::FsStrategyUnavailable);
+
+    // Nothing was committed: no id was minted, so the caller owes nothing and nothing owes it.
+    EXPECT_EQ(submission_id, 0u);
+
+    // And no response is waiting - a submission that was never accepted must not have produced one.
+    bool done = false;
+    EXPECT_EQ(streamer.response(EMPTY_WAIT_MS, done).ret, common::ResponseCode::TimedOut);
+}
+
 TEST(Async, ReadFailureIsAttributableNotUnknown)
 {
     utils::temp::Dir dir;
@@ -880,6 +1351,417 @@ TEST(Async, Scattered_Ranges_And_Destinations)
                 << "range " << i << " (offset " << offset << " size " << length << ") differs at byte " << j;
         }
         EXPECT_EQ(dsts[i][length], 0xAB) << "range " << i << " wrote past the end of its destination";
+    }
+}
+
+// libaio has no asynchronous buffered mode, so a file it cannot read directly has to reach the
+// synchronous reader BEFORE dispatch - once a workload is on the async pool the worker cannot hand it
+// back. Congruence is the first of the two reasons.
+//
+// The destination here is deliberately one byte out of step with the file offset. Aligning the buffer
+// is not enough: a direct read puts file byte F+k at address B+k, so it needs (B - F) % block == 0.
+// Without that NO part of the region can be read directly.
+TEST(Async, LibaioSkipsAFileItCannotReadDirectly)
+{
+    const auto data = utils::random::buffer(8192);
+    utils::temp::File file(data);
+
+    // Over-allocated so the destination can be moved off a block boundary on purpose.
+    std::vector<char> dst(data.size() + posix_io::DirectBlockSize);
+    char * misaligned = dst.data() + 1;
+    ASSERT_NE((reinterpret_cast<uintptr_t>(misaligned)) % posix_io::DirectBlockSize, 0u);
+
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), misaligned });
+
+    Streamer::Environment environment;
+    environment.availability = [](posix_io::Strategy) { return common::ResponseCode::Success; };
+    environment.direct = [](dev_t, const std::string &) { return posix_io::DirectSupport::Yes; };
+
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("libaio_direct"));
+    Streamer streamer(Config(), std::move(environment));
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+    EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+
+    EXPECT_FALSE(streamer.async_pool_used())
+        << "a file libaio cannot read directly must not reach the async pool at all";
+
+    SubmissionStats stats;
+    ASSERT_TRUE(streamer.stats().find(submission_id, stats));
+    ASSERT_EQ(stats.files.size(), 1u);
+    EXPECT_EQ(stats.files[0].strategy, posix_io::Strategy::SyncBuffered);
+
+    // And the bytes are still right - routing away is a performance decision, never a correctness one.
+    EXPECT_EQ(std::vector<uint8_t>(misaligned, misaligned + data.size()), data);
+}
+
+// The second reason: the mount cannot serve O_DIRECT at all. Congruence holds here, so this isolates
+// the mount from the placement.
+TEST(Async, LibaioSkipsAMountWithoutODirect)
+{
+    const auto data = utils::random::buffer(8192);
+    utils::temp::File file(data);
+
+    std::vector<char> dst(data.size() + posix_io::DirectBlockSize);
+    char * congruent = dst.data() + ((-reinterpret_cast<uintptr_t>(dst.data()))
+                                     % posix_io::DirectBlockSize);
+    ASSERT_TRUE(posix_io::is_congruent(0, congruent, posix_io::DirectBlockSize));
+
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), congruent });
+
+    Streamer::Environment environment;
+    environment.availability = [](posix_io::Strategy) { return common::ResponseCode::Success; };
+    environment.direct = [](dev_t, const std::string &) { return posix_io::DirectSupport::No; };
+
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("libaio_direct"));
+    Streamer streamer(Config(), std::move(environment));
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+    EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+
+    EXPECT_FALSE(streamer.async_pool_used())
+        << "libaio without O_DIRECT reads one file at a time, which is worse than the 16-thread pool";
+
+    EXPECT_EQ(std::vector<uint8_t>(congruent, congruent + data.size()), data);
+}
+
+// A congruent file on a mount that serves O_DIRECT is the case libaio exists for, so it must reach
+// the async pool. Without this the two tests above would pass with routing that always said no.
+TEST(Async, LibaioTakesAFileItCanReadDirectly)
+{
+    const auto data = utils::random::buffer(8192);
+    utils::temp::File file(data);
+
+    std::vector<char> dst(data.size() + posix_io::DirectBlockSize);
+    char * congruent = dst.data() + ((-reinterpret_cast<uintptr_t>(dst.data()))
+                                     % posix_io::DirectBlockSize);
+
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), congruent });
+
+    Streamer::Environment environment;
+    environment.availability = [](posix_io::Strategy) { return common::ResponseCode::Success; };
+    environment.direct = [](dev_t, const std::string &) { return posix_io::DirectSupport::Yes; };
+
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("libaio_direct"));
+    Streamer streamer(Config(), std::move(environment));
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+    EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+
+    EXPECT_TRUE(streamer.async_pool_used());
+
+    SubmissionStats stats;
+    ASSERT_TRUE(streamer.stats().find(submission_id, stats));
+    ASSERT_EQ(stats.files.size(), 1u);
+    EXPECT_EQ(stats.files[0].strategy, posix_io::Strategy::LibaioDirect);
+
+    EXPECT_EQ(std::vector<uint8_t>(congruent, congruent + data.size()), data);
+}
+
+// io_uring keeps a file it cannot read directly, because a buffered read on the ring is STILL
+// asynchronous - the worker just opens that one file without O_DIRECT. Only libaio has to route away.
+//
+// Without this test the routing could reject non-congruent files for every strategy and nothing would
+// notice, which would quietly send io_uring work to the 16-thread pool.
+TEST(Async, IoUringKeepsAFileItCannotReadDirectly)
+{
+    if (!ring_works())
+    {
+        GTEST_SKIP() << "io_uring is unavailable here";
+    }
+
+    const auto data = utils::random::buffer(8192);
+    utils::temp::File file(data);
+
+    std::vector<char> dst(data.size() + posix_io::DirectBlockSize);
+    char * misaligned = dst.data() + 1;
+
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), misaligned });
+
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("io_uring_direct"));
+    Streamer streamer;
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+    EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+
+    EXPECT_TRUE(streamer.async_pool_used())
+        << "io_uring falls back to a buffered read on the same ring, so the file stays on the engine";
+
+    EXPECT_EQ(std::vector<uint8_t>(misaligned, misaligned + data.size()), data);
+}
+
+// THE ASSERTION S8b EXISTS FOR: reading into destinations the streamer placed congruently must copy
+// NOTHING.
+//
+// A direct read puts file byte F+k at address B+k, so if (B - F) is a multiple of the block, every
+// block boundary in the file lines up with one in memory and no edge needs a scratch buffer. When it
+// does not line up, every byte is copied through scratch instead - which costs throughput and reports
+// no error anywhere. A number, not a log line, is the only way to see it.
+//
+// This could not be written before. The worker tests drive chunks directly, so they check the
+// bouncing logic rather than the placement; only here do a real request, real routing and a real
+// engine meet.
+TEST(Async, CongruentDestinationsBounceNothing)
+{
+    if (!ring_works())
+    {
+        GTEST_SKIP() << "io_uring is unavailable here";
+    }
+
+    const size_t block = posix_io::DirectBlockSize;
+    const auto data = utils::random::buffer(block * 16);
+    utils::temp::File file(data);
+
+    // Congruent with file offset 0: the destination itself lands on a block boundary.
+    std::vector<char> dst(data.size() + block);
+    char * congruent = dst.data() + ((-reinterpret_cast<uintptr_t>(dst.data())) % block);
+    ASSERT_TRUE(posix_io::is_congruent(0, congruent, block));
+
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), congruent });
+
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("io_uring_direct"));
+    Streamer streamer;
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+    EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+
+    const auto counters = streamer.async_counters();
+    EXPECT_EQ(counters.bytes_read, data.size());
+    EXPECT_EQ(counters.bounced_bytes, 0u)
+        << "a congruent destination has no partial edge, so nothing should go through scratch";
+
+    EXPECT_EQ(std::vector<uint8_t>(congruent, congruent + data.size()), data);
+}
+
+// The other side of the same assertion, so a zero above cannot come from bouncing being broken or
+// never reached. A destination one byte out of step has no aligned part at all, so the worker reads
+// the file BUFFERED - and a buffered read never bounces either.
+//
+// So what this pins is the routing, not the copying: the bytes still arrive, and they arrive without
+// scratch, because the worker chose the reader that does not need it.
+TEST(Async, ANonCongruentDestinationIsReadBufferedRatherThanBounced)
+{
+    if (!ring_works())
+    {
+        GTEST_SKIP() << "io_uring is unavailable here";
+    }
+
+    const size_t block = posix_io::DirectBlockSize;
+    const auto data = utils::random::buffer(block * 4);
+    utils::temp::File file(data);
+
+    std::vector<char> dst(data.size() + block);
+    char * misaligned = dst.data() + 1;
+    ASSERT_FALSE(posix_io::is_congruent(0, misaligned, block));
+
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), misaligned });
+
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("io_uring_direct"));
+    Streamer streamer;
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+    EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+
+    const auto counters = streamer.async_counters();
+    EXPECT_EQ(counters.bytes_read, data.size());
+    EXPECT_EQ(counters.bounced_bytes, 0u)
+        << "no part of this region can be read directly, so the worker reads it buffered instead of"
+           " copying every byte through scratch";
+
+    EXPECT_EQ(std::vector<uint8_t>(misaligned, misaligned + data.size()), data);
+}
+
+// The counters are summed over every worker and reach zero when nothing async ran, so a caller cannot
+// mistake "no async work" for "async work that copied nothing".
+TEST(Async, CountersAreZeroWithoutAnAsyncWorkload)
+{
+    const auto data = utils::random::buffer(4096);
+    utils::temp::File file(data);
+
+    std::vector<char> dst(data.size());
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), dst.data() });
+
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("sync_buffered"));
+    Streamer streamer;
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+    EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+
+    const auto counters = streamer.async_counters();
+    EXPECT_EQ(counters.bytes_read, 0u) << "the synchronous reader served this, so no worker counted it";
+    EXPECT_EQ(counters.bounced_bytes, 0u);
+    EXPECT_EQ(counters.achieved_depth, 0u);
+}
+
+// Achieved depth is a high-water mark, so it must survive the reads finishing - by the time anyone
+// asks, the live in-flight count is back to zero.
+TEST(Async, AchievedDepthOutlivesTheReads)
+{
+    if (!ring_works())
+    {
+        GTEST_SKIP() << "io_uring is unavailable here";
+    }
+
+    const auto data = utils::random::buffer(4 * 1024 * 1024);
+    utils::temp::File file(data);
+
+    std::vector<char> dst(data.size());
+    std::vector<FileRanges> request(1);
+    request[0].path = file.path;
+    request[0].ranges.push_back(ReadRange{ 0, data.size(), dst.data() });
+
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("io_uring_buffered"));
+    Streamer streamer;
+
+    SubmissionId submission_id = 0;
+    ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+    EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+
+    const auto counters = streamer.async_counters();
+    EXPECT_GE(counters.achieved_depth, 1u) << "at least one read was outstanding at some point";
+    EXPECT_EQ(counters.bytes_read, data.size());
+}
+
+// direct_block_for answers from the INJECTED probe when a test set one.
+//
+// Every measurement site has to honour the same seam. This one did not, so a test could answer for
+// file_groups and reads_directly and still get the build machine's real block back from this API -
+// a number that changes with the filesystem the tests happen to run on.
+//
+// The two mounts answer differently on purpose. A request spanning both must report the LARGER, since
+// congruence at a power of two implies congruence at every smaller one, so one number satisfies both.
+TEST(Streamer, Direct_Block_For_Uses_The_Injected_Probe)
+{
+    const auto data = utils::random::buffer(100);
+
+    // Two directories, because the probe answers per directory - two files in one would share a mount
+    // and the larger-of-the-two check would prove nothing.
+    utils::temp::Dir dir_one;
+    utils::temp::Dir dir_two;
+    utils::temp::File one(dir_one.path, utils::random::string(), data);
+    utils::temp::File two(dir_two.path, utils::random::string(), data);
+
+    const std::string first = dir_one.path;
+    const dev_t device_one = makedev(8, 1);
+    const dev_t device_two = makedev(8, 2);
+
+    // Values no real mount would report, so a number that leaked in from the machine is obvious.
+    constexpr size_t BlockOne = 8192;
+    constexpr size_t BlockTwo = 32768;
+
+    Streamer streamer(Config(), Streamer::Environment{
+                      .mount = [first, device_one, device_two](const std::string & directory) -> posix_io::MountCapability
+                      {
+                          return posix_io::MountCapability{ directory == first ? device_one : device_two, false };
+                      },
+                      .direct = {},
+                      .direct_block = [device_one, BlockOne, BlockTwo](dev_t device, const std::string &) -> size_t
+                      {
+                          return device == device_one ? BlockOne : BlockTwo;
+                      },
+    });
+
+    size_t block = 0;
+    EXPECT_EQ(streamer.direct_block_for({ one.path }, block), common::ResponseCode::Success);
+    EXPECT_EQ(block, BlockOne);
+
+    EXPECT_EQ(streamer.direct_block_for({ two.path }, block), common::ResponseCode::Success);
+    EXPECT_EQ(block, BlockTwo);
+
+    EXPECT_EQ(streamer.direct_block_for({ one.path, two.path }, block), common::ResponseCode::Success);
+    EXPECT_EQ(block, BlockTwo) << "a request spanning both mounts must be laid out at the larger";
+}
+
+// A mount whose engine dies is read by the SYNCHRONOUS reader from then on, and the bytes are right.
+//
+// This is the end of the chain the pieces below only cover separately: the worker marks its engine
+// dead, tells the streamer which mount it served, and file_groups stops routing that mount to it.
+// Each link was where the bugs in this area lived, so the test drives all three.
+//
+// The engine is injected because a real one fails only when its ring or context is gone, which a test
+// cannot arrange - and what follows the failure is the part worth pinning.
+TEST(Async, ADeadEngineDropsItsMountToTheSynchronousReader)
+{
+    const auto data = utils::random::buffer(8192);
+    utils::temp::File first(data);
+    utils::temp::File second(data);
+
+    Streamer::Environment environment;
+    environment.availability = [](posix_io::Strategy) { return common::ResponseCode::Success; };
+    environment.direct = [](dev_t, const std::string &) { return posix_io::DirectSupport::No; };
+
+    // Every engine this streamer builds refuses to issue anything - the ring is gone before the first
+    // read goes out.
+    environment.engine = [](posix_io::Strategy, const posix_io::AsyncIoConfig & config)
+        -> std::unique_ptr<posix_io::IoEngine>
+    {
+        posix_io::Limits limits;
+        limits.max_read_bytesize = posix_io::max_read_bytesize();
+        limits.offset_alignment = posix_io::DirectBlockSize;
+        limits.buffer_alignment = posix_io::DirectBlockSize;
+
+        auto engine = std::make_unique<posix_io::MockIoEngine>(config.depth, limits);
+        engine->set_flush_result(common::ResponseCode::FsAsyncEngineError);
+        return engine;
+    };
+
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("io_uring_buffered"));
+    Streamer streamer(Config(), std::move(environment));
+
+    // First submission: it reaches the dead engine and fails with the engine's own code - not
+    // UnknownError, which would tell the caller to abort everything over one broken ring.
+    {
+        std::vector<char> dst(data.size());
+        std::vector<FileRanges> request(1);
+        request[0].path = first.path;
+        request[0].ranges.push_back(ReadRange{ 0, data.size(), dst.data() });
+
+        SubmissionId submission_id = 0;
+        ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+        EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::FsAsyncEngineError);
+    }
+
+    // Second submission on the same mount: no longer routed to the async pool at all, and it reads.
+    {
+        std::vector<char> dst(data.size());
+        std::vector<FileRanges> request(1);
+        request[0].path = second.path;
+        request[0].ranges.push_back(ReadRange{ 0, data.size(), dst.data() });
+
+        SubmissionId submission_id = 0;
+        ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+        EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success)
+            << "the storage is healthy - only the ring was lost, so this must still read";
+
+        SubmissionStats stats;
+        ASSERT_TRUE(streamer.stats().find(submission_id, stats));
+        ASSERT_EQ(stats.files.size(), 1u);
+        EXPECT_EQ(stats.files[0].strategy, posix_io::Strategy::SyncBuffered)
+            << "the mount must have dropped to the synchronous reader";
+
+        EXPECT_EQ(std::vector<uint8_t>(dst.begin(), dst.end()), data)
+            << "a demotion is a performance decision, never a correctness one";
     }
 }
 

@@ -142,11 +142,46 @@ TEST(Getenv_Unsigned_long, Sanity)
     EXPECT_EQ(getenv<unsigned long>(env.name, random::number<unsigned long>()), value);
 }
 
+// A negative value is refused, not wrapped.
+//
+// This test used to assert the opposite - that "-1" gives ULONG_MAX - which is what std::stoul does
+// and what the code did. It reads as a deliberate huge number all the way down: nothing after the
+// parse can tell the two apart, because stoul also reports the whole string consumed.
+//
+// The damage is at the callers. RUNAI_STREAMER_CONCURRENCY=-1 narrows to UINT_MAX at Config and asks
+// for four billion threads. RUNAI_STREAMER_PROCESS_GROUP_SIZE=-1 is a divisor, so Azure concurrency
+// falls to one and the async queue depth falls to its minimum - slow, with no error anywhere.
+//
+// So it throws, exactly as "a" does, and runai_start turns that into InvalidParameterError.
 TEST(Getenv_Unsigned_long, Negative)
+{
+    for (const auto text : { "-1", "-4", " -1" })
+    {
+        temp::Env env(text);
+
+        EXPECT_THROW(getenv<unsigned long>(env.name), std::exception) << text;
+        EXPECT_THROW(getenv<unsigned long>(env.name, random::number()), std::exception) << text;
+
+        unsigned long value = 0;
+        EXPECT_THROW(try_getenv<unsigned long>(env.name, /* out */ value), std::exception) << text;
+    }
+}
+
+// A negative value must not survive as a huge count either - the cap in getenv_positive would turn
+// ULONG_MAX into the maximum of T, which is as wrong as the value it came from.
+TEST(Getenv_Positive, Negative)
 {
     temp::Env env("-1");
 
-    EXPECT_EQ(getenv<unsigned long>(env.name), ULONG_MAX);
+    EXPECT_THROW(getenv_positive<unsigned>(env.name, 8U), std::exception);
+}
+
+// A plus sign is a sign, not a minus. It must still parse.
+TEST(Getenv_Unsigned_long, Explicitly_Positive)
+{
+    temp::Env env("+8");
+
+    EXPECT_EQ(getenv<unsigned long>(env.name), 8UL);
 }
 
 TEST(Getenv_Unsigned_long, NotUnsignedLong)
@@ -199,6 +234,50 @@ TEST(Getenv_Bool, NotBool)
     {
         EXPECT_THROW(getenv<bool>(env.name, def), std::exception);
     }
+}
+
+// A value too large for T must not wrap to ZERO, which is the one answer callers cannot use.
+//
+// Every caller of this used to floor its own value with std::max(1UL, ...) BEFORE storing it in an
+// `unsigned`, and that floor does not survive the narrowing: any non-zero multiple of 2^32 truncates
+// to 0. Zero was an integer division by zero in AsyncIoSettings and in the Azure client
+// configuration, and a fatal ASSERT in BackendPools.
+TEST(getenv_positive, Oversized_Values_Are_Capped_Not_Wrapped)
+{
+    const std::string name = "RUNAI_STREAMER_TEST_" + random::string();
+
+    // 2^32 exactly, the smallest value that truncates to zero rather than to something merely wrong.
+    {
+        temp::Env env(name, 4294967296UL);
+        EXPECT_EQ(getenv_positive<unsigned>(name, 1U), std::numeric_limits<unsigned>::max());
+    }
+
+    // And a multiple of it, so the test is not passing on one special case.
+    {
+        temp::Env env(name, 8589934592UL);
+        EXPECT_EQ(getenv_positive<unsigned>(name, 1U), std::numeric_limits<unsigned>::max());
+    }
+}
+
+// The floor still applies, and it applies AFTER the cap.
+TEST(getenv_positive, Zero_And_Unset_Take_The_Minimum)
+{
+    const std::string name = "RUNAI_STREAMER_TEST_" + random::string();
+
+    EXPECT_EQ(getenv_positive<unsigned>(name, 8U), 8U) << "unset must give the default";
+
+    temp::Env env(name, 0UL);
+    EXPECT_EQ(getenv_positive<unsigned>(name, 8U), 1U) << "zero must be floored, not passed through";
+    EXPECT_EQ(getenv_positive<unsigned>(name, 8U, 4U), 4U) << "an explicit minimum must win";
+}
+
+// An ordinary value passes through untouched - the guard must not change the normal case.
+TEST(getenv_positive, Ordinary_Values_Are_Unchanged)
+{
+    const std::string name = "RUNAI_STREAMER_TEST_" + random::string();
+
+    temp::Env env(name, 512UL);
+    EXPECT_EQ(getenv_positive<unsigned>(name, 1U), 512U);
 }
 
 } // namespace runai::llm::streamer::utils

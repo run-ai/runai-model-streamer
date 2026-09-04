@@ -45,7 +45,7 @@ std::size_t ObjectStorageWorker::capacity(const Workload & first)
 
         // Request one completion at a time by default for prompt, per-completion window refill;
         // RUNAI_STREAMER_INTERNAL_MAX_RESPONSES can raise it (internal tuning / test knob).
-        _max_responses = static_cast<unsigned>(std::max(1UL, utils::getenv<unsigned long>("RUNAI_STREAMER_INTERNAL_MAX_RESPONSES", 1UL)));
+        _max_responses = utils::getenv_positive<unsigned>("RUNAI_STREAMER_INTERNAL_MAX_RESPONSES", 1U);
 
         try
         {
@@ -104,17 +104,16 @@ void ObjectStorageWorker::discard(Workload && workload)
 
 void ObjectStorageWorker::enqueue(Workload && workload)
 {
-    // Count chunks up front so we can reserve one contiguous block of handles and size chunk_task_idx.
+    // Count chunks up front so we can reserve one contiguous block of handles and size chunk_tasks.
+    //
+    // The chunks are the batch's own (Batch::chunks), built where the tasks were cut and at the same
+    // size, so this worker never re-derives the grouping. That is also what gives object storage
+    // request PACKING: several small tensors falling inside one chunk become ONE ranged read, where
+    // previously each task was chunked on its own and a small tensor meant a small request.
     size_t total_chunks = 0;
     for (const auto & batch : workload.batches())
     {
-        for (const auto & task : batch.tasks)
-        {
-            if (task.info.bytesize != 0)
-            {
-                total_chunks += (task.info.bytesize + _chunk_bytesize - 1) / _chunk_bytesize;   // ceil
-            }
-        }
+        total_chunks += batch.chunks.size();
     }
 
     // A workload with no chunks (only zero-size tasks) is reported inline and never entered into _inflight:
@@ -143,7 +142,7 @@ void ObjectStorageWorker::enqueue(Workload && workload)
     const auto handle_base = _async_handle_counter;
     _async_handle_counter += total_chunks;
 
-    // Registration and chunk-building allocate (the map node, chunk_task_idx, the tasks vector, the queue
+    // Registration and chunk-building allocate (the map node, chunk_tasks, the tasks vector, the queue
     // entries); under memory pressure any of these can throw. The workload's expected responses were already
     // counted (responder increment + submissions add) before dispatch, so bailing out here without pushing
     // them hangs the consumer forever. On a throw we finalize the workload as UnknownError instead - best
@@ -163,38 +162,39 @@ void ObjectStorageWorker::enqueue(Workload && workload)
         // added to a dispatched workload - so the batches vector is never grown or moved again.
         for (auto & batch : wl.workload.batches())
         {
+            // Task indices are per batch, so shift them into this workload's flat task vector. Every
+            // task gets an entry, including zero-size ones, so a chunk's span indexes straight in.
+            const size_t task_base = wl.tasks.size();
             for (const auto & task : batch.tasks)
             {
+                wl.tasks.push_back(TaskState{ &batch, &task, common::ResponseCode::Success });
+
                 if (task.info.bytesize == 0)
                 {
-                    // zero-size task: no backend read, complete immediately (handle_response ignores the handle)
+                    // Zero-size tasks appear in no chunk (chunk_splitter.h), so nothing will ever
+                    // complete for them - but they still owe a response each. Finish them here.
                     common::backend_api::Response resp(common::ResponseCode::Success);
                     batch.handle_response(resp, &task);
-                    continue;
                 }
+            }
 
-                const size_t task_idx = wl.tasks.size();
-                wl.tasks.push_back(TaskState{ &batch, &task, 0, common::ResponseCode::Success });
+            for (const auto & chunk : batch.chunks)
+            {
+                // One queue entry costs 1 and the window is sized in chunks, so an over-long chunk
+                // would be worth more bytes than the window assumes. Batches cuts at the same size
+                // this worker reports, but nothing enforces that the two agree.
+                ASSERT(chunk.bytesize <= _chunk_bytesize)
+                    << "chunk of " << chunk.bytesize << " bytes exceeds " << _chunk_bytesize
+                    << " - the task cut and the chunk size have diverged";
 
-                size_t offset = task.info.offset;
-                size_t remaining = task.info.bytesize;
-                char * buffer = task.destination();
-                while (remaining > 0)
-                {
-                    const size_t bs = std::min(remaining, _chunk_bytesize);   // last chunk is the remainder
-                    ObjectChunk chunk{ handle_base + next_chunk, offset, bs, buffer };
-                    wl.chunks[next_chunk] = ChunkState{ chunk, task_idx };
-                    _queue->enqueue(chunk, 1);   // cost 1
-                    ++wl.tasks[task_idx].remaining_chunks;
-                    ++next_chunk;
-                    offset += bs;
-                    buffer += bs;
-                    remaining -= bs;
-                }
+                const ObjectChunk object_chunk{ handle_base + next_chunk, chunk.offset, chunk.bytesize, chunk.buffer };
+                wl.chunks[next_chunk] = ChunkState{ object_chunk, task_base + chunk.first_task, chunk.task_count, {} };
+                _queue->enqueue(object_chunk, 1);   // cost 1
+                ++next_chunk;
             }
         }
 
-        wl.remaining_tasks = wl.tasks.size();   // total_chunks > 0 -> at least one non-zero-size task
+        wl.remaining_chunks = total_chunks;
     }
     catch (...)
     {
@@ -230,16 +230,15 @@ void ObjectStorageWorker::submit(const ObjectChunk & chunk)
     ASSERT(wlit != _inflight.end()) << "submitting a chunk with unknown handle " << chunk.handle;
 
     ChunkState & cs = wlit->second.chunks[chunk_idx];
-    const size_t task_idx = cs.task_idx;
-    TaskState & ts = wlit->second.tasks[task_idx];
+    ASSERT(cs.count > 0) << "chunk " << chunk.handle << " covers no tasks";
 
-    // the owning task has already failed a chunk: don't waste a backend read on a doomed task; account for
-    // this chunk now. Chunks already issued before the failure still land and complete via drain_batch.
-    if (ts.error != common::ResponseCode::Success)
-    {
-        complete_chunk(wlit, chunk_idx, ts.error);
-        return;
-    }
+    // Every task in the span shares this one read, and a task belongs to exactly one chunk - so none
+    // of them can already have failed when this runs. Master's "the owning task already failed, skip
+    // the read" short-circuit existed because a task was split across several chunks and an early
+    // failure could doom the rest; with one chunk per span there are no siblings to short-circuit.
+    TaskState & first = wlit->second.tasks[cs.first];
+    ASSERT(first.error == common::ResponseCode::Success)
+        << "task already failed before its only chunk was submitted";
 
     // ObjectStorageRetry starts the deadline here, so queueing before the first backend attempt does not
     // consume the chunk's retry budget. A delayed retry promoted after its deadline is rejected here.
@@ -254,11 +253,11 @@ void ObjectStorageWorker::submit(const ObjectChunk & chunk)
     try
     {
         const common::Range range(chunk.offset, chunk.bytesize);
-        _reader->async_read(ts.batch->object_storage_params, chunk.handle, range, chunk.buffer);
+        _reader->async_read(first.batch->object_storage_params, chunk.handle, range, chunk.buffer);
     }
     catch (const common::Exception & e)
     {
-        // the read could not be issued: fail this chunk (marks the task, short-circuits its siblings)
+        // the read could not be issued: fail every task this chunk carried
         complete_chunk(wlit, chunk_idx, e.error());
     }
     catch (...)
@@ -272,35 +271,40 @@ void ObjectStorageWorker::complete_chunk(InflightMap::iterator wlit, size_t chun
     _queue->complete(1);   // free the window slot so the next chunk can be submitted
 
     Inflight & wl = wlit->second;
-    const size_t task_idx = wl.chunks[chunk_idx].task_idx;
-    TaskState & ts = wl.tasks[task_idx];
+    const auto & span = wl.chunks[chunk_idx];
 
-    ASSERT(ts.remaining_chunks > 0) << "chunk completion for a task with no remaining chunks";
-
-    if (ret != common::ResponseCode::Success && ts.error == common::ResponseCode::Success)
+    // One read carried all of these, so they share its outcome.
+    for (unsigned i = 0; i < span.count; ++i)
     {
-        ts.error = ret;   // first failing chunk wins for this task
-    }
+        TaskState & ts = wl.tasks[span.first + i];
 
-    if (--ts.remaining_chunks == 0)
-    {
-        // once every chunk of the task has completed, report its aggregate result: success goes through
-        // handle_response; a failure is recorded per file and the task is left for report_workload to fail
-        // (handle_response throws on non-success)
-        if (ts.error == common::ResponseCode::Success)
+        // Zero-sized tasks were answered at enqueue and read nothing. They can fall inside a span,
+        // and answering one again would be harmless - finished_request is idempotent - but skipping
+        // says so rather than relying on it.
+        if (ts.task->info.bytesize == 0)
+        {
+            continue;
+        }
+
+        ts.error = ret;
+
+        if (ret == common::ResponseCode::Success)
         {
             common::backend_api::Response resp(common::ResponseCode::Success);
             ts.batch->handle_response(resp, ts.task);
         }
         else
         {
-            wl.error_by_file_index.emplace(ts.batch->file_index, ts.error);   // first error per file
+            wl.error_by_file_index.emplace(ts.batch->file_index, ret);   // first error per file
         }
+    }
 
-        if (--wl.remaining_tasks == 0)
-        {
-            finalize(wlit, common::ResponseCode::Success);
-        }
+    // Once per chunk, after its tasks are answered - so this is independent of which tasks the span
+    // happened to contain. wl is gone after finalize, so nothing may touch it below.
+    ASSERT(wl.remaining_chunks > 0) << "completing a chunk of a workload with none outstanding";
+    if (--wl.remaining_chunks == 0)
+    {
+        finalize(wlit, common::ResponseCode::Success);
     }
 }
 
@@ -461,10 +465,16 @@ void ObjectStorageWorker::drain_batch(std::atomic<bool> & stopped)
         if (ret == common::ResponseCode::RetryableFileAccessError)
         {
             ChunkState & cs = wlit->second.chunks[chunk_idx];
-            TaskState & ts = wlit->second.tasks[cs.task_idx];
-            const auto retry = ts.error == common::ResponseCode::Success
-                ? _retry.schedule(cs.retry, cs.chunk.handle)
-                : std::nullopt;
+
+            // No sibling guard here. Master also asked whether the owning task had already failed,
+            // because a task was split across several chunks and one failure doomed the rest -
+            // retrying such a chunk would be wasted work. Our cut gives a task exactly one chunk, so
+            // no other chunk can have failed its tasks first, and there is nothing to guard against.
+            //
+            // Worth knowing when reading a failure: a chunk here covers a WHOLE SPAN of tasks, so an
+            // exhausted budget fails all of them together. The retry matters more than it did, not
+            // less.
+            const auto retry = _retry.schedule(cs.retry, cs.chunk.handle);
             if (retry.has_value())
             {
                 // The failed attempt is no longer in flight; the logical chunk remains pending in _retry.

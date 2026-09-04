@@ -4,6 +4,7 @@
         runai_mock_s3_set_response_time_ms;
         runai_mock_s3_set_inflight_window;
         runai_mock_s3_max_concurrent;
+        runai_mock_s3_requests;
         runai_mock_s3_set_failing_path;
         runai_mock_s3_set_read_failures;
         runai_mock_s3_total_read_requests;

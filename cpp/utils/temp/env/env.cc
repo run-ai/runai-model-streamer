@@ -20,11 +20,22 @@ Env::Env(const std::string & name, char const * const value) :
     name(name),
     value(value)
 {
+    // What was there before, so the destructor puts it back instead of removing it.
+    if (const char * existing = ::getenv(name.c_str()))
+    {
+        previous_value = existing;
+        had_value = true;
+    }
+
     // We are sleeping for 10ms here in order to avoid a getenv/setenv race that occurs
     // sometimes upon launching a thread (calling getenv()) and using this method to
     // set an environment variable in our UT.
     std::this_thread::sleep_for(PRE_SETENV_DELAY);
-    PASSERT(::setenv(name.c_str(), value, 0 /* no overwrite */) != -1) << "Failed setting environment variable '" << name << "' to \"" << value << "\"";
+
+    // OVERWRITE. Without it a variable already in the environment wins, and the test then runs under
+    // a value it did not choose while its assertions describe the value it asked for. setenv returns
+    // success when it declines to overwrite, so that failure is completely silent.
+    PASSERT(::setenv(name.c_str(), value, 1 /* overwrite */) != -1) << "Failed setting environment variable '" << name << "' to \"" << value << "\"";
 }
 
 Env::Env(const std::string & name, const std::string & value) :
@@ -49,7 +60,21 @@ Env::Env(const std::string & name, float value) :
 
 Env::~Env()
 {
-    if (!name.empty() && ::unsetenv(name.c_str()) == -1)
+    if (name.empty())
+    {
+        return;
+    }
+
+    // Put back what was there, rather than removing it. Removing would delete a value this object
+    // never set - which matters when tests run in one process and a later test reads the variable.
+    if (had_value)
+    {
+        if (::setenv(name.c_str(), previous_value.c_str(), 1 /* overwrite */) == -1)
+        {
+            LOG(ERROR) << "Failed restoring environment variable '" << name << "'";
+        }
+    }
+    else if (::unsetenv(name.c_str()) == -1)
     {
         LOG(ERROR) << "Failed unsetting environment variable '" << name << "'";
     }

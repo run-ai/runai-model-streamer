@@ -293,6 +293,46 @@ TEST_F(StreamerTest, Credentials_Reach_Plugin)
     EXPECT_EQ(verify_mock(), 0);
 }
 
+// An unservable FILESYSTEM strategy must not reject an OBJECT-STORAGE read.
+//
+// The strategy names a filesystem engine and has nothing to say about S3, but resolution used to run
+// on every submission - so setting RUNAI_STREAMER_FS_STRATEGY to something this host cannot serve
+// failed every object-storage request, for a reason that cannot apply to it.
+TEST_F(StreamerTest, Object_Storage_Ignores_The_Filesystem_Strategy)
+{
+    // libaio_direct has no engine, so this list can never resolve. A filesystem submission would be
+    // rejected by it; an object-storage one must not even consult it.
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("libaio_direct"));
+
+    utils::Dylib dylib("libstreamers3.so");
+    auto mock_cleanup = dylib.dlsym<void(*)()>("runai_mock_s3_cleanup");
+
+    void * streamer;
+    ASSERT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
+
+    const auto res = submit(streamer,
+                            num_files,
+                            file_names.data(),
+                            file_offsets.data(),
+                            sizes.data(),
+                            dsts.data(),
+                            num_ranges.data(),
+                            internal_sizes.data());
+
+    EXPECT_EQ(res, static_cast<int>(common::ResponseCode::Success))
+        << "an unservable filesystem strategy rejected an object-storage submission";
+
+    unsigned r = 0;
+    unsigned file_index = 0;
+    for (unsigned i = 0; i < num_expected_responses; ++i)
+    {
+        EXPECT_EQ(next_response(streamer, &file_index, &r), static_cast<int>(common::ResponseCode::Success));
+    }
+
+    runai_end(streamer);
+    mock_cleanup();
+}
+
 TEST_F(StreamerTest, Async_Read_Bounded_By_Window)
 {
     utils::Dylib dylib("libstreamers3.so");

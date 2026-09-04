@@ -1,6 +1,9 @@
 from runai_model_streamer.libstreamer import dll, t_streamer
 from typing import Callable, Dict, List, Optional, Tuple
 import ctypes
+import logging
+
+log = logging.getLogger(__name__)
 
 from runai_model_streamer.s3_utils.s3_utils import (
     S3Credentials,
@@ -210,6 +213,47 @@ def runai_response(
 
 def runai_response_str(response_code: int) -> str:
     return dll.fn_runai_response_str(response_code)
+
+
+def runai_probe_direct_block_size(streamer, paths: List[str]) -> int:
+    """The block destinations must be laid out at for these paths, so reads can use O_DIRECT.
+
+    Asked of the library rather than restated here: this side lays out the ring, the library tests
+    congruence against the same number, and a second copy could drift. A mismatch raises nothing - it
+    just stops direct reads happening.
+
+    Per REQUEST, not per process. The requirement belongs to the mount and a request can span several,
+    so the library returns the largest any of them needs. Congruence at a power of two implies
+    congruence at every smaller one, so that one number satisfies them all.
+
+    The library probes - it opens and reads - so this is not free, but it is cached per mount.
+
+    A failure to measure is not an error here: the library still returns a usable layout value (the
+    host page size), and the next submission asks again. Nothing is cached on this side, so a mount
+    that could not be probed today is measured tomorrow.
+    """
+    array = (ctypes.c_char_p * len(paths))(*[p.encode("utf-8") for p in paths])
+    block = ctypes.c_size_t(0)
+
+    error_code = dll.fn_runai_probe_direct_block_size(streamer, array, len(paths),
+                                                      ctypes.byref(block))
+    if error_code != 0:
+        # Not raised. The value is still usable for layout, and the library logs why it could not
+        # measure - aborting a model load because a probe was inconclusive would be far worse.
+        log.debug(
+            "Could not measure the direct-I/O block: %s. Laying out at %d bytes",
+            runai_response_str(error_code), block.value)
+
+    # A zero must never leave this function, and must not be papered over either. The caller divides
+    # by this when placing ranges, so a zero becomes a ZeroDivisionError far from its cause - but
+    # substituting a value would hide a library that broke its own contract. It promises a usable
+    # block on every path, including the ones where it could not measure.
+    if block.value == 0:
+        raise RuntimeError(
+            f"the streamer reported a direct-I/O block of 0 for {len(paths)} path(s), which cannot be "
+            f"used to place destinations ({runai_response_str(error_code)})")
+
+    return block.value
 
 
 def runai_list_files(

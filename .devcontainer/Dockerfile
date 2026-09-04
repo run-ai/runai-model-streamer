@@ -182,7 +182,10 @@ RUN curl -fsSL -o libxml2-2.13.5.tar.xz https://download.gnome.org/sources/libxm
     RANLIB=/usr/bin/x86_64-linux-gnu-ranlib \
     CC=/usr/bin/x86_64-linux-gnu-gcc \
     NM=/usr/bin/x86_64-linux-gnu-nm \
-    CFLAGS="-fPIC" \
+    # -O2 is explicit because setting CFLAGS at all REPLACES autoconf's own default of "-g -O2".
+    # Passing only -fPIC therefore silently removed the optimisation. curl survives the same treatment
+    # a few blocks up only because its configure applies --enable-optimize itself; libxml2 does not.
+    CFLAGS="-fPIC -O2" \
     ./configure --host=x86_64-linux-gnu \
         --disable-shared --enable-static \
         --without-python --without-lzma --without-zlib \
@@ -197,7 +200,7 @@ RUN curl -fsSL -o libxml2-2.13.5.tar.xz https://download.gnome.org/sources/libxm
     RANLIB=/usr/bin/aarch64-linux-gnu-ranlib \
     CC=/usr/bin/aarch64-linux-gnu-gcc \
     NM=/usr/bin/aarch64-linux-gnu-nm \
-    CFLAGS="-fPIC" \
+    CFLAGS="-fPIC -O2" \
     ./configure --host=aarch64-linux-gnu \
         --disable-shared --enable-static \
         --without-python --without-lzma --without-zlib \
@@ -218,7 +221,15 @@ RUN git clone --recurse-submodules https://github.com/Azure/azure-sdk-for-cpp /o
     # Helper function to build Azure SDK components
     build_azure_sdk_components() { \
         local arch=$1 prefix=$2 source=$3 extra_opts=$4; \
+        # CMAKE_BUILD_TYPE is REQUIRED, not a nicety. With it unset cmake adds no optimisation flag at
+        # all and gcc falls back to its own default of -O0. Measured before this line: every function
+        # in libazure-core.a and libazure-storage-blobs.a opened with a frame-pointer prologue and
+        # spilled its arguments to the stack, which is what -O0 does and -O1 upwards does not.
+        #
+        # aws-sdk-cpp gets away with the same omission because it sets a default build type in its own
+        # CMakeLists. azure-sdk-for-cpp does not, so it has to be stated here.
         local common_opts="-DCMAKE_TOOLCHAIN_FILE=/opt/toolchains/${arch}-linux-gnu.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
             -DCMAKE_INSTALL_PREFIX=${prefix} \
             -DBUILD_SHARED_LIBS=OFF \
@@ -259,4 +270,96 @@ RUN NATIVE_ARCH=$(uname -m | sed 's/x86_64/x86_64/;s/aarch64/aarch64/') && \
         ln -sf /opt/${NATIVE_ARCH}-azure/include/azure /usr/local/include/azure && \
         ln -sf /opt/${NATIVE_ARCH}-azure/lib/* /usr/local/lib/; \
     fi
+
+# liburing and libaio come LAST on purpose, after the three cloud SDKs.
+#
+# Docker invalidates every layer below the one that changed. These two are small, build in seconds,
+# and move faster than anything above them - liburing alone had eight releases while we sat on one
+# version. Placed higher, each bump would rebuild the AWS and Azure SDKs, which are the slowest steps
+# in this file and have no dependency on either library.
+#
+# liburing, for the io_uring engine. Static only: it is linked into libstreamer.so, which exports an
+# explicit allowlist via streamer.ldscript, so these symbols stay hidden.
+#   --use-libc    route syscalls through libc wrappers instead of raw syscall instructions, so
+#                 sanitizers and interposition can see them
+#   ENABLE_SHARED=0  liburing has no ./configure --disable-shared; the switch is a make variable
+#
+# CHECKSUMMED, like libaio below and like googletest in cpp/rules.bzl.
+#
+# An earlier version of this block skipped the check, reasoning that GitHub's generated /archive/
+# tarballs are rebuilt on demand and have changed bytes for an unchanged tag before. That reasoning
+# does not survive contact with what this repository already does: rules.bzl pins the sha256 of a
+# GitHub-generated archive for googletest and has been fine.
+#
+# The trade is the right way round. Without a pin, altered bytes are linked statically into
+# libstreamer.so and shipped, silently. With one, a regenerated archive fails the image build loudly -
+# and a loud failure that needs a one-line update beats an unverified dependency in a release
+# artifact.
+RUN curl -fsSL -o liburing-2.14.tar.gz https://github.com/axboe/liburing/archive/refs/tags/liburing-2.14.tar.gz && \
+    echo "5f80964108981c6ad979c735f0b4877d5f49914c2a062f8e88282f26bf61de0c  liburing-2.14.tar.gz" | sha256sum -c - && \
+    tar zxf liburing-2.14.tar.gz && \
+    cd liburing-liburing-2.14 && \
+
+    CC=/usr/bin/x86_64-linux-gnu-gcc \
+    ./configure --use-libc --prefix=/opt/x86_64-uring --libdir=/opt/x86_64-uring/lib && \
+        AR=/usr/bin/x86_64-linux-gnu-ar \
+        RANLIB=/usr/bin/x86_64-linux-gnu-ranlib \
+        CC=/usr/bin/x86_64-linux-gnu-gcc \
+        make -C src -j4 ENABLE_SHARED=0 CFLAGS="-fPIC -O2" > /dev/null && \
+        make install ENABLE_SHARED=0 > /dev/null && \
+        make clean > /dev/null && \
+
+    CC=/usr/bin/aarch64-linux-gnu-gcc \
+    ./configure --use-libc --prefix=/opt/aarch64-uring --libdir=/opt/aarch64-uring/lib && \
+        AR=/usr/bin/aarch64-linux-gnu-ar \
+        RANLIB=/usr/bin/aarch64-linux-gnu-ranlib \
+        CC=/usr/bin/aarch64-linux-gnu-gcc \
+        make -C src -j4 ENABLE_SHARED=0 CFLAGS="-fPIC -O2" > /dev/null && \
+        make install ENABLE_SHARED=0 > /dev/null && \
+        make clean > /dev/null && \
+
+    cd - && \
+    rm -rf liburing-liburing-2.14 liburing-2.14.tar.gz
+
+# libaio, for the fallback engine where io_uring is unavailable. Static only, same reasoning as
+# liburing. Its symbols carry .symver directives, which need no version nodes here because
+# streamer.ldscript ends "local: *" and localizes them.
+#   CFLAGS -I.       libaio has no ./configure, and its sources include <libaio.h> from src/
+#   copy, not make install   its install target also lays down libaio.so and its sonames; we want
+#                            only the archive
+#   the URL     pagure.io was SUNSET in 2026 and is now a static snapshot. Its /archive/<ref>.tar.gz
+#               endpoint generated tarballs on demand, so it needs a running app and now returns 404
+#               for every project - including pagure's own. The git remote and releases.pagure.org
+#               are plain files and still serve, which is why this fetches a published release rather
+#               than a generated archive.
+#   the sha256  so the host stops being load-bearing. This exact tarball is served byte-identically by
+#               releases.pagure.org and by Debian
+#               (deb.debian.org/debian/pool/main/liba/libaio/libaio_0.3.113.orig.tar.gz), and its
+#               src/ matches the libaio-0.3.113 git tag. If this host disappears too, point the URL
+#               at any mirror - a wrong tarball then fails here instead of shipping.
+RUN curl -fsSL -o libaio-0.3.113.tar.gz https://releases.pagure.org/libaio/libaio-0.3.113.tar.gz && \
+    echo "2c44d1c5fd0d43752287c9ae1eb9c023f04ef848ea8d4aafa46e9aedb678200b  libaio-0.3.113.tar.gz" | sha256sum -c - && \
+    tar zxf libaio-0.3.113.tar.gz && \
+    cd libaio-0.3.113 && \
+
+    AR=/usr/bin/x86_64-linux-gnu-ar \
+    RANLIB=/usr/bin/x86_64-linux-gnu-ranlib \
+    CC=/usr/bin/x86_64-linux-gnu-gcc \
+    make -C src CFLAGS="-fPIC -O2 -I." > /dev/null && \
+        mkdir -p /opt/x86_64-aio/lib /opt/x86_64-aio/include && \
+        cp src/libaio.a /opt/x86_64-aio/lib/ && \
+        cp src/libaio.h /opt/x86_64-aio/include/ && \
+        make -C src clean > /dev/null && \
+
+    AR=/usr/bin/aarch64-linux-gnu-ar \
+    RANLIB=/usr/bin/aarch64-linux-gnu-ranlib \
+    CC=/usr/bin/aarch64-linux-gnu-gcc \
+    make -C src CFLAGS="-fPIC -O2 -I." > /dev/null && \
+        mkdir -p /opt/aarch64-aio/lib /opt/aarch64-aio/include && \
+        cp src/libaio.a /opt/aarch64-aio/lib/ && \
+        cp src/libaio.h /opt/aarch64-aio/include/ && \
+        make -C src clean > /dev/null && \
+
+    cd - && \
+    rm -rf libaio-0.3.113 libaio-0.3.113.tar.gz
 
