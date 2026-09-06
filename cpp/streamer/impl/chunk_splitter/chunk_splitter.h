@@ -9,7 +9,12 @@
 namespace runai::llm::streamer::impl
 {
 
-// One read request to an IoEngine, and the tasks it covers.
+// One read request to a backend, and the tasks it covers.
+//
+// Backend-agnostic on purpose, and shared: Batch builds its chunks with the splitter below, and BOTH
+// readers consume them - the filesystem worker turns each into an IoEngine read, and the
+// object-storage worker into a ranged GET with its own handle. Only the chunk SIZE differs between
+// them, and that is a parameter.
 //
 // A batch is read as a sequence of these: contiguous in the file and in the destination, since a
 // batch covers one contiguous transfer.

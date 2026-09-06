@@ -7,7 +7,7 @@
 #include <map>
 #include <set>
 #include "streamer/impl/assigner/assigner.h"
-#include "streamer/impl/config/config.h"
+#include "streamer/impl/config/config/config.h"
 #include "common/exception/exception.h"
 #include "common/response_code/response_code.h"
 #include "utils/random/random.h"

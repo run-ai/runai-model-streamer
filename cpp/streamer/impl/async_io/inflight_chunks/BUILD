@@ -4,7 +4,7 @@ runai_cc_auto_library(
     name = "inflight_chunks",
     deps = [
         "//posix_io/io_engine",
-        "//streamer/impl/async_io/chunk_splitter",
+        "//streamer/impl/chunk_splitter",
         "//utils/logging",
     ],
 )

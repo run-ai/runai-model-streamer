@@ -1,4 +1,4 @@
-#include "streamer/impl/config/config.h"
+#include "streamer/impl/config/config/config.h"
 
 #include <gtest/gtest.h>
 #include <algorithm>

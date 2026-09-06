@@ -15,7 +15,7 @@
 
 #include "common/responder/responder.h"
 #include "common/s3_credentials/s3_credentials.h"
-#include "streamer/impl/config/config.h"
+#include "streamer/impl/config/config/config.h"
 #include "streamer/impl/workload/workload.h"
 #include "streamer/impl/s3/s3.h"
 #include "streamer/impl/batches/batches.h"

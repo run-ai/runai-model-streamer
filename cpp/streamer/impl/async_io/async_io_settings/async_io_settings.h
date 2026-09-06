@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <ostream>
 
-#include "streamer/impl/config/config.h"
+#include "streamer/impl/config/config/config.h"
 
 namespace runai::llm::streamer::impl
 {

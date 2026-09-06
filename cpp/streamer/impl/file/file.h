@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "streamer/impl/reader/reader.h"
-#include "streamer/impl/config/config.h"
+#include "streamer/impl/config/config/config.h"
 
 #include "utils/fd/fd.h"
 

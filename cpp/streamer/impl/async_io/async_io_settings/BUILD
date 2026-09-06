@@ -4,7 +4,7 @@ runai_cc_auto_library(
     name = "async_io_settings",
     deps = [
         "//posix_io/io_engine",
-        "//streamer/impl/config",
+        "//streamer/impl/config/config",
         "//utils/env",
         "//utils/logging",
     ],
