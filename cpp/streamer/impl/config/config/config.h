@@ -17,7 +17,7 @@ namespace runai::llm::streamer::impl
 //     RUNAI_STREAMER_CHUNK_BYTESIZE     -> fs_sync_read_block_bytesize (2 MiB, also the minimum) AND
 //                                          s3_block_bytesize (8 MiB, minimum 5 MiB), likewise.
 //     RUNAI_STREAMER_FS_CHUNK_BYTESIZE  -> fs_async_chunk_bytesize (8 MiB). File system only.
-//     RUNAI_STREAMER_FS_PARALLELISM     -> fs_async_queue_depth (512): reads in flight. File system
+//     RUNAI_STREAMER_FS_QUEUE_DEPTH     -> fs_async_queue_depth (512): reads in flight. File system
 //                                          only, and NODE-WIDE - divided per process, see
 //                                          AsyncIoSettings.
 //

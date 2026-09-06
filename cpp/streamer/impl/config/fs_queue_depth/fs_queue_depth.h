@@ -9,7 +9,7 @@
 namespace runai::llm::streamer::impl
 {
 
-// RUNAI_STREAMER_FS_PARALLELISM: how many filesystem reads may be in flight, per mount.
+// RUNAI_STREAMER_FS_QUEUE_DEPTH: how many filesystem reads may be in flight, per mount.
 //
 //     <default> [ "," <type> "=" <value> ]*
 //
@@ -24,7 +24,16 @@ namespace runai::llm::streamer::impl
 // Types are keyed rather than paths because a path is a per-deployment detail - the same model sits at
 // different paths on different clusters - while "NFS is the slow one" travels with the storage. The
 // type is what /proc/self/mountinfo reports, so `nfs`, `nfs4`, `virtiofs`, `ext4`, `overlay`.
-class FsParallelism
+//
+// WHAT A TYPE CANNOT SAY: which device is underneath. An NVMe SSD and a spinning disk formatted ext4
+// both report `ext4`, so `ext4=1024` reaches both. The split this keys on is network against local -
+// `nfs`, `virtiofs`, `ceph`, `lustre` - which is the one that motivated per-mount values, because an
+// NFS mount with nconnect=16 wants a different depth from anything local.
+//
+// Device class is answerable, just not from here: /sys/block/<device>/queue/rotational and
+// nr_requests, found from the same major:minor. That is a derivation rather than a setting, and it
+// would replace a default rather than a key - see MountCapability::fs_type.
+class FsQueueDepth
 {
  public:
     // A type entry, in the order it was written. Order matters when one key is a prefix of another.
@@ -40,10 +49,10 @@ class FsParallelism
     // set and mistyped must not read as "unset". Rejected are a missing or non-numeric default, a
     // non-numeric or zero value, an entry with no "=", an empty type, and a REPEATED type - the last
     // one because resolving it by order would silently pick one of two numbers the user wrote.
-    static FsParallelism parse(const std::string & value);
+    static FsQueueDepth parse(const std::string & value);
 
     // A plain value, for the callers that have no mount to ask about.
-    explicit FsParallelism(unsigned value);
+    explicit FsQueueDepth(unsigned value);
 
     // The value for a mount of this type: the FIRST entry whose type is a prefix of it, else the
     // default. Prefix, so `nfs=` covers `nfs` and `nfs4` without the user knowing which the kernel
@@ -61,12 +70,12 @@ class FsParallelism
     const std::vector<Entry> & entries() const;
 
  private:
-    FsParallelism() = default;
+    FsQueueDepth() = default;
 
     unsigned _default = 0;
     std::vector<Entry> _entries;
 };
 
-std::ostream & operator<<(std::ostream &, const FsParallelism &);
+std::ostream & operator<<(std::ostream &, const FsQueueDepth &);
 
 }; // namespace runai::llm::streamer::impl

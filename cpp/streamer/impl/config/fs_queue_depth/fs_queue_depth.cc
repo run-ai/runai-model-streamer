@@ -1,4 +1,4 @@
-#include "streamer/impl/config/fs_parallelism/fs_parallelism.h"
+#include "streamer/impl/config/fs_queue_depth/fs_queue_depth.h"
 
 #include <algorithm>
 #include <limits>
@@ -44,7 +44,7 @@ unsigned positive_count(const std::string & text, const std::string & whole)
 {
     if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos)
     {
-        LOG(ERROR) << "RUNAI_STREAMER_FS_PARALLELISM=" << whole << " : '" << text
+        LOG(ERROR) << "RUNAI_STREAMER_FS_QUEUE_DEPTH=" << whole << " : '" << text
                    << "' is not a positive number";
         throw common::Exception(common::ResponseCode::InvalidParameterError);
     }
@@ -54,7 +54,7 @@ unsigned positive_count(const std::string & text, const std::string & whole)
         const auto value = std::stoul(text);
         if (value == 0 || value > std::numeric_limits<unsigned>::max())
         {
-            LOG(ERROR) << "RUNAI_STREAMER_FS_PARALLELISM=" << whole << " : " << text
+            LOG(ERROR) << "RUNAI_STREAMER_FS_QUEUE_DEPTH=" << whole << " : " << text
                        << " is out of range - it must be at least 1";
             throw common::Exception(common::ResponseCode::InvalidParameterError);
         }
@@ -62,25 +62,25 @@ unsigned positive_count(const std::string & text, const std::string & whole)
     }
     catch (const std::out_of_range &)
     {
-        LOG(ERROR) << "RUNAI_STREAMER_FS_PARALLELISM=" << whole << " : " << text << " is too large";
+        LOG(ERROR) << "RUNAI_STREAMER_FS_QUEUE_DEPTH=" << whole << " : " << text << " is too large";
         throw common::Exception(common::ResponseCode::InvalidParameterError);
     }
 }
 
 } // namespace
 
-FsParallelism::FsParallelism(unsigned value) :
+FsQueueDepth::FsQueueDepth(unsigned value) :
     _default(value)
 {}
 
-FsParallelism FsParallelism::parse(const std::string & value)
+FsQueueDepth FsQueueDepth::parse(const std::string & value)
 {
-    FsParallelism out;
+    FsQueueDepth out;
 
     const auto whole = trimmed(value);
     if (whole.empty())
     {
-        LOG(ERROR) << "RUNAI_STREAMER_FS_PARALLELISM is empty; it must start with a number of reads";
+        LOG(ERROR) << "RUNAI_STREAMER_FS_QUEUE_DEPTH is empty; it must start with a number of reads";
         throw common::Exception(common::ResponseCode::InvalidParameterError);
     }
 
@@ -101,7 +101,7 @@ FsParallelism FsParallelism::parse(const std::string & value)
         {
             if (element.find('=') != std::string::npos)
             {
-                LOG(ERROR) << "RUNAI_STREAMER_FS_PARALLELISM=" << whole
+                LOG(ERROR) << "RUNAI_STREAMER_FS_QUEUE_DEPTH=" << whole
                            << " must begin with a number, before any <type>=<value> entries";
                 throw common::Exception(common::ResponseCode::InvalidParameterError);
             }
@@ -114,7 +114,7 @@ FsParallelism FsParallelism::parse(const std::string & value)
             const auto equals = element.find('=');
             if (equals == std::string::npos)
             {
-                LOG(ERROR) << "RUNAI_STREAMER_FS_PARALLELISM=" << whole << " : '" << element
+                LOG(ERROR) << "RUNAI_STREAMER_FS_QUEUE_DEPTH=" << whole << " : '" << element
                            << "' is not <type>=<value>";
                 throw common::Exception(common::ResponseCode::InvalidParameterError);
             }
@@ -122,7 +122,7 @@ FsParallelism FsParallelism::parse(const std::string & value)
             const auto type = lowered(trimmed(element.substr(0, equals)));
             if (type.empty())
             {
-                LOG(ERROR) << "RUNAI_STREAMER_FS_PARALLELISM=" << whole << " : '" << element
+                LOG(ERROR) << "RUNAI_STREAMER_FS_QUEUE_DEPTH=" << whole << " : '" << element
                            << "' has no filesystem type before the '='";
                 throw common::Exception(common::ResponseCode::InvalidParameterError);
             }
@@ -132,7 +132,7 @@ FsParallelism FsParallelism::parse(const std::string & value)
             // strategy list already refuses a repeated candidate for the same reason.
             if (!seen.insert(type).second)
             {
-                LOG(ERROR) << "RUNAI_STREAMER_FS_PARALLELISM=" << whole << " : '" << type
+                LOG(ERROR) << "RUNAI_STREAMER_FS_QUEUE_DEPTH=" << whole << " : '" << type
                            << "' appears more than once";
                 throw common::Exception(common::ResponseCode::InvalidParameterError);
             }
@@ -150,7 +150,7 @@ FsParallelism FsParallelism::parse(const std::string & value)
     return out;
 }
 
-unsigned FsParallelism::for_type(const std::string & fs_type, size_t & out_matched) const
+unsigned FsQueueDepth::for_type(const std::string & fs_type, size_t & out_matched) const
 {
     const auto type = lowered(fs_type);
 
@@ -169,23 +169,23 @@ unsigned FsParallelism::for_type(const std::string & fs_type, size_t & out_match
     return _default;
 }
 
-unsigned FsParallelism::for_type(const std::string & fs_type) const
+unsigned FsQueueDepth::for_type(const std::string & fs_type) const
 {
     size_t matched = 0;
     return for_type(fs_type, matched);
 }
 
-unsigned FsParallelism::default_value() const
+unsigned FsQueueDepth::default_value() const
 {
     return _default;
 }
 
-const std::vector<FsParallelism::Entry> & FsParallelism::entries() const
+const std::vector<FsQueueDepth::Entry> & FsQueueDepth::entries() const
 {
     return _entries;
 }
 
-std::ostream & operator<<(std::ostream & os, const FsParallelism & parallelism)
+std::ostream & operator<<(std::ostream & os, const FsQueueDepth & parallelism)
 {
     os << parallelism.default_value();
 

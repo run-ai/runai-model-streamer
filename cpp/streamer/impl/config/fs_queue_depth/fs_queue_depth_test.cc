@@ -1,4 +1,4 @@
-#include "streamer/impl/config/fs_parallelism/fs_parallelism.h"
+#include "streamer/impl/config/fs_queue_depth/fs_queue_depth.h"
 
 #include <gtest/gtest.h>
 
@@ -12,9 +12,9 @@ namespace runai::llm::streamer::impl
 
 // A plain number is the whole value, and stays the whole meaning of the variable for anyone who never
 // needs per-type entries.
-TEST(FsParallelism, A_Plain_Number_Applies_Everywhere)
+TEST(FsQueueDepth, A_Plain_Number_Applies_Everywhere)
 {
-    const auto parallelism = FsParallelism::parse("512");
+    const auto parallelism = FsQueueDepth::parse("512");
 
     EXPECT_EQ(parallelism.default_value(), 512u);
     EXPECT_TRUE(parallelism.entries().empty());
@@ -25,9 +25,9 @@ TEST(FsParallelism, A_Plain_Number_Applies_Everywhere)
     }
 }
 
-TEST(FsParallelism, Type_Entries_Override_The_Default)
+TEST(FsQueueDepth, Type_Entries_Override_The_Default)
 {
-    const auto parallelism = FsParallelism::parse("512,nfs=64,virtiofs=256");
+    const auto parallelism = FsQueueDepth::parse("512,nfs=64,virtiofs=256");
 
     EXPECT_EQ(parallelism.default_value(), 512u);
     ASSERT_EQ(parallelism.entries().size(), 2u);
@@ -39,9 +39,9 @@ TEST(FsParallelism, Type_Entries_Override_The_Default)
 
 // The reason keys are prefixes: the kernel reports `nfs` for a v3 mount and `nfs4` for a v4 one, and a
 // user should not have to know which they have.
-TEST(FsParallelism, A_Key_Matches_As_A_Prefix)
+TEST(FsQueueDepth, A_Key_Matches_As_A_Prefix)
 {
-    const auto parallelism = FsParallelism::parse("512,nfs=64,fuse=128");
+    const auto parallelism = FsQueueDepth::parse("512,nfs=64,fuse=128");
 
     EXPECT_EQ(parallelism.for_type("nfs"), 64u);
     EXPECT_EQ(parallelism.for_type("nfs4"), 64u);
@@ -53,33 +53,33 @@ TEST(FsParallelism, A_Key_Matches_As_A_Prefix)
 // First match, not longest match, and the caller is told which entry answered so it can log it. Written
 // down because it is the one surprising case: `nfs4` mounts take the `nfs` entry when it is listed
 // first, and writing the longer key first gives the other answer.
-TEST(FsParallelism, The_First_Matching_Entry_Wins_And_Is_Reported)
+TEST(FsQueueDepth, The_First_Matching_Entry_Wins_And_Is_Reported)
 {
-    const auto first_shorter = FsParallelism::parse("512,nfs=64,nfs4=32");
+    const auto first_shorter = FsQueueDepth::parse("512,nfs=64,nfs4=32");
     size_t matched = 0;
 
     EXPECT_EQ(first_shorter.for_type("nfs4", matched), 64u);
     EXPECT_EQ(matched, 0u) << "the caller must be able to name the entry that answered";
 
-    const auto first_longer = FsParallelism::parse("512,nfs4=32,nfs=64");
+    const auto first_longer = FsQueueDepth::parse("512,nfs4=32,nfs=64");
     EXPECT_EQ(first_longer.for_type("nfs4", matched), 32u);
     EXPECT_EQ(matched, 0u);
     EXPECT_EQ(first_longer.for_type("nfs", matched), 64u);
     EXPECT_EQ(matched, 1u);
 }
 
-TEST(FsParallelism, The_Default_Reports_Itself_As_No_Entry)
+TEST(FsQueueDepth, The_Default_Reports_Itself_As_No_Entry)
 {
-    const auto parallelism = FsParallelism::parse("512,nfs=64");
+    const auto parallelism = FsQueueDepth::parse("512,nfs=64");
     size_t matched = 0;
 
     EXPECT_EQ(parallelism.for_type("ext4", matched), 512u);
     EXPECT_EQ(matched, parallelism.entries().size()) << "out of range means the default answered";
 }
 
-TEST(FsParallelism, Whitespace_And_Case_Are_Ignored)
+TEST(FsQueueDepth, Whitespace_And_Case_Are_Ignored)
 {
-    const auto parallelism = FsParallelism::parse("  512 , NFS = 64 , VirtioFS=256 ");
+    const auto parallelism = FsQueueDepth::parse("  512 , NFS = 64 , VirtioFS=256 ");
 
     EXPECT_EQ(parallelism.default_value(), 512u);
     EXPECT_EQ(parallelism.for_type("nfs4"), 64u);
@@ -89,7 +89,7 @@ TEST(FsParallelism, Whitespace_And_Case_Are_Ignored)
 // Every malformed value is refused at parse time, with the variable named. A value the user meant to
 // set and mistyped must never read as "unset" - that is the rule the rest of the streamer's numeric
 // variables already follow.
-TEST(FsParallelism, Malformed_Values_Are_Refused)
+TEST(FsQueueDepth, Malformed_Values_Are_Refused)
 {
     for (const auto * bad : {
             "",                     // nothing at all
@@ -109,13 +109,13 @@ TEST(FsParallelism, Malformed_Values_Are_Refused)
             "99999999999999999999", // beyond unsigned
          })
     {
-        EXPECT_THROW(FsParallelism::parse(bad), common::Exception) << "accepted: '" << bad << "'";
+        EXPECT_THROW(FsQueueDepth::parse(bad), common::Exception) << "accepted: '" << bad << "'";
     }
 }
 
-TEST(FsParallelism, A_Constructed_Value_Behaves_Like_A_Plain_Number)
+TEST(FsQueueDepth, A_Constructed_Value_Behaves_Like_A_Plain_Number)
 {
-    const FsParallelism parallelism(64);
+    const FsQueueDepth parallelism(64);
 
     EXPECT_EQ(parallelism.default_value(), 64u);
     EXPECT_TRUE(parallelism.entries().empty());
@@ -124,10 +124,10 @@ TEST(FsParallelism, A_Constructed_Value_Behaves_Like_A_Plain_Number)
 
 // The log line an operator reads back. It has to show the entries, or a value that parsed differently
 // from what was intended is invisible.
-TEST(FsParallelism, It_Prints_What_It_Parsed)
+TEST(FsQueueDepth, It_Prints_What_It_Parsed)
 {
     std::ostringstream stream;
-    stream << FsParallelism::parse("512,nfs=64,virtiofs=256");
+    stream << FsQueueDepth::parse("512,nfs=64,virtiofs=256");
 
     EXPECT_EQ(stream.str(), "512, nfs=64, virtiofs=256");
 }
