@@ -29,6 +29,29 @@ struct MountCapability
 {
     dev_t dev = 0;
     bool  memory_backed = false;   // tmpfs / ramfs
+
+    // What the KERNEL calls this filesystem - "ext4", "nfs4", "virtiofs", "overlay", "fuse.gvfsd".
+    // Empty when the mount is not in /proc/self/mountinfo, which is not an error: a caller uses it to
+    // choose a default and falls back when it is empty.
+    //
+    // From mountinfo, NOT from the statfs magic that fills memory_backed. Measured: the magic cannot
+    // name these filesystems. Two different FUSE mounts on one host both report `fuseblk` or nothing,
+    // and ext4 reports as `ext2/ext3` - while mountinfo says `fuse.portal`, `fuse.gvfsd-fuse` and
+    // `ext4`. virtiofs is FUSE-based, so no magic can ever distinguish it.
+    //
+    // memory_backed stays on the magic on purpose. It is the check that keeps tmpfs off the direct
+    // path, and it must not depend on parsing a file that a container might not present.
+    //
+    // IT NAMES THE FILESYSTEM, NOT THE DEVICE. An NVMe SSD, a SATA disk and a USB stick formatted
+    // ext4 all report "ext4"; the device appears only in mountinfo's source field, and even there it
+    // is hidden behind /dev/mapper/... on anything using LVM. So this distinguishes network storage
+    // from local - nfs, virtiofs, ceph, lustre, 9p - which is what it exists for, and says nothing
+    // about how fast the local device is.
+    //
+    // The honest signal for device class is /sys/block/<device>/queue/{rotational,nr_requests},
+    // reachable from the same major:minor. Deliberately not read here: it is a different question,
+    // and answering it well means measuring rather than name-matching.
+    std::string fs_type;
 };
 
 // Whether a mount can serve O_DIRECT.

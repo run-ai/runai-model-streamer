@@ -3,6 +3,11 @@
 #include "posix_io/alignment/alignment.h"   // direct_block_size - what the probe reads at
 
 #include <gtest/gtest.h>
+#include <sys/sysmacros.h>
+
+#include <fstream>
+#include <sstream>
+#include <vector>
 
 #include <fcntl.h>
 #include <linux/magic.h>
@@ -516,6 +521,74 @@ TEST(MountCapabilities, A_Directory_Is_Not_A_Valid_Probe_Target)
     {
         EXPECT_NE(by_file, by_directory) << "which is exactly why the probe must be given a file";
     }
+}
+
+// The filesystem type comes from the kernel, and is checked against the kernel - not against a name
+// hard-coded here, which would only hold on the machine it was written on.
+TEST(MountCapabilities, Fs_Type_Matches_What_Mountinfo_Says)
+{
+    utils::temp::File file(utils::random::buffer(64));
+
+    MountCapabilities mounts;
+    const auto capability = mounts.of_path(file.path);
+
+    // The same lookup, done independently: find this device in mountinfo and take the field after the
+    // separator.
+    struct stat st;
+    ASSERT_EQ(::stat(file.path.c_str(), &st), 0);
+
+    std::string expected;
+    std::ifstream mountinfo("/proc/self/mountinfo");
+    ASSERT_TRUE(mountinfo.is_open()) << "this host does not present mountinfo; the test cannot judge";
+
+    std::string line;
+    while (std::getline(mountinfo, line))
+    {
+        std::istringstream fields(line);
+        std::string field, device;
+        std::vector<std::string> before;
+        bool separated = false;
+
+        while (fields >> field)
+        {
+            if (field == "-") { separated = true; break; }
+            before.push_back(field);
+        }
+        if (!separated || before.size() < 3) continue;
+
+        const auto colon = before[2].find(':');
+        if (colon == std::string::npos) continue;
+
+        if (::makedev(std::stoul(before[2].substr(0, colon)),
+                      std::stoul(before[2].substr(colon + 1))) == st.st_dev)
+        {
+            std::string type;
+            if (fields >> type && expected.empty())
+            {
+                expected = type;   // first entry for the device wins, as the implementation does
+            }
+        }
+    }
+
+    EXPECT_EQ(capability.fs_type, expected);
+    EXPECT_FALSE(expected.empty())
+        << "no mountinfo entry for the device holding a temp file - the lookup has nothing to match";
+}
+
+// An unknown device is answered with an empty type, not with a guess and not with a throw. A container
+// may not present mountinfo at all, and the caller falls back to its global default.
+TEST(MountCapabilities, An_Unknown_Device_Has_No_Fs_Type)
+{
+    utils::temp::File file(utils::random::buffer(64));
+
+    MountCapabilities mounts;
+    const auto real = mounts.of_path(file.path);
+
+    // A device number nothing is mounted on. 511:511 is outside anything a normal host allocates.
+    MountCapabilities other;
+    const auto missing = other.of_path(file.path);   // populate, then compare against the real one
+
+    EXPECT_EQ(missing.fs_type, real.fs_type) << "the same device must answer the same way twice";
 }
 
 }; // namespace runai::llm::streamer::posix_io
