@@ -17,8 +17,15 @@ namespace runai::llm::streamer::impl
 //     RUNAI_STREAMER_CHUNK_BYTESIZE     -> fs_sync_read_block_bytesize (2 MiB, also the minimum) AND
 //                                          s3_block_bytesize (8 MiB, minimum 5 MiB), likewise.
 //     RUNAI_STREAMER_FS_CHUNK_BYTESIZE  -> fs_async_chunk_bytesize (8 MiB). File system only.
-//     RUNAI_STREAMER_FS_QUEUE_DEPTH     -> fs_async_queue_depth (512). File system only, and
-//                                          NODE-WIDE - divided per process, see AsyncIoSettings.
+//     RUNAI_STREAMER_FS_PARALLELISM     -> fs_async_queue_depth (512): reads in flight. File system
+//                                          only, and NODE-WIDE - divided per process, see
+//                                          AsyncIoSettings.
+//
+//                                          Named for the quantity, not the mechanism. At the engine
+//                                          it is a queue depth, which is why the field keeps that
+//                                          name; to a user it is how many reads may be outstanding,
+//                                          which is the same question the object-storage side answers
+//                                          with its own parallelism setting.
 //     RUNAI_STREAMER_FS_STRATEGY        -> fs_strategy_candidates ("sync_buffered"). An ordered
 //                                          preference list; the first the host can serve wins.
 

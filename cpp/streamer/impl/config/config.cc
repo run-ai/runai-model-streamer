@@ -66,7 +66,7 @@ Config::Config(bool enforce_minimum /* = true */) :
            utils::getenv<size_t>("RUNAI_STREAMER_CHUNK_BYTESIZE", min_fs_sync_read_block_bytesize),
            enforce_minimum,
            utils::getenv<size_t>("RUNAI_STREAMER_FS_CHUNK_BYTESIZE", default_fs_async_chunk_bytesize),
-           utils::getenv<unsigned long>("RUNAI_STREAMER_FS_QUEUE_DEPTH", default_fs_async_queue_depth),
+           utils::getenv<unsigned long>("RUNAI_STREAMER_FS_PARALLELISM", default_fs_async_queue_depth),
            utils::getenv<std::string>("RUNAI_STREAMER_FS_STRATEGY", default_fs_strategy_candidates),
            utils::getenv<unsigned long>("RUNAI_STREAMER_S3_TIMEOUT", 0UL))
 {}

@@ -48,7 +48,7 @@ struct Fixture
                      unsigned long queue_depth = 1024UL) :
         concurrency(std::string("RUNAI_STREAMER_CONCURRENCY"), static_cast<unsigned long>(concurrency)),
         chunk_bytesize(std::string("RUNAI_STREAMER_FS_CHUNK_BYTESIZE"), static_cast<unsigned long>(ChunkSize)),
-        depth(std::string("RUNAI_STREAMER_FS_QUEUE_DEPTH"), queue_depth),
+        depth(std::string("RUNAI_STREAMER_FS_PARALLELISM"), queue_depth),
         group(std::string("RUNAI_STREAMER_PROCESS_GROUP_SIZE"), 1UL),
         sizes(range_sizes),
         total(std::accumulate(range_sizes.begin(), range_sizes.end(), static_cast<size_t>(0))),
