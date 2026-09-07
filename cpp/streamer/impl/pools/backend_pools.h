@@ -151,6 +151,10 @@ class BackendPools
     // The engine with the least queued work. Called under _async_mutex.
     utils::ThreadPool<Workload> * least_loaded_async() const;
 
+    // Threads for this plugin's pool: the configured concurrency, except for S3, which carries all of
+    // it in one client.
+    unsigned object_storage_threads(Plugin plugin) const;
+
     std::unique_ptr<utils::ThreadPool<Workload>> _object_storage_pool;
 
     // The object-storage plugin lock. The first object-storage submission records the plugin and creates the

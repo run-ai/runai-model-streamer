@@ -480,17 +480,9 @@ common::ResponseCode Streamer::async_request(
     }
     catch (...)
     {
-        // A failure HERE is past the point of no return: the submission is registered and its responses
-        // are already counted. There is no recovery - report UnknownError, whatever was thrown.
-        //
-        // UnknownError is the code that tells the caller to abort everything; every other code says the
-        // failure is attributable to this submission and the caller may carry on. Reporting a specific
-        // code from here would be a lie, because drain_undispatched (still armed - it runs as this
-        // returns) fails the undispatched ranges as UnknownError, and because the drain itself is
-        // best-effort under severe OOM, so the submission-done flag may never arrive. Normalising here
-        // rather than relying on the C layer's catch-all keeps that true whatever a future change throws:
-        // today only std::bad_alloc can escape, which the catch-all would have mapped correctly by
-        // accident, but a common::Exception would now surface its own code instead.
+        // UnknownError - "abort everything" - because the drain is best-effort: a range may end up with
+        // no response and the submission may never complete, so a caller told to carry on would wait
+        // forever. Normalised here so a future common::Exception cannot surface its own code instead.
         LOG(ERROR) << "Submission " << submission_id << " failed during dispatch; reporting UnknownError";
         return common::ResponseCode::UnknownError;
     }

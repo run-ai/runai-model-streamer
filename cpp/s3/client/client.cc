@@ -25,6 +25,8 @@
 namespace runai::llm::streamer::impl::s3
 {
 
+static constexpr int decimal_base = 10;
+
 static bool starts_with_ci(const Aws::String & str, const Aws::String & prefix)
 {
     if (str.size() < prefix.size()) return false;
@@ -118,6 +120,10 @@ S3ClientBase::S3ClientBase(const common::backend_api::ObjectClientConfig_t & con
             {
                 _region = convert(value);
             }
+            else if (strcmp(key, common::s3::S3ClientWrapper::CONCURRENT_READERS_KEY) == 0)
+            {
+                _concurrent_readers = static_cast<unsigned>(std::strtoul(value, nullptr, decimal_base));
+            }
             else
             {
                 LOG(WARNING) << "Unknown initial parameter: " << key;
@@ -175,6 +181,8 @@ S3Client::S3Client(const common::backend_api::ObjectClientConfig_t & config) :
     S3ClientBase(config),
     _stop(false),
     _application_retries_enabled(utils::getenv<unsigned long>("RUNAI_STREAMER_S3_TIMEOUT", 0UL) > 0),
+    // After S3ClientBase, so the values parsed from the config are available here.
+    _client_config(_concurrent_readers, _chunk_bytesize),
     _responder(nullptr)
 {
     if (_endpoint.has_value()) // endpoint passed as parameter by user application (in credentials)

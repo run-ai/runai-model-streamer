@@ -2,7 +2,11 @@
 
 ### RUNAI_STREAMER_CONCURRENCY
 
-Controls the level of concurrency and number of OS threads reading tensors from the file to the CPU buffer.
+Controls the level of concurrency reading tensors into the CPU buffer.
+
+This variable is now a fallback for both backends. It supplies `RUNAI_STREAMER_OBJ_CONCURRENCY` for
+object storage, and `RUNAI_STREAMER_FS_QUEUE_DEPTH` for the file system, in each case only when that
+variable is unset. 
 
 #### Values accepted
 
@@ -10,9 +14,57 @@ Positive integer value
 
 #### Default value
 
-16 for reading from file system
+See `RUNAI_STREAMER_OBJ_CONCURRENCY` and `RUNAI_STREAMER_FS_QUEUE_DEPTH` - each backend keeps its own
+default when nothing is set.
 
-8 for reading from object storage
+### RUNAI_STREAMER_OBJ_CONCURRENCY
+
+Since version 0.17.0
+
+Controls how much object-storage work runs at once
+For S3 configuring concurrency of 1 is equivalent to 10 gigabits per second
+
+When this variable is unset, `RUNAI_STREAMER_CONCURRENCY` supplies the value if it is set.
+
+#### Values accepted
+
+Positive integer value
+
+#### Default value
+
+8
+
+### RUNAI_STREAMER_FS_QUEUE_DEPTH
+
+Since version 0.17.0
+
+Controls how many file system reads are in flight at once.
+
+#### Values accepted
+
+A positive integer, optionally followed by per-filesystem-type overrides:
+
+```
+RUNAI_STREAMER_FS_QUEUE_DEPTH=512                          # every mount
+RUNAI_STREAMER_FS_QUEUE_DEPTH="512,nfs=64"                 # 64 on NFS, 512 elsewhere
+RUNAI_STREAMER_FS_QUEUE_DEPTH="512,nfs=64,virtiofs=256"    # and 256 on virtiofs
+```
+
+The leading value is the default and is mandatory.
+A type key matches as a prefix, so `nfs` covers both `nfs` and `nfs4`. Where two keys both match, the first one written wins.
+
+The type is the filesystem name reported by `/proc/self/mountinfo` for that mount - for example `ext4`,
+`xfs`, `nfs`, `nfs4`, `virtiofs`, `overlay`. You can read the names on your own machine with:
+
+```
+findmnt -no FSTYPE /path/to/model
+```
+
+#### Default value
+
+512 for the asynchronous readers
+
+16 for `sync_buffered`
 
 ### RUNAI_STREAMER_CHUNK_BYTESIZE
 
@@ -101,6 +153,25 @@ Boolean `0` or `1`
 #### Default value
 
 `0`
+
+### RUNAI_STREAMER_S3_TARGET_GBPS
+
+Overrides the AWS CRT throughput target that the S3 client is built with.
+
+The value is **per reader**, which is what it has always been: it replaces the CRT's own per-client
+default, and is then multiplied by `RUNAI_STREAMER_OBJ_CONCURRENCY` for the single client that carries
+the whole capacity. With `RUNAI_STREAMER_S3_TARGET_GBPS=25` and a concurrency of 8, the client targets
+200 Gbps - the same total as the eight clients at 25 Gbps each that earlier versions built.
+
+The CRT converts the target into connections at 0.4 Gbps per connection, with a floor of 10.
+
+#### Values accepted
+
+Positive integer, in Gbps
+
+#### Default value
+
+The AWS CRT default per client (10), multiplied by the object-storage concurrency
 
 ### RUNAI_STREAMER_S3_MAX_RETRIES
 

@@ -72,10 +72,6 @@ struct Streamer
 
     // What a test may answer instead of the machine.
     //
-    // Grouped rather than taken as three more parameters. Each is a std::function, so positionally
-    // they are three interchangeable nulls at a call site - `Streamer(Config(), nullptr, nullptr, f)`
-    // says nothing about which seam `f` is. A named field says it.
-    //
     // Every field is empty in production, and an empty field means "ask the machine". So the default
     // Environment is exactly today's behaviour and nothing has to opt out.
     struct Environment
@@ -105,11 +101,8 @@ struct Streamer
     explicit Streamer(Config config, Environment environment = {});
     ~Streamer();
 
-    // Set the streamer's object-storage credentials (a general key->value dictionary; see
-    // common::s3::Credentials). Set-once and thread-safe: the first call stores them; a later call with the
-    // SAME credentials returns Success; a later call with DIFFERENT credentials returns CredentialsAlreadySet
-    // (the streamer's client may already be built from the first set). Credentials are streamer-scoped, not
-    // per request - async_request/list_files use whatever was set here.
+    // Set the streamer's object-storage credentials 
+    // Set-once and thread-safe
     common::ResponseCode set_credentials(const common::s3::Credentials & credentials);
 
     // Submit a read request: a list of files, each with the ranges to read from it. A range is an
@@ -128,56 +121,34 @@ struct Streamer
     // The response carries the submission_id.
     common::Response response(unsigned timeout_ms, bool & submission_done);
 
-    // Which filesystem strategy this streamer resolved to. Valid only after the first submission -
-    // resolution happens there, not at construction.
-    //
-    // Exposed because "which path served this read" is otherwise invisible: the pools are internal
-    // and the two paths return identical data, so a test asserting only the bytes cannot tell an
-    // io_uring read from a synchronous one.
+ 
     // Set the filesystem strategy candidates. Set-once, and rejected once resolution has happened -
-    // see StrategyResolver::set_candidates for why one rule is not enough.
     common::ResponseCode set_fs_strategy(const std::string & candidates);
 
     // Valid only after a FILESYSTEM submission: an object-storage one never resolves a strategy.
     posix_io::Strategy fs_strategy() const;
 
-    // Whether any workload was actually routed to the async pool. fs_strategy() says what was
-    // CHOSEN; this says what was USED, and only the second catches a dispatch that ignores the
-    // choice.
+    // Whether any workload was actually routed to the async pool.
     bool async_pool_used() const;
 
-    // How many async engines exist. One per mount, up to RUNAI_STREAMER_FS_MAX_ENGINES. Above that
-    // limit mounts share an engine, so this can be smaller than the number of mounts read.
+    // How many async engines exist
     unsigned async_engines() const;
 
-    // What each submission did, and which reader served each of its files. Kept for the last few
-    // submissions - see AsyncIoStats.
     const AsyncIoStats & stats() const;
 
     // What the async workers have done, summed over all of them and over the streamer's whole life.
-    //
-    // SEPARATE from stats(), and not a field on it, because the scopes differ. A SubmissionStats
-    // describes one submission and is recorded when it is dispatched; these are measured during the
-    // reads and belong to a worker, which serves many submissions at once.
-    //
-    // Zero when no async workload has run - there is nothing to sum.
     AsyncIoCounters async_counters() const;
 
     // For testing only. Credentials are streamer-scoped: call set_credentials first (these use whatever
     // was set there).
 
-    // single synchronous read request from offset in file
-    // returns common::ResponseCode::Success if successful or error code
     common::ResponseCode sync_read(const std::string & path, size_t offset, size_t bytesize, void * dst);
 
-    // async request to read a range asynchronously as multiple chunks
-    // returns common::ResponseCode::Success if successful or error code
     common::ResponseCode async_read(const std::string & path, size_t offset, size_t bytesize, void * dst, unsigned num_sizes, size_t * internal_sizes);
 
     // List files under prefix, which may be an object storage URI or a local filesystem path.
     // Applies fnmatch allow/ignore filtering (empty vectors mean no filter) and returns
-    // (full path, size) pairs. Uses the streamer's credentials (set_credentials). Throws common::Exception
-    // on error.
+    // (full path, size) pairs. 
     std::vector<std::pair<std::string, size_t>> list_files(
       const std::string & prefix,
       bool is_recursive,
@@ -187,10 +158,6 @@ struct Streamer
     // The block a caller must lay destinations out at for THESE paths: the largest any of their
     // mounts requires.
     //
-    // Not per path, and it does not need to be. Congruence at a power of two implies congruence at
-    // every smaller one, so one number satisfies every mount a request touches even though each mount
-    // gets its own engine and may use a smaller block internally.
-    //
     // Success        out_block is measured. FileAccessError from a mount that refuses O_DIRECT
     //                contributes nothing, which is right: it imposes no padding requirement.
     // UnknownError   nothing could be measured. out_block is the host page size - a layout value, so
@@ -199,7 +166,7 @@ struct Streamer
     common::ResponseCode direct_block_for(const std::vector<std::string> & paths, size_t & out_block);
 
  private:
-    // Try to parse path as an object storage URI; returns nullptr for a filesystem path
+    // Returns nullptr for a filesystem path
     std::shared_ptr<common::s3::StorageUri> try_parse_uri(const std::string & path);
 
     // Reject a submission that mixes backends, and lock the streamer to a single object-storage plugin
@@ -274,12 +241,8 @@ struct Streamer
     // submission's last response (i.e. submission_done).
     bool consume_submission_response(SubmissionId submission_id);
 
-    // Drain workloads[from .. end] as UnknownError so the responder/registry reach zero and the
-    // consumer does not hang, when dispatch fails after increment(). `from` is the index of the
-    // workload whose push threw: workloads[0 .. from) were already moved into the pool and are
-    // NEVER referenced here (excluded by position); workloads[from] is intact because Workload's
-    // move is noexcept (see the static_assert in async_request), so push_back's strong guarantee
-    // means a throwing dispatch never moved it. Best-effort - under severe OOM a push may throw too.
+    // Fail workloads[from .. end] so the consumer does not hang when dispatch throws. `from` is the
+    // index the loop threw on; the workloads before it were already moved into the pool.
     void drain_undispatched(SubmissionId submission_id, std::vector<Workload> & workloads, size_t from);
 
  private:

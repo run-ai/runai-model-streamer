@@ -63,7 +63,10 @@ struct S3ClientWrapper
          Params()
          {}
 
-         Params(std::shared_ptr<StorageUri> uri, const Credentials & credentials, size_t chunk_bytesize);
+         // concurrent_readers is how many readers the caller will run against this client. 0 leaves the
+         // backend at its own default.
+         Params(std::shared_ptr<StorageUri> uri, const Credentials & credentials, size_t chunk_bytesize,
+                unsigned concurrent_readers = 0);
 
          Params(std::shared_ptr<StorageUri> uri, size_t chunk_bytesize) : Params(uri, Credentials(), chunk_bytesize)
          {}
@@ -77,7 +80,15 @@ struct S3ClientWrapper
 
        private:
          std::string _endpoint;
+
+         // The value for CONCURRENT_READERS_KEY, or empty when there is nothing to send. Held as a
+         // string because the parameter list points into it and must stay valid for the whole call.
+         std::string _concurrent_readers;
       };
+
+      // Sent to the S3 plugin only, which sizes one client for this many readers. GCS and Azure reach
+      // the same capacity with one client per reader, so the key would be unknown to them.
+      static const char * const CONCURRENT_READERS_KEY;
 
       // Plugin C-ABI entry points. Resolved once (see resolve_api), because dlsym takes the process-wide
       // dynamic-linker lock: resolving per call would serialize every worker on the hot read/response path.

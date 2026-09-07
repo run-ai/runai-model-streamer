@@ -3,6 +3,7 @@
 #include "utils/logging/logging.h"
 #include "utils/env/env.h"
 
+#include <cstdlib>
 #include <thread>
 #include <algorithm>
 
@@ -58,9 +59,15 @@ ClientConfiguration::ClientConfiguration()
     unsigned nprocs = std::thread::hardware_concurrency();
     LOG(SPAM) << "Hardware concurrency detected: " << nprocs;
     unsigned default_max_concurrency = nprocs == 0 ? 8U : 1U;
+    // The number of clients the streamer will build, which cancels out below: N clients with
+    // nprocs*2/N threads each. Reading the wrong variable over-provisions by exactly that factor.
+    //
     // Both of these are DIVISORS below, and neither had any floor - a plain 0 in either variable
     // was an integer division by zero, no 2^32 required (env.h).
-    unsigned worker_concurrency = utils::getenv_positive<unsigned>("RUNAI_STREAMER_CONCURRENCY", 8U);
+    const char * const variable = std::getenv("RUNAI_STREAMER_OBJ_CONCURRENCY") != nullptr
+                                ? "RUNAI_STREAMER_OBJ_CONCURRENCY"
+                                : "RUNAI_STREAMER_CONCURRENCY";
+    unsigned worker_concurrency = utils::getenv_positive<unsigned>(variable, 8U);
     LOG(SPAM) << "Streamer worker concurrency: " << worker_concurrency;
     unsigned process_group_size = utils::getenv_positive<unsigned>("RUNAI_STREAMER_PROCESS_GROUP_SIZE", 1U);
     LOG(SPAM) << "Process group size: " << process_group_size;

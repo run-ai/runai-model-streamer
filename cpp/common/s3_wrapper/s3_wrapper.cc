@@ -16,11 +16,19 @@ namespace runai::llm::streamer::common::s3
 
 std::mutex S3ClientWrapper::_backend_handle_mutex;
 
-S3ClientWrapper::Params::Params(std::shared_ptr<StorageUri> uri, const Credentials & credentials, size_t chunk_bytesize) :
+const char * const S3ClientWrapper::CONCURRENT_READERS_KEY = "concurrent_readers";
+
+S3ClientWrapper::Params::Params(std::shared_ptr<StorageUri> uri, const Credentials & credentials, size_t chunk_bytesize,
+                                unsigned concurrent_readers) :
     chunk_bytesize(chunk_bytesize),
     uri(uri),
     credentials(credentials)
 {
+    if (concurrent_readers != 0 && uri != nullptr && !uri->is_gcs() && !uri->is_azure())
+    {
+        _concurrent_readers = std::to_string(concurrent_readers);
+    }
+
     if (auto ep = credentials.endpoint(); ep.has_value()) // endpoint passed as parameter by user application (in credentials)
     {
         _endpoint = ep.value();
@@ -49,6 +57,12 @@ const common::backend_api::ObjectClientConfig_t S3ClientWrapper::Params::to_conf
     config.endpoint_url = _endpoint.empty() ? nullptr : _endpoint.c_str();
 
     credentials.to_object_client_config(initial_params);
+
+    if (!_concurrent_readers.empty())
+    {
+        initial_params.push_back({ CONCURRENT_READERS_KEY, _concurrent_readers.c_str() });
+    }
+
     config.num_initial_params = initial_params.size();
     config.initial_params = initial_params.data();
     config.default_storage_chunk_size = chunk_bytesize;

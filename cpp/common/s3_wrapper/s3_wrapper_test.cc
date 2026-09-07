@@ -168,4 +168,51 @@ TEST(BackendHandle, GetPluginType_GCS)
     EXPECT_EQ(plugin_type, ObjectPluginType::ObjStorageGCS);
 }
 
+namespace
+{
+
+// The value the parameter list carries for `key`, or empty when the key is absent.
+std::string param_value(const S3ClientWrapper::Params & params, const char * key)
+{
+    std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
+    const auto config = params.to_config(initial_params);
+
+    for (unsigned i = 0; i < config.num_initial_params; ++i)
+    {
+        if (std::string(config.initial_params[i].key) == key)
+        {
+            return config.initial_params[i].value;
+        }
+    }
+    return std::string();
+}
+
+} // namespace
+
+// The reader count sizes ONE S3 client for the whole capacity, so it has to reach the plugin.
+TEST(Params, Concurrent_Readers_Reach_S3)
+{
+    const S3ClientWrapper::Params params(std::make_shared<StorageUri>("s3://bucket/path"), Credentials(),
+                                         8 * 1024 * 1024, 8);
+
+    EXPECT_EQ(param_value(params, S3ClientWrapper::CONCURRENT_READERS_KEY), "8");
+}
+
+// GCS and Azure reach the same capacity with one client per worker, and would report the key as
+// unknown. Unstated is also nothing to send.
+TEST(Params, Concurrent_Readers_Are_S3_Only)
+{
+    for (const auto * uri : { "gs://bucket/path", "az://bucket/path" })
+    {
+        const S3ClientWrapper::Params params(std::make_shared<StorageUri>(uri), Credentials(),
+                                             8 * 1024 * 1024, 8);
+
+        EXPECT_TRUE(param_value(params, S3ClientWrapper::CONCURRENT_READERS_KEY).empty()) << uri;
+    }
+
+    const S3ClientWrapper::Params unstated(std::make_shared<StorageUri>("s3://bucket/path"), Credentials(),
+                                           8 * 1024 * 1024, 0);
+    EXPECT_TRUE(param_value(unstated, S3ClientWrapper::CONCURRENT_READERS_KEY).empty());
+}
+
 }; // namespace runai::llm::streamer::common::s3

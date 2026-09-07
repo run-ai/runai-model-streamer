@@ -34,8 +34,13 @@ size_t inflight_window_bytes(size_t chunk_bytesize, double target_gbps)
     return result;
 }
 
-ClientConfiguration::ClientConfiguration()
+ClientConfiguration::ClientConfiguration(unsigned concurrent_readers, size_t part_size)
 {
+    if (part_size)
+    {
+        config.partSize = part_size;
+    }
+
     unsigned long max_retries = 0;
     if (utils::try_getenv("RUNAI_STREAMER_S3_MAX_RETRIES", max_retries))
     {
@@ -58,12 +63,22 @@ ClientConfiguration::ClientConfiguration()
         config.maxConnections = max_connections;
     }
 
+    // Per reader, both here and in the SDK default it replaces - so the process targets the same total
+    // as when it built one client per reader.
     unsigned long target_gbps = utils::getenv<unsigned long>("RUNAI_STREAMER_S3_TARGET_GBPS", 0);
     if (target_gbps)
     {
-        LOG(DEBUG) << "S3 target throughput is set to " << target_gbps << " Gbps";
         config.throughputTargetGbps = target_gbps;
     }
+
+    if (concurrent_readers > 1)
+    {
+        config.throughputTargetGbps *= concurrent_readers;
+    }
+
+    LOG(DEBUG) << "S3 target throughput is " << config.throughputTargetGbps << " Gbps for "
+               << concurrent_readers << " concurrent readers on one client, with a part size of "
+               << config.partSize << " bytes";
 
     // if the transfer speed is less than the low speed limit for request_timeout_ms milliseconds the transfer is aborted and retried
     const auto request_timeout_ms = utils::getenv<unsigned long>("RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS", 1000);
