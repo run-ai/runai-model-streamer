@@ -32,9 +32,12 @@ TEST(Creation, ObjectStorageRetryTimeout)
     EXPECT_EQ(config.object_storage_retry_timeout, std::chrono::seconds(expected));
 }
 
+// The legacy variable alone still configures both backends.
 TEST(Creation, Concurrency)
 {
     const auto expected = utils::random::number<int>(1, 1000);
+    utils::temp::UnsetEnv obj(std::string("RUNAI_STREAMER_OBJ_CONCURRENCY"));
+    utils::temp::UnsetEnv depth(std::string("RUNAI_STREAMER_FS_QUEUE_DEPTH"));
     utils::temp::Env size_("RUNAI_STREAMER_CONCURRENCY", expected);
 
     Config config;
@@ -157,6 +160,37 @@ TEST(Creation, The_Two_Readers_Default_Apart)
 
     EXPECT_EQ(config.concurrency, Config::default_concurrency);
     EXPECT_EQ(config.fs_async_queue_depth.default_value(), Config::default_fs_async_queue_depth);
+}
+
+// Object storage takes the specific variable, and nothing about the file system moves with it.
+TEST(Creation, Obj_Concurrency_Serves_Object_Storage_Only)
+{
+    utils::temp::UnsetEnv legacy(std::string("RUNAI_STREAMER_CONCURRENCY"));
+    utils::temp::UnsetEnv depth(std::string("RUNAI_STREAMER_FS_QUEUE_DEPTH"));
+    utils::temp::Env obj(std::string("RUNAI_STREAMER_OBJ_CONCURRENCY"), 24UL);
+
+    const Config config;
+
+    EXPECT_EQ(config.s3_concurrency, 24u);
+    EXPECT_EQ(config.concurrency, Config::default_concurrency);
+    EXPECT_EQ(config.fs_async_queue_depth.default_value(), Config::default_fs_async_queue_depth);
+}
+
+TEST(Creation, Obj_Concurrency_Wins_Over_Concurrency)
+{
+    utils::temp::Env legacy(std::string("RUNAI_STREAMER_CONCURRENCY"), 4UL);
+    utils::temp::Env obj(std::string("RUNAI_STREAMER_OBJ_CONCURRENCY"), 24UL);
+
+    const Config config;
+
+    EXPECT_EQ(config.s3_concurrency, 24u);
+    EXPECT_EQ(config.concurrency, 4u) << "the legacy variable still serves the file system";
+}
+
+TEST(Creation, Zero_Obj_Concurrency)
+{
+    utils::temp::Env obj(std::string("RUNAI_STREAMER_OBJ_CONCURRENCY"), 0UL);
+    EXPECT_THROW(Config(), std::exception);
 }
 
 // A plain number is a complete value: it applies to every mount.

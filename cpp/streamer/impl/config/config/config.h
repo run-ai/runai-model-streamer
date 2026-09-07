@@ -13,8 +13,11 @@ namespace runai::llm::streamer::impl
 
 // Environment variables, with their defaults when unset (config.cc):
 //
-//     RUNAI_STREAMER_CONCURRENCY        -> s3_concurrency (8), and the file system readers when
-//                                          FS_QUEUE_DEPTH is unset. Legacy, kept for compatibility.
+//     RUNAI_STREAMER_CONCURRENCY        -> s3_concurrency when OBJ_CONCURRENCY is unset, and the file
+//                                          system readers when FS_QUEUE_DEPTH is unset. Legacy, kept
+//                                          for compatibility.
+//     RUNAI_STREAMER_OBJ_CONCURRENCY    -> s3_concurrency (8): how much object storage work runs at
+//                                          once. Object storage only.
 //     RUNAI_STREAMER_CHUNK_BYTESIZE     -> fs_sync_read_block_bytesize (2 MiB, also the minimum) AND
 //                                          s3_block_bytesize (8 MiB, minimum 5 MiB).
 //     RUNAI_STREAMER_FS_CHUNK_BYTESIZE  -> fs_async_chunk_bytesize (8 MiB). File system only.
@@ -54,10 +57,15 @@ struct Config
     // than a queue slot.
     static constexpr unsigned default_concurrency = 16;
 
+    static constexpr unsigned default_s3_concurrency = 8;
+
     static constexpr const char * default_fs_strategy_candidates = "io_uring_direct,libaio_direct,sync_buffered";
 
     // Threads in the synchronous file system pool.
     unsigned concurrency;
+
+    // How much object storage work runs at once. Named for the capacity, not for clients, so it stays
+    // accurate if an implementation stops using one client per unit.
     unsigned s3_concurrency;
     size_t s3_block_bytesize;
     size_t fs_sync_read_block_bytesize;

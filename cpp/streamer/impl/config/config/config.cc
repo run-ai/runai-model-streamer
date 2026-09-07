@@ -38,6 +38,18 @@ FsQueueDepth resolve_fs_queue_depth()
     return FsQueueDepth(Config::default_fs_async_queue_depth);
 }
 
+unsigned resolve_obj_concurrency()
+{
+    unsigned long configured = 0;
+    if (utils::try_getenv("RUNAI_STREAMER_OBJ_CONCURRENCY", configured))
+    {
+        return static_cast<unsigned>(configured);
+    }
+
+    return static_cast<unsigned>(utils::getenv<unsigned long>("RUNAI_STREAMER_CONCURRENCY",
+                                                              Config::default_s3_concurrency));
+}
+
 // Same order, different default. The per-type entries are dropped: this is one pool for every mount.
 unsigned resolve_fs_concurrency()
 {
@@ -75,6 +87,10 @@ Config::Config(unsigned concurrency, unsigned s3_concurrency, size_t s3_block_by
     (void)posix_io::direct_block_size();
 
     ASSERT(concurrency) << " threadpool size must be a positive number";
+
+    // Zero divides the workload between no workers, and asks for a zero file descriptor budget.
+    ASSERT(s3_concurrency) << "object storage concurrency must be a positive number";
+
     ASSERT(s3_block_bytesize) << "s3 chunk bytesize must be positive";
 
     // Tasks are cut on multiples of this, so zero would divide by zero rather than merely misbehave.
@@ -101,7 +117,7 @@ Config::Config(unsigned concurrency, unsigned s3_concurrency, size_t s3_block_by
 
 Config::Config(bool enforce_minimum /* = true */) :
     Config(resolve_fs_concurrency(),
-           utils::getenv<unsigned long>("RUNAI_STREAMER_CONCURRENCY", 8UL),
+           resolve_obj_concurrency(),
            utils::getenv<size_t>("RUNAI_STREAMER_CHUNK_BYTESIZE", common::s3::S3ClientWrapper::default_chunk_bytesize),
            utils::getenv<size_t>("RUNAI_STREAMER_CHUNK_BYTESIZE", min_fs_sync_read_block_bytesize),
            enforce_minimum,
