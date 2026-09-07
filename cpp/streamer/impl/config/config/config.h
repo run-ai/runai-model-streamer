@@ -42,8 +42,6 @@ struct Config
            unsigned long object_storage_retry_timeout_seconds = 0);
     Config(bool enforce_minimum = true);
 
-    unsigned max_concurrency() const;
-
     static constexpr size_t min_fs_sync_read_block_bytesize = 2 * 1024 * 1024;
 
     // No shared floor with the synchronous block size: 2 MiB suits a reader that wants fewer, larger

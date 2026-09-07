@@ -4,8 +4,6 @@
 
 #include <utility>
 
-#include <algorithm>
-
 #include "common/s3_wrapper/s3_wrapper.h"
 
 #include "utils/env/env.h"
@@ -126,11 +124,6 @@ Config::Config(bool enforce_minimum /* = true */) :
            utils::getenv<std::string>("RUNAI_STREAMER_FS_STRATEGY", default_fs_strategy_candidates),
            utils::getenv<unsigned long>("RUNAI_STREAMER_S3_TIMEOUT", 0UL))
 {}
-
-unsigned Config::max_concurrency() const
-{
-    return std::max(concurrency, s3_concurrency);
-}
 
 std::ostream & operator<<(std::ostream & os, const Config & config)
 {
