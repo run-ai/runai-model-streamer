@@ -174,13 +174,6 @@ constexpr bool ladder_is_usable(const std::array<size_t, N> & rungs)
     return N != 0 && rungs[N - 1] == MaxProbeBlock;
 }
 
-// What the kernel calls the filesystem on this device, from /proc/self/mountinfo.
-//
-// mountinfo rather than the statfs magic, because the magic cannot name what we need to distinguish.
-// Measured on one host: two different FUSE mounts report `fuseblk` and nothing at all, while mountinfo
-// says `fuse.portal` and `fuse.gvfsd-fuse`; ext4 reports as `ext2/ext3`. virtiofs is FUSE-based, so no
-// magic can separate it from any other FUSE filesystem.
-//
 // Field 3 is "major:minor", which is st_dev, and the type is the field after the " - " separator:
 //
 //     36 25 252:1 / /mnt rw,relatime - ext4 /dev/sda1 rw
@@ -188,10 +181,8 @@ constexpr bool ladder_is_usable(const std::array<size_t, N> & rungs)
 //     id parent DEVICE                 TYPE
 //
 // Read once and cached: mountinfo does not change under a running streamer in any way that matters,
-// and the alternative is one open+parse per mount probe.
-//
-// An empty answer is normal, not an error - a container may not present mountinfo, and a caller that
-// wanted a per-type default simply falls back to its global one.
+// and the alternative is one open and parse per mount probe. An empty map is normal - a container may
+// not present mountinfo, and the caller then keeps its global default.
 const std::map<dev_t, std::string> & fs_types_by_device()
 {
     static const std::map<dev_t, std::string> types = []

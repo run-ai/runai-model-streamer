@@ -4,6 +4,7 @@ runai_cc_auto_library(
     name = "config",
     deps = [
         "//posix_io/alignment",
+        "//streamer/impl/config/fs_queue_depth",
         "//utils/env",
         "//utils/logging",
         "//common/s3_wrapper",

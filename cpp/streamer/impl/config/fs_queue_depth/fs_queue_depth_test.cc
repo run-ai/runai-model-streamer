@@ -14,81 +14,66 @@ namespace runai::llm::streamer::impl
 // needs per-type entries.
 TEST(FsQueueDepth, A_Plain_Number_Applies_Everywhere)
 {
-    const auto parallelism = FsQueueDepth::parse("512");
+    const auto depth = FsQueueDepth::parse("512");
 
-    EXPECT_EQ(parallelism.default_value(), 512u);
-    EXPECT_TRUE(parallelism.entries().empty());
+    EXPECT_EQ(depth.default_value(), 512u);
+    EXPECT_TRUE(depth.entries().empty());
 
     for (const auto * type : { "ext4", "nfs", "nfs4", "virtiofs", "overlay", "" })
     {
-        EXPECT_EQ(parallelism.for_type(type), 512u) << type;
+        EXPECT_EQ(depth.for_type(type), 512u) << type;
     }
 }
 
 TEST(FsQueueDepth, Type_Entries_Override_The_Default)
 {
-    const auto parallelism = FsQueueDepth::parse("512,nfs=64,virtiofs=256");
+    const auto depth = FsQueueDepth::parse("512,nfs=64,virtiofs=256");
 
-    EXPECT_EQ(parallelism.default_value(), 512u);
-    ASSERT_EQ(parallelism.entries().size(), 2u);
+    EXPECT_EQ(depth.default_value(), 512u);
+    ASSERT_EQ(depth.entries().size(), 2u);
 
-    EXPECT_EQ(parallelism.for_type("nfs"), 64u);
-    EXPECT_EQ(parallelism.for_type("virtiofs"), 256u);
-    EXPECT_EQ(parallelism.for_type("ext4"), 512u) << "a type with no entry falls back to the default";
+    EXPECT_EQ(depth.for_type("nfs"), 64u);
+    EXPECT_EQ(depth.for_type("virtiofs"), 256u);
+    EXPECT_EQ(depth.for_type("ext4"), 512u) << "a type with no entry falls back to the default";
 }
 
 // The reason keys are prefixes: the kernel reports `nfs` for a v3 mount and `nfs4` for a v4 one, and a
 // user should not have to know which they have.
 TEST(FsQueueDepth, A_Key_Matches_As_A_Prefix)
 {
-    const auto parallelism = FsQueueDepth::parse("512,nfs=64,fuse=128");
+    const auto depth = FsQueueDepth::parse("512,nfs=64,fuse=128");
 
-    EXPECT_EQ(parallelism.for_type("nfs"), 64u);
-    EXPECT_EQ(parallelism.for_type("nfs4"), 64u);
-    EXPECT_EQ(parallelism.for_type("fuse.gvfsd-fuse"), 128u);
+    EXPECT_EQ(depth.for_type("nfs"), 64u);
+    EXPECT_EQ(depth.for_type("nfs4"), 64u);
+    EXPECT_EQ(depth.for_type("fuse.gvfsd-fuse"), 128u);
 
-    EXPECT_EQ(parallelism.for_type("nf"), 512u) << "a shorter type is not matched by a longer key";
+    EXPECT_EQ(depth.for_type("nf"), 512u) << "a shorter type is not matched by a longer key";
 }
 
-// First match, not longest match, and the caller is told which entry answered so it can log it. Written
-// down because it is the one surprising case: `nfs4` mounts take the `nfs` entry when it is listed
-// first, and writing the longer key first gives the other answer.
-TEST(FsQueueDepth, The_First_Matching_Entry_Wins_And_Is_Reported)
+// First match, not longest match. Written down because it is the one surprising case: `nfs4` mounts
+// take the `nfs` entry when it is listed first, and writing the longer key first gives the other
+// answer.
+TEST(FsQueueDepth, The_First_Matching_Entry_Wins)
 {
     const auto first_shorter = FsQueueDepth::parse("512,nfs=64,nfs4=32");
-    size_t matched = 0;
-
-    EXPECT_EQ(first_shorter.for_type("nfs4", matched), 64u);
-    EXPECT_EQ(matched, 0u) << "the caller must be able to name the entry that answered";
+    EXPECT_EQ(first_shorter.for_type("nfs4"), 64u);
 
     const auto first_longer = FsQueueDepth::parse("512,nfs4=32,nfs=64");
-    EXPECT_EQ(first_longer.for_type("nfs4", matched), 32u);
-    EXPECT_EQ(matched, 0u);
-    EXPECT_EQ(first_longer.for_type("nfs", matched), 64u);
-    EXPECT_EQ(matched, 1u);
-}
-
-TEST(FsQueueDepth, The_Default_Reports_Itself_As_No_Entry)
-{
-    const auto parallelism = FsQueueDepth::parse("512,nfs=64");
-    size_t matched = 0;
-
-    EXPECT_EQ(parallelism.for_type("ext4", matched), 512u);
-    EXPECT_EQ(matched, parallelism.entries().size()) << "out of range means the default answered";
+    EXPECT_EQ(first_longer.for_type("nfs4"), 32u);
+    EXPECT_EQ(first_longer.for_type("nfs"), 64u);
 }
 
 TEST(FsQueueDepth, Whitespace_And_Case_Are_Ignored)
 {
-    const auto parallelism = FsQueueDepth::parse("  512 , NFS = 64 , VirtioFS=256 ");
+    const auto depth = FsQueueDepth::parse("  512 , NFS = 64 , VirtioFS=256 ");
 
-    EXPECT_EQ(parallelism.default_value(), 512u);
-    EXPECT_EQ(parallelism.for_type("nfs4"), 64u);
-    EXPECT_EQ(parallelism.for_type("VIRTIOFS"), 256u);
+    EXPECT_EQ(depth.default_value(), 512u);
+    EXPECT_EQ(depth.for_type("nfs4"), 64u);
+    EXPECT_EQ(depth.for_type("VIRTIOFS"), 256u);
 }
 
-// Every malformed value is refused at parse time, with the variable named. A value the user meant to
-// set and mistyped must never read as "unset" - that is the rule the rest of the streamer's numeric
-// variables already follow.
+// Every malformed value is refused at parse time, with the variable named: a value the user meant to
+// set and mistyped must never read as a working one.
 TEST(FsQueueDepth, Malformed_Values_Are_Refused)
 {
     for (const auto * bad : {
@@ -115,11 +100,11 @@ TEST(FsQueueDepth, Malformed_Values_Are_Refused)
 
 TEST(FsQueueDepth, A_Constructed_Value_Behaves_Like_A_Plain_Number)
 {
-    const FsQueueDepth parallelism(64);
+    const FsQueueDepth depth(64);
 
-    EXPECT_EQ(parallelism.default_value(), 64u);
-    EXPECT_TRUE(parallelism.entries().empty());
-    EXPECT_EQ(parallelism.for_type("nfs"), 64u);
+    EXPECT_EQ(depth.default_value(), 64u);
+    EXPECT_TRUE(depth.entries().empty());
+    EXPECT_EQ(depth.for_type("nfs"), 64u);
 }
 
 // The log line an operator reads back. It has to show the entries, or a value that parsed differently
@@ -130,6 +115,22 @@ TEST(FsQueueDepth, It_Prints_What_It_Parsed)
     stream << FsQueueDepth::parse("512,nfs=64,virtiofs=256");
 
     EXPECT_EQ(stream.str(), "512, nfs=64, virtiofs=256");
+}
+
+// The engine count follows from the setting: a mount is only tuned separately if it has its own
+// engine, so distinct values is the floor RUNAI_STREAMER_FS_MAX_ENGINES is raised to.
+TEST(FsQueueDepth, Distinct_Values_Counts_What_Needs_Its_Own_Engine)
+{
+    EXPECT_EQ(FsQueueDepth::parse("512").distinct_values(), 1u);
+    EXPECT_EQ(FsQueueDepth::parse("512,nfs=64").distinct_values(), 2u);
+    EXPECT_EQ(FsQueueDepth::parse("512,nfs=64,virtiofs=256").distinct_values(), 3u);
+
+    EXPECT_EQ(FsQueueDepth::parse("512,nfs=512").distinct_values(), 1u)
+        << "an entry equal to the default asks for nothing new";
+    EXPECT_EQ(FsQueueDepth::parse("512,nfs=64,ceph=64").distinct_values(), 2u)
+        << "two types at one value can share one engine";
+
+    EXPECT_EQ(FsQueueDepth(64).distinct_values(), 1u);
 }
 
 }; // namespace runai::llm::streamer::impl

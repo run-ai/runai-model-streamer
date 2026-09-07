@@ -1765,4 +1765,70 @@ TEST(Async, ADeadEngineDropsItsMountToTheSynchronousReader)
     }
 }
 
+// Two mounts of different types get the depth their type asks for, from one setting.
+//
+// The engine factory delegates to the real one and records the depth it was asked for - the only place
+// the resolution is observable, since everything downstream is the ring's own size. A mock engine
+// cannot be used here: it never completes, so the read would never return.
+TEST(Async, QueueDepthIsResolvedPerMount)
+{
+    const auto data = utils::random::buffer(8192);
+    utils::temp::Dir dir_one;
+    utils::temp::Dir dir_two;
+    utils::temp::File nfs_file(dir_one.path, utils::random::string(), data);
+    utils::temp::File local_file(dir_two.path, utils::random::string(), data);
+
+    const std::string nfs_dir = dir_one.path;
+
+    utils::temp::Env depth(std::string("RUNAI_STREAMER_FS_QUEUE_DEPTH"), std::string("512,nfs=64"));
+    utils::temp::Env group(std::string("RUNAI_STREAMER_PROCESS_GROUP_SIZE"), 1UL);
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("io_uring_buffered"));
+
+    // FS_MAX_ENGINES is deliberately NOT set: a per-type depth only reaches a mount that has its own
+    // engine, so the setting raises the engine floor itself. At the default of one engine the second
+    // mount would share the first one, and its depth with it.
+    utils::temp::UnsetEnv engines(std::string("RUNAI_STREAMER_FS_MAX_ENGINES"));
+
+    std::mutex recorded_mutex;
+    std::vector<unsigned> recorded;
+
+    Streamer::Environment environment;
+    environment.availability = [](posix_io::Strategy) { return common::ResponseCode::Success; };
+    environment.mount = [nfs_dir](const std::string & directory) -> posix_io::MountCapability
+    {
+        const bool is_nfs = directory == nfs_dir;
+        return posix_io::MountCapability{ is_nfs ? makedev(8, 1) : makedev(8, 2), false,
+                                          is_nfs ? "nfs4" : "ext4" };
+    };
+    environment.engine = [&recorded, &recorded_mutex](posix_io::Strategy s, const posix_io::AsyncIoConfig & config)
+    {
+        {
+            const auto guard = std::unique_lock<std::mutex>(recorded_mutex);
+            recorded.push_back(config.depth);
+        }
+        return posix_io::make_io_engine(s, config);
+    };
+
+    Streamer streamer(Config(), std::move(environment));
+
+    for (const auto & path : { nfs_file.path, local_file.path })
+    {
+        std::vector<char> dst(data.size());
+        std::vector<FileRanges> request(1);
+        request[0].path = path;
+        request[0].ranges.push_back(ReadRange{ 0, data.size(), dst.data() });
+
+        SubmissionId submission_id = 0;
+        ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+        EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+        EXPECT_EQ(std::vector<uint8_t>(dst.begin(), dst.end()), data);
+    }
+
+    const auto guard = std::unique_lock<std::mutex>(recorded_mutex);
+    ASSERT_EQ(recorded.size(), 2u) << "one engine per mount, so two engines";
+
+    EXPECT_EQ(std::set<unsigned>(recorded.begin(), recorded.end()), (std::set<unsigned>{ 64, 512 }))
+        << "the nfs4 mount takes the nfs entry, the ext4 mount takes the default";
+}
+
 }; // namespace runai::llm::streamer::impl

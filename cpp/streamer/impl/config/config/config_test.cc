@@ -1,6 +1,8 @@
 #include "streamer/impl/config/config/config.h"
 
 #include <gtest/gtest.h>
+
+#include "common/exception/exception.h"
 #include <algorithm>
 
 #include "common/s3_wrapper/s3_wrapper.h"
@@ -67,6 +69,103 @@ TEST(Creation, Zero_Concurrency)
 {
     utils::temp::Env size_("RUNAI_STREAMER_CONCURRENCY", 0);
     EXPECT_THROW(Config(), std::exception);
+}
+
+// The queue depth is PARSED, not read as a number, so a per-type value survives into Config.
+TEST(Creation, Queue_Depth_Is_Parsed)
+{
+    {
+        utils::temp::Env depth(std::string("RUNAI_STREAMER_FS_QUEUE_DEPTH"), std::string("512,nfs=64"));
+
+        const Config config;
+
+        EXPECT_EQ(config.fs_async_queue_depth.default_value(), 512u);
+        EXPECT_EQ(config.fs_async_queue_depth.for_type("nfs4"), 64u);
+        EXPECT_EQ(config.fs_async_queue_depth.for_type("ext4"), 512u);
+    }
+
+    {
+        utils::temp::UnsetEnv unset(std::string("RUNAI_STREAMER_FS_QUEUE_DEPTH"));
+
+        const Config config;
+
+        EXPECT_EQ(config.fs_async_queue_depth.default_value(), Config::default_fs_async_queue_depth);
+        EXPECT_TRUE(config.fs_async_queue_depth.entries().empty());
+    }
+}
+
+// A malformed value fails where every other malformed variable fails - building the Config, which
+// runai_start turns into InvalidParameterError. Silently falling back would leave the typo undetected.
+TEST(Creation, Malformed_Queue_Depth_Is_Rejected)
+{
+    for (const auto * bad : { "nfs=64", "abc", "0", "512,nfs=0", "512,nfs=64,nfs=32", "-1" })
+    {
+        utils::temp::Env depth(std::string("RUNAI_STREAMER_FS_QUEUE_DEPTH"), std::string(bad));
+
+        EXPECT_THROW(Config(), common::Exception) << "accepted: '" << bad << "'";
+    }
+}
+
+// Both file system readers take the queue depth, so a host that resolves the synchronous reader is
+// configured by the same variable. The per-type entries are for the mounts, so the pool takes the
+// leading default.
+TEST(Creation, Queue_Depth_Serves_Both_File_System_Readers)
+{
+    utils::temp::UnsetEnv legacy(std::string("RUNAI_STREAMER_CONCURRENCY"));
+    utils::temp::Env depth(std::string("RUNAI_STREAMER_FS_QUEUE_DEPTH"), std::string("256,nfs=64"));
+
+    const Config config;
+
+    EXPECT_EQ(config.concurrency, 256u);
+    EXPECT_EQ(config.fs_async_queue_depth.for_type("nfs4"), 64u);
+    EXPECT_EQ(config.fs_async_queue_depth.for_type("ext4"), 256u);
+}
+
+// The legacy variable still configures the file system when the specific one is unset - otherwise an
+// existing setting would stop working on upgrade, silently.
+TEST(Creation, Concurrency_Serves_The_File_System_When_Queue_Depth_Is_Unset)
+{
+    utils::temp::UnsetEnv unset(std::string("RUNAI_STREAMER_FS_QUEUE_DEPTH"));
+    utils::temp::Env legacy(std::string("RUNAI_STREAMER_CONCURRENCY"), 32UL);
+
+    const Config config;
+
+    EXPECT_EQ(config.concurrency, 32u);
+    EXPECT_EQ(config.fs_async_queue_depth.default_value(), 32u);
+    EXPECT_TRUE(config.fs_async_queue_depth.entries().empty());
+}
+
+TEST(Creation, Queue_Depth_Wins_Over_Concurrency)
+{
+    utils::temp::Env legacy(std::string("RUNAI_STREAMER_CONCURRENCY"), 32UL);
+    utils::temp::Env depth(std::string("RUNAI_STREAMER_FS_QUEUE_DEPTH"), std::string("256"));
+
+    const Config config;
+
+    EXPECT_EQ(config.concurrency, 256u);
+    EXPECT_EQ(config.fs_async_queue_depth.default_value(), 256u);
+}
+
+// Unset is not "set to the default": with nothing set the two readers differ, because a read costs a
+// thread in one and a queue slot in the other.
+TEST(Creation, The_Two_Readers_Default_Apart)
+{
+    utils::temp::UnsetEnv legacy(std::string("RUNAI_STREAMER_CONCURRENCY"));
+    utils::temp::UnsetEnv depth(std::string("RUNAI_STREAMER_FS_QUEUE_DEPTH"));
+
+    const Config config;
+
+    EXPECT_EQ(config.concurrency, Config::default_concurrency);
+    EXPECT_EQ(config.fs_async_queue_depth.default_value(), Config::default_fs_async_queue_depth);
+}
+
+// A plain number is a complete value: it applies to every mount.
+TEST(Creation, A_Plain_Number_Applies_Everywhere)
+{
+    const Config config(16, 8, 5 * 1024 * 1024, 2 * 1024 * 1024, false, 8 * 1024 * 1024, FsQueueDepth(64));
+
+    EXPECT_EQ(config.fs_async_queue_depth.default_value(), 64u);
+    EXPECT_EQ(config.fs_async_queue_depth.for_type("nfs"), 64u);
 }
 
 }; // namespace runai::llm::streamer::impl

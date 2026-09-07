@@ -1,5 +1,7 @@
 #include "streamer/impl/pools/backend_pools.h"
 
+#include <algorithm>
+
 #include <sys/sysmacros.h>   // major/minor - moved out of sys/types.h in glibc 2.28
 
 #include <atomic>
@@ -15,7 +17,7 @@ BackendPools::BackendPools(Handler filesystem_handler,
                            AsyncWorkerFactory filesystem_async_factory,
                            WorkerFactory object_storage_factory,
                            unsigned filesystem_size,
-                           unsigned object_storage_size) :
+                           unsigned object_storage_size, unsigned min_async_engines) :
     _filesystem_handler(std::move(filesystem_handler)),
     _filesystem_async_factory(std::move(filesystem_async_factory)),
     _object_storage_factory(std::move(object_storage_factory)),
@@ -23,7 +25,8 @@ BackendPools::BackendPools(Handler filesystem_handler,
     _object_storage_size(object_storage_size),
     // This limit is per PROCESS, not per node. Each engine has its own queue depth, so N engines mean
     // N times the depth of reads running at the device.
-    _max_async_engines(utils::getenv_positive<unsigned>("RUNAI_STREAMER_FS_MAX_ENGINES", 1U))
+    _max_async_engines(std::max(utils::getenv_positive<unsigned>("RUNAI_STREAMER_FS_MAX_ENGINES", 1U),
+                                min_async_engines))
 {}
 
 void BackendPools::push(Pool pool, Workload && workload)
@@ -48,7 +51,7 @@ void BackendPools::push(Pool pool, Workload && workload)
     _filesystem_pool->push(std::move(workload));
 }
 
-void BackendPools::push_async(dev_t device, size_t block, Workload && workload)
+void BackendPools::push_async(dev_t device, size_t block, unsigned depth, Workload && workload)
 {
     utils::ThreadPool<Workload> * pool = nullptr;
 
@@ -71,7 +74,7 @@ void BackendPools::push_async(dev_t device, size_t block, Workload && workload)
             // The block is bound HERE, when this mount's engine is created, and never changes for
             // it - which is right, because the engine serves this one mount for its whole life.
             auto created = std::make_unique<utils::ThreadPool<Workload>>(
-                [factory = _filesystem_async_factory, device, block]() { return factory(device, block); }, 1);
+                [factory = _filesystem_async_factory, device, block, depth]() { return factory(device, block, depth); }, 1);
             pool = created.get();
             _async_pools.emplace(device, std::move(created));
             _async_by_device.emplace(device, pool);
@@ -92,9 +95,10 @@ void BackendPools::push_async(dev_t device, size_t block, Workload && workload)
             // engine. Nothing else would show this. Logged once per mount, because the choice is
             // permanent.
             LOG(WARNING) << "Mount " << major(device) << ":" << minor(device) << " shares an engine: "
-                         << _async_pools.size() << " already in use. A stall on one of these mounts"
-                         << " now stalls the others; raise RUNAI_STREAMER_FS_MAX_ENGINES to separate"
-                         << " them";
+                         << _async_pools.size() << " already in use, so it reads at that engine's"
+                         << " queue depth and direct-I/O block, not the " << depth << " and " << block
+                         << " it resolved. A stall on one of these mounts now stalls the others;"
+                         << " raise RUNAI_STREAMER_FS_MAX_ENGINES to separate them";
         }
     }
 

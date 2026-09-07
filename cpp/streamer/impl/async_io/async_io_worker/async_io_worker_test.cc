@@ -138,10 +138,14 @@ struct Driver
     // measurement (mount_block 0 -> provisional MaxProbeBlock) while the engine still advertises a
     // usable alignment. Passing 0 for BOTH would make the engine advertise an alignment of 0, and
     // every congruence test divides by it.
+    // `depth` is the node-wide queue depth the streamer resolved for this mount. It reaches the worker
+    // directly, so setting RUNAI_STREAMER_FS_QUEUE_DEPTH in the fixture no longer changes it.
     explicit Driver(Strategy strategy = Strategy::IoUringBuffered, size_t block = 4096,
-                    std::optional<size_t> mount_block = std::nullopt) :
+                    std::optional<size_t> mount_block = std::nullopt,
+                    unsigned depth = Config::default_fs_async_queue_depth) :
         worker(strategy,
                mount_block.value_or(block),
+               depth,
                [this, block](Strategy, const posix_io::AsyncIoConfig & config)
                {
                    posix_io::Limits limits;
@@ -1129,8 +1133,8 @@ TEST(AsyncIoWorker, Does_Not_Block_While_The_Window_Has_Room)
 {
     // One chunk against a depth of 3 (the floor), so something is in flight and the window is not
     // full - the case that used to block.
-    Fixture fixture({ ChunkSize }, 1 /* concurrency */, 0 /* start */, 1 /* queue depth -> floors at 3 */);
-    Driver driver;
+    Fixture fixture({ ChunkSize });
+    Driver driver(Strategy::IoUringBuffered, 4096, std::nullopt, 1 /* depth -> floors at 3 */);
 
     driver.execute(fixture.workload());
     driver.issue();
@@ -1144,8 +1148,8 @@ TEST(AsyncIoWorker, Does_Not_Block_While_The_Window_Has_Room)
 // stopped worker would never notice.
 TEST(AsyncIoWorker, Blocks_Once_The_Window_Is_Full)
 {
-    Fixture fixture({ ChunkSize, ChunkSize, ChunkSize }, 1, 0, 1 /* depth floors at 3 */);
-    Driver driver;
+    Fixture fixture({ ChunkSize, ChunkSize, ChunkSize });
+    Driver driver(Strategy::IoUringBuffered, 4096, std::nullopt, 1 /* depth -> floors at 3 */);
 
     driver.execute(fixture.workload());
     driver.issue();
@@ -1341,7 +1345,7 @@ TEST(AsyncIoWorker, An_Engine_That_Cannot_Be_Built_Is_Not_An_Internal_Error)
     Fixture fixture({ ChunkSize });
 
     bool told = false;
-    AsyncIoWorker worker(Strategy::IoUringBuffered, 4096,
+    AsyncIoWorker worker(Strategy::IoUringBuffered, 4096, Config::default_fs_async_queue_depth,
                          [](Strategy, const posix_io::AsyncIoConfig &) -> std::unique_ptr<posix_io::IoEngine>
                          {
                              return nullptr;   // this host cannot serve the strategy it was given

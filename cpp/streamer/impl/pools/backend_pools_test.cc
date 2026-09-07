@@ -36,7 +36,8 @@ struct NoopWorker : utils::Worker<Workload>
 
 // Two factories, because the two are no longer the same type: the filesystem async factory takes the
 // mount's measured block, the object-storage one takes nothing.
-std::unique_ptr<utils::Worker<Workload>> noop_async_factory(dev_t /* device */, size_t /* block */)
+std::unique_ptr<utils::Worker<Workload>> noop_async_factory(dev_t /* device */, size_t /* block */,
+                                                           unsigned /* depth */)
 {
     return std::make_unique<NoopWorker>();
 }
@@ -56,9 +57,9 @@ TEST(BackendPools, DefaultsToOneEngineForAllMounts)
 
     BackendPools pools(run, noop_async_factory, noop_factory, 2, 3);
 
-    pools.push_async(makedev(8, 1), 0 /* block: not probed in this test */, Workload{});
-    pools.push_async(makedev(8, 2), 0 /* block: not probed in this test */, Workload{});
-    pools.push_async(makedev(259, 0), 0 /* block: not probed in this test */, Workload{});
+    pools.push_async(makedev(8, 1), 0 /* block: not probed in this test */, 512 /* depth */, Workload{});
+    pools.push_async(makedev(8, 2), 0 /* block: not probed in this test */, 512 /* depth */, Workload{});
+    pools.push_async(makedev(259, 0), 0 /* block: not probed in this test */, 512 /* depth */, Workload{});
 
     EXPECT_EQ(pools.async_engines(), 1u) << "the default cap is 1";
 }
@@ -70,13 +71,13 @@ TEST(BackendPools, EnginePerMountUpToTheCap)
 
     BackendPools pools(run, noop_async_factory, noop_factory, 2, 3);
 
-    pools.push_async(makedev(8, 1), 0 /* block: not probed in this test */, Workload{});
+    pools.push_async(makedev(8, 1), 0 /* block: not probed in this test */, 512 /* depth */, Workload{});
     EXPECT_EQ(pools.async_engines(), 1u);
 
-    pools.push_async(makedev(8, 2), 0 /* block: not probed in this test */, Workload{});
+    pools.push_async(makedev(8, 2), 0 /* block: not probed in this test */, 512 /* depth */, Workload{});
     EXPECT_EQ(pools.async_engines(), 2u);
 
-    pools.push_async(makedev(259, 0), 0 /* block: not probed in this test */, Workload{});
+    pools.push_async(makedev(259, 0), 0 /* block: not probed in this test */, 512 /* depth */, Workload{});
     EXPECT_EQ(pools.async_engines(), 3u);
 }
 
@@ -95,7 +96,7 @@ TEST(BackendPools, AnOversizedEngineCapDoesNotWrapToZero)
 
     BackendPools pools(run, noop_async_factory, noop_factory, 2, 3);
 
-    pools.push_async(makedev(8, 1), 0 /* block: not probed in this test */, Workload{});
+    pools.push_async(makedev(8, 1), 0 /* block: not probed in this test */, 512 /* depth */, Workload{});
     EXPECT_EQ(pools.async_engines(), 1u) << "an engine must still be created";
 }
 
@@ -109,7 +110,7 @@ TEST(BackendPools, SameMountReusesItsEngine)
 
     for (int i = 0; i < 5; ++i)
     {
-        pools.push_async(makedev(8, 1), 0 /* block: not probed in this test */, Workload{});
+        pools.push_async(makedev(8, 1), 0 /* block: not probed in this test */, 512 /* depth */, Workload{});
     }
 
     EXPECT_EQ(pools.async_engines(), 1u) << "one mount must never build a second engine";
@@ -123,13 +124,13 @@ TEST(BackendPools, PastTheCapMountsShare)
 
     BackendPools pools(run, noop_async_factory, noop_factory, 2, 3);
 
-    pools.push_async(makedev(8, 1), 0 /* block: not probed in this test */, Workload{});
-    pools.push_async(makedev(8, 2), 0 /* block: not probed in this test */, Workload{});
+    pools.push_async(makedev(8, 1), 0 /* block: not probed in this test */, 512 /* depth */, Workload{});
+    pools.push_async(makedev(8, 2), 0 /* block: not probed in this test */, 512 /* depth */, Workload{});
     EXPECT_EQ(pools.async_engines(), 2u);
 
     // The third and fourth mounts must not create engines, and must not be refused either.
-    pools.push_async(makedev(8, 3), 0 /* block: not probed in this test */, Workload{});
-    pools.push_async(makedev(8, 4), 0 /* block: not probed in this test */, Workload{});
+    pools.push_async(makedev(8, 3), 0 /* block: not probed in this test */, 512 /* depth */, Workload{});
+    pools.push_async(makedev(8, 4), 0 /* block: not probed in this test */, 512 /* depth */, Workload{});
     EXPECT_EQ(pools.async_engines(), 2u) << "the cap must bound engines, not reject work";
 }
 
@@ -144,7 +145,7 @@ TEST(BackendPools, AsyncEnginesAreLazy)
     EXPECT_EQ(pools.async_engines(), 0u);
     EXPECT_EQ(pools.pools_created(), 0u);
 
-    pools.push_async(makedev(8, 1), 0 /* block: not probed in this test */, Workload{});
+    pools.push_async(makedev(8, 1), 0 /* block: not probed in this test */, 512 /* depth */, Workload{});
     EXPECT_EQ(pools.async_engines(), 1u);
     EXPECT_EQ(pools.pools_created(), 1u) << "and it counts among the pools";
 }

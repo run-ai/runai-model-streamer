@@ -6,28 +6,23 @@
 
 #include <ostream>
 
+#include "streamer/impl/config/fs_queue_depth/fs_queue_depth.h"
+
 namespace runai::llm::streamer::impl
 {
 
 // Environment variables, with their defaults when unset (config.cc):
 //
-//     RUNAI_STREAMER_CONCURRENCY        -> concurrency (file system, 16) AND s3_concurrency (object
-//                                          storage, 8). One variable, two defaults: setting it
-//                                          overrides both backends with the same value.
+//     RUNAI_STREAMER_CONCURRENCY        -> s3_concurrency (8), and the file system readers when
+//                                          FS_QUEUE_DEPTH is unset. Legacy, kept for compatibility.
 //     RUNAI_STREAMER_CHUNK_BYTESIZE     -> fs_sync_read_block_bytesize (2 MiB, also the minimum) AND
-//                                          s3_block_bytesize (8 MiB, minimum 5 MiB), likewise.
+//                                          s3_block_bytesize (8 MiB, minimum 5 MiB).
 //     RUNAI_STREAMER_FS_CHUNK_BYTESIZE  -> fs_async_chunk_bytesize (8 MiB). File system only.
-//     RUNAI_STREAMER_FS_QUEUE_DEPTH     -> fs_async_queue_depth (512): reads in flight. File system
-//                                          only, and NODE-WIDE - divided per process, see
-//                                          AsyncIoSettings.
-//
-//                                          Named for the quantity, not the mechanism. At the engine
-//                                          it is a queue depth, which is why the field keeps that
-//                                          name; to a user it is how many reads may be outstanding,
-//                                          which is the same question the object-storage side answers
-//                                          with its own parallelism setting.
-//     RUNAI_STREAMER_FS_STRATEGY        -> fs_strategy_candidates ("sync_buffered"). An ordered
-//                                          preference list; the first the host can serve wins.
+//     RUNAI_STREAMER_FS_QUEUE_DEPTH     -> fs_async_queue_depth per mount (512) AND concurrency as the
+//                                          synchronous pool's threads (16). NODE-WIDE for the mounts,
+//                                          divided per process by AsyncIoSettings.
+//     RUNAI_STREAMER_FS_STRATEGY        -> fs_strategy_candidates. An ordered preference list; the
+//                                          first the host can serve wins.
 
 struct Config
 {
@@ -39,7 +34,7 @@ struct Config
            size_t fs_sync_read_block_bytesize,
            bool enforce_minimum = true,
            size_t fs_async_chunk_bytesize = default_fs_async_chunk_bytesize,
-           unsigned fs_async_queue_depth = default_fs_async_queue_depth,
+           FsQueueDepth fs_async_queue_depth = FsQueueDepth(default_fs_async_queue_depth),
            std::string fs_strategy_candidates = default_fs_strategy_candidates,
            unsigned long object_storage_retry_timeout_seconds = 0);
     Config(bool enforce_minimum = true);
@@ -52,12 +47,16 @@ struct Config
     // reads, while an async reader with depth wants more, smaller ones.
     static constexpr size_t default_fs_async_chunk_bytesize = 8 * 1024 * 1024;
 
-    // Node-wide, so it means the same thing at TP=1 and TP=8. 512 matches what InstantTensor uses
-    // before its own division by world size.
+    // Node-wide, so it means the same thing at TP=1 and TP=8.
     static constexpr unsigned default_fs_async_queue_depth = 512;
+
+    // 32 times smaller than the depth above, because here a concurrent read costs an OS thread rather
+    // than a queue slot.
+    static constexpr unsigned default_concurrency = 16;
 
     static constexpr const char * default_fs_strategy_candidates = "io_uring_direct,libaio_direct,sync_buffered";
 
+    // Threads in the synchronous file system pool.
     unsigned concurrency;
     unsigned s3_concurrency;
     size_t s3_block_bytesize;
@@ -71,9 +70,10 @@ struct Config
     // caller may override it until the first submission resolves it (StrategyResolver).
     std::string fs_strategy_candidates;
 
-    // In-flight requests for the whole node. What one process may hold is this divided by the number
-    // of streamer processes on the node, which is not known this early - AsyncIoSettings does it.
-    unsigned fs_async_queue_depth;
+    // In-flight requests for the whole node, per file system type. What one process may hold is this
+    // divided by the streamer processes on the node, which is not known this early - AsyncIoSettings
+    // does it.
+    FsQueueDepth fs_async_queue_depth;
 
     // Application-level retry budget for each object chunk, starting when that chunk is first submitted to
     // the backend. Zero preserves fail-fast behavior after the storage plugin's native retry policy expires.

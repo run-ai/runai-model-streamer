@@ -19,6 +19,10 @@ namespace runai::llm::streamer::posix_io
 // non-deterministic: out-of-order completion, a partial flush(), and a wait that times out.
 //
 // NOT THREAD SAFE, like the interface it implements. Tests drive it from their own thread.
+//
+// DRIVEN, not self-completing: a read completes only when the test calls complete(), complete_short()
+// or fail(). Behind a live worker thread nothing ever completes and the submission hangs until the
+// test times out - there, delegate to make_io_engine and record what it was asked for.
 class MockIoEngine : public IoEngine
 {
  public:

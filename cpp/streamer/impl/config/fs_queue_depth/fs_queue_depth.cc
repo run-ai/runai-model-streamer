@@ -35,11 +35,8 @@ std::string lowered(std::string text)
     return text;
 }
 
-// A positive count, or throw.
-//
-// Rejected rather than repaired, like every other numeric variable here: a value the user meant to set
-// and mistyped must not read as "unset". Zero is rejected too - it would mean a reader that admits
-// nothing, which is not a configuration anyone wants and would divide by zero downstream.
+// A positive count, or throw. Zero divides by zero downstream, and clamping it the way
+// getenv_positive does would leave a typo looking like a working setting.
 unsigned positive_count(const std::string & text, const std::string & whole)
 {
     if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos)
@@ -94,9 +91,6 @@ FsQueueDepth FsQueueDepth::parse(const std::string & value)
         const auto element = trimmed(whole.substr(begin, comma == std::string::npos
                                                         ? std::string::npos : comma - begin));
 
-        // The DEFAULT comes first, and is mandatory. Without it a mount matching no entry would have
-        // no answer, and the variable would have to invent one - which is the kind of silent decision
-        // this whole setting exists to remove.
         if (first)
         {
             if (element.find('=') != std::string::npos)
@@ -127,9 +121,8 @@ FsQueueDepth FsQueueDepth::parse(const std::string & value)
                 throw common::Exception(common::ResponseCode::InvalidParameterError);
             }
 
-            // A repeat is REJECTED, not resolved by order. Both numbers were written on purpose, and
-            // picking one silently would leave the user reading a value that never applied. The
-            // strategy list already refuses a repeated candidate for the same reason.
+            // Rejected, not resolved by order: both numbers were meant, so picking one silently
+            // would leave the other looking as if it applied.
             if (!seen.insert(type).second)
             {
                 LOG(ERROR) << "RUNAI_STREAMER_FS_QUEUE_DEPTH=" << whole << " : '" << type
@@ -150,29 +143,20 @@ FsQueueDepth FsQueueDepth::parse(const std::string & value)
     return out;
 }
 
-unsigned FsQueueDepth::for_type(const std::string & fs_type, size_t & out_matched) const
+unsigned FsQueueDepth::for_type(const std::string & fs_type) const
 {
     const auto type = lowered(fs_type);
 
-    for (size_t i = 0; i < _entries.size(); ++i)
+    for (const auto & entry : _entries)
     {
-        // PREFIX, so `nfs=` covers `nfs` and `nfs4` without the user having to know which one the
-        // kernel reports for their mount.
-        if (type.compare(0, _entries[i].type.size(), _entries[i].type) == 0)
+        // Prefix, so `nfs` covers `nfs4` without the user knowing which the kernel reports.
+        if (type.compare(0, entry.type.size(), entry.type) == 0)
         {
-            out_matched = i;
-            return _entries[i].value;
+            return entry.value;
         }
     }
 
-    out_matched = _entries.size();
     return _default;
-}
-
-unsigned FsQueueDepth::for_type(const std::string & fs_type) const
-{
-    size_t matched = 0;
-    return for_type(fs_type, matched);
 }
 
 unsigned FsQueueDepth::default_value() const
@@ -185,11 +169,23 @@ const std::vector<FsQueueDepth::Entry> & FsQueueDepth::entries() const
     return _entries;
 }
 
-std::ostream & operator<<(std::ostream & os, const FsQueueDepth & parallelism)
+unsigned FsQueueDepth::distinct_values() const
 {
-    os << parallelism.default_value();
+    std::set<unsigned> values{ _default };
 
-    for (const auto & entry : parallelism.entries())
+    for (const auto & entry : _entries)
+    {
+        values.insert(entry.value);
+    }
+
+    return static_cast<unsigned>(values.size());
+}
+
+std::ostream & operator<<(std::ostream & os, const FsQueueDepth & depth)
+{
+    os << depth.default_value();
+
+    for (const auto & entry : depth.entries())
     {
         os << ", " << entry.type << "=" << entry.value;
     }

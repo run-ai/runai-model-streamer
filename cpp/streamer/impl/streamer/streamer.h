@@ -226,10 +226,14 @@ struct Streamer
     // out_blocks is dense with out_devices: the direct-I/O block measured for that mount, or 0 when
     // no file on it could be probed. It travels to the engine so its Limits describe the mount it
     // actually serves rather than a process-wide assumption.
+    //
+    // out_depths is dense with them too: the queue depth for that mount's file system type, resolved
+    // here because this is where the type is known.
  private:
     std::vector<int> file_groups(const std::vector<FileRanges> & request,
                                  std::vector<dev_t> & out_devices,
-                                 std::vector<size_t> & out_blocks);
+                                 std::vector<size_t> & out_blocks,
+                                 std::vector<unsigned> & out_depths);
 
     // Can this file be read directly, on this mount? Asked only for libaio, and per file.
     //

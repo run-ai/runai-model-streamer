@@ -1,5 +1,6 @@
 #include "streamer/impl/streamer/streamer.h"
 
+#include <sys/sysmacros.h>   // major/minor
 #include <unistd.h>
 
 #include <fnmatch.h>
@@ -59,11 +60,11 @@ Streamer::Streamer(Config config, Environment environment) :
         // silently builds the real engine instead of the injected one.
         [resolver = _strategy_resolver, workers = _async_workers, dead = _dead_mounts,
          engine = _environment.engine]
-        (dev_t device, size_t block) -> std::unique_ptr<utils::Worker<Workload>>
+        (dev_t device, size_t block, unsigned depth) -> std::unique_ptr<utils::Worker<Workload>>
         {
             // The worker reports its own death here, and the streamer stops routing this mount to it -
             // see DeadMounts. Captured by value, never `this`.
-            auto worker = std::make_unique<AsyncIoWorker>(resolver->resolved(), block,
+            auto worker = std::make_unique<AsyncIoWorker>(resolver->resolved(), block, depth,
                                                           engine ? engine : posix_io::make_io_engine,
                                                           [dead, device]() { dead->add(device); });
 
@@ -80,7 +81,9 @@ Streamer::Streamer(Config config, Environment environment) :
         {
             return std::make_unique<ObjectStorageWorker>([state]() { return state->get(); });
         },
-        _config->concurrency, _config->s3_concurrency),
+        _config->concurrency, _config->s3_concurrency,
+        // a per-type depth reaches a mount only if that mount has its own engine
+        config.fs_async_queue_depth.distinct_values()),
     // One PERSISTENT responder for the streamer's lifetime, shared by all submissions and
     // demuxed by submission_id. increment() grows its expected count per accepted submission.
     _responder(std::make_shared<common::Responder>(0, common::QueueMode::PERSISTENT)),
@@ -358,9 +361,10 @@ common::ResponseCode Streamer::async_request(
     // names is the key its engine is chosen by.
     std::vector<dev_t> group_devices;
     std::vector<size_t> group_blocks;
+    std::vector<unsigned> group_depths;
     const std::vector<int> group_by_file = object_storage
                                          ? std::vector<int>{}
-                                         : file_groups(request, group_devices, group_blocks);
+                                         : file_groups(request, group_devices, group_blocks, group_depths);
     Assigner assigner(request, _config, group_by_file);
 
     std::vector<Workload> workloads(assigner.num_workloads());
@@ -468,7 +472,8 @@ common::ResponseCode Streamer::async_request(
                         << " but only " << group_devices.size() << " mounts were probed";
 
                     workloads[next].direct_block = group_blocks[group];
-                    _pools.push_async(group_devices[group], group_blocks[group], std::move(workloads[next]));
+                    _pools.push_async(group_devices[group], group_blocks[group], group_depths[group],
+                                      std::move(workloads[next]));
                 }
             }
         }
@@ -692,11 +697,13 @@ common::ResponseCode Streamer::direct_block_for(const std::vector<std::string> &
 
 std::vector<int> Streamer::file_groups(const std::vector<FileRanges> & request,
                                        std::vector<dev_t> & out_devices,
-                                       std::vector<size_t> & out_blocks)
+                                       std::vector<size_t> & out_blocks,
+                                       std::vector<unsigned> & out_depths)
 {
     std::vector<int> group_by_file(request.size(), -1);
     out_devices.clear();
     out_blocks.clear();
+    out_depths.clear();
 
     if (!posix_io::is_async(_strategy_resolver->resolved()))
     {
@@ -764,6 +771,14 @@ std::vector<int> Streamer::file_groups(const std::vector<FileRanges> & request,
 
                         // 0 until a file on this mount answers the probe - see the loop below.
                         out_blocks.push_back(0);
+
+                        // Resolved here because this is the one place the file system type is known.
+                        const auto depth = _config->fs_async_queue_depth.for_type(capability.fs_type);
+                        out_depths.push_back(depth);
+
+                        LOG(DEBUG) << "Mount " << major(capability.dev) << ":" << minor(capability.dev)
+                                   << " is " << capability.fs_type << " and reads at a queue depth of "
+                                   << depth;
                     }
                 }
             }

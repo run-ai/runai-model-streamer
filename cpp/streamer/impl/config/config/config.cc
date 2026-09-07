@@ -14,8 +14,47 @@
 namespace runai::llm::streamer::impl
 {
 
+namespace
+{
+
+// The file system setting: the specific variable when set, then the legacy one when set, then the
+// default. Resolved on PRESENCE - getenv with a default cannot tell "unset" from "set to the
+// default", so the legacy variable could never take precedence over a default of its own.
+
+FsQueueDepth resolve_fs_queue_depth()
+{
+    std::string configured;
+    if (utils::try_getenv("RUNAI_STREAMER_FS_QUEUE_DEPTH", configured))
+    {
+        return FsQueueDepth::parse(configured);
+    }
+
+    unsigned long legacy = 0;
+    if (utils::try_getenv("RUNAI_STREAMER_CONCURRENCY", legacy))
+    {
+        return FsQueueDepth(static_cast<unsigned>(legacy));
+    }
+
+    return FsQueueDepth(Config::default_fs_async_queue_depth);
+}
+
+// Same order, different default. The per-type entries are dropped: this is one pool for every mount.
+unsigned resolve_fs_concurrency()
+{
+    std::string configured;
+    if (utils::try_getenv("RUNAI_STREAMER_FS_QUEUE_DEPTH", configured))
+    {
+        return FsQueueDepth::parse(configured).default_value();
+    }
+
+    return static_cast<unsigned>(utils::getenv<unsigned long>("RUNAI_STREAMER_CONCURRENCY",
+                                                              Config::default_concurrency));
+}
+
+} // namespace
+
 Config::Config(unsigned concurrency, unsigned s3_concurrency, size_t s3_block_bytesize, size_t fs_sync_read_block_bytesize,
-               bool enforce_minimum, size_t fs_async_chunk_bytesize, unsigned fs_async_queue_depth,
+               bool enforce_minimum, size_t fs_async_chunk_bytesize, FsQueueDepth fs_async_queue_depth,
                std::string fs_strategy_candidates, unsigned long object_storage_retry_timeout_seconds) :
     concurrency(concurrency),
     s3_concurrency(s3_concurrency),
@@ -23,7 +62,7 @@ Config::Config(unsigned concurrency, unsigned s3_concurrency, size_t s3_block_by
     fs_sync_read_block_bytesize(fs_sync_read_block_bytesize),
     fs_async_chunk_bytesize(fs_async_chunk_bytesize),
     fs_strategy_candidates(std::move(fs_strategy_candidates)),
-    fs_async_queue_depth(fs_async_queue_depth),
+    fs_async_queue_depth(std::move(fs_async_queue_depth)),
     object_storage_retry_timeout(object_storage_retry_timeout_seconds)
 {
     // Resolved here, with the other configuration, so a malformed RUNAI_STREAMER_DIRECT_BLOCK fails
@@ -40,7 +79,8 @@ Config::Config(unsigned concurrency, unsigned s3_concurrency, size_t s3_block_by
 
     // Tasks are cut on multiples of this, so zero would divide by zero rather than merely misbehave.
     ASSERT(fs_async_chunk_bytesize) << "file system chunk bytesize must be positive";
-    ASSERT(fs_async_queue_depth) << "file system queue depth must be positive";
+    // parse() rejects a zero; a positional caller can still pass one
+    ASSERT(this->fs_async_queue_depth.default_value()) << "file system queue depth must be positive";
 
     if (enforce_minimum)
     {
@@ -60,13 +100,13 @@ Config::Config(unsigned concurrency, unsigned s3_concurrency, size_t s3_block_by
 }
 
 Config::Config(bool enforce_minimum /* = true */) :
-    Config(utils::getenv<unsigned long>("RUNAI_STREAMER_CONCURRENCY", 16UL),
+    Config(resolve_fs_concurrency(),
            utils::getenv<unsigned long>("RUNAI_STREAMER_CONCURRENCY", 8UL),
            utils::getenv<size_t>("RUNAI_STREAMER_CHUNK_BYTESIZE", common::s3::S3ClientWrapper::default_chunk_bytesize),
            utils::getenv<size_t>("RUNAI_STREAMER_CHUNK_BYTESIZE", min_fs_sync_read_block_bytesize),
            enforce_minimum,
            utils::getenv<size_t>("RUNAI_STREAMER_FS_CHUNK_BYTESIZE", default_fs_async_chunk_bytesize),
-           utils::getenv<unsigned long>("RUNAI_STREAMER_FS_QUEUE_DEPTH", default_fs_async_queue_depth),
+           resolve_fs_queue_depth(),
            utils::getenv<std::string>("RUNAI_STREAMER_FS_STRATEGY", default_fs_strategy_candidates),
            utils::getenv<unsigned long>("RUNAI_STREAMER_S3_TIMEOUT", 0UL))
 {}

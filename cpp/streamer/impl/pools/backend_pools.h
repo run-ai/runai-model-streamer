@@ -54,18 +54,21 @@ class BackendPools
     // `device` is the mount this engine will serve. Passed so the caller can bind per-mount state to
     // the worker it builds - the streamer uses it to learn which mount to stop routing here when the
     // engine dies.
-    using AsyncWorkerFactory = std::function<std::unique_ptr<utils::Worker<Workload>>(dev_t device, size_t block)>;
+    using AsyncWorkerFactory = std::function<std::unique_ptr<utils::Worker<Workload>>(dev_t device, size_t block, unsigned depth)>;
 
     // filesystem_handler: the stateless synchronous handler for the filesystem pool.
     // object_storage_factory: builds a per-worker ObjectStorageWorker for the object-storage pool (async,
     // each worker owns its in-flight window).
     // filesystem_async_factory builds the AsyncIoWorker; its pool is always one thread, so no size is
     // taken for it.
+    // min_async_engines raises RUNAI_STREAMER_FS_MAX_ENGINES so a per-type queue depth can reach the
+    // mounts it names: a mount is only tuned separately if it has its own engine.
     BackendPools(Handler filesystem_handler,
                  AsyncWorkerFactory filesystem_async_factory,
                  WorkerFactory object_storage_factory,
                  unsigned filesystem_size,
-                 unsigned object_storage_size);
+                 unsigned object_storage_size,
+                 unsigned min_async_engines = 1);
 
     // Hand the workload to its pool. FileSystem and ObjectStorage only - Pool::FileSystemAsync is
     // REJECTED here (asserted), because an async workload is routed by its mount and there is no
@@ -91,7 +94,7 @@ class BackendPools
     // that routes completions and counts free slots, so a mount cannot move while it still has reads
     // running. A stuck mount therefore keeps its engine forever. That is the separation working, not
     // a leak.
-    void push_async(dev_t device, size_t block, Workload && workload);
+    void push_async(dev_t device, size_t block, unsigned depth, Workload && workload);
 
     // Lock object storage to a single plugin and create the ObjectStorage pool (once). The first
     // object-storage submission records the plugin and builds the pool; a later submission with a different
