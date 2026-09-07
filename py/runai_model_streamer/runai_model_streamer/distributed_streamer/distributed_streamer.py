@@ -18,9 +18,11 @@ from runai_model_streamer.file_streamer.requests_iterator import (
 
 from runai_model_streamer.distributed_streamer.partition import (
     partition,
+    partition_for_rank,
     get_total_number_of_chunks,
     get_partition_policy,
     log_partition_info,
+    log_rank_span_info,
 )
 
 from runai_model_streamer.s3_utils.s3_utils import (
@@ -288,7 +290,6 @@ class _distributedStreamer:
     def __init__(self, file_streamer : FileStreamer) -> None:
         self.file_streamer = file_streamer
         self.device = None
-        self.partitions = {} # partitions of all the input file_stream_requests
         self.rank_file_chunks_list = {} # post Partitioning FileChunks to be streamed by this rank
         self.rank_dicts_map = {} # maps post partitioning FileChunks.id and chunk index to the original FileChunks.id and chunk index and chunk size
         self.total_chunks_to_read = 0
@@ -401,21 +402,37 @@ class _distributedStreamer:
         if self.original_group_rank == 0:
             logger.info(f"[RunAI Streamer][Distributed] Using distributed streaming between {self.group_size} processes")
 
-        # partition tensors between processes in the distribution group
-        self.partitions = partition(file_stream_requests, dist.get_world_size(group=self.distribution_group))
-        if self.rank == 0:
-            log_partition_info(self.partitions)
+        # Partition tensors between processes in the distribution group.
+        #
+        # Only THIS rank's share is built where the policy allows it. Every rank used to build all of
+        # them and discard the rest, which on a 150k-tensor model is most of the work: 184 ms against
+        # 113 ms for one share, and 702 ms for the `chunks` policy that does it the old way.
+        #
+        # The two things the discarded shares were needed for come back as plain numbers:
+        # sizes_by_rank for the log, and total_chunks for the broadcast countdown.
+        my_span = partition_for_rank(
+            file_stream_requests,
+            dist.get_world_size(group=self.distribution_group),
+            self.rank,
+        )
 
-        self.total_chunks_to_read = get_total_number_of_chunks(self.partitions)
-        
+        if self.rank == 0:
+            log_partition_info(my_span.sizes_by_rank)
+
+        # GLOBAL, not this rank's share. The broadcast loop counts it down as chunks are sent AND
+        # received, so a rank that counted only its own would stop while others were still sending.
+        self.total_chunks_to_read = my_span.total_chunks
+
         # read partition
         self.rank_file_chunks_list = []
 
         # map partitions's file chunks index to the index in the original file list
         self.rank_dicts_map = {}
-        for fc, d in self.partitions[self.rank]:
+        for fc, d in my_span.partition:
             self.rank_file_chunks_list.append(fc)
             self.rank_dicts_map[fc.id] = d
+
+        log_rank_span_info(self.original_group_rank, my_span.partition)
 
         if len(self.rank_file_chunks_list) == 0:
             self.reading_from_storage = False

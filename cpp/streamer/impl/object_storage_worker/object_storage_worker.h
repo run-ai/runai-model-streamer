@@ -90,14 +90,23 @@ class ObjectStorageWorker : public utils::CapacityWorker<Workload, ObjectChunk>
     {
         Batch * batch;                                              // owning batch: handle_response + file_index
         const Task * task;                                         // the task itself: handle_response arg
-        unsigned remaining_chunks = 0;                             // when 0, the task is fully read
-        common::ResponseCode error = common::ResponseCode::Success;   // first failing chunk's code
+        common::ResponseCode error = common::ResponseCode::Success;
     };
 
+    // One object read: the read itself, the tasks it covers as indices into Inflight::tasks, and its
+    // retry budget.
+    //
+    // A chunk is read once and completes every task in its span at that moment, so there is no
+    // per-task chunk counter: a task belongs to exactly one chunk, because Batch::chunks are built
+    // from the same cut that produced the tasks.
+    //
+    // The ObjectChunk is kept rather than just its span because a retry re-enqueues this exact read
+    // (see promote_due_retries).
     struct ChunkState
     {
         ObjectChunk chunk;
-        size_t task_idx;
+        size_t   first = 0;                 // first task of the span
+        unsigned count = 0;                 // tasks in the span
         ObjectStorageRetry::State retry;
     };
 
@@ -108,7 +117,10 @@ class ObjectStorageWorker : public utils::CapacityWorker<Workload, ObjectChunk>
         std::vector<ChunkState> chunks;                            // handle - handle_base -> chunk state
         std::vector<TaskState> tasks;                              // per task (only non-zero-size tasks)
         std::map<unsigned, common::ResponseCode> error_by_file_index;   // first error per file (finalize)
-        size_t remaining_tasks = 0;                                // tasks not yet completed; 0 -> finalize
+        // Chunks, not tasks. Every chunk completes exactly once, and every task belongs to exactly one
+        // chunk, so all chunks done already means all tasks answered - and the zero-sized ones, which
+        // are answered at enqueue and can sit inside a span, never enter the arithmetic.
+        size_t remaining_chunks = 0;                               // 0 -> finalize
     };
 
     // In-flight workloads keyed by their handle block base. The blocks are contiguous and disjoint, so a
@@ -116,16 +128,16 @@ class ObjectStorageWorker : public utils::CapacityWorker<Workload, ObjectChunk>
     // lookups/erase go by key - the number in flight on one worker can be large.
     using InflightMap = std::map<common::backend_api::ObjectRequestId_t, Inflight>;
 
-    // Find the workload owning `handle` (the block whose [base, base+size) contains it) and the local task
-    // index of that chunk. Returns {end(), 0} if no block contains it (stale / out-of-range).
+    // Find the workload owning `handle` (the block whose [base, base+size) contains it) and that chunk's
+    // index within the block. Returns {end(), 0} if no block contains it (stale / out-of-range).
     std::pair<InflightMap::iterator, size_t> locate(common::backend_api::ObjectRequestId_t handle);
 
-    // Account one completed chunk of a task (from the backend or a short-circuit): free the window slot,
-    // record the task's first error, report the task once its last chunk lands, and finalize the workload
-    // once its last task lands.
+    // Account one completed chunk: free the window slot and report EVERY task it covered - one read
+    // carries them all, so they succeed or fail together. Finalizes the workload once its last task lands.
     void complete_chunk(InflightMap::iterator wlit, size_t chunk_idx, common::ResponseCode ret);
 
-    // Move retry entries whose jitter delay elapsed to the front of the capacity queue.
+    // Move retry entries whose jitter delay elapsed to the FRONT of the capacity queue, so a retry is
+    // preferred over a new submission.
     void promote_due_retries();
 
     // Push each batch's aggregate result: the whole-workload `code` if non-Success, else the batch's own

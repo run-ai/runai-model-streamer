@@ -4,7 +4,16 @@ PACKAGE_VERSION ?= 0.0.0
 
 STREAMER_MOCK_LIB = ../../cpp/bazel-bin/mock/libstreamer-mock.so
 
-.PHONY: install_dev_dep build mock test clean
+# The real library, for test-unit-real. Same bazel output tree as the mock, since both are built with
+# --config=${ARCH}, so the two can sit side by side and neither rebuild disturbs the other.
+STREAMER_REAL_LIB = ../../cpp/bazel-bin/streamer/libstreamer.so
+
+# Which filesystem reader test-unit-real uses. Always keep sync_buffered LAST as a fallback, and never
+# repeat a name: a duplicate is rejected by the parser, and then every test that builds a streamer
+# fails at once, which looks like a product fault and is not one.
+FS_STRATEGY ?= sync_buffered
+
+.PHONY: install_dev_dep build mock real test test-unit test-unit-real test-dist clean
 
 install_dev_dep:
 	python3 -m pip download torch --index-url https://download.pytorch.org/whl/cpu --no-deps --dest ./dst && \
@@ -18,8 +27,26 @@ build:
 mock:
 	make -C ../../cpp build_mock
 
+real:
+	make -C ../../cpp build
+
 test-unit: mock install_dev_dep
 	STREAMER_LIBRARY=$(STREAMER_MOCK_LIB) python3 -m unittest discover -b runai_model_streamer
+
+# The same tests against the REAL library instead of the mock.
+#
+# NOT part of `test`, and not run by CI. It needs a real filesystem to read, and with an io_uring
+# strategy it needs a host where io_uring works - CI has neither. Run it through `make test_iouring`
+# at the repository root.
+#
+# Why it earns its place: the mock's runai_set_fs_strategy is a stub that returns 0, and the mock
+# never reads RUNAI_STREAMER_FS_STRATEGY and performs no I/O. So `test-unit` cannot reach any reader,
+# and a green from it says nothing about io_uring, about O_DIRECT, or about how a read failure is
+# reported. A bug where zero-sized ranges on a missing file returned Success was invisible to the
+# whole suite until these tests ran against the real library.
+test-unit-real: real install_dev_dep
+	STREAMER_LIBRARY=$(STREAMER_REAL_LIB) RUNAI_STREAMER_FS_STRATEGY=$(FS_STRATEGY) \
+		python3 -m unittest discover -b runai_model_streamer
 
 test-dist: mock install_dev_dep
 	torchrun --nproc_per_node 2 run_dist_tests.py

@@ -46,9 +46,78 @@ all_link_actions = [
     ACTION_NAMES.cpp_link_nodeps_dynamic_library,
 ]
 
+all_compile_actions = [
+    ACTION_NAMES.c_compile,
+    ACTION_NAMES.cpp_compile,
+    ACTION_NAMES.linkstamp_compile,
+    ACTION_NAMES.assemble,
+    ACTION_NAMES.preprocess_assemble,
+    ACTION_NAMES.cpp_header_parsing,
+    ACTION_NAMES.cpp_module_compile,
+    ACTION_NAMES.cpp_module_codegen,
+    ACTION_NAMES.lto_backend,
+]
+
 # Statically link c++ standard library
 # https://bazel.build/tutorials/ccp-toolchain-config
 features = [
+    # Compilation modes. Bazel enables the feature whose NAME matches --compilation_mode, so these
+    # three are what make `-c opt` and `-c dbg` mean anything here. None of them is `enabled = True`:
+    # Bazel turns exactly one on per build, and forcing one would apply it in every mode.
+    #
+    # With no no such features the effect is silent. A toolchain that defines none still ACCEPTS `-c opt`
+    #  - it just emits no -O flag, so gcc fell back to its own default of -O0 and every build was unoptimised:
+    #  `bazel build -c opt` and a plain `bazel build`
+    #
+    # Worth carrying: the flag and the mode are two switches, and BOTH have to be right. A mode that
+    # silently does nothing looks exactly like a mode that works.
+    #
+    # Flags are spelled for gcc because this toolchain only ever drives gcc, for linux-x86_64 and
+    # linux-aarch64. A compiler that spells optimisation differently would need its own feature; it
+    # would not silently get the wrong flags.
+    feature(
+        name = "opt",
+        flag_sets = [
+            flag_set(
+                actions = all_compile_actions,
+                flag_groups = ([
+                    flag_group(
+                        # -DNDEBUG goes with -O2, as it does in Bazel's own toolchains: it is what
+                        # drops assert() from release builds.
+                        flags = [
+                            "-O2",
+                            "-DNDEBUG",
+                        ],
+                    ),
+                ]),
+            ),
+        ],
+    ),
+    feature(
+        name = "dbg",
+        flag_sets = [
+            flag_set(
+                actions = all_compile_actions,
+                flag_groups = ([
+                    flag_group(
+                        # -O0 is stated rather than left to gcc's default. It is already gcc's
+                        # default, so this changes nothing today - but relying on a compiler default
+                        # to carry a build decision is the exact thing that hid the missing -O2.
+                        flags = [
+                            "-O0",
+                            "-g",
+                        ],
+                    ),
+                ]),
+            ),
+        ],
+    ),
+    feature(
+        # No flags, and that is deliberate: fastbuild is meant to be the quick unoptimised build, and
+        # gcc gives that with no -O flag at all. Declared anyway so all three modes are visible in one
+        # place - an undeclared mode is what made this hard to see the first time.
+        name = "fastbuild",
+    ),
     feature(
         name = "default_linker_flags",
         enabled = True,

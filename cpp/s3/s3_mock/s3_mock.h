@@ -73,6 +73,9 @@ extern "C" void runai_mock_s3_set_response_time_ms(unsigned milliseconds);
 extern "C" void runai_mock_s3_set_inflight_window(size_t bytes);
 // Peak per-client in-flight (submitted-but-not-completed) request count observed since the last cleanup.
 extern "C" size_t runai_mock_s3_max_concurrent();
+// Total obj_request_read calls since the last cleanup - how many reads the backend was actually asked
+// for, which is what shows whether small ranges were packed into one request or issued one by one.
+extern "C" size_t runai_mock_s3_requests();
 // Fail (with FileAccessError) the completion of any read whose path contains substr; "" / nullptr disables.
 extern "C" void runai_mock_s3_set_failing_path(const char* substr);
 // Fail the next `count` submitted reads at completion with `response_code`. A retry that reuses the same

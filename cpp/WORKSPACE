@@ -15,6 +15,18 @@ new_local_repository(
     build_file = "//third_party:azure.BUILD"
 )
 
+new_local_repository(
+    name = "uring",
+    path = "/opt",
+    build_file = "//third_party:uring.BUILD"
+)
+
+new_local_repository(
+    name = "aio",
+    path = "/opt",
+    build_file = "//third_party:aio.BUILD"
+)
+
 load("//third_party:gcp_repo.bzl", "load_gcp_repo")
 load_gcp_repo()
 

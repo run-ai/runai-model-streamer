@@ -62,6 +62,15 @@ class LibstreamerDLLWrapper:
         self.fn_runai_response_str.argtypes = [ctypes.c_int]
         self.fn_runai_response_str.restype = ctypes.c_char_p
 
+        self.fn_runai_probe_direct_block_size = self.lib.runai_probe_direct_block_size
+        self.fn_runai_probe_direct_block_size.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_char_p),
+            ctypes.c_uint,
+            ctypes.POINTER(ctypes.c_size_t),
+        ]
+        self.fn_runai_probe_direct_block_size.restype = ctypes.c_int
+
         RunaiFileListCallback = ctypes.CFUNCTYPE(
             None,                # return void
             ctypes.c_char_p,     # path

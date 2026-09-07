@@ -60,11 +60,20 @@ azure:
 	wait $$AZURITE_PID 2>/dev/null || true; \
 	rm -rf ${AZURITE_SERVER_WORKSPACE}
 
+# Which filesystem reader to use. Unset means "leave it to the library", which is what a plain
+# `make all` does; the root Makefile's test_strategies target passes each strategy in turn.
+#
+# Set through this indirection rather than exported directly, because an EMPTY
+# RUNAI_STREAMER_FS_STRATEGY is not the same as an unset one - the parser rejects an empty entry
+# with InvalidParameterError, so every test would fail at once.
+FS_STRATEGY ?=
+FS_ENV := $(if $(FS_STRATEGY),RUNAI_STREAMER_FS_STRATEGY=$(FS_STRATEGY),)
+
 fuzzing:
 	for i in $(shell seq 1 ${RUN_TIMES}); \
 	do \
 		echo "Running test iteration $$i"; \
-		pytest fuzzing/; \
+		${FS_ENV} pytest fuzzing/; \
 	done
 
 all: fuzzing s3 gcs azure

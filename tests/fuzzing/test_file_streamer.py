@@ -16,7 +16,22 @@ MAX_CHUNK_NUM = 500
 # be able to generate one. It reaches no storage yet still owes exactly one response, which is where
 # off-by-one indexing shows up - and at 0 it lands anywhere in a file's list, including first and last.
 MIN_CHUNK_SIZE = 0
-MAX_CHUNK_SIZE = 2048
+# Raised from 2048 so the fuzzer moves enough data to fill the engine's window. Measured on one run
+# under io_uring_direct, with everything else unchanged:
+#
+#            bytes read   bounced   deepest queue   avg outstanding
+#     2048      1.78 MB    2%             8              3.5
+#    16384     40.60 MB    0%            23              8.3
+#
+# Depth is the point. At 2048 the whole run finished with at most 8 reads in flight, so nothing
+# exercised a full window, the re-stage path, or the reap loop under pressure - the parts most likely
+# to be wrong.
+#
+# NOT about O_DIRECT alignment, which was the first guess and the measurement says otherwise. Reads
+# are sized by RUNAI_STREAMER_FS_CHUNK_BYTESIZE rather than by range, and the fuzzer's ranges are
+# contiguous within a file, so they coalesce into large aligned reads at either setting. Bounces
+# happen only at the edges, which is why 2% falls to 0% as the reads get bigger.
+MAX_CHUNK_SIZE = 16384
 
 
 def random_chunks():

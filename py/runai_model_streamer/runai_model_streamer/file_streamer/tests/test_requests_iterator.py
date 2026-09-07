@@ -2,6 +2,7 @@ import logging
 import os
 import unittest
 from unittest.mock import patch
+from runai_model_streamer.file_streamer import requests_iterator
 from runai_model_streamer.file_streamer.requests_iterator import (
     FileChunksIterator,
     FilesRequestsIterator,
@@ -10,6 +11,12 @@ from runai_model_streamer.file_streamer.requests_iterator import (
     MemoryCapMode,
     RunaiStreamerMemoryLimitException,
     RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME,
+    RUNAI_STREAMER_MAX_PADS_PER_BUFFER_ENV_VAR_NAME,
+    DIRECT_IO_BLOCK,
+    HUGE_PAGE,
+    RUNAI_STREAMER_HUGE_PAGES_ENV_VAR_NAME,
+    _mapping_memory,
+    _max_pads_per_buffer,
     _ring_sizing,
 )
 
@@ -563,9 +570,26 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
         )
         self.assertEqual(requests_iterator.buffer_size, 10)
 
-    def test_range_dsts_pack_the_request(self):
-        # replaces the old per-file file_buffers: destinations are per range now, packed back to back
-        # across the whole request, and handed to runai_request as absolute addresses.
+    def assert_congruent(self, request):
+        """Every range's address and its file offset leave the same remainder for the block size.
+
+        This is the property a direct read needs. Aligning the address alone is not enough: the file
+        offset cannot be chosen, so the address has to be moved to match it.
+        """
+        for file_index, file_chunks in enumerate(request.files):
+            for range_index, offset in enumerate(file_chunks.offsets):
+                dst = request.range_dsts[request.flat_index(file_index, range_index)]
+                self.assertEqual(
+                    dst % DIRECT_IO_BLOCK, offset % DIRECT_IO_BLOCK,
+                    f"file {file_chunks.path} range {range_index} at offset {offset} is not congruent",
+                )
+
+    def test_range_dsts_place_the_request_congruently(self):
+        # replaces the old per-file file_buffers: destinations are per range now, one per range across
+        # the whole request, handed to runai_request as absolute addresses.
+        #
+        # They are NOT packed back to back. A range is pushed forward so that its address and its file
+        # offset leave the same remainder - the condition for reading it directly.
         requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
             MemoryCapMode.largest_chunk,
             [FileChunks.contiguous(17, "a.txt", 10, [1, 2, 3, 4]),
@@ -577,18 +601,46 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
 
         files_requests = requests_iterator.next_request()
         self.assertEqual([f.id for f in files_requests.files], [17])
-        self.assertEqual(files_requests.range_dsts, [base, base + 1, base + 3])
+        # a.txt starts at file offset 10, so the first range skips 10 bytes to match it. The two after
+        # it follow back to back in the file, so the cursor stays in step and costs nothing.
+        self.assertEqual(files_requests.range_dsts, [base + 10, base + 11, base + 13])
+        self.assert_congruent(files_requests)
 
         # largest_chunk mode is a ring of one, so the single buffer has to come back before the next
-        # request can be built - and the next request then packs from that same base.
+        # request can be built - and the next request then places from that same base.
         requests_iterator.release(files_requests)
 
         files_requests = requests_iterator.next_request()
         self.assertEqual([f.id for f in files_requests.files], [17, 18])
-        # a.txt's remaining 4 bytes, then b.txt's 1 and 2 - one destination per range, packed from the
-        # start of the buffer this request was given
-        self.assertEqual(files_requests.range_dsts, [base, base + 4, base + 5])
+        # a.txt's remaining 4 bytes at file offset 16, then b.txt's 1 and 2 at file offsets 10 and 11.
+        # Crossing into b.txt sends the file offset BACKWARDS (16 -> 10) while the cursor only moves
+        # forward, so re-syncing costs nearly a whole block. That is the worst case, and it is why the
+        # slot reserves room for many pads rather than a few bytes.
+        # Expressed in terms of the block, not as 4106: the re-sync lands at the next address
+        # congruent with file offset 10, which is 10 + one whole block past the base. Hardcoding it
+        # tied this test to a 4096 block, and it broke the moment the block was raised.
+        resync = 10 + DIRECT_IO_BLOCK
+        self.assertEqual(files_requests.range_dsts, [base + 16, base + resync, base + resync + 1])
+        self.assert_congruent(files_requests)
         self.assertEqual(files_requests.file_base, [0, 1])
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_MAX_PADS_PER_BUFFER_ENV_VAR_NAME: "0"})
+    def test_no_pad_budget_falls_back_to_tight_packing(self):
+        # With no room reserved, the aligned placement cannot fit and the request packs back to back
+        # instead. Correct, just not readable directly - the reader falls back to a buffered read.
+        requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
+            MemoryCapMode.largest_chunk,
+            [FileChunks.contiguous(17, "a.txt", 10, [1, 2, 3, 4])],
+            5,
+        )
+        base = requests_iterator.buffer_addresses[0]
+
+        files_requests = requests_iterator.next_request()
+        self.assertEqual(files_requests.range_dsts, [base, base + 1])
+
+        # and the fallback really is the reason: a.txt starts at file offset 10, so a placement that
+        # had any room would have moved the first range 10 bytes in rather than leaving it at the base
+        self.assertNotEqual(base % DIRECT_IO_BLOCK, files_requests.files[0].offsets[0] % DIRECT_IO_BLOCK)
 
     @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "1"})
     def test_get_global_file_and_range_aliases_the_buffer(self):
@@ -600,8 +652,14 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
         self.assertEqual(requests_iterator.buffer_size, 10)
 
         request = requests_iterator.next_request()
-        requests_iterator.buffers[0][0] = 9
-        requests_iterator.buffers[0][3] = 8
+
+        # Write at the address the request will hand to runai_request, then read it back through the
+        # view. That is the invariant: the two must agree. Deriving the index from range_dsts rather
+        # than hardcoding it keeps this test about aliasing, not about where placement chose to put
+        # things - test_range_dsts_place_the_request_congruently covers that.
+        base = requests_iterator.buffer_addresses[0]
+        requests_iterator.buffers[0][request.range_dsts[request.flat_index(0, 0)] - base] = 9
+        requests_iterator.buffers[0][request.range_dsts[request.flat_index(1, 0)] - base] = 8
 
         file_id, range_index, view = requests_iterator.get_global_file_and_range(request, 0, 0)
         self.assertEqual((file_id, range_index), (17, 0))
@@ -634,11 +692,12 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             requests_iterator.next_request()
 
-        # released, so the third request reuses the first one's buffer and packs from its base
+        # released, so the third request reuses the first one's buffer and places from its base. The
+        # range it carries sits at file offset 18 (10 + 4 + 4), so it is placed 18 bytes in.
         requests_iterator.release(first)
         third = requests_iterator.next_request()
         self.assertEqual(third.buffer_index, first_index)
-        self.assertEqual(third.range_dsts, [requests_iterator.buffer_addresses[first_index]])
+        self.assertEqual(third.range_dsts, [requests_iterator.buffer_addresses[first_index] + 18])
 
     @patch.dict(os.environ, {RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "2"})
     def test_releasing_twice_is_rejected(self):
@@ -658,16 +717,28 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
             MemoryCapMode.limited, [FileChunks.contiguous(17, "a.txt", 10, [4, 4, 4])], 12
         )
         self.assertEqual(len(requests_iterator.buffers), 3)
-        self.assertEqual(len(requests_iterator.pool), 12)
+
+        # A slot is the caller's bytes plus room for the pads that make a direct read possible, so the
+        # pool is bigger than the memory cap asked for. That overshoot is fixed per slot, not
+        # proportional, so it disappears next to a real ring.
+        slot_size = requests_iterator.buffer_size + DIRECT_IO_BLOCK * _max_pads_per_buffer()
+        self.assertEqual(len(requests_iterator.pool), slot_size * 3)
+
+        # The base must be block aligned. Without it no range in any slot could be placed congruently,
+        # because a pad can only move an address forward within the block it already sits in.
+        self.assertEqual(requests_iterator.pool.ctypes.data % DIRECT_IO_BLOCK, 0)
+        self.assertEqual(
+            requests_iterator.buffer_addresses,
+            [requests_iterator.pool.ctypes.data + slot_size * i for i in range(3)],
+        )
 
         # writing through one buffer must not disturb another, and each view must alias the pool
         for index, buffer in enumerate(requests_iterator.buffers):
             buffer[:] = index
-        self.assertEqual(list(requests_iterator.pool), [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2])
-        self.assertEqual(
-            requests_iterator.buffer_addresses,
-            [requests_iterator.pool.ctypes.data + 4 * i for i in range(3)],
-        )
+        for index in range(3):
+            # first and last byte of each slot, rather than the whole pool - the slots are megabytes
+            self.assertEqual(requests_iterator.pool[slot_size * index], index)
+            self.assertEqual(requests_iterator.pool[slot_size * (index + 1) - 1], index)
 
     def test_end_of_stream_does_not_consume_a_buffer(self):
         requests_iterator = FilesRequestsIteratorWithBuffer.with_memory_cap(
@@ -691,3 +762,245 @@ class TestFilesRequestsIteratorWithBuffer(unittest.TestCase):
         # the zero sized range consumes no buffer, so the range after it starts where it did
         _, _, view = requests_iterator.get_global_file_and_range(request, 0, 2)
         self.assertEqual(len(view), 3)
+
+
+def _resident_bytes(address: int, length: int) -> int:
+    """How many bytes of [address, address+length) the kernel currently holds in memory.
+
+    mincore(2), so it is the kernel's own answer for the same range that _mapping_memory reads out of
+    /proc/self/smaps. Two independent routes to one number: if they disagree, the text parsing is
+    wrong, and if they agree the machine simply reclaimed the pages."""
+    import ctypes
+
+    page = os.sysconf("SC_PAGESIZE")
+    start = address - (address % page)
+    span = length + (address - start)
+    pages = (span + page - 1) // page
+
+    libc = ctypes.CDLL("libc.so.6", use_errno=True)
+    vec = (ctypes.c_ubyte * pages)()
+    if libc.mincore(ctypes.c_void_p(start), ctypes.c_size_t(span), vec) != 0:
+        raise OSError(ctypes.get_errno(), "mincore failed")
+
+    return sum(1 for byte in vec if byte & 1) * page
+
+
+class TestPoolHugePages(unittest.TestCase):
+    """The pool base and the huge-page hint.
+
+    Whether the kernel actually gives huge pages depends on the machine, so nothing here asserts
+    that. What is asserted is what we control: the base is placed correctly, and asking for huge
+    pages never breaks a load however the host is configured."""
+
+    def _pool(self, num_buffers=2, buffer_size=4 * 1024 * 1024):
+        return FilesRequestsIteratorWithBuffer(
+            buffer_size=buffer_size,
+            num_buffers=num_buffers,
+            files_chunks=[FileChunks.contiguous(0, "a.bin", 0, [1024, 1024])],
+        )
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_HUGE_PAGES_ENV_VAR_NAME: "1"})
+    def test_pool_base_is_huge_page_aligned(self):
+        # A 2 MiB base is what lets the whole pool sit on huge pages. It is also a multiple of
+        # DIRECT_IO_BLOCK, so it replaces the old 4096 shift rather than adding to it.
+        self.assertEqual(self._pool().pool.ctypes.data % HUGE_PAGE, 0)
+
+    def test_every_slot_base_is_block_aligned(self):
+        # Follows from the base only because the slot size is a multiple of the block. If that ever
+        # stops holding, direct reads into later slots lose congruence while the first slot keeps it
+        # - which would look like a bug in one file rather than in the pool.
+        pool = self._pool(num_buffers=4)
+        for address in pool.buffer_addresses:
+            self.assertEqual(address % DIRECT_IO_BLOCK, 0)
+
+    def test_the_pool_still_holds_every_buffer(self):
+        # The base shift grew from 4096 to 2 MiB, so the over-allocation had to grow with it.
+        pool = self._pool(num_buffers=3)
+        self.assertEqual(len(pool.buffers), 3)
+        last = pool.buffers[-1]
+        self.assertEqual(len(last), pool._slot_size)
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_HUGE_PAGES_ENV_VAR_NAME: "0"})
+    def test_switching_huge_pages_off_restores_the_old_alignment(self):
+        # Off must mean exactly what it meant before huge pages existed: a block-aligned base, no
+        # madvise, no report. A switch that still did the work and only stayed quiet would be no use
+        # as a rollback.
+        pool = self._pool()
+        self.assertEqual(pool.pool.ctypes.data % DIRECT_IO_BLOCK, 0)
+        self.assertTrue(pool._huge_pages_reported, "nothing to report when the feature is off")
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_HUGE_PAGES_ENV_VAR_NAME: "0"})
+    def test_switching_off_still_aligns_every_slot(self):
+        # Congruent placement depends on this, so the direct-read path must keep working with the
+        # feature off. Otherwise the switch would quietly disable direct reads as well.
+        pool = self._pool(num_buffers=4)
+        for address in pool.buffer_addresses:
+            self.assertEqual(address % DIRECT_IO_BLOCK, 0)
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_HUGE_PAGES_ENV_VAR_NAME: "0"})
+    def test_the_report_is_skipped_when_switched_off(self):
+        pool = self._pool()
+        with patch(
+            "runai_model_streamer.file_streamer.requests_iterator._mapping_memory"
+        ) as measured:
+            request = pool.next_request()
+            pool.release(request)
+        measured.assert_not_called()
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_HUGE_PAGES_ENV_VAR_NAME: "yes"})
+    def test_a_value_that_is_not_one_turns_it_off(self):
+        # A typo must be safe rather than surprising, so only "1" enables it.
+        self.assertFalse(requests_iterator._huge_pages_enabled())
+
+    def test_huge_pages_are_off_by_default(self):
+        # Opt in, not opt out. The gain is large and measured (see _huge_pages_enabled), but the risk -
+        # direct compaction at fault time on a fragmented node - is not, so the default stays off until
+        # someone measures the bad case.
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(RUNAI_STREAMER_HUGE_PAGES_ENV_VAR_NAME, None)
+            self.assertFalse(requests_iterator._huge_pages_enabled())
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_HUGE_PAGES_ENV_VAR_NAME: "1"})
+    def test_the_default_pool_alignment_is_a_block(self):
+        # With the feature off, the pool must be laid out exactly as it was before huge pages existed.
+        # Checked here as well as through _huge_pages_enabled, because the alignment is what a direct
+        # read actually depends on.
+        with patch.dict(os.environ, {RUNAI_STREAMER_HUGE_PAGES_ENV_VAR_NAME: "0"}):
+            pool = self._pool()
+            self.assertEqual(pool.pool.ctypes.data % DIRECT_IO_BLOCK, 0)
+            self.assertNotEqual(requests_iterator._pool_alignment(), HUGE_PAGE)
+
+    def test_the_pad_budget_does_not_grow_with_huge_pages(self):
+        """A slot reserves room for pads at DIRECT_IO_BLOCK each, whatever the page size.
+
+        The trap this guards: if congruent placement had to hold modulo 2 MiB, one pad would cost
+        2 MiB and the 1024-pad budget would want 2 GB per buffer instead of 4 MB.
+
+        It does not, because O_DIRECT alignment comes from the storage device's logical block while a
+        huge page is a property of the memory mapping. Measured: a direct read into an address one
+        block inside a huge page succeeds and is exactly as cheap as one at the huge page's start.
+        """
+        with patch.dict(os.environ, {RUNAI_STREAMER_HUGE_PAGES_ENV_VAR_NAME: "0"}):
+            without = self._pool()._slot_size
+        with patch.dict(os.environ, {RUNAI_STREAMER_HUGE_PAGES_ENV_VAR_NAME: "1"}):
+            with_huge = self._pool()._slot_size
+
+        self.assertEqual(without, with_huge, "the pad budget must not scale with the page size")
+
+        # And it really is the block, not the page: the reserved room is exactly one block per pad.
+        expected = 4 * 1024 * 1024 + DIRECT_IO_BLOCK * requests_iterator._max_pads_per_buffer()
+        self.assertEqual(with_huge, expected)
+
+    def test_mapping_memory_tolerates_a_bad_address(self):
+        # It reads /proc/self/smaps, which may not exist. An address in no mapping must come back as
+        # "no answer" rather than raising - the caller treats None as unknown.
+        self.assertIsNone(_mapping_memory(0x1, 4096))
+
+    def test_mapping_memory_reports_resident_bytes(self):
+        # Rss is what says whether anything has been written. Without it a pool nobody has touched
+        # reads as "no huge pages" and looks broken, which is how this check first cried wolf.
+        #
+        # What is asserted is our PARSE, checked against the kernel's own answer for the same memory.
+        # How much stays resident is the host's decision, not ours.
+        #
+        # This used to require half the pool, and CI reported 128 KiB of a 16 MiB pool. Reproduced
+        # against the real library: the pool covered TWO mappings, 128 KiB then 18 MiB, and only the
+        # first was read. Our own madvise() on a sub-range is what splits them.
+        #
+        # mincore is the oracle because it answers the same question with no text to parse, so a
+        # disagreement is our parse and not the machine reclaiming pages.
+        pool = self._pool()
+        pool.pool[:] = 1
+
+        # Either side of the smaps read, so a host actively reclaiming these pages moves the band
+        # rather than failing the test. A wrong mapping is out by orders of magnitude and still fails.
+        before = _resident_bytes(pool.pool.ctypes.data, pool.pool.nbytes)
+
+        measured = _mapping_memory(pool.pool.ctypes.data, pool.pool.nbytes)
+        self.assertIsNotNone(measured)
+        resident, _ = measured
+
+        after = _resident_bytes(pool.pool.ctypes.data, pool.pool.nbytes)
+
+        low = min(before, after) // 2
+        high = max(before, after) * 2 + 64 * 1024
+
+        self.assertTrue(
+            low <= resident <= high,
+            f"smaps reports {resident} bytes resident for this mapping, while mincore reports "
+            f"{before}..{after} for the same range - the parse is reading a different mapping")
+
+        # And something must be resident: distinguishing "written" from "untouched" is the only thing
+        # the caller uses this number for.
+        self.assertGreater(resident, 0)
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_HUGE_PAGES_ENV_VAR_NAME: "1"})
+    def test_an_untouched_pool_is_not_judged(self):
+        # A request of only zero-sized ranges writes nothing, so its buffer comes back untouched and
+        # there is nothing to conclude. The report must stay unanswered rather than warn - it cried
+        # wolf exactly this way before Rss was consulted.
+        #
+        # _mapping_memory is faked rather than driven through a real pool, because what is under test
+        # is the decision, not what this machine's allocator happens to do.
+        pool = self._pool()
+        with patch(
+            "runai_model_streamer.file_streamer.requests_iterator._mapping_memory",
+            return_value=(0, 0),
+        ), patch.object(requests_iterator.logger, "warning") as warned:
+            pool._report_huge_pages_once(0)
+        warned.assert_not_called()
+        self.assertFalse(pool._huge_pages_reported, "an untouched pool must be asked again later")
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_HUGE_PAGES_ENV_VAR_NAME: "1"})
+    def test_a_touched_pool_with_no_huge_pages_warns(self):
+        # The case the check exists for: pages were written and none came back huge, so the O_DIRECT
+        # pinning cost is back and nothing else would say so.
+        pool = self._pool()
+        with patch(
+            "runai_model_streamer.file_streamer.requests_iterator._mapping_memory",
+            return_value=(64 * 1024 * 1024, 0),
+        ), patch.object(requests_iterator.logger, "warning") as warned:
+            pool._report_huge_pages_once(0)
+        warned.assert_called_once()
+        self.assertIn("no huge pages", warned.call_args[0][0])
+        self.assertTrue(pool._huge_pages_reported)
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_HUGE_PAGES_ENV_VAR_NAME: "1"})
+    def test_a_touched_pool_with_huge_pages_does_not_warn(self):
+        pool = self._pool()
+        with patch(
+            "runai_model_streamer.file_streamer.requests_iterator._mapping_memory",
+            return_value=(64 * 1024 * 1024, 64 * 1024 * 1024),
+        ), patch.object(requests_iterator.logger, "warning") as warned:
+            pool._report_huge_pages_once(0)
+        warned.assert_not_called()
+        self.assertTrue(pool._huge_pages_reported)
+
+    @patch.dict(os.environ, {RUNAI_STREAMER_HUGE_PAGES_ENV_VAR_NAME: "1"})
+    def test_the_report_runs_at_most_once(self):
+        # It reads /proc/self/smaps, which is not free, and the answer cannot change. Once per pool.
+        #
+        # _mapping_memory is faked so the answer does not depend on how much of this small pool the
+        # allocator happens to have made resident. Asserting on the real value made this test pass or
+        # fail according to what ran before it - which it did, once the suite grew.
+        pool = self._pool()
+        with patch(
+            "runai_model_streamer.file_streamer.requests_iterator._mapping_memory",
+            return_value=(64 * 1024 * 1024, 64 * 1024 * 1024),
+        ), patch.object(
+            type(pool), "_report_huge_pages_once", wraps=pool._report_huge_pages_once
+        ) as reported:
+            request = pool.next_request()
+            pool.release(request)
+            self.assertEqual(reported.call_count, 1)
+            self.assertTrue(pool._huge_pages_reported)
+
+    def test_releasing_twice_does_not_report_twice(self):
+        pool = self._pool()
+        request = pool.next_request()
+        pool.release(request)
+        pool._huge_pages_reported = False   # pretend it never ran, to prove release drives it
+        request = pool.next_request()
+        if request is not None:
+            pool.release(request)
+            self.assertTrue(pool._huge_pages_reported)

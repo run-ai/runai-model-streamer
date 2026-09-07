@@ -27,7 +27,8 @@ ClientConfiguration::ClientConfiguration()
         // Use at least 8 threads if hardware_concurrency cannot be computed.
         LOG(SPAM) << "Hardware concurrency detected: " << nprocs;
         unsigned default_max_concurrency = nprocs == 0 ? 8U : 1U;
-        unsigned worker_concurrency = utils::getenv<unsigned long>("RUNAI_STREAMER_CONCURRENCY", 8UL);
+        // A DIVISOR below, and it had no floor - a plain 0 was an integer division by zero (env.h).
+        unsigned worker_concurrency = utils::getenv_positive<unsigned>("RUNAI_STREAMER_CONCURRENCY", 8U);
         LOG(SPAM) << "Streamer worker concurrency: " << worker_concurrency;
         max_concurrency = std::max(default_max_concurrency, nprocs * 2 / worker_concurrency);
     }

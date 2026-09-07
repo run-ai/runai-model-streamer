@@ -36,6 +36,7 @@ std::atomic<bool> __opened(false);
 std::atomic<size_t> __mock_max_inflight_bytes{static_cast<size_t>(-1)};
 // peak per-client in-flight (submitted-but-not-completed) request count, for window tests
 std::atomic<size_t> __mock_max_concurrent{0};
+std::atomic<size_t> __mock_requests{0};
 // requests whose path matched __mock_failing_path at submission time; their completion
 // events are reported with FileAccessError instead of the global response code, for
 // per-file error-isolation tests. __mock_failing_path is a substring match; empty = none.
@@ -152,6 +153,11 @@ void runai_mock_s3_set_response_time_ms(unsigned milliseconds)
 void runai_mock_s3_set_inflight_window(size_t bytes)
 {
     __mock_max_inflight_bytes.store(bytes);
+}
+
+size_t runai_mock_s3_requests()
+{
+    return __mock_requests.load();
 }
 
 size_t runai_mock_s3_max_concurrent()
@@ -275,6 +281,8 @@ common::backend_api::ResponseCode_t obj_request_read(
     common::backend_api::ObjectRequestId_t request_id)
 {
     const auto guard = std::unique_lock<std::mutex>(__mutex);
+
+    ++__mock_requests;
 
     if (!__mock_clients.count(client_handle) || __mock_unused.count(client_handle))
     {
@@ -541,6 +549,7 @@ void runai_mock_s3_cleanup()
     __stopped = false;
     __mock_max_inflight_bytes.store(static_cast<size_t>(-1));
     __mock_max_concurrent.store(0);
+    __mock_requests.store(0);
     __mock_max_events_per_wait.store(0);
     __mock_append_finished_sentinel.store(false);
     runai_s3_mock_set_backend_shutdown_policy(common::backend_api::OBJECT_SHUTDOWN_POLICY_ON_PROCESS_EXIT);

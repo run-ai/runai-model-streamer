@@ -251,6 +251,40 @@ void Fd::write(const std::string & path, const std::vector<uint8_t> & data, int 
     fd.write(data.data(), data.size());
 }
 
+int Fd::open_for_read(const std::string & path, int extra_flags)
+{
+    const int fd = ::open(path.c_str(), O_RDONLY | O_NONBLOCK | extra_flags);
+    if (fd < 0)
+    {
+        return -1;
+    }
+
+    struct stat st;
+    if (::fstat(fd, &st) != 0)
+    {
+        const int error = errno;
+        ::close(fd);
+        errno = error;
+        return -1;
+    }
+
+    if (S_ISREG(st.st_mode) || S_ISBLK(st.st_mode) || S_ISCHR(st.st_mode))
+    {
+        return fd;
+    }
+
+    // Named here rather than left to the caller: "Invalid argument" on an open that succeeded reads as
+    // a bug in us, and the path alone does not say what it is.
+    LOG(ERROR) << path << " is a "
+               << (S_ISDIR(st.st_mode) ? "directory" : S_ISFIFO(st.st_mode) ? "FIFO"
+                                                     : S_ISSOCK(st.st_mode) ? "socket" : "file type")
+               << ", which cannot be read at an offset";
+
+    ::close(fd);
+    errno = EINVAL;
+    return -1;
+}
+
 bool Fd::exists(const std::string & path)
 {
     return ::access(path.c_str(), F_OK) != -1;

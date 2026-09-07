@@ -50,6 +50,24 @@ struct Fd
     std::vector<uint8_t> read(size_t size, Read mode = Read::Exactly);
     void write(const std::vector<uint8_t> & data);
 
+    // Open `path` for reading, refusing the file types a reader cannot serve.
+    //
+    // O_NONBLOCK, because open() ITSELF blocks on a FIFO that has no writer. Measured on Linux 6.8:
+    // open(fifo, O_RDONLY) never returns until someone opens the other end. The thread that calls this
+    // serves a whole mount, so one such path stops every read on it, for good. O_NONBLOCK changes
+    // nothing for what we do serve - it has no effect on reads from a regular file or a block device.
+    //
+    // Regular files and devices are kept: all three can be read at an offset, which is all a reader
+    // needs, and O_DIRECT on a block device is a legitimate thing to point the streamer at.
+    //
+    // Directories, FIFOs and sockets are refused HERE so that both readers say the same thing about
+    // the same path. Each of them fails differently and later otherwise: a directory read reports
+    // EISDIR to pread and EINVAL to libaio, while a FIFO ignores the offset, consumes the stream, and
+    // gives every reader a different prefix of it.
+    //
+    // Returns the descriptor, or -1 with errno set - EINVAL for a type we refuse.
+    static int open_for_read(const std::string & path, int extra_flags = 0);
+
     static bool exists(const std::string & path);
 
     // read the entire file - used for testing

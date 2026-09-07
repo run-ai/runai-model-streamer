@@ -190,6 +190,14 @@ struct ThreadPool
         _deque.push(std::move(request));
     }
 
+    // Requests accepted but not yet taken by a worker. A load measure for choosing between pools -
+    // NOT a completion measure: a request a worker has taken is no longer counted here even though
+    // its work may still be outstanding.
+    unsigned pending() const
+    {
+        return _deque.size();
+    }
+
     static void routine(ThreadPool & pool)
     {
         while (true)

@@ -1,9 +1,12 @@
 #include "streamer/impl/streamer/streamer.h"
 
+#include <unistd.h>
+
 #include <fnmatch.h>
 
 #include <atomic>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <limits>
 #include <numeric>
@@ -17,10 +20,12 @@
 #include "utils/scope_guard/scope_guard.h"
 
 #include "streamer/impl/workload/workload.h"
+#include "streamer/impl/async_io/async_io_worker/async_io_worker.h"
 #include "streamer/impl/object_storage_worker/object_storage_worker.h"
 #include "streamer/impl/assigner/assigner.h"
 #include "streamer/impl/batches/batches.h"
 #include "common/exception/exception.h"
+#include "posix_io/alignment/alignment.h"
 #include "common/storage_uri/storage_uri.h"
 
 namespace runai::llm::streamer::impl
@@ -29,8 +34,12 @@ namespace runai::llm::streamer::impl
 Streamer::Streamer() : Streamer(Config())
 {}
 
-Streamer::Streamer(Config config) :
+Streamer::Streamer(Config config, Environment environment) :
     _config(std::make_shared<Config>(config)),
+    // Built here, resolved on the first submission - so RUNAI_STREAMER_FS_STRATEGY is only the
+    // DEFAULT, and anything set between runai_start() and the first request still takes effect.
+    _strategy_resolver(std::make_shared<StrategyResolver>(config.fs_strategy_candidates,
+                                                          environment.availability)),
     // Filesystem reads are synchronous (concurrency threads, stateless handler); object-storage reads are
     // asynchronous (s3_concurrency ObjectStorageWorkers, each owning a client + in-flight capacity window).
     // Pools are created lazily on first use of each kind.
@@ -38,6 +47,31 @@ Streamer::Streamer(Config config) :
         [](Workload&& workload, std::atomic<bool> & stopped)
         {
             workload.execute(stopped);
+        },
+        // the async worker owns an IoEngine built for the resolved strategy. Reading the strategy
+        // here is safe: this factory runs when the pool is created, which is the first push, which is
+        // after resolution. Captures the resolver by value, never `this`.
+        // `block` is the mount's measured direct-I/O block, supplied by BackendPools when it creates
+        // this mount's engine. 0 means no file on it could be probed, and the worker falls back.
+        // engine comes from _environment, NOT from the `environment` parameter. _environment is declared
+        // before _pools, so it is initialised first - and it was initialised by MOVING the parameter,
+        // which leaves environment.engine empty. Capturing the parameter here compiles, runs, and
+        // silently builds the real engine instead of the injected one.
+        [resolver = _strategy_resolver, workers = _async_workers, dead = _dead_mounts,
+         engine = _environment.engine]
+        (dev_t device, size_t block) -> std::unique_ptr<utils::Worker<Workload>>
+        {
+            // The worker reports its own death here, and the streamer stops routing this mount to it -
+            // see DeadMounts. Captured by value, never `this`.
+            auto worker = std::make_unique<AsyncIoWorker>(resolver->resolved(), block,
+                                                          engine ? engine : posix_io::make_io_engine,
+                                                          [dead, device]() { dead->add(device); });
+
+            // Registered here, where the concrete type is still known. The pool stores it as a
+            // Worker<Workload>, which knows nothing of counters, so this is the last point at which
+            // it can be recorded without a cast.
+            workers->add(worker.get());
+            return worker;
         },
         // each object-storage worker reads the streamer's credentials once, at client creation, via this
         // provider. It captures the shared credentials state by value, so the state outlives the worker
@@ -49,7 +83,8 @@ Streamer::Streamer(Config config) :
         _config->concurrency, _config->s3_concurrency),
     // One PERSISTENT responder for the streamer's lifetime, shared by all submissions and
     // demuxed by submission_id. increment() grows its expected count per accepted submission.
-    _responder(std::make_shared<common::Responder>(0, common::QueueMode::PERSISTENT))
+    _responder(std::make_shared<common::Responder>(0, common::QueueMode::PERSISTENT)),
+    _environment(std::move(environment))
 {
     LOG(DEBUG) << config;
 }
@@ -58,6 +93,21 @@ Streamer::~Streamer()
 {
     try
     {
+        // At INFO because it is the only way to tell a real direct read from one that bounced every
+        // pass through the scratch buffer. Both reach the same bytes and both look identical in the
+        // log otherwise, so without this a run that lost congruence reads as a working direct run.
+        //
+        // Reported here, at the end, because the counters are totals over the streamer's life: a
+        // ratio taken mid-run would only describe the submissions seen so far.
+        //
+        // Silent when nothing was read asynchronously, so a synchronous run does not gain a line of
+        // zeroes that means nothing.
+        const auto counters = async_counters();
+        if (counters.bytes_read != 0)
+        {
+            LOG(INFO) << "Async io totals: " << counters;
+        }
+
         LOG(DEBUG) << "Streamer shutting down";
         // unblock any consumer parked in response()/pop() on the persistent responder
         _responder->stop();
@@ -114,6 +164,18 @@ common::ResponseCode Streamer::async_read(const std::string & path, size_t file_
     return ret;
 }
 
+void Streamer::DeadMounts::add(dev_t device)
+{
+    const auto guard = std::unique_lock<std::mutex>(_mutex);
+    _devices.insert(device);
+}
+
+bool Streamer::DeadMounts::contains(dev_t device) const
+{
+    const auto guard = std::unique_lock<std::mutex>(_mutex);
+    return _devices.count(device) != 0;
+}
+
 common::ResponseCode Streamer::CredentialsState::set(const common::s3::Credentials & credentials)
 {
     const auto guard = std::unique_lock<std::mutex>(_mutex);
@@ -152,6 +214,36 @@ common::s3::Credentials Streamer::credentials() const
     return _credentials_state->get();
 }
 
+const AsyncIoStats & Streamer::stats() const
+{
+    return _stats;
+}
+
+AsyncIoCounters Streamer::async_counters() const
+{
+    return _async_workers->total();
+}
+
+unsigned Streamer::async_engines() const
+{
+    return _pools.async_engines();
+}
+
+common::ResponseCode Streamer::set_fs_strategy(const std::string & candidates)
+{
+    return _strategy_resolver->set_candidates(candidates);
+}
+
+posix_io::Strategy Streamer::fs_strategy() const
+{
+    return _strategy_resolver->resolved();
+}
+
+bool Streamer::async_pool_used() const
+{
+    return _pools.async_pool_used();
+}
+
 common::Response Streamer::response(unsigned timeout_ms, bool & submission_done)
 {
     submission_done = false;
@@ -188,6 +280,24 @@ common::ResponseCode Streamer::async_request(
     if (const auto ret = lock_object_plugin(request); ret != common::ResponseCode::Success)
     {
         return ret;
+    }
+
+    // Settle which filesystem strategy this streamer uses - once, here, for the same reasons as the
+    // plugin lock above: nothing is committed yet, so returning is clean, and every setter has had
+    // its chance to run. Idempotent, so every later submission takes a fast path through it.
+    //
+    // ONLY for a filesystem submission. The strategy names a filesystem engine and has nothing to say
+    // about object storage, so resolving it here would let an unservable filesystem strategy reject an
+    // S3 read - failing a submission for a reason that cannot apply to it. It also means a streamer
+    // that only ever touches object storage never probes io_uring at all.
+    const bool object_storage = is_object_storage_submission(request);
+
+    if (!object_storage)
+    {
+        if (const auto ret = _strategy_resolver->resolve(); ret != common::ResponseCode::Success)
+        {
+            return ret;
+        }
     }
 
     // One response per range whatever its size, so total_ranges counts every range - a zero-sized one is
@@ -242,7 +352,16 @@ common::ResponseCode Streamer::async_request(
     }
 
     // divide reading between workers
-    Assigner assigner(request, _config);
+    // Object storage has no mount to probe and no strategy to consult, so it is not asked.
+    //
+    // The devices are kept alongside: a workload's group is an index into this, and the st_dev it
+    // names is the key its engine is chosen by.
+    std::vector<dev_t> group_devices;
+    std::vector<size_t> group_blocks;
+    const std::vector<int> group_by_file = object_storage
+                                         ? std::vector<int>{}
+                                         : file_groups(request, group_devices, group_blocks);
+    Assigner assigner(request, _config, group_by_file);
 
     std::vector<Workload> workloads(assigner.num_workloads());
 
@@ -325,11 +444,32 @@ common::ResponseCode Streamer::async_request(
             {
                 LOG(DEBUG) << "Submission " << submission_id << " sending workload to worker with batches " << workloads[next].size();
 
-                // route to the pool for this workload's backend kind (a workload is homogeneous)
-                const auto kind = workloads[next].is_object_storage()
-                    ? BackendPools::Kind::ObjectStorage
-                    : BackendPools::Kind::FileSystem;
-                _pools.push(kind, std::move(workloads[next]));
+                // Route to this workload's pool - a workload is homogeneous.
+                //
+                // The filesystem choice is the strategy resolved above, which is streamer-scoped, so
+                // The pool was decided per file before the batches were built, and nothing moves
+                // between pools afterwards - so this only reads the answer.
+                const int group = workloads[next].is_object_storage() ? -1 : assigner.group_of_workload(next);
+
+                if (workloads[next].is_object_storage())
+                {
+                    _pools.push(BackendPools::Pool::ObjectStorage, std::move(workloads[next]));
+                }
+                else if (group < 0)
+                {
+                    _pools.push(BackendPools::Pool::FileSystem, std::move(workloads[next]));
+                }
+                else
+                {
+                    // The mount picks the engine. Every task in this workload is on one mount, which
+                    // is why the group exists - see Assigner's group_by_file.
+                    ASSERT(static_cast<size_t>(group) < group_devices.size())
+                        << "async workload " << next << " has group " << group
+                        << " but only " << group_devices.size() << " mounts were probed";
+
+                    workloads[next].direct_block = group_blocks[group];
+                    _pools.push_async(group_devices[group], group_blocks[group], std::move(workloads[next]));
+                }
             }
         }
     }
@@ -351,6 +491,30 @@ common::ResponseCode Streamer::async_request(
     }
 
     drain_guard.cancel(); // all workloads dispatched
+
+    // Recorded only once every workload is dispatched. A submission that failed before this point was
+    // never read by anything, so recording it would say a run happened that did not.
+    {
+        SubmissionStats stats;
+        stats.submission_id = submission_id;
+        stats.shared_engine_mounts = _pools.shared_engine_mounts();
+
+        // Object-storage files are left out rather than labelled: the strategy names a filesystem
+        // reader, and none of it applies to them.
+        if (!object_storage)
+        {
+            stats.files.reserve(request.size());
+            for (size_t i = 0; i < request.size(); ++i)
+            {
+                const int group = i < group_by_file.size() ? group_by_file[i] : -1;
+                stats.files.push_back({ request[i].path,
+                                        group < 0 ? posix_io::Strategy::SyncBuffered
+                                                  : _strategy_resolver->resolved() });
+            }
+        }
+
+        _stats.record(stats);
+    }
 
     return common::ResponseCode::Success;
 }
@@ -415,6 +579,331 @@ void Streamer::verify_requests(std::vector<FileRanges> & request)
             }
         }
     }
+}
+
+bool Streamer::is_object_storage_submission(const std::vector<FileRanges> & request)
+{
+    for (const auto & file : request)
+    {
+        // A file with no ranges reaches no storage, so it must not decide the backend - the same rule
+        // lock_object_plugin and Assigner::check_object_storage already follow.
+        if (file.ranges.empty())
+        {
+            continue;
+        }
+
+        return try_parse_uri(file.path) != nullptr;
+    }
+
+    return false;
+}
+
+common::ResponseCode Streamer::direct_block_for(const std::vector<std::string> & paths,
+                                                size_t & out_block)
+{
+    out_block = 0;
+
+    size_t largest = 0;
+    bool measured = false;
+
+    for (const auto & path : paths)
+    {
+        // Filesystem paths only. An object-storage URI names no mount and never reaches O_DIRECT, and
+        // stat'ing "s3:/" would probe the current directory's mount and report an answer belonging to
+        // something else entirely.
+        //
+        // A submission cannot legally mix the two - lock_object_plugin rejects that with
+        // UnsupportedBackendMix - but this runs BEFORE any submission is validated, so it takes the
+        // list as given rather than assuming the caller has been checked.
+        if (try_parse_uri(path) != nullptr)
+        {
+            continue;
+        }
+
+        // The DIRECTORY, as file_groups does: capability belongs to the mount, and this works for a
+        // file that does not exist yet where stat'ing the file itself would fail.
+        const auto slash = path.find_last_of('/');
+        const std::string directory = (slash == std::string::npos) ? std::string(".")
+                                    : (slash == 0 ? std::string("/") : path.substr(0, slash));
+
+        try
+        {
+            const auto capability = _environment.mount ? _environment.mount(directory)
+                                                       : _mounts.of_path(directory);
+
+            // A memory-backed mount has no device to bypass, so it imposes no alignment at all.
+            if (capability.memory_backed)
+            {
+                continue;
+            }
+
+            // The injected probe when a test set one, as file_groups and reads_directly do. Without
+            // this, a test that answers for the other two sites still gets the build machine's real
+            // block here - so what this API reports would depend on where the test ran.
+            size_t block = 0;
+            if (_environment.direct_block)
+            {
+                block = _environment.direct_block(capability.dev, path);
+            }
+            else
+            {
+                (void)_mounts.direct_block(capability.dev, path, block);
+            }
+
+            // Non-zero is the answer, whichever side produced it. The injected probe reports 0 for
+            // "serves no direct reads" and has no response code, so the value decides rather than the
+            // code - which is also true of the real one: it only reports Success with a block above 0.
+            if (block != 0)
+            {
+                largest = std::max(largest, block);
+                measured = true;
+            }
+        }
+        catch (const common::Exception &)
+        {
+            // An unstattable directory tells us nothing about alignment. Skip it; another path may
+            // answer, and if none do the fallback below applies.
+            continue;
+        }
+    }
+
+    if (!measured)
+    {
+        // A LAYOUT value, so the caller can still place its buffers. The host page size: on x86 that
+        // is 4096, and on a large-page host the caller's pool is already aligned to it, so nothing is
+        // over-padded relative to what the allocator gives anyway.
+        //
+        // UnknownError, not Success, so the caller knows to ask again next submission instead of
+        // treating this as the mount's answer.
+        out_block = static_cast<size_t>(::sysconf(_SC_PAGESIZE));
+
+        LOG(INFO) << "No filesystem mount among " << paths.size() << " path(s) could be measured;"
+                  << " laying out at"
+                  << " the host page size of " << out_block << " bytes for now";
+        return common::ResponseCode::UnknownError;
+    }
+
+    out_block = largest;
+
+    LOG(INFO) << "Destinations for these " << paths.size() << " path(s) must be laid out at "
+              << out_block << " bytes - the largest any of their mounts requires";
+    return common::ResponseCode::Success;
+}
+
+std::vector<int> Streamer::file_groups(const std::vector<FileRanges> & request,
+                                       std::vector<dev_t> & out_devices,
+                                       std::vector<size_t> & out_blocks)
+{
+    std::vector<int> group_by_file(request.size(), -1);
+    out_devices.clear();
+    out_blocks.clear();
+
+    if (!posix_io::is_async(_strategy_resolver->resolved()))
+    {
+        return group_by_file;   // the synchronous reader serves everything
+    }
+
+
+    // Directory -> its group. MountCapabilities caches by st_dev, which saves the statfs but NOT the
+    // stat that finds st_dev in the first place - so without this a 200-shard model in one directory
+    // would stat that directory 200 times. Per submission, because it is only read inside this loop.
+    std::map<std::string, int> by_directory;
+
+    // st_dev -> group id, so two directories on the same mount share a group and therefore an engine.
+    std::map<dev_t, int> by_device;
+
+    // Which group serves this directory, or -1 for the synchronous reader. Answered once per
+    // directory; every shard beside the first is free.
+    const auto group_of_directory = [&](const std::string & directory, const std::string & path)
+    {
+        const auto seen = by_directory.find(directory);
+        if (seen != by_directory.end())
+        {
+            return seen->second;
+        }
+
+        int group = -1;
+        try
+        {
+            const auto capability = _environment.mount ? _environment.mount(directory)
+                                                       : _mounts.of_path(directory);
+
+            // A mount whose engine has already failed goes to the synchronous reader, for the rest of
+            // the process.
+            //
+            // The failure is permanent and it is about the RING, not the storage - io_uring_submit or
+            // io_getevents gone, with the files still perfectly readable. So this is a demotion rather
+            // than a loss: slower, and it needs none of the machinery that broke. Leaving the mount
+            // routed here instead would answer every later submission with FsAsyncEngineError, which
+            // is the same outcome as failing the load.
+            //
+            // Tested before memory_backed and before any probe, because both cost syscalls to answer a
+            // question already settled.
+            //
+            // Left at -1 rather than returned early, so the answer still lands in by_directory below -
+            // otherwise a 200-shard model on a dead mount would stat its directory 200 times.
+            if (!_dead_mounts->contains(capability.dev))
+            {
+                // tmpfs and ramfs are pure memcpy with no device to overlap, so depth buys nothing and
+                // parallelism does - the 16-thread pool is the right reader for them (5.12).
+                if (!capability.memory_backed)
+                {
+                    // One group per MOUNT, so directories sharing a mount share an engine. Groups are
+                    // numbered in first-seen order, which is what makes them dense indices into
+                    // out_devices.
+                    const auto device = by_device.find(capability.dev);
+                    if (device != by_device.end())
+                    {
+                        group = device->second;
+                    }
+                    else
+                    {
+                        group = static_cast<int>(out_devices.size());
+                        by_device.emplace(capability.dev, group);
+                        out_devices.push_back(capability.dev);
+
+                        // 0 until a file on this mount answers the probe - see the loop below.
+                        out_blocks.push_back(0);
+                    }
+                }
+            }
+        }
+        catch (const common::Exception & e)
+        {
+            // Deliberately NOT fatal. A directory we cannot stat means we cannot tell what serves it
+            // best, not that the read must fail - and failing here would turn a per-file problem into
+            // a whole-submission one, which is exactly what the missing file itself will report
+            // later, attributably.
+            LOG(WARNING) << "Cannot probe the mount of " << directory << " (" << e.error()
+                         << "); reading " << path << " with the synchronous reader";
+        }
+
+        // Remembered whatever the answer, so an unprobeable directory is not retried once per file.
+        by_directory.emplace(directory, group);
+        return group;
+    };
+
+    // libaio has no asynchronous buffered mode, so a file it cannot read directly must be routed away
+    // before dispatch. Every other async strategy keeps its files whatever this would have said - see
+    // reads_directly().
+    const bool check_direct = _strategy_resolver->resolved() == posix_io::Strategy::LibaioDirect;
+
+    for (size_t i = 0; i < request.size(); ++i)
+    {
+        const auto & path = request[i].path;
+
+        // A file with no ranges reaches no storage, so probing its mount would be a syscall for
+        // nothing - and would fail the probe on a path that was never going to be read.
+        if (request[i].ranges.empty())
+        {
+            continue;
+        }
+
+        // The DIRECTORY, not the file: capability belongs to the mount, so the answer is the same for
+        // every shard beside it. It also works for a file that does not exist yet, where stat'ing the
+        // file itself would fail.
+        const auto slash = path.find_last_of('/');
+        const std::string directory = (slash == std::string::npos) ? std::string(".")
+                                    : (slash == 0 ? std::string("/") : path.substr(0, slash));
+
+        const int group = group_of_directory(directory, path);
+        if (group < 0)
+        {
+            continue;   // the synchronous reader serves it
+        }
+
+        // This mount's block, measured once and carried to the engine that will serve it.
+        //
+        // Taken from the first file that ANSWERS, not the first file. A path that does not exist yet
+        // leaves direct_block at 0 and caches nothing, so asking only the first file would freeze
+        // this mount's engine on a fallback because of one missing shard.
+        //
+        // Measured for every direct strategy, not only libaio. reads_directly() below is still gated
+        // on libaio - routing a file AWAY is what only libaio may do - but io_uring needs the number
+        // just as much, and it has no other chance to learn it before its engine is built.
+        if (out_blocks[group] == 0 && posix_io::is_direct(_strategy_resolver->resolved()))
+        {
+            if (_environment.direct_block)
+            {
+                out_blocks[group] = _environment.direct_block(out_devices[group], path);
+            }
+            else
+            {
+                // The code is ignored on purpose here: a mount that refuses O_DIRECT and one that
+                // could not be probed both leave the block at 0, and both mean "no measurement to
+                // carry". What must NOT happen is caching the failure, and direct_block already
+                // does not - so the next submission measures again.
+                size_t block = 0;
+                (void)_mounts.direct_block(out_devices[group], path, block);
+                out_blocks[group] = block;
+            }
+        }
+
+        // PER FILE, so it cannot be answered from the directory cache above: congruence depends on
+        // this file's own offsets and destinations, and two shards in one directory can differ.
+        if (check_direct && !reads_directly(request[i], out_devices[group]))
+        {
+            continue;
+        }
+
+        group_by_file[i] = group;
+    }
+
+    return group_by_file;
+}
+
+bool Streamer::reads_directly(const FileRanges & file, dev_t device)
+{
+    // THIS MOUNT's block, measured, not the process-wide assumption.
+    //
+    // The number decides congruence, and congruence decides whether a file is read directly at all -
+    // so testing against a block larger than the mount needs rejects files the mount would have
+    // served. On a mount that accepts 512, testing at 65536 makes congruence 128 times harder.
+    //
+    // Zero means the mount serves no direct reads; the direct_support() check below then routes the
+    // file away, so any value works here and the loop simply finds nothing congruent.
+    size_t measured = 0;
+    if (_environment.direct_block)
+    {
+        measured = _environment.direct_block(device, file.path);
+    }
+    else
+    {
+        (void)_mounts.direct_block(device, file.path, measured);
+    }
+
+    const auto block = measured != 0 ? measured : posix_io::direct_block_size();
+
+    for (const auto & range : file.ranges)
+    {
+        // A zero-sized range produces no chunk, so it is never read and never opens the file. Letting
+        // one decide the reader for the whole file would be deciding on a range nobody reads.
+        if (range.size == 0)
+        {
+            continue;
+        }
+
+        if (!posix_io::is_congruent(range.offset, range.dst, block))
+        {
+            // No PART of this range can be read directly - not the middle, not one block of it. So
+            // the worker would open the file buffered, and under libaio that is a serial read.
+            LOG(DEBUG) << "Reading " << file.path << " with the synchronous reader: offset "
+                       << range.offset << " and its destination are not congruent for block " << block;
+            return false;
+        }
+    }
+
+    const auto support = _environment.direct ? _environment.direct(device, file.path)
+                                             : _mounts.direct_support(device, file.path);
+
+    if (support == posix_io::DirectSupport::No)
+    {
+        LOG(DEBUG) << "Reading " << file.path << " with the synchronous reader: its mount cannot"
+                   << " serve O_DIRECT, and libaio without O_DIRECT reads one file at a time";
+        return false;
+    }
+
+    return true;
 }
 
 common::ResponseCode Streamer::lock_object_plugin(const std::vector<FileRanges> & request)

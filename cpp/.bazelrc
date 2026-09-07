@@ -4,6 +4,13 @@ build --cxxopt=-std=c++17
 # compile with '-fPIC'; this is needed for building in optimized mode (i.e. '-c opt').
 build --force_pic
 
+# Build optimised by default. The -O2 itself lives in the toolchain's `opt` feature (see
+# toolchain/template/toolchain.bzl); this line only chooses the mode.
+#
+# Needed because the default mode is fastbuild, which is unoptimised on purpose. 
+## Overridable: `bazel build -c dbg` still wins, because a command-line flag beats an rc file.
+build --compilation_mode=opt
+
 # Disable bzlmod Modules, as this workspace uses WORKSPACE
 # dependency management. See https://bazel.build/external/migration
 build --noenable_bzlmod

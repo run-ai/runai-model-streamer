@@ -1,5 +1,6 @@
 from typing import Dict, List, Iterator, Optional, Tuple
 from runai_model_streamer.libstreamer.libstreamer import (
+    runai_probe_direct_block_size,
     SUCCESS_ERROR_CODE,
     runai_start,
     runai_end,
@@ -10,6 +11,7 @@ from runai_model_streamer.libstreamer.libstreamer import (
     runai_list_files,
 )
 from runai_model_streamer.file_streamer.requests_iterator import (
+    DIRECT_IO_BLOCK,
     FilesRequestsIteratorWithBuffer,
     FilesRequest,
     FileChunks,
@@ -184,8 +186,24 @@ class FileStreamer:
             # first object-storage path resolves + applies the credentials to the streamer, once
             file_stream_request.path = self.handle_object_store(file_stream_request.path, self.streamer, credentials)
 
+        # The ring is laid out to the block the mounts require, measured by the library.
+        #
+        # A submission is all filesystem or all object storage - mixing them is rejected with
+        # UnsupportedBackendMix, and homogeneous_paths() above says the same thing on this side - so
+        # the first path decides for the whole list. An object-storage submission has no mount, no
+        # O_DIRECT and no alignment requirement, so it skips the probe entirely rather than asking a
+        # question that can only answer "nothing to measure".
+        #
+        # Asked AFTER handle_object_store() above, so these paths are the ones that will be read.
+        paths = [request.path for request in file_stream_requests]
+        object_storage = bool(paths) and (is_s3_path(paths[0]) or is_gs_path(paths[0])
+                                          or is_azure_path(paths[0]))
+
+        direct_block = (DIRECT_IO_BLOCK if object_storage or not paths
+                        else runai_probe_direct_block_size(self.streamer, paths))
+
         self.requests_iterator: FilesRequestsIteratorWithBuffer = FilesRequestsIteratorWithBuffer.with_memory_mode(
-            file_stream_requests, memory_limit
+            file_stream_requests, memory_limit, direct_block
         )
         self.live_requests = {}
         self.outstanding = 0

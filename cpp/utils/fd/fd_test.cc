@@ -4,6 +4,9 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <unistd.h>
+
+#include <cerrno>
 
 #include <string>
 #include <utility>
@@ -274,6 +277,81 @@ TEST(Size, Sanity)
     EXPECT_TRUE(is_fd_open(temp.name));
 
     EXPECT_EQ(fd.size(), data.size());
+}
+
+// A FIFO must not be opened, because the OPEN is what hangs.
+//
+// Measured on Linux 6.8: open(fifo, O_RDONLY) does not return until something opens the write end. In
+// the streamer that call is made by the thread serving a whole mount, so one such path stops every
+// read on it, permanently and with no error anywhere.
+//
+// This is the test that made the branch real. Every other file type this refuses can be reasoned
+// about; a FIFO can simply be created.
+TEST(OpenForRead, A_Fifo_Is_Refused_Rather_Than_Blocking_Forever)
+{
+    const std::string path = "/tmp/runai_fifo_" + random::string();
+    ASSERT_EQ(::mkfifo(path.c_str(), 0600), 0);
+
+    // No writer exists, and none ever will - so a blocking open here would never return and this test
+    // would hang rather than fail. That is the behaviour being prevented.
+    const int fd = Fd::open_for_read(path);
+
+    EXPECT_EQ(fd, -1) << "a FIFO cannot be read at an offset and must be refused";
+    EXPECT_EQ(errno, EINVAL);
+
+    if (fd >= 0)
+    {
+        ::close(fd);
+    }
+    ::unlink(path.c_str());
+}
+
+TEST(OpenForRead, A_Directory_Is_Refused)
+{
+    // open(O_RDONLY) SUCCEEDS on a directory, so nothing before the read notices. Each reader then
+    // finds out somewhere different - libaio refuses the whole io_submit with EINVAL, io_uring
+    // completes the read with -EINVAL, and pread returns EISDIR. Refusing here makes all three say the
+    // same thing.
+    const int fd = Fd::open_for_read("/tmp");
+
+    EXPECT_EQ(fd, -1);
+    EXPECT_EQ(errno, EINVAL);
+
+    if (fd >= 0)
+    {
+        ::close(fd);
+    }
+}
+
+TEST(OpenForRead, A_Regular_File_Is_Opened_And_Reads_Normally)
+{
+    const auto data = random::buffer(1024);
+    const std::string path = "/tmp/runai_open_for_read_" + random::string();
+
+    {
+        Fd out(::open(path.c_str(), O_CREAT | O_WRONLY, 0600));
+        ASSERT_NE(out.fd(), -1);
+        out.write(data);
+    }
+
+    const int fd = Fd::open_for_read(path);
+    ASSERT_GE(fd, 0);
+
+    Fd owned(fd);
+    const auto got = owned.read(data.size(), Fd::Read::Exactly);
+
+    // O_NONBLOCK is set on this descriptor and must not change what a read of a regular file does.
+    EXPECT_EQ(got, data);
+
+    ::unlink(path.c_str());
+}
+
+TEST(OpenForRead, A_Missing_Path_Reports_Its_Own_Errno)
+{
+    const int fd = Fd::open_for_read("/tmp/runai_definitely_missing_" + random::string());
+
+    EXPECT_EQ(fd, -1);
+    EXPECT_EQ(errno, ENOENT) << "a missing file must not be reported as a refused type";
 }
 
 } // namespace runai::llm::streamer::utils

@@ -743,4 +743,53 @@ TEST(AsyncEx, MultipleSubmitterThreads)
     runai_end(streamer);
 }
 
+// Every exit of the probe must leave a USABLE block behind, including the ones that report an error.
+//
+// The caller lays its ring out from this number and divides by it, so the Python binding treats a zero
+// as a broken promise and refuses to stream. That makes an unwritten out-parameter on an error path a
+// failed model load, not a degraded one - and the API exists to do the opposite: report a code AND a
+// block, so an inconclusive probe costs a page-aligned layout now and is asked again next submission.
+//
+// None of these paths can be reached from Python, which always passes a real streamer and real paths.
+// That is exactly why they are tested here: nothing else runs them.
+TEST(ProbeDirectBlockSize, Every_Exit_Leaves_A_Usable_Block)
+{
+    void * streamer = nullptr;
+    ASSERT_EQ(runai_start(&streamer), static_cast<int>(common::ResponseCode::Success));
+
+    const auto invalid = static_cast<int>(common::ResponseCode::InvalidParameterError);
+
+    const auto data = utils::random::buffer(utils::random::number(10, 100));
+    utils::temp::File file(data);
+    const char * path = file.path.c_str();
+
+    // The success case first, so the failures below are compared against something real.
+    size_t block = 0;
+    EXPECT_EQ(runai_probe_direct_block_size(streamer, &path, 1, &block),
+              static_cast<int>(common::ResponseCode::Success));
+    EXPECT_GT(block, 0u);
+
+    // A null streamer. Rejected, but the block must still be usable.
+    block = 0;
+    EXPECT_EQ(runai_probe_direct_block_size(nullptr, &path, 1, &block), invalid);
+    EXPECT_GT(block, 0u) << "an error exit left the out-parameter untouched, so the caller reads 0";
+
+    // A null path array with a non-zero count. Same requirement.
+    block = 0;
+    EXPECT_EQ(runai_probe_direct_block_size(streamer, nullptr, 1, &block), invalid);
+    EXPECT_GT(block, 0u) << "an error exit left the out-parameter untouched, so the caller reads 0";
+
+    // No paths at all. Nothing can be measured, so this reports UnknownError - and still answers with
+    // a layout value, which is the whole contract.
+    block = 0;
+    EXPECT_EQ(runai_probe_direct_block_size(streamer, nullptr, 0, &block),
+              static_cast<int>(common::ResponseCode::UnknownError));
+    EXPECT_GT(block, 0u);
+
+    // A null out-parameter is the one case with nowhere to write, so it only reports.
+    EXPECT_EQ(runai_probe_direct_block_size(streamer, &path, 1, nullptr), invalid);
+
+    EXPECT_NO_THROW(runai_end(streamer));
+}
+
 }; // namespace runai::llm::streamer

@@ -1,4 +1,5 @@
 import unittest
+import hashlib
 import os
 import torch
 import torch.distributed as dist
@@ -265,6 +266,127 @@ class TestDistributedStreamer(unittest.TestCase):
 
         if self.rank == 0:
             print(f"\n✅ Auto mode correctly disabled distributed streaming for gloo backend.")
+
+
+    def _prepare_position_encoded_files(self, files: int, chunks_per_file: int, chunk_size: int):
+        """Files whose every chunk holds bytes derived from its own (file, index).
+
+        Identical filler would hide the failure this test exists for: a rank could yield another
+        rank's tensor under the wrong identity and the bytes would still compare equal.
+        """
+        # The property this fixture is FOR, asserted rather than assumed. The previous encoding
+        # claimed it in a comment and did not have it, and nothing noticed - a swap between two
+        # colliding chunks was indistinguishable from a correct read.
+        payloads = {}
+        for file_index in range(files):
+            for chunk_index in range(chunks_per_file):
+                payload = self._expected_bytes(file_index, chunk_index, chunk_size)
+                clash = payloads.get(payload)
+                assert clash is None, (
+                    f"chunks {clash} and {(file_index, chunk_index)} have identical bytes, so a swap "
+                    f"between them would pass every assertion in this test")
+                payloads[payload] = (file_index, chunk_index)
+
+        if self.rank == 0:
+            requests = []
+            for file_index in range(files):
+                path = os.path.join(self.temp_dir, f"encoded_{file_index}.bin")
+                with open(path, "wb") as handle:
+                    for chunk_index in range(chunks_per_file):
+                        handle.write(self._expected_bytes(file_index, chunk_index, chunk_size))
+                requests.append(FileChunks.contiguous(
+                    id=file_index, path=path, sizes=[chunk_size] * chunks_per_file, offset=0))
+            payload = pickle.dumps(requests)
+            size_tensor = torch.tensor([len(payload)], dtype=torch.long)
+        else:
+            size_tensor = torch.tensor([0], dtype=torch.long)
+
+        dist.broadcast(size_tensor, src=0)
+        if self.rank == 0:
+            buffer = torch.tensor(list(payload), dtype=torch.uint8)
+        else:
+            buffer = torch.empty(size_tensor.item(), dtype=torch.uint8)
+        dist.broadcast(buffer, src=0)
+        if self.rank != 0:
+            requests = pickle.loads(buffer.numpy().tobytes())
+        return requests
+
+    @staticmethod
+    def _expected_bytes(file_index: int, chunk_index: int, size: int) -> bytes:
+        # Sensitive to both coordinates and to the position within the chunk, so a swap between any
+        # two chunks changes the bytes.
+        #
+        # HASHED, not a linear combination. This was `(file_index * 37 + chunk_index * 91 + offset)
+        # % 256`, and 37*2 + 91*2 is exactly 256 - so (f, c) and (f+2, c+2) produced identical bytes.
+        # At files=3, chunks_per_file=8 that was six colliding pairs, (0,0)/(2,2) through (0,5)/(2,7):
+        # 18 distinct payloads for 24 chunks. A swap between any of those pairs passed the byte
+        # comparison, which is the single failure this test exists to detect.
+        #
+        # Any linear scheme mod 256 has this problem somewhere; a digest has no such structure to
+        # exploit. `+ offset` keeps the within-chunk position sensitivity the linear version had.
+        digest = hashlib.blake2b(f"{file_index}:{chunk_index}".encode(), digest_size=32).digest()
+        return bytes((digest[offset % 32] + offset) % 256 for offset in range(size))
+
+    def test_1_broadcast_metadata_identifies_tensors_a_rank_never_read(self):
+        """A rank must yield the right tensor for chunks it did not read itself.
+
+        This is what makes it safe for a rank to build only its own share of the partition. The
+        identity of a received tensor comes from the broadcast METADATA, not from any partition, so a
+        rank knows nothing about which tensors the others own - and does not need to.
+
+        The test fails if that ever stops being true. Moving a lookup from the metadata tensor to
+        rank_dicts_map would load a model with silently mismatched weights, and nothing else here
+        would notice.
+        """
+        chunk_size = 512
+        requests = self._prepare_position_encoded_files(files=3, chunks_per_file=8,
+                                                        chunk_size=chunk_size)
+
+        for policy in ("chunks", "files", "spans"):
+            env_vars = {
+                "RUNAI_STREAMER_DIST": "1",
+                "RUNAI_STREAMER_DIST_BUFFER_MIN_BYTESIZE": "0",
+                "RUNAI_STREAMER_PARTITION_POLICY": policy,
+            }
+            with patch.dict(os.environ, env_vars):
+                with DistributedStreamer() as streamer:
+                    streamer.stream_files(requests, None, "cpu", True)
+
+                    # What THIS rank read from storage, before consuming anything.
+                    mine = {
+                        (origin[0], origin[1])
+                        for source_map in streamer.distributed_streamer.rank_dicts_map.values()
+                        for origin in source_map.values()
+                    }
+
+                    received = {}
+                    for req_id, chunk_idx, data in streamer.get_chunks():
+                        received[(req_id, chunk_idx)] = data.cpu().numpy().tobytes()
+
+                expected = {
+                    (file_index, chunk_index)
+                    for file_index in range(len(requests))
+                    for chunk_index in range(len(requests[file_index].sizes))
+                }
+
+                with self.subTest(policy=policy, rank=self.rank):
+                    self.assertEqual(set(received), expected,
+                                     "every rank yields the whole model, whoever read it")
+
+                    # The point of the test: chunks this rank never touched.
+                    from_others = expected - mine
+                    self.assertTrue(
+                        from_others,
+                        f"rank {self.rank} read everything under {policy}, so this proves nothing")
+
+                    for file_index, chunk_index in sorted(from_others):
+                        self.assertEqual(
+                            received[(file_index, chunk_index)],
+                            self._expected_bytes(file_index, chunk_index, chunk_size),
+                            f"tensor ({file_index}, {chunk_index}) arrived under the wrong identity")
+
+        if self.rank == 0:
+            print(f"\n✅ Broadcast identity verified on all {self.world_size} ranks.")
 
     def test_9_failure_on_one_rank(self):
         if self.world_size < 2:

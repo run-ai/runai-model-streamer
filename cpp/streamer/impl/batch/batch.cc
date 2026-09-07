@@ -19,18 +19,20 @@
 namespace runai::llm::streamer::impl
 {
 
-Batch::Batch(SubmissionId submission_id, unsigned workload_index, unsigned file_index, const std::string & path, const common::s3::S3ClientWrapper::Params & params, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config) :
+Batch::Batch(SubmissionId submission_id, unsigned workload_index, unsigned file_index, const std::string & path, const common::s3::S3ClientWrapper::Params & params, const Tasks && tasks, std::shared_ptr<common::Responder> responder, std::shared_ptr<const Config> config, size_t chunk_bytesize) :
     submission_id(submission_id),
     workload_index(workload_index),
     file_index(file_index),
     path(path),
     object_storage_params(params),
     tasks(tasks),
+    chunks(split_into_chunks(this->tasks, chunk_bytesize)),
     range(tasks),
     responder(responder),
     config(config)
 {
-    LOG(DEBUG) << "Batch " << path << " range " << range << " ; " << this->tasks.size() << " tasks";
+    LOG(DEBUG) << "Batch " << path << " range " << range << " ; " << this->tasks.size() << " tasks in "
+               << chunks.size() << " chunks";
 }
 
 size_t Batch::total_bytes() const
@@ -113,7 +115,7 @@ void Batch::read(const Config & config, std::atomic<bool> & stopped)
     // destination. Both cursors advance in lockstep below.
     char * buffer = tasks[0].destination();
 
-    size_t num_chunks = range.size / config.fs_block_bytesize;
+    size_t num_chunks = range.size / config.fs_sync_read_block_bytesize;
 
     // seek just once because tasks are consecutive within the range
     _reader->seek(file_offset);
@@ -122,10 +124,10 @@ void Batch::read(const Config & config, std::atomic<bool> & stopped)
     size_t i = 0;
     for (; i < num_chunks && !stopped; ++i)
     {
-        _reader->read(config.fs_block_bytesize, buffer);
+        _reader->read(config.fs_sync_read_block_bytesize, buffer);
 
-        file_offset += config.fs_block_bytesize;
-        buffer += config.fs_block_bytesize;
+        file_offset += config.fs_sync_read_block_bytesize;
+        buffer += config.fs_sync_read_block_bytesize;
 
         finished_until(file_offset, common::ResponseCode::Success);
     }
