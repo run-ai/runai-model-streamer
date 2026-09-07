@@ -123,10 +123,7 @@ def pull_files(
     container_client = client.get_container_client(container_name)
 
     for file in files:
-        destination_file = os.path.join(
-            dst,
-            removeprefix(file, base_dir).lstrip("/")
-        )
+        destination_file = _safe_destination_path(dst, base_dir, file)
         local_dir = Path(destination_file).parent
         os.makedirs(local_dir, exist_ok=True)
         
@@ -214,6 +211,14 @@ def _filter_ignore(paths: List[str], patterns: List[str]) -> List[str]:
         if not any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
     ]
 
+
+def _safe_destination_path(dst: str, base_dir: str, file: str) -> str:
+    relative = removeprefix(file, base_dir).lstrip("/")
+    dst_real = os.path.realpath(dst)
+    destination_file = os.path.realpath(os.path.join(dst_real, relative))
+    if os.path.commonpath([dst_real, destination_file]) != dst_real:
+        raise ValueError(f"refusing to write outside destination directory: {file!r}")
+    return destination_file
 
 def removeprefix(s: str, prefix: str) -> str:
     if s.startswith(prefix):
