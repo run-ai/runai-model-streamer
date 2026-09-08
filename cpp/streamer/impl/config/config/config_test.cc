@@ -31,7 +31,8 @@ class Creation : public ::testing::Test
                                        "RUNAI_STREAMER_CHUNK_BYTESIZE",
                                        "RUNAI_STREAMER_FS_CHUNK_BYTESIZE",
                                        "RUNAI_STREAMER_FS_STRATEGY",
-                                       "RUNAI_STREAMER_S3_TIMEOUT" })
+                                       "RUNAI_STREAMER_S3_TIMEOUT",
+                                       "RUNAI_STREAMER_DIRECT_BLOCK" })
         {
             _cleared.push_back(std::make_unique<utils::temp::UnsetEnv>(std::string(variable)));
         }
