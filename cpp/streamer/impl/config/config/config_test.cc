@@ -4,6 +4,9 @@
 
 #include "common/exception/exception.h"
 #include <algorithm>
+#include <memory>
+#include <string>
+#include <vector>
 
 #include "common/s3_wrapper/s3_wrapper.h"
 
@@ -13,7 +16,37 @@
 namespace runai::llm::streamer::impl
 {
 
-TEST(Creation, Default)
+// Every variable Config reads is cleared before each test, so a test states only what it SETS and the
+// defaults are the defaults. Guarding per test was how Default and Chunk_Size came to assert the
+// concurrency defaults with nothing cleared: `--test_env` or running the binary directly then failed
+// them against correct code. (A plain `bazel test` scrubs the environment, so it did not.)
+class Creation : public ::testing::Test
+{
+ protected:
+    void SetUp() override
+    {
+        for (const auto * variable : { "RUNAI_STREAMER_CONCURRENCY",
+                                       "RUNAI_STREAMER_OBJ_CONCURRENCY",
+                                       "RUNAI_STREAMER_FS_QUEUE_DEPTH",
+                                       "RUNAI_STREAMER_CHUNK_BYTESIZE",
+                                       "RUNAI_STREAMER_FS_CHUNK_BYTESIZE",
+                                       "RUNAI_STREAMER_FS_STRATEGY",
+                                       "RUNAI_STREAMER_S3_TIMEOUT" })
+        {
+            _cleared.push_back(std::make_unique<utils::temp::UnsetEnv>(std::string(variable)));
+        }
+    }
+
+    void TearDown() override
+    {
+        _cleared.clear();
+    }
+
+ private:
+    std::vector<std::unique_ptr<utils::temp::UnsetEnv>> _cleared;
+};
+
+TEST_F(Creation, Default)
 {
     Config config;
     EXPECT_EQ(config.concurrency, 16UL);
@@ -23,7 +56,7 @@ TEST(Creation, Default)
     EXPECT_EQ(config.object_storage_retry_timeout, std::chrono::seconds(0));
 }
 
-TEST(Creation, ObjectStorageRetryTimeout)
+TEST_F(Creation, ObjectStorageRetryTimeout)
 {
     const auto expected = utils::random::number<unsigned long>(1, 3600);
     utils::temp::Env timeout("RUNAI_STREAMER_S3_TIMEOUT", expected);
@@ -33,11 +66,9 @@ TEST(Creation, ObjectStorageRetryTimeout)
 }
 
 // The legacy variable alone still configures both backends.
-TEST(Creation, Concurrency)
+TEST_F(Creation, Concurrency)
 {
     const auto expected = utils::random::number<int>(1, 1000);
-    utils::temp::UnsetEnv obj(std::string("RUNAI_STREAMER_OBJ_CONCURRENCY"));
-    utils::temp::UnsetEnv depth(std::string("RUNAI_STREAMER_FS_QUEUE_DEPTH"));
     utils::temp::Env size_("RUNAI_STREAMER_CONCURRENCY", expected);
 
     Config config;
@@ -47,7 +78,7 @@ TEST(Creation, Concurrency)
     EXPECT_EQ(config.fs_sync_read_block_bytesize, 2 * 1024 * 1024);
 }
 
-TEST(Creation, Chunk_Size)
+TEST_F(Creation, Chunk_Size)
 {
     const size_t min_ = common::s3::S3ClientWrapper::min_chunk_bytesize;
     for (size_t expected : { 1UL, utils::random::number<size_t>(1UL, min_ - 1UL), utils::random::number<size_t>(min_, 10UL * min_)})
@@ -62,20 +93,20 @@ TEST(Creation, Chunk_Size)
     }
 }
 
-TEST(Creation, Zero_Chunk_Size)
+TEST_F(Creation, Zero_Chunk_Size)
 {
     utils::temp::Env size_("RUNAI_STREAMER_CHUNK_BYTESIZE", 0);
     EXPECT_THROW(Config(), std::exception);
 }
 
-TEST(Creation, Zero_Concurrency)
+TEST_F(Creation, Zero_Concurrency)
 {
     utils::temp::Env size_("RUNAI_STREAMER_CONCURRENCY", 0);
     EXPECT_THROW(Config(), std::exception);
 }
 
 // The queue depth is PARSED, not read as a number, so a per-type value survives into Config.
-TEST(Creation, Queue_Depth_Is_Parsed)
+TEST_F(Creation, Queue_Depth_Is_Parsed)
 {
     {
         utils::temp::Env depth(std::string("RUNAI_STREAMER_FS_QUEUE_DEPTH"), std::string("512,nfs=64"));
@@ -87,19 +118,15 @@ TEST(Creation, Queue_Depth_Is_Parsed)
         EXPECT_EQ(config.fs_async_queue_depth.for_type("ext4"), 512u);
     }
 
-    {
-        utils::temp::UnsetEnv unset(std::string("RUNAI_STREAMER_FS_QUEUE_DEPTH"));
+    const Config config;
 
-        const Config config;
-
-        EXPECT_EQ(config.fs_async_queue_depth.default_value(), Config::default_fs_async_queue_depth);
-        EXPECT_TRUE(config.fs_async_queue_depth.entries().empty());
-    }
+    EXPECT_EQ(config.fs_async_queue_depth.default_value(), Config::default_fs_async_queue_depth);
+    EXPECT_TRUE(config.fs_async_queue_depth.entries().empty());
 }
 
 // A malformed value fails where every other malformed variable fails - building the Config, which
 // runai_start turns into InvalidParameterError. Silently falling back would leave the typo undetected.
-TEST(Creation, Malformed_Queue_Depth_Is_Rejected)
+TEST_F(Creation, Malformed_Queue_Depth_Is_Rejected)
 {
     for (const auto * bad : { "nfs=64", "abc", "0", "512,nfs=0", "512,nfs=64,nfs=32", "-1" })
     {
@@ -112,9 +139,8 @@ TEST(Creation, Malformed_Queue_Depth_Is_Rejected)
 // Both file system readers take the queue depth, so a host that resolves the synchronous reader is
 // configured by the same variable. The per-type entries are for the mounts, so the pool takes the
 // leading default.
-TEST(Creation, Queue_Depth_Serves_Both_File_System_Readers)
+TEST_F(Creation, Queue_Depth_Serves_Both_File_System_Readers)
 {
-    utils::temp::UnsetEnv legacy(std::string("RUNAI_STREAMER_CONCURRENCY"));
     utils::temp::Env depth(std::string("RUNAI_STREAMER_FS_QUEUE_DEPTH"), std::string("256,nfs=64"));
 
     const Config config;
@@ -126,9 +152,8 @@ TEST(Creation, Queue_Depth_Serves_Both_File_System_Readers)
 
 // The legacy variable still configures the file system when the specific one is unset - otherwise an
 // existing setting would stop working on upgrade, silently.
-TEST(Creation, Concurrency_Serves_The_File_System_When_Queue_Depth_Is_Unset)
+TEST_F(Creation, Concurrency_Serves_The_File_System_When_Queue_Depth_Is_Unset)
 {
-    utils::temp::UnsetEnv unset(std::string("RUNAI_STREAMER_FS_QUEUE_DEPTH"));
     utils::temp::Env legacy(std::string("RUNAI_STREAMER_CONCURRENCY"), 32UL);
 
     const Config config;
@@ -138,7 +163,7 @@ TEST(Creation, Concurrency_Serves_The_File_System_When_Queue_Depth_Is_Unset)
     EXPECT_TRUE(config.fs_async_queue_depth.entries().empty());
 }
 
-TEST(Creation, Queue_Depth_Wins_Over_Concurrency)
+TEST_F(Creation, Queue_Depth_Wins_Over_Concurrency)
 {
     utils::temp::Env legacy(std::string("RUNAI_STREAMER_CONCURRENCY"), 32UL);
     utils::temp::Env depth(std::string("RUNAI_STREAMER_FS_QUEUE_DEPTH"), std::string("256"));
@@ -151,11 +176,8 @@ TEST(Creation, Queue_Depth_Wins_Over_Concurrency)
 
 // Unset is not "set to the default": with nothing set the two readers differ, because a read costs a
 // thread in one and a queue slot in the other.
-TEST(Creation, The_Two_Readers_Default_Apart)
+TEST_F(Creation, The_Two_Readers_Default_Apart)
 {
-    utils::temp::UnsetEnv legacy(std::string("RUNAI_STREAMER_CONCURRENCY"));
-    utils::temp::UnsetEnv depth(std::string("RUNAI_STREAMER_FS_QUEUE_DEPTH"));
-
     const Config config;
 
     EXPECT_EQ(config.concurrency, Config::default_concurrency);
@@ -163,10 +185,8 @@ TEST(Creation, The_Two_Readers_Default_Apart)
 }
 
 // Object storage takes the specific variable, and nothing about the file system moves with it.
-TEST(Creation, Obj_Concurrency_Serves_Object_Storage_Only)
+TEST_F(Creation, Obj_Concurrency_Serves_Object_Storage_Only)
 {
-    utils::temp::UnsetEnv legacy(std::string("RUNAI_STREAMER_CONCURRENCY"));
-    utils::temp::UnsetEnv depth(std::string("RUNAI_STREAMER_FS_QUEUE_DEPTH"));
     utils::temp::Env obj(std::string("RUNAI_STREAMER_OBJ_CONCURRENCY"), 24UL);
 
     const Config config;
@@ -176,7 +196,7 @@ TEST(Creation, Obj_Concurrency_Serves_Object_Storage_Only)
     EXPECT_EQ(config.fs_async_queue_depth.default_value(), Config::default_fs_async_queue_depth);
 }
 
-TEST(Creation, Obj_Concurrency_Wins_Over_Concurrency)
+TEST_F(Creation, Obj_Concurrency_Wins_Over_Concurrency)
 {
     utils::temp::Env legacy(std::string("RUNAI_STREAMER_CONCURRENCY"), 4UL);
     utils::temp::Env obj(std::string("RUNAI_STREAMER_OBJ_CONCURRENCY"), 24UL);
@@ -187,14 +207,14 @@ TEST(Creation, Obj_Concurrency_Wins_Over_Concurrency)
     EXPECT_EQ(config.concurrency, 4u) << "the legacy variable still serves the file system";
 }
 
-TEST(Creation, Zero_Obj_Concurrency)
+TEST_F(Creation, Zero_Obj_Concurrency)
 {
     utils::temp::Env obj(std::string("RUNAI_STREAMER_OBJ_CONCURRENCY"), 0UL);
     EXPECT_THROW(Config(), std::exception);
 }
 
 // A plain number is a complete value: it applies to every mount.
-TEST(Creation, A_Plain_Number_Applies_Everywhere)
+TEST_F(Creation, A_Plain_Number_Applies_Everywhere)
 {
     const Config config(16, 8, 5 * 1024 * 1024, 2 * 1024 * 1024, false, 8 * 1024 * 1024, FsQueueDepth(64));
 
