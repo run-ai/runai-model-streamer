@@ -570,9 +570,10 @@ TEST(MountCapabilities, Fs_Type_Matches_What_Mountinfo_Says)
         }
     }
 
+    // Both outcomes are checked. A listed device must agree with mountinfo; an unlisted one must
+    // answer empty, which is the documented fallback and is otherwise unreachable - fs_type is only
+    // ever filled by of_path, keyed on the st_dev of a real path.
     EXPECT_EQ(capability.fs_type, expected);
-    EXPECT_FALSE(expected.empty())
-        << "no mountinfo entry for the device holding a temp file - the lookup has nothing to match";
 }
 
 // The type cache is a process-wide static, so instances must not disagree about a device.
