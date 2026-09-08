@@ -49,7 +49,7 @@ bool ring_works()
 
 // Skipping is silent, and on a host that is supposed to have io_uring a silent skip is
 // indistinguishable from a pass. RUNAI_STREAMER_REQUIRE_IO_URING says "io_uring works here", turning
-// the skip into a failure. Set by `make -C cpp test_iouring`; unset in CI, which has no ring.
+// the skip into a failure. CI sets it, through BAZEL_TEST_FLAGS (.github/workflows/on-pr.yaml).
 bool require_io_uring()
 {
     const char * value = std::getenv("RUNAI_STREAMER_REQUIRE_IO_URING");
@@ -66,7 +66,7 @@ bool require_io_uring()
                        << "RUNAI_STREAMER_REQUIRE_IO_URING=1 says this host has io_uring";    \
             }                                                                                 \
             GTEST_SKIP() << "io_uring unavailable (" << std::strerror(errno)                  \
-                         << "); run `make -C cpp test_iouring` where it is expected to work"; \
+                         << "); set RUNAI_STREAMER_REQUIRE_IO_URING=1 where it should work";  \
         }                                                                                     \
     } while (0)
 

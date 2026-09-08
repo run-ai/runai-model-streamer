@@ -35,9 +35,9 @@ test-unit: mock install_dev_dep
 
 # The same tests against the REAL library instead of the mock.
 #
-# NOT part of `test`, and not run by CI. It needs a real filesystem to read, and with an io_uring
-# strategy it needs a host where io_uring works - CI has neither. Run it through `make test_iouring`
-# at the repository root.
+# Not part of `make -C py test`, which runs the same tests against the mock. The repository root runs
+# it once per file system strategy, through `make test_strategies` - which `make test` includes, so CI
+# reaches it.
 #
 # Why it earns its place: the mock's runai_set_fs_strategy is a stub that returns 0, and the mock
 # never reads RUNAI_STREAMER_FS_STRATEGY and performs no I/O. So `test-unit` cannot reach any reader,

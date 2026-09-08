@@ -3,6 +3,7 @@
 #include "posix_io/mock/mock_io_engine.h"
 
 #include "posix_io/alignment/alignment.h"
+#include "posix_io/io_uring_probe/io_uring_probe.h"
 
 #include <unistd.h>
 
@@ -1770,8 +1771,25 @@ TEST(Async, ADeadEngineDropsItsMountToTheSynchronousReader)
 // The engine factory delegates to the real one and records the depth it was asked for - the only place
 // the resolution is observable, since everything downstream is the ring's own size. A mock engine
 // cannot be used here: it never completes, so the read would never return.
+//
+// Which means a REAL ring is built: the injected availability makes the resolver pick io_uring
+// whatever the host says, so without one the factory returns nullptr and this fails. Skipping is
+// silent, so RUNAI_STREAMER_REQUIRE_IO_URING - which CI passes - turns the skip into a failure rather
+// than hiding a broken CI host.
 TEST(Async, QueueDepthIsResolvedPerMount)
 {
+    const auto ring = posix_io::IoUringProbe::instance().capability();
+    if (!ring.available)
+    {
+        const char * const required = std::getenv("RUNAI_STREAMER_REQUIRE_IO_URING");
+        if (required != nullptr && std::string(required) == "1")
+        {
+            FAIL() << "io_uring is unavailable (" << ring.error << ") but "
+                   << "RUNAI_STREAMER_REQUIRE_IO_URING=1 says this host has it";
+        }
+        GTEST_SKIP() << "io_uring unavailable (" << ring.error << "); this test builds a real ring";
+    }
+
     const auto data = utils::random::buffer(8192);
     utils::temp::Dir dir_one;
     utils::temp::Dir dir_two;
