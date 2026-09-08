@@ -15,27 +15,9 @@ namespace runai::llm::streamer::impl
 namespace
 {
 
-// The file system setting: the specific variable when set, then the legacy one when set, then the
-// default. Resolved on PRESENCE - getenv with a default cannot tell "unset" from "set to the
-// default", so the legacy variable could never take precedence over a default of its own.
-
-FsQueueDepth resolve_fs_queue_depth()
-{
-    std::string configured;
-    if (utils::try_getenv("RUNAI_STREAMER_FS_QUEUE_DEPTH", configured))
-    {
-        return FsQueueDepth::parse(configured);
-    }
-
-    unsigned long legacy = 0;
-    if (utils::try_getenv("RUNAI_STREAMER_CONCURRENCY", legacy))
-    {
-        return FsQueueDepth(static_cast<unsigned>(legacy));
-    }
-
-    return FsQueueDepth(Config::default_fs_async_queue_depth);
-}
-
+// Object storage: the specific variable when set, then the legacy one, then the default. Resolved on
+// PRESENCE - getenv with a default cannot tell "unset" from "set to the default", so the legacy
+// variable could never take precedence over a default of its own.
 unsigned resolve_obj_concurrency()
 {
     unsigned long configured = 0;
@@ -46,19 +28,6 @@ unsigned resolve_obj_concurrency()
 
     return static_cast<unsigned>(utils::getenv<unsigned long>("RUNAI_STREAMER_CONCURRENCY",
                                                               Config::default_s3_concurrency));
-}
-
-// Same order, different default. The per-type entries are dropped: this is one pool for every mount.
-unsigned resolve_fs_concurrency()
-{
-    std::string configured;
-    if (utils::try_getenv("RUNAI_STREAMER_FS_QUEUE_DEPTH", configured))
-    {
-        return FsQueueDepth::parse(configured).default_value();
-    }
-
-    return static_cast<unsigned>(utils::getenv<unsigned long>("RUNAI_STREAMER_CONCURRENCY",
-                                                              Config::default_concurrency));
 }
 
 } // namespace
@@ -113,14 +82,44 @@ Config::Config(unsigned concurrency, unsigned s3_concurrency, size_t s3_block_by
     }
 }
 
+Config::FsSettings Config::resolve_fs_settings()
+{
+    std::string configured;
+    if (utils::try_getenv("RUNAI_STREAMER_FS_QUEUE_DEPTH", configured))
+    {
+        auto depth = FsQueueDepth::parse(configured);
+        const auto concurrency = depth.default_value();   // per-type entries are for the mounts
+
+        LOG(DEBUG) << "File system settings from RUNAI_STREAMER_FS_QUEUE_DEPTH=" << configured;
+        return FsSettings{ std::move(depth), concurrency };
+    }
+
+    unsigned long legacy = 0;
+    if (utils::try_getenv("RUNAI_STREAMER_CONCURRENCY", legacy))
+    {
+        const auto concurrency = static_cast<unsigned>(legacy);
+
+        LOG(DEBUG) << "File system settings from RUNAI_STREAMER_CONCURRENCY=" << legacy
+                   << ", because RUNAI_STREAMER_FS_QUEUE_DEPTH is unset";
+        return FsSettings{ FsQueueDepth(concurrency), concurrency };
+    }
+
+    // Apart, because a read costs a thread in one reader and a queue slot in the other.
+    return FsSettings{ FsQueueDepth(Config::default_fs_async_queue_depth), Config::default_concurrency };
+}
+
 Config::Config(bool enforce_minimum /* = true */) :
-    Config(resolve_fs_concurrency(),
+    Config(resolve_fs_settings(), enforce_minimum)
+{}
+
+Config::Config(FsSettings fs, bool enforce_minimum) :
+    Config(fs.concurrency,
            resolve_obj_concurrency(),
            utils::getenv<size_t>("RUNAI_STREAMER_CHUNK_BYTESIZE", common::s3::S3ClientWrapper::default_chunk_bytesize),
            utils::getenv<size_t>("RUNAI_STREAMER_CHUNK_BYTESIZE", min_fs_sync_read_block_bytesize),
            enforce_minimum,
            utils::getenv<size_t>("RUNAI_STREAMER_FS_CHUNK_BYTESIZE", default_fs_async_chunk_bytesize),
-           resolve_fs_queue_depth(),
+           std::move(fs.depth),
            utils::getenv<std::string>("RUNAI_STREAMER_FS_STRATEGY", default_fs_strategy_candidates),
            utils::getenv<unsigned long>("RUNAI_STREAMER_S3_TIMEOUT", 0UL))
 {}

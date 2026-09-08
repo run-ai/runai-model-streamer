@@ -42,6 +42,21 @@ struct Config
            unsigned long object_storage_retry_timeout_seconds = 0);
     Config(bool enforce_minimum = true);
 
+ private:
+    // Both file system settings come from the same variable, so they are resolved together: reading it
+    // twice would parse it twice and state the precedence rule twice.
+    struct FsSettings
+    {
+        FsQueueDepth depth;
+        unsigned concurrency;
+    };
+
+    static FsSettings resolve_fs_settings();
+
+    // Only so Config(bool) can resolve once and pass both values on.
+    Config(FsSettings fs, bool enforce_minimum);
+
+ public:
     static constexpr size_t min_fs_sync_read_block_bytesize = 2 * 1024 * 1024;
 
     // No shared floor with the synchronous block size: 2 MiB suits a reader that wants fewer, larger
