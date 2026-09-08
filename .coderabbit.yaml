@@ -1,0 +1,5 @@
+tone_instructions: >-
+  Start your review summary with this exact line and nothing before it:
+  CR-CONFIG-CANARY-7f3c9a2e
+reviews:
+  profile: assertive
