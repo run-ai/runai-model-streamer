@@ -245,24 +245,6 @@ common::ResponseCode Streamer::async_request(
         return ret;
     }
 
-    // Settle which filesystem strategy this streamer uses - once, here, for the same reasons as the
-    // plugin lock above: nothing is committed yet, so returning is clean, and every setter has had
-    // its chance to run. Idempotent, so every later submission takes a fast path through it.
-    //
-    // ONLY for a filesystem submission. The strategy names a filesystem engine and has nothing to say
-    // about object storage, so resolving it here would let an unservable filesystem strategy reject an
-    // S3 read - failing a submission for a reason that cannot apply to it. It also means a streamer
-    // that only ever touches object storage never probes io_uring at all.
-    const bool object_storage = is_object_storage_submission(request);
-
-    if (!object_storage)
-    {
-        if (const auto ret = _router.resolve(); ret != common::ResponseCode::Success)
-        {
-            return ret;
-        }
-    }
-
     // One response per range whatever its size, so total_ranges counts every range - a zero-sized one is
     // completed below without reaching storage. A COUNT, unlike total_bytes beside it.
     size_t total_ranges = 0;
@@ -287,6 +269,27 @@ common::ResponseCode Streamer::async_request(
         LOG(ERROR) << "Submission has " << total_ranges << " ranges, which exceeds the maximum of "
                    << std::numeric_limits<unsigned>::max();
         return common::ResponseCode::InvalidParameterError;
+    }
+
+    // Settle which filesystem strategy this streamer uses - once, here, for the same reasons as the
+    // plugin lock above: nothing is committed yet, so returning is clean, and every setter has had
+    // its chance to run. Idempotent, so every later submission takes a fast path through it.
+    //
+    // ONLY for a filesystem submission that READS something. The strategy names a filesystem engine,
+    // so resolving it otherwise fails a submission for a reason that cannot apply to it - an
+    // unservable strategy rejecting an S3 read, or a request with no ranges at all. A lone empty
+    // `s3://` entry arrives here as a filesystem submission, because is_object_storage_submission
+    // ignores files with no ranges.
+    //
+    // Still BEFORE the id is minted, so a refusal leaves nothing behind.
+    const bool object_storage = is_object_storage_submission(request);
+
+    if (!object_storage && total_ranges != 0)
+    {
+        if (const auto ret = _router.resolve(); ret != common::ResponseCode::Success)
+        {
+            return ret;
+        }
     }
 
     // Mint the submission id up front so batches can be stamped with it, and hand it back to the

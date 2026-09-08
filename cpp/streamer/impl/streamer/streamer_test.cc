@@ -527,6 +527,26 @@ TEST(Async, DefaultStrategyPrefersIoUringDirect)
 
 // An unservable list is an error, not a quiet fall-through to the synchronous reader - and it must
 // fail the REQUEST, since that is the only place the caller can see it.
+// A request that reads nothing must not fail on a reader it will never use. An empty `s3://` entry
+// classifies as a file system submission, because is_object_storage_submission ignores files with no
+// ranges - so resolving before the empty-submission return refused a no-op object-storage request.
+TEST(Async, AnEmptySubmissionDoesNotResolveTheStrategy)
+{
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("libaio_direct"));
+
+    Streamer streamer(Config(), without(posix_io::Strategy::LibaioDirect));
+
+    for (const auto * path : { "s3://bucket/key", "/no/such/file" })
+    {
+        std::vector<FileRanges> request(1);
+        request[0].path = path;   // no ranges: nothing is read, so nothing needs a reader
+
+        SubmissionId submission_id = 0;
+        EXPECT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success) << path;
+        EXPECT_NE(submission_id, 0u) << path << ": the id is still minted and handed back";
+    }
+}
+
 TEST(Async, UnservableStrategyFailsTheRequest)
 {
     utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("libaio_direct"));
