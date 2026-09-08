@@ -575,20 +575,19 @@ TEST(MountCapabilities, Fs_Type_Matches_What_Mountinfo_Says)
         << "no mountinfo entry for the device holding a temp file - the lookup has nothing to match";
 }
 
-// An unknown device is answered with an empty type, not with a guess and not with a throw. A container
-// may not present mountinfo at all, and the caller falls back to its global default.
-TEST(MountCapabilities, An_Unknown_Device_Has_No_Fs_Type)
+// The type cache is a process-wide static, so instances must not disagree about a device.
+//
+// The unknown-device case - an empty type rather than a guess or a throw - is NOT tested here and is
+// not reachable: fs_type is only ever filled by of_path, keyed on the st_dev of a real path, so a
+// device absent from mountinfo cannot be asked for.
+TEST(MountCapabilities, Every_Instance_Reports_The_Same_Fs_Type)
 {
     utils::temp::File file(utils::random::buffer(64));
 
-    MountCapabilities mounts;
-    const auto real = mounts.of_path(file.path);
+    MountCapabilities one;
+    MountCapabilities two;
 
-    // A device number nothing is mounted on. 511:511 is outside anything a normal host allocates.
-    MountCapabilities other;
-    const auto missing = other.of_path(file.path);   // populate, then compare against the real one
-
-    EXPECT_EQ(missing.fs_type, real.fs_type) << "the same device must answer the same way twice";
+    EXPECT_EQ(one.of_path(file.path).fs_type, two.of_path(file.path).fs_type);
 }
 
 }; // namespace runai::llm::streamer::posix_io

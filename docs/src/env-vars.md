@@ -21,8 +21,7 @@ default when nothing is set.
 
 Since version 0.17.0
 
-Controls how much object-storage work runs at once
-For S3 configuring concurrency of 1 is equivalent to 10 gigabits per second
+Controls how much object-storage work runs at once For S3 configuring concurrency of 1 is equivalent to 10 gigabits per second
 
 When this variable is unset, `RUNAI_STREAMER_CONCURRENCY` supplies the value if it is set.
 
@@ -156,14 +155,10 @@ Boolean `0` or `1`
 
 ### RUNAI_STREAMER_S3_TARGET_GBPS
 
-Overrides the AWS CRT throughput target that the S3 client is built with.
+Overrides the AWS CRT throughput target of the S3 client.
 
-The value is **per reader**, which is what it has always been: it replaces the CRT's own per-client
-default, and is then multiplied by `RUNAI_STREAMER_OBJ_CONCURRENCY` for the single client that carries
-the whole capacity. With `RUNAI_STREAMER_S3_TARGET_GBPS=25` and a concurrency of 8, the client targets
-200 Gbps - the same total as the eight clients at 25 Gbps each that earlier versions built.
-
-The CRT converts the target into connections at 0.4 Gbps per connection, with a floor of 10.
+The value is per reader, and is multiplied by `RUNAI_STREAMER_OBJ_CONCURRENCY` for the single client
+that carries the whole capacity. With `25` and a concurrency of `8` the client targets 200 Gbps.
 
 #### Values accepted
 
@@ -171,7 +166,27 @@ Positive integer, in Gbps
 
 #### Default value
 
-The AWS CRT default per client (10), multiplied by the object-storage concurrency
+The AWS CRT default of 10 per reader
+
+### RUNAI_STREAMER_S3_MAX_CONNECTIONS
+
+Usage depends on object storage type
+
+For S3 it caps the connections the S3 client may open for the whole process.
+A resource guard, not a throughput control: the CRT already scales connections from the throughput target.
+Set it only to bound resource usage, for example against a file descriptor limit.
+
+For GCS it sets the per-client thread count directly.
+
+For Azure it is ignored.
+
+#### Values accepted
+
+Positive integer
+
+#### Default value
+
+Unset - the AWS CRT chooses
 
 ### RUNAI_STREAMER_S3_MAX_RETRIES
 
