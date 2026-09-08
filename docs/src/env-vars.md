@@ -21,7 +21,9 @@ default when nothing is set.
 
 Since version 0.17.0
 
-Controls how much object-storage work runs at once For S3 configuring concurrency of 1 is equivalent to 10 gigabits per second
+Controls how much object-storage work runs at once.
+
+For S3 each unit is 10 gigabits per second, so a concurrency of 8 targets 80. `RUNAI_STREAMER_S3_TARGET_GBPS` replaces the 10, not the total.
 
 When this variable is unset, `RUNAI_STREAMER_CONCURRENCY` supplies the value if it is set.
 
