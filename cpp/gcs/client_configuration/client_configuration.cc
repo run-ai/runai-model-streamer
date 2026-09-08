@@ -8,7 +8,6 @@
 #include "utils/logging/logging.h"
 #include "utils/env/env.h"
 
-#include <cstdlib>
 #include <fstream>
 #include <thread>
 #include <algorithm>
@@ -16,7 +15,7 @@
 namespace runai::llm::streamer::impl::gcs
 {
 
-ClientConfiguration::ClientConfiguration()
+ClientConfiguration::ClientConfiguration(unsigned concurrent_readers)
 {
     use_grpc = utils::getenv<bool>("RUNAI_STREAMER_GCS_USE_GRPC", false);
 
@@ -28,14 +27,11 @@ ClientConfiguration::ClientConfiguration()
         // Use at least 8 threads if hardware_concurrency cannot be computed.
         LOG(SPAM) << "Hardware concurrency detected: " << nprocs;
         unsigned default_max_concurrency = nprocs == 0 ? 8U : 1U;
-        // The number of clients the streamer will build, which cancels out below: N clients with
-        // nprocs*2/N threads each. Reading the wrong variable over-provisions by exactly that factor.
-        //
-        // A DIVISOR below, and it had no floor - a plain 0 was an integer division by zero (env.h).
-        const char * const variable = std::getenv("RUNAI_STREAMER_OBJ_CONCURRENCY") != nullptr
-                                    ? "RUNAI_STREAMER_OBJ_CONCURRENCY"
-                                    : "RUNAI_STREAMER_CONCURRENCY";
-        unsigned worker_concurrency = utils::getenv_positive<unsigned>(variable, 8U);
+        // A DIVISOR below, so it must not be zero: an unstated count means the caller said nothing,
+        // not that it will build no clients.
+        // Floored, not defaulted: a zero would divide by zero, and only a caller outside the streamer
+        // can send one.
+        const unsigned worker_concurrency = std::max(1U, concurrent_readers);
         LOG(SPAM) << "Streamer worker concurrency: " << worker_concurrency;
         max_concurrency = std::max(default_max_concurrency, nprocs * 2 / worker_concurrency);
     }

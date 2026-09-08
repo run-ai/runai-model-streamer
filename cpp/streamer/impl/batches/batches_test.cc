@@ -286,7 +286,7 @@ TEST(Batches, Object_Storage_Cuts_At_Its_Own_Chunk_Size)
     auto responder = std::make_shared<common::Responder>(0);
 
     const std::string uri = "s3://bucket/key";
-    common::s3::S3ClientWrapper::Params s3_params(std::make_shared<common::s3::StorageUri>(uri), s3_chunk);
+    common::s3::S3ClientWrapper::Params s3_params(std::make_shared<common::s3::StorageUri>(uri), s3_chunk, 8);
     ASSERT_TRUE(s3_params.valid());
 
     const std::vector<size_t> sizes = { 20000 };

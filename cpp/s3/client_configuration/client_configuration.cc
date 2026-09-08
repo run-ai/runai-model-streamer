@@ -34,11 +34,11 @@ size_t inflight_window_bytes(size_t chunk_bytesize, double target_gbps)
     return result;
 }
 
-ClientConfiguration::ClientConfiguration(unsigned concurrent_readers, size_t part_size)
+ClientConfiguration::ClientConfiguration(unsigned concurrent_readers, size_t chunk_bytesize)
 {
-    if (part_size)
+    if (chunk_bytesize)
     {
-        config.partSize = part_size;
+        config.partSize = chunk_bytesize;
     }
 
     unsigned long max_retries = 0;

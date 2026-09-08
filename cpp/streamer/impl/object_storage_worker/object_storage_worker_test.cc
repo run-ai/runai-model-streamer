@@ -99,7 +99,7 @@ struct Submission
             const auto file_idx = transfer.file_index;
 
             auto uri = std::make_shared<common::s3::StorageUri>(paths[file_idx]);
-            common::s3::S3ClientWrapper::Params params(uri, credentials, config->s3_block_bytesize);
+            common::s3::S3ClientWrapper::Params params(uri, credentials, config->s3_block_bytesize, config->s3_concurrency);
 
             Batches batches(submission_id, file_idx, transfer.tasks, config, responder, paths[file_idx], params,
                             transfer.range_sizes, transfer.first_range_index);
@@ -310,7 +310,7 @@ TEST_F(ObjectStorageWorkerTest, Small_Ranges_Are_Packed_Into_One_Read)
     for (const auto & transfer : assigner.transfers())
     {
         auto uri = std::make_shared<common::s3::StorageUri>(path);
-        common::s3::S3ClientWrapper::Params params(uri, credentials, config->s3_block_bytesize);
+        common::s3::S3ClientWrapper::Params params(uri, credentials, config->s3_block_bytesize, config->s3_concurrency);
 
         Batches batches(utils::random::number(), transfer.file_index, transfer.tasks, config, responder,
                         path, params, transfer.range_sizes, transfer.first_range_index);

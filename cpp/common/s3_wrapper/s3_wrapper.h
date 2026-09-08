@@ -63,12 +63,13 @@ struct S3ClientWrapper
          Params()
          {}
 
-         // concurrent_readers is how many readers the caller will run against this client. 0 leaves the
-         // backend at its own default.
+         // concurrent_readers has no default: the streamer resolves it once, in Config, and every
+         // caller states it. A plugin must never have to decide it.
          Params(std::shared_ptr<StorageUri> uri, const Credentials & credentials, size_t chunk_bytesize,
-                unsigned concurrent_readers = 0);
+                unsigned concurrent_readers);
 
-         Params(std::shared_ptr<StorageUri> uri, size_t chunk_bytesize) : Params(uri, Credentials(), chunk_bytesize)
+         Params(std::shared_ptr<StorageUri> uri, size_t chunk_bytesize, unsigned concurrent_readers) :
+             Params(uri, Credentials(), chunk_bytesize, concurrent_readers)
          {}
 
          bool valid() const { return (uri.get() != nullptr); }
@@ -76,19 +77,14 @@ struct S3ClientWrapper
          size_t chunk_bytesize;
          std::shared_ptr<StorageUri> uri;
          Credentials credentials;
+
+         // How many clients the caller will run at once.
+         unsigned concurrent_readers;
          const common::backend_api::ObjectClientConfig_t to_config(std::vector<common::backend_api::ObjectConfigParam_t> & initial_params) const;
 
        private:
          std::string _endpoint;
-
-         // The value for CONCURRENT_READERS_KEY, or empty when there is nothing to send. Held as a
-         // string because the parameter list points into it and must stay valid for the whole call.
-         std::string _concurrent_readers;
       };
-
-      // Sent to the S3 plugin only, which sizes one client for this many readers. GCS and Azure reach
-      // the same capacity with one client per reader, so the key would be unknown to them.
-      static const char * const CONCURRENT_READERS_KEY;
 
       // Plugin C-ABI entry points. Resolved once (see resolve_api), because dlsym takes the process-wide
       // dynamic-linker lock: resolving per call would serialize every worker on the hot read/response path.

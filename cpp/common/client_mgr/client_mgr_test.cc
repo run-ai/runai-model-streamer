@@ -75,7 +75,7 @@ struct ClientMgrTest : ::testing::Test
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr)),
-        params(uri, credentials, utils::random::number<size_t>())
+        params(uri, credentials, utils::random::number<size_t>(), 8)
     {}
 
     void TearDown() override
@@ -183,7 +183,7 @@ TEST_F(ClientMgrTest, Credentials_Changed)
 
         auto new_uri = std::make_shared<common::s3::StorageUri>(*uri);
         new_uri->path = utils::random::string();
-        common::s3::S3ClientWrapper::Params new_params(new_uri, new_credentials, utils::random::number<size_t>());
+        common::s3::S3ClientWrapper::Params new_params(new_uri, new_credentials, utils::random::number<size_t>(), 8);
         std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
         const auto new_config = new_params.to_config(initial_params);
         bool changed = !helper->verify_credentials(new_config);
@@ -238,7 +238,7 @@ TEST_F(ClientMgrTest, Change_Bucket)
     {
         const std::string path = utils::random::string();
         uri_->path = path;
-        common::s3::S3ClientWrapper::Params new_params(uri_, credentials, utils::random::number<size_t>());
+        common::s3::S3ClientWrapper::Params new_params(uri_, credentials, utils::random::number<size_t>(), 8);
         std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
         const auto new_config = new_params.to_config(initial_params);
         Helper * helper = ClientMgrHelper::pop(new_config);

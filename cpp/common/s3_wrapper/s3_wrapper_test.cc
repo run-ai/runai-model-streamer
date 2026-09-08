@@ -19,7 +19,7 @@ struct S3WrappertTest : ::testing::Test
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr)),
-        params(std::make_shared<StorageUri>(uri), credentials, utils::random::number<size_t>())
+        params(std::make_shared<StorageUri>(uri), credentials, utils::random::number<size_t>(), 8)
     {
         auto ptr = utils::random::number<uintptr_t>();
         request_id = reinterpret_cast<common::backend_api::ObjectRequestId_t>(ptr);
@@ -107,7 +107,7 @@ TEST_F(S3WrappertTest, Endpoint_Exists)
     utils::temp::Env endpoint_env("AWS_ENDPOINT_URL", endpoint);
 
     Credentials credentials_;
-    S3ClientWrapper::Params params_(std::make_shared<StorageUri>(uri), credentials_, utils::random::number<size_t>());
+    S3ClientWrapper::Params params_(std::make_shared<StorageUri>(uri), credentials_, utils::random::number<size_t>(), 8);
     S3ClientWrapper wrapper(params);
 
     std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
@@ -120,7 +120,7 @@ TEST_F(S3WrappertTest, Endpoint_In_Credentials)
     auto endpoint = utils::random::string();
     Credentials credentials_(nullptr, nullptr, nullptr, nullptr, endpoint.c_str());
 
-    S3ClientWrapper::Params params_(std::make_shared<StorageUri>(uri), credentials_, utils::random::number<size_t>());
+    S3ClientWrapper::Params params_(std::make_shared<StorageUri>(uri), credentials_, utils::random::number<size_t>(), 8);
     S3ClientWrapper wrapper(params);
 
     std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
@@ -168,51 +168,26 @@ TEST(BackendHandle, GetPluginType_GCS)
     EXPECT_EQ(plugin_type, ObjectPluginType::ObjStorageGCS);
 }
 
-namespace
-{
-
-// The value the parameter list carries for `key`, or empty when the key is absent.
-std::string param_value(const S3ClientWrapper::Params & params, const char * key)
+// A typed field rather than a dictionary entry, so it needs no key, no parsing and no validation -
+// and every plugin reads the same number the streamer resolved.
+TEST(Params, The_Reader_Count_Reaches_The_Client_Config)
 {
     std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
-    const auto config = params.to_config(initial_params);
 
-    for (unsigned i = 0; i < config.num_initial_params; ++i)
-    {
-        if (std::string(config.initial_params[i].key) == key)
-        {
-            return config.initial_params[i].value;
-        }
-    }
-    return std::string();
-}
-
-} // namespace
-
-// The reader count sizes ONE S3 client for the whole capacity, so it has to reach the plugin.
-TEST(Params, Concurrent_Readers_Reach_S3)
-{
     const S3ClientWrapper::Params params(std::make_shared<StorageUri>("s3://bucket/path"), Credentials(),
                                          8 * 1024 * 1024, 8);
 
-    EXPECT_EQ(param_value(params, S3ClientWrapper::CONCURRENT_READERS_KEY), "8");
+    EXPECT_EQ(params.to_config(initial_params).concurrent_readers, 8u);
 }
 
-// GCS and Azure reach the same capacity with one client per worker, and would report the key as
-// unknown. Unstated is also nothing to send.
-TEST(Params, Concurrent_Readers_Are_S3_Only)
+// Only a default-constructed Params has no count, and it names no storage and builds no client.
+TEST(Params, An_Unstated_Reader_Count_Is_Zero)
 {
-    for (const auto * uri : { "gs://bucket/path", "az://bucket/path" })
-    {
-        const S3ClientWrapper::Params params(std::make_shared<StorageUri>(uri), Credentials(),
-                                             8 * 1024 * 1024, 8);
+    std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
 
-        EXPECT_TRUE(param_value(params, S3ClientWrapper::CONCURRENT_READERS_KEY).empty()) << uri;
-    }
+    const S3ClientWrapper::Params params(std::make_shared<StorageUri>("s3://bucket/path"), 8 * 1024 * 1024, 4);
 
-    const S3ClientWrapper::Params unstated(std::make_shared<StorageUri>("s3://bucket/path"), Credentials(),
-                                           8 * 1024 * 1024, 0);
-    EXPECT_TRUE(param_value(unstated, S3ClientWrapper::CONCURRENT_READERS_KEY).empty());
+    EXPECT_EQ(params.to_config(initial_params).concurrent_readers, 4u);
 }
 
 }; // namespace runai::llm::streamer::common::s3

@@ -48,6 +48,11 @@ struct ObjectClientConfig_t
     const ObjectConfigParam_t* initial_params; // Array of key-value pairs for other client-specific settings
                                                // (e.g., credentials, CA bundle, region) to be applied at creation. Can be NULL.
     unsigned num_initial_params;               // Number of parameters in initial_params. Must be 0 if initial_params is NULL.
+
+    // How many clients the caller will run at once. Every backend sizes itself by it - S3 gives one
+    // client the whole throughput target, GCS and Azure divide their threads by it - so no plugin
+    // reads the environment for it and the value has one source.
+    unsigned concurrent_readers;
 };
 
 struct ObjectRange_t

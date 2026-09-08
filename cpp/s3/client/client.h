@@ -50,9 +50,6 @@ struct S3ClientBase : common::IClient
     std::unique_ptr<Aws::Auth::AWSCredentials> _client_credentials;
     const size_t _chunk_bytesize;
 
-    // Readers the caller will run against this client. Sizes the throughput target; 1 when unstated.
-    unsigned _concurrent_readers = 1;
-
  private:
     bool verify_credentials_member(const std::optional<Aws::String>& client_member, const std::optional<Aws::String>& input_member, const char * name) const;
 };

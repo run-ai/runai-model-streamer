@@ -20,13 +20,14 @@ size_t inflight_window_bytes(size_t chunk_bytesize, double target_gbps);
 
 struct ClientConfiguration
 {
-    // concurrent_readers multiplies the per-reader throughput target, so one client asks for the whole
-    // capacity and the CRT opens the connections in one pool.
+    // Neither has a default: the caller states both. concurrent_readers multiplies the per-reader
+    // throughput target, so one client asks for the whole capacity and the CRT opens the connections
+    // in one pool.
     //
-    // part_size is the size of the ranged reads this client will be given. Setting it keeps one read
-    // to one CRT part; leaving it 0 keeps the SDK default, and the CRT then splits a larger read into
-    // parts of its own. The CRT raises anything below 5 MiB.
-    explicit ClientConfiguration(unsigned concurrent_readers = 1, size_t part_size = 0);
+    // chunk_bytesize is the size of the ranged reads this client will be given, and becomes the CRT
+    // part size so one read is one part. 0 keeps the SDK default, and the CRT then splits a larger
+    // read into parts of its own. The CRT raises anything below 5 MiB.
+    ClientConfiguration(unsigned concurrent_readers, size_t chunk_bytesize);
 
     Aws::S3Crt::ClientConfiguration config;
 };

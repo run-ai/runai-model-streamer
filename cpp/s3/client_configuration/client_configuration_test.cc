@@ -37,7 +37,7 @@ class ClientConfigurationTest : public ::testing::Test
     // it, so a change in the SDK default must not fail this suite.
     double per_reader() const
     {
-        return ClientConfiguration(1).config.throughputTargetGbps;
+        return ClientConfiguration(1, 0).config.throughputTargetGbps;
     }
 
     std::unique_ptr<utils::temp::Env> _imds;
@@ -48,15 +48,15 @@ class ClientConfigurationTest : public ::testing::Test
 // One client carries the whole capacity, so its target is the per-reader figure times the readers.
 TEST_F(ClientConfigurationTest, Target_Scales_With_The_Reader_Count)
 {
-    EXPECT_DOUBLE_EQ(ClientConfiguration(8).config.throughputTargetGbps, per_reader() * 8);
+    EXPECT_DOUBLE_EQ(ClientConfiguration(8, 0).config.throughputTargetGbps, per_reader() * 8);
     EXPECT_GT(per_reader(), 0.0) << "a zero per-reader target would make the scaling vacuous";
 }
 
-// Unstated must not scale the target down: it is the client the SDK would have built anyway.
+// Unstated must not scale the target down: it is the client the SDK would have built anyway. Only a
+// caller outside the streamer can leave it unstated - the streamer always resolves it in Config.
 TEST_F(ClientConfigurationTest, An_Unstated_Reader_Count_Leaves_The_Default)
 {
-    EXPECT_DOUBLE_EQ(ClientConfiguration(0).config.throughputTargetGbps, per_reader());
-    EXPECT_DOUBLE_EQ(ClientConfiguration().config.throughputTargetGbps, per_reader());
+    EXPECT_DOUBLE_EQ(ClientConfiguration(0, 0).config.throughputTargetGbps, per_reader());
 }
 
 // One of our ranged reads is one CRT part. Left to its own 8 MiB default the CRT would split a larger
@@ -69,7 +69,7 @@ TEST_F(ClientConfigurationTest, The_Part_Size_Follows_The_Read_Size)
 // Unstated leaves the SDK default, so a caller that says nothing gets the client it always got.
 TEST_F(ClientConfigurationTest, An_Unstated_Part_Size_Leaves_The_Default)
 {
-    const auto sdk_default = ClientConfiguration().config.partSize;
+    const auto sdk_default = ClientConfiguration(1, 0).config.partSize;
 
     EXPECT_GT(sdk_default, 0u);
     EXPECT_EQ(ClientConfiguration(8, 0).config.partSize, sdk_default);
@@ -82,8 +82,8 @@ TEST_F(ClientConfigurationTest, The_Override_Is_Per_Reader_Too)
 {
     utils::temp::Env target(std::string("RUNAI_STREAMER_S3_TARGET_GBPS"), 25UL);
 
-    EXPECT_DOUBLE_EQ(ClientConfiguration(8).config.throughputTargetGbps, 200.0);
-    EXPECT_DOUBLE_EQ(ClientConfiguration(1).config.throughputTargetGbps, 25.0);
+    EXPECT_DOUBLE_EQ(ClientConfiguration(8, 0).config.throughputTargetGbps, 200.0);
+    EXPECT_DOUBLE_EQ(ClientConfiguration(1, 0).config.throughputTargetGbps, 25.0);
 }
 
 }; // namespace runai::llm::streamer::impl::s3

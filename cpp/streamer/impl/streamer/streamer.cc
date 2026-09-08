@@ -675,7 +675,7 @@ common::s3::S3ClientWrapper::Params Streamer::handle_s3(unsigned file_index, con
 
     // Batch params carry only the URI (used by the per-read path) - no credentials. Credentials are applied
     // once, at client creation, from the streamer's credentials() (see ObjectStorageWorker::capacity).
-    return common::s3::S3ClientWrapper::Params(uri, _config->s3_block_bytesize);
+    return common::s3::S3ClientWrapper::Params(uri, _config->s3_block_bytesize, _config->s3_concurrency);
 }
 
 std::vector<std::pair<std::string, size_t>> Streamer::list_files(
@@ -716,7 +716,8 @@ std::vector<std::pair<std::string, size_t>> Streamer::list_files(
         std::call_once(_s3_cleanup_init_flag, [this]() { _s3 = std::make_unique<S3Cleanup>(); });
 
         // listing builds a client, so read the streamer's credentials here (a client-creation point)
-        common::s3::S3ClientWrapper::Params params(uri, credentials(), _config->s3_block_bytesize);
+        common::s3::S3ClientWrapper::Params params(uri, credentials(), _config->s3_block_bytesize,
+                                                  _config->s3_concurrency);
         common::s3::S3ClientWrapper wrapper(params);
 
         common::backend_api::ObjectFileEntry_t * entries = nullptr;
