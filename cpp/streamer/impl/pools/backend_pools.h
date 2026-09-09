@@ -113,6 +113,10 @@ class BackendPools
     // How many async engines exist. For tests: nothing in production reads it.
     unsigned async_engines() const;
 
+    // The resolved limit per queue depth, after the environment is read and capped. For tests: the
+    // cap is otherwise only visible by building enough engines to reach it.
+    unsigned max_async_engines() const { return _max_async_engines; }
+
     // How many mounts had to share an engine because the limit was reached. Zero when every mount got
     // its own. Counted here because only this class knows which mounts were refused an engine.
     unsigned shared_engine_mounts() const;

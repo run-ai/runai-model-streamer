@@ -214,6 +214,58 @@ TEST_F(Creation, Zero_Obj_Concurrency)
     EXPECT_THROW(Config(), std::exception);
 }
 
+// A negative value is already rejected when the variable is parsed. A large positive one is not, and
+// each unit costs a thread - and a client with its own connections for object storage. Capped rather
+// than refused, so the load still runs.
+TEST_F(Creation, Concurrency_Is_Capped)
+{
+    utils::temp::Env fs(std::string("RUNAI_STREAMER_FS_QUEUE_DEPTH"), std::string("100000"));
+    utils::temp::Env obj(std::string("RUNAI_STREAMER_OBJ_CONCURRENCY"), 100000UL);
+
+    const Config config;
+
+    EXPECT_EQ(config.concurrency, Config::max_concurrency);
+    EXPECT_EQ(config.s3_concurrency, Config::max_concurrency);
+
+    EXPECT_EQ(config.fs_async_queue_depth.default_value(), 100000u)
+        << "the cap is on worker counts, not on the queue depth, which costs a slot rather than a thread";
+}
+
+// The cap has to be applied to the parsed 64-bit value, not to the narrowed one. A cast alone wraps:
+// 4294967301 becomes 5, and 4294967296 becomes 0, which the zero assertion then reads as a deliberate
+// zero and rejects. Both are silently wrong rather than merely too large.
+TEST_F(Creation, Concurrency_Above_The_Word_Size_Does_Not_Wrap)
+{
+    {
+        utils::temp::Env obj(std::string("RUNAI_STREAMER_OBJ_CONCURRENCY"), 4294967301UL);
+        EXPECT_EQ(Config().s3_concurrency, Config::max_concurrency) << "must not narrow to 5";
+    }
+
+    {
+        utils::temp::Env obj(std::string("RUNAI_STREAMER_OBJ_CONCURRENCY"), 4294967296UL);
+        EXPECT_EQ(Config().s3_concurrency, Config::max_concurrency) << "must not narrow to 0 and throw";
+    }
+
+    {
+        utils::temp::Env legacy(std::string("RUNAI_STREAMER_CONCURRENCY"), 4294967301UL);
+
+        const Config config;
+        EXPECT_EQ(config.concurrency, Config::max_concurrency);
+        EXPECT_EQ(config.s3_concurrency, Config::max_concurrency);
+    }
+}
+
+// The cap must not move a value that is already below it.
+TEST_F(Creation, The_Cap_Leaves_A_Normal_Value_Alone)
+{
+    utils::temp::Env legacy(std::string("RUNAI_STREAMER_CONCURRENCY"), 32UL);
+
+    const Config config;
+
+    EXPECT_EQ(config.concurrency, 32u);
+    EXPECT_EQ(config.s3_concurrency, 32u);
+}
+
 // A plain number is a complete value: it applies to every mount.
 TEST_F(Creation, A_Plain_Number_Applies_Everywhere)
 {

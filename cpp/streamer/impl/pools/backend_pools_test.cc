@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "common/response_code/response_code.h"
+#include "streamer/impl/config/config/config.h"
 #include "utils/temp/env/env.h"
 
 namespace runai::llm::streamer::impl
@@ -192,6 +193,23 @@ TEST(BackendPools, AnOversizedEngineCapDoesNotWrapToZero)
 
     pools.push_async(makedev(8, 1), 0 /* block: not probed in this test */, 512 /* depth */, Workload{});
     EXPECT_EQ(pools.async_engines(), 1u) << "an engine must still be created";
+}
+
+// An engine costs a thread and a ring, so the limit takes the same ceiling as the concurrencies -
+// and it applies per depth, so an unbounded value would be multiplied by the depths configured.
+TEST(BackendPools, TheEngineCapIsBounded)
+{
+    {
+        utils::temp::Env max_engines(std::string("RUNAI_STREAMER_FS_MAX_ENGINES"), 100000UL);
+        BackendPools pools(run, noop_async_factory, noop_factory, 2, 3);
+        EXPECT_EQ(pools.max_async_engines(), Config::max_concurrency);
+    }
+
+    {
+        utils::temp::Env max_engines(std::string("RUNAI_STREAMER_FS_MAX_ENGINES"), 4UL);
+        BackendPools pools(run, noop_async_factory, noop_factory, 2, 3);
+        EXPECT_EQ(pools.max_async_engines(), 4u) << "a value below the ceiling is untouched";
+    }
 }
 
 // The same mount keeps the same engine however often it is pushed to - assignment is stable, because

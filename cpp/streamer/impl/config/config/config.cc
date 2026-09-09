@@ -23,14 +23,31 @@ unsigned resolve_obj_concurrency()
     unsigned long configured = 0;
     if (utils::try_getenv("RUNAI_STREAMER_OBJ_CONCURRENCY", configured))
     {
-        return static_cast<unsigned>(configured);
+        return Config::to_concurrency(configured, "RUNAI_STREAMER_OBJ_CONCURRENCY");
     }
 
-    return static_cast<unsigned>(utils::getenv<unsigned long>("RUNAI_STREAMER_CONCURRENCY",
-                                                              Config::default_s3_concurrency));
+    return Config::to_concurrency(utils::getenv<unsigned long>("RUNAI_STREAMER_CONCURRENCY",
+                                                               Config::default_s3_concurrency),
+                                  "RUNAI_STREAMER_CONCURRENCY");
 }
 
 } // namespace
+
+unsigned Config::to_concurrency(unsigned long value, const char * source)
+{
+    // Caps BEFORE narrowing. The variables are parsed as 64-bit, so a cast alone would wrap:
+    // 4294967301 becomes 5, and 4294967296 becomes 0, which the assertions above then read as a
+    // deliberate zero. Both are silently wrong rather than merely too large.
+    if (value > max_concurrency)
+    {
+        LOG(WARNING) << "Concurrency " << value << " from " << source << " is above the limit of "
+                     << max_concurrency << " and is capped to it. Each unit costs a thread, and an"
+                     << " object storage unit also costs a client with its own connections";
+        return max_concurrency;
+    }
+
+    return static_cast<unsigned>(value);
+}
 
 Config::Config(unsigned concurrency, unsigned s3_concurrency, size_t s3_block_bytesize, size_t fs_sync_read_block_bytesize,
                bool enforce_minimum, size_t fs_async_chunk_bytesize, FsQueueDepth fs_async_queue_depth,
@@ -57,6 +74,12 @@ Config::Config(unsigned concurrency, unsigned s3_concurrency, size_t s3_block_by
 
     // Zero divides the workload between no workers, and asks for a zero file descriptor budget.
     ASSERT(s3_concurrency) << "object storage concurrency must be a positive number";
+
+    // A backstop for the positional constructor, whose caller passes a number directly. The values
+    // that come from the environment were already capped where they were narrowed, in
+    // resolve_obj_concurrency and resolve_fs_settings.
+    this->concurrency = to_concurrency(this->concurrency, "the streamer configuration");
+    this->s3_concurrency = to_concurrency(this->s3_concurrency, "the streamer configuration");
 
     ASSERT(s3_block_bytesize) << "s3 chunk bytesize must be positive";
 
@@ -97,7 +120,7 @@ Config::FsSettings Config::resolve_fs_settings()
     unsigned long legacy = 0;
     if (utils::try_getenv("RUNAI_STREAMER_CONCURRENCY", legacy))
     {
-        const auto concurrency = static_cast<unsigned>(legacy);
+        const auto concurrency = to_concurrency(legacy, "RUNAI_STREAMER_CONCURRENCY");
 
         LOG(DEBUG) << "File system settings from RUNAI_STREAMER_CONCURRENCY=" << legacy
                    << ", because RUNAI_STREAMER_FS_QUEUE_DEPTH is unset";

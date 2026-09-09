@@ -10,7 +10,7 @@ variable is unset.
 
 #### Values accepted
 
-Positive integer value
+Positive integer value, at most 1024. A larger value is capped, with a warning.
 
 #### Default value
 
@@ -30,7 +30,7 @@ When this variable is unset, `RUNAI_STREAMER_CONCURRENCY` supplies the value if 
 
 #### Values accepted
 
-Positive integer value
+Positive integer value, at most 1024. A larger value is capped, with a warning.
 
 #### Default value
 
@@ -54,6 +54,10 @@ RUNAI_STREAMER_FS_QUEUE_DEPTH="512,nfs=64,virtiofs=256"    # and 256 on virtiofs
 
 The leading value is the default and is mandatory.
 A type key matches as a prefix, so `nfs` covers both `nfs` and `nfs4`. Where two keys both match, the first one written wins.
+
+The leading value is also the thread count for `sync_buffered`, and there it is capped at 1024. The
+depth for the asynchronous readers is not capped, because a read in flight costs a queue slot rather
+than a thread.
 
 The type is the filesystem name reported by `/proc/self/mountinfo` for that mount - for example `ext4`,
 `xfs`, `nfs`, `nfs4`, `virtiofs`, `overlay`. You can read the names on your own machine with:
@@ -83,7 +87,7 @@ Not used by `sync_buffered`, which serves all mounts from a single shared pool.
 
 #### Values accepted
 
-Positive integer
+Positive integer, at most 1024. A larger value is capped, with a warning.
 
 #### Default value
 

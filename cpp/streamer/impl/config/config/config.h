@@ -72,6 +72,17 @@ struct Config
 
     static constexpr unsigned default_s3_concurrency = 8;
 
+    // A ceiling for every count of workers - the two concurrencies and the engines per queue depth.
+    // A negative value is already rejected when the variable is parsed, but a large positive one is
+    // not, and each unit costs an OS thread and, for object storage, a client with its own connection
+    // pool and file descriptors. Clamped rather than rejected, with a warning: a number too big is a
+    // misunderstanding, not a typo, and the load should still run.
+    static constexpr unsigned max_concurrency = 1024;
+
+    // Caps a worker count at max_concurrency and narrows it, naming the variable it came from. Takes
+    // the wide type the variables are parsed as, because capping after the narrowing is too late.
+    static unsigned to_concurrency(unsigned long value, const char * source);
+
     static constexpr const char * default_fs_strategy_candidates = "io_uring_direct,libaio_direct,sync_buffered";
 
     // Threads in the synchronous file system pool.

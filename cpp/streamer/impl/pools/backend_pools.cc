@@ -7,6 +7,7 @@
 #include <atomic>
 #include <utility>
 
+#include "streamer/impl/config/config/config.h"
 #include "utils/env/env.h"
 #include "utils/logging/logging.h"
 
@@ -24,8 +25,10 @@ BackendPools::BackendPools(Handler filesystem_handler,
     _filesystem_size(filesystem_size),
     _object_storage_size(object_storage_size),
     // Per queue depth and per PROCESS, not per node. Each engine has its own queue depth, so N
-    // engines mean N times the depth of reads running at the device.
-    _max_async_engines(utils::getenv_positive<unsigned>("RUNAI_STREAMER_FS_MAX_ENGINES", 1U))
+    // engines mean N times the depth of reads running at the device - and a thread and a ring each,
+    // which is why the same ceiling as the concurrencies applies.
+    _max_async_engines(std::min(utils::getenv_positive<unsigned>("RUNAI_STREAMER_FS_MAX_ENGINES", 1U),
+                                Config::max_concurrency))
 {}
 
 void BackendPools::push(Pool pool, Workload && workload)
