@@ -141,6 +141,23 @@ class TestSafeDestinationPath(unittest.TestCase):
             files._safe_destination_path(
                 self.dst, "models/llama/", "../../etc/passwd")
 
+    def test_rejects_sibling_prefix_collision(self):
+        # base_dir "models/llama" (no trailing slash) is a plain string prefix
+        # of "models/llama_backup/...", but it's a different, unrelated key.
+        with self.assertRaises(ValueError):
+            files._safe_destination_path(
+                self.dst, "models/llama", "models/llama_backup/weights.bin")
+
+    def test_rejects_object_name_unrelated_to_base_dir(self):
+        with self.assertRaises(ValueError):
+            files._safe_destination_path(
+                self.dst, "models/llama/", "other/path/secret.txt")
+
+    def test_allows_top_level_key_when_base_dir_is_empty(self):
+        # base_dir is "" when pulling from the root of a container (no prefix).
+        result = files._safe_destination_path(self.dst, "", "config.json")
+        self.assertEqual(result, os.path.realpath(os.path.join(self.dst, "config.json")))
+
 
 class TestPullFilesTraversalRegression(unittest.TestCase):
     """Exercises the real pull_files() loop end-to-end, with only the SDK
@@ -184,6 +201,21 @@ class TestPullFilesTraversalRegression(unittest.TestCase):
         files.pull_files("az://container/models/llama/", self.dst)
 
         self.assertTrue(os.path.exists(os.path.join(self.dst, "subdir", "config.json")))
+
+    @patch("runai_model_streamer_azure.files.files._create_client")
+    @patch("runai_model_streamer_azure.files.files.list_files")
+    def test_pull_files_downloads_deeply_nested_key(
+            self, mock_list_files, mock_create_client):
+        mock_client = MagicMock()
+        mock_create_client.return_value = mock_client
+        mock_list_files.return_value = (
+            "container", "models/llama/", ["models/llama/a/b/c/deep.safetensors"])
+        mock_client.get_container_client.return_value.get_blob_client \
+            .return_value.download_blob.return_value.readall.return_value = b"content"
+
+        files.pull_files("az://container/models/llama/", self.dst)
+
+        self.assertTrue(os.path.exists(os.path.join(self.dst, "a", "b", "c", "deep.safetensors")))
 
 
 if __name__ == "__main__":

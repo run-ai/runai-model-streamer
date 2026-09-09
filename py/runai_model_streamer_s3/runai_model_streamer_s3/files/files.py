@@ -114,7 +114,10 @@ def _filter_ignore(paths: List[str], patterns: List[str]) -> List[str]:
     ]
 
 def _safe_destination_path(dst: str, base_dir: str, file: str) -> str:
-    relative = removeprefix(file, base_dir).lstrip("/")
+    prefix = base_dir if base_dir == "" or base_dir.endswith("/") else base_dir + "/"
+    if not file.startswith(prefix):
+        raise ValueError(f"object key {file!r} does not start with expected prefix {prefix!r}")
+    relative = file[len(prefix):]
     dst_real = os.path.realpath(dst)
     destination_file = os.path.realpath(os.path.join(dst_real, relative))
     if os.path.commonpath([dst_real, destination_file]) != dst_real:
