@@ -34,11 +34,15 @@ size_t inflight_window_bytes(size_t chunk_bytesize, double target_gbps)
     return result;
 }
 
-ClientConfiguration::ClientConfiguration(unsigned concurrent_readers, size_t chunk_bytesize)
+ClientConfiguration::ClientConfiguration()
 {
-    if (chunk_bytesize)
+    // Undocumented, for benchmarking. The CRT splits a read larger than this into parts and fetches
+    // them in parallel, so raising it to the read size REMOVES that parallelism: measured at 5.7x
+    // slower on a 1 GiB chunk. Left at the SDK default unless someone is deliberately measuring.
+    const auto part_size = utils::getenv<unsigned long>("RUNAI_STREAMER_S3_CLIENT_PART_SIZE", 0);
+    if (part_size)
     {
-        config.partSize = chunk_bytesize;
+        config.partSize = part_size;
     }
 
     unsigned long max_retries = 0;
@@ -63,22 +67,14 @@ ClientConfiguration::ClientConfiguration(unsigned concurrent_readers, size_t chu
         config.maxConnections = max_connections;
     }
 
-    // Per reader, both here and in the SDK default it replaces - so the process targets the same total
-    // as when it built one client per reader.
     unsigned long target_gbps = utils::getenv<unsigned long>("RUNAI_STREAMER_S3_TARGET_GBPS", 0);
     if (target_gbps)
     {
         config.throughputTargetGbps = target_gbps;
     }
 
-    if (concurrent_readers > 1)
-    {
-        config.throughputTargetGbps *= concurrent_readers;
-    }
-
-    LOG(DEBUG) << "S3 target throughput is " << config.throughputTargetGbps << " Gbps for "
-               << concurrent_readers << " concurrent readers on one client, with a part size of "
-               << config.partSize << " bytes";
+    LOG(DEBUG) << "S3 target throughput is " << config.throughputTargetGbps << " Gbps per client,"
+               << " with a part size of " << config.partSize << " bytes";
 
     // if the transfer speed is less than the low speed limit for request_timeout_ms milliseconds the transfer is aborted and retried
     const auto request_timeout_ms = utils::getenv<unsigned long>("RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS", 1000);

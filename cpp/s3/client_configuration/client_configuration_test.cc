@@ -23,67 +23,46 @@ class ClientConfigurationTest : public ::testing::Test
     {
         _imds = std::make_unique<utils::temp::Env>(std::string("AWS_EC2_METADATA_DISABLED"), std::string("true"));
         _target = std::make_unique<utils::temp::UnsetEnv>(std::string("RUNAI_STREAMER_S3_TARGET_GBPS"));
+        _part = std::make_unique<utils::temp::UnsetEnv>(std::string("RUNAI_STREAMER_S3_CLIENT_PART_SIZE"));
         _init = std::make_unique<S3Init>();
     }
 
     void TearDown() override
     {
         _init.reset();
+        _part.reset();
         _target.reset();
         _imds.reset();
     }
 
-    // What the SDK targets for one client, read rather than hardcoded: the scaling below is relative to
-    // it, so a change in the SDK default must not fail this suite.
-    double per_reader() const
-    {
-        return ClientConfiguration(1, 0).config.throughputTargetGbps;
-    }
-
     std::unique_ptr<utils::temp::Env> _imds;
     std::unique_ptr<utils::temp::UnsetEnv> _target;
+    std::unique_ptr<utils::temp::UnsetEnv> _part;
     std::unique_ptr<S3Init> _init;
 };
 
-// One client carries the whole capacity, so its target is the per-reader figure times the readers.
-TEST_F(ClientConfigurationTest, Target_Scales_With_The_Reader_Count)
+// Undocumented and unset by default: raising it removes the CRT's own splitting of a large read into
+// parallel parts, measured at 5.7x slower on a 1 GiB chunk. It exists for benchmarking that effect.
+TEST_F(ClientConfigurationTest, The_Part_Size_Is_The_Sdk_Default_Unless_Overridden)
 {
-    EXPECT_DOUBLE_EQ(ClientConfiguration(8, 0).config.throughputTargetGbps, per_reader() * 8);
-    EXPECT_GT(per_reader(), 0.0) << "a zero per-reader target would make the scaling vacuous";
-}
+    utils::temp::UnsetEnv part(std::string("RUNAI_STREAMER_S3_CLIENT_PART_SIZE"));
 
-// Unstated must not scale the target down: it is the client the SDK would have built anyway. Only a
-// caller outside the streamer can leave it unstated - the streamer always resolves it in Config.
-TEST_F(ClientConfigurationTest, An_Unstated_Reader_Count_Leaves_The_Default)
-{
-    EXPECT_DOUBLE_EQ(ClientConfiguration(0, 0).config.throughputTargetGbps, per_reader());
-}
-
-// One of our ranged reads is one CRT part. Left to its own 8 MiB default the CRT would split a larger
-// read into parts underneath us, on top of the connections this client already pools.
-TEST_F(ClientConfigurationTest, The_Part_Size_Follows_The_Read_Size)
-{
-    EXPECT_EQ(ClientConfiguration(8, 32 * 1024 * 1024).config.partSize, 32u * 1024 * 1024);
-}
-
-// Unstated leaves the SDK default, so a caller that says nothing gets the client it always got.
-TEST_F(ClientConfigurationTest, An_Unstated_Part_Size_Leaves_The_Default)
-{
-    const auto sdk_default = ClientConfiguration(1, 0).config.partSize;
-
+    const auto sdk_default = ClientConfiguration().config.partSize;
     EXPECT_GT(sdk_default, 0u);
-    EXPECT_EQ(ClientConfiguration(8, 0).config.partSize, sdk_default);
+
+    utils::temp::Env override_(std::string("RUNAI_STREAMER_S3_CLIENT_PART_SIZE"), 32UL * 1024 * 1024);
+    EXPECT_EQ(ClientConfiguration().config.partSize, 32u * 1024 * 1024);
 }
 
-// The variable has always named the target for ONE client, so it scales like the default it replaces.
-// Taking it literally would cut an existing user's total by the reader count, because they used to get
-// one client at this target per reader.
-TEST_F(ClientConfigurationTest, The_Override_Is_Per_Reader_Too)
+// Per client, as it has always been - the streamer builds one client per unit of concurrency, so the
+// process target is this times that count.
+TEST_F(ClientConfigurationTest, The_Target_Is_Per_Client)
 {
-    utils::temp::Env target(std::string("RUNAI_STREAMER_S3_TARGET_GBPS"), 25UL);
+    const auto sdk_default = ClientConfiguration().config.throughputTargetGbps;
+    EXPECT_GT(sdk_default, 0.0);
 
-    EXPECT_DOUBLE_EQ(ClientConfiguration(8, 0).config.throughputTargetGbps, 200.0);
-    EXPECT_DOUBLE_EQ(ClientConfiguration(1, 0).config.throughputTargetGbps, 25.0);
+    utils::temp::Env target(std::string("RUNAI_STREAMER_S3_TARGET_GBPS"), 25UL);
+    EXPECT_DOUBLE_EQ(ClientConfiguration().config.throughputTargetGbps, 25.0);
 }
 
 }; // namespace runai::llm::streamer::impl::s3

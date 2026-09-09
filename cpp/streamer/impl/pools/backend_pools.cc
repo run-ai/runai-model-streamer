@@ -105,17 +105,6 @@ void BackendPools::push_async(dev_t device, size_t block, unsigned depth, Worklo
     pool->push(std::move(workload));
 }
 
-unsigned BackendPools::object_storage_threads(Plugin plugin) const
-{
-    // S3 reaches the configured capacity inside ONE client, which is sized for it, so a second worker
-    // would only add a second client and split the connections again. GCS and Azure have no such
-    // control, so they still reach it with one client per worker.
-    //
-    // One worker is enough because it never blocks on a full window: it returns as soon as a workload
-    // is submitted, so later workloads interleave with the chunks already in flight (CapacityWorker).
-    return plugin == Plugin::S3 ? 1U : _object_storage_size;
-}
-
 utils::ThreadPool<Workload> * BackendPools::least_loaded_async() const
 {
     // "Least loaded" means the fewest workloads waiting, not the fewest mounts. A mount that reads
@@ -172,8 +161,7 @@ common::ResponseCode BackendPools::lock_object_plugin(Plugin plugin)
         // _ready_plugin at -1 with the pool still null, so the NEXT submission retries this branch cleanly -
         // instead of finding the plugin "locked" with a null pool, which would ASSERT on _pools.push.
         // per-worker pool: each thread owns an ObjectStorageWorker (from the factory) with its own in-flight window
-        _object_storage_pool = std::make_unique<utils::ThreadPool<Workload>>(_object_storage_factory,
-                                                                            object_storage_threads(plugin));
+        _object_storage_pool = std::make_unique<utils::ThreadPool<Workload>>(_object_storage_factory, _object_storage_size);
         // Commit the lock only now that the pool exists. _ready_plugin is stored last (release), so a fast-path
         // acquire that observes it is guaranteed the pool is built and safe to dispatch to. The s3_wrapper
         // backend handle is a process-wide static, hence the single-plugin lock.

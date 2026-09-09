@@ -23,7 +23,8 @@ Since version 0.17.0
 
 Controls how much object-storage work runs at once.
 
-For S3 each unit is 10 gigabits per second, so a concurrency of 8 targets 80. `RUNAI_STREAMER_S3_TARGET_GBPS` replaces the 10, not the total.
+Each unit is one client. For S3 a client targets 10 gigabits per second, so a concurrency of 8 targets
+80 across the process.
 
 When this variable is unset, `RUNAI_STREAMER_CONCURRENCY` supplies the value if it is set.
 
@@ -157,10 +158,10 @@ Boolean `0` or `1`
 
 ### RUNAI_STREAMER_S3_TARGET_GBPS
 
-Overrides the AWS CRT throughput target of the S3 client.
+Overrides the AWS CRT throughput target of each S3 client.
 
-The value is per reader, and is multiplied by `RUNAI_STREAMER_OBJ_CONCURRENCY` for the single client
-that carries the whole capacity. With `25` and a concurrency of `8` the client targets 200 Gbps.
+The value is per client, so the process targets it times `RUNAI_STREAMER_OBJ_CONCURRENCY`. To give a
+single client the whole capacity, set the concurrency to `1` and this to the total you want.
 
 #### Values accepted
 
@@ -168,13 +169,13 @@ Positive integer, in Gbps
 
 #### Default value
 
-The AWS CRT default of 10 per reader
+The AWS CRT default of 10, per client
 
 ### RUNAI_STREAMER_S3_MAX_CONNECTIONS
 
 Usage depends on object storage type
 
-For S3 it caps the connections the S3 client may open for the whole process.
+For S3 it caps the connections each client may open.
 A resource guard, not a throughput control: the CRT already scales connections from the throughput target.
 Set it only to bound resource usage, for example against a file descriptor limit.
 

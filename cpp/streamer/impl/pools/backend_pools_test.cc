@@ -203,28 +203,10 @@ TEST(BackendPools, ObjectPluginLockedToOne)
 }
 
 
-// S3 carries the whole configured capacity inside ONE client, sized for it, so a second worker would
-// only build a second client and split the connections again. Counted through the factory, which the
-// pool calls once per thread.
-TEST(BackendPools, S3PoolRunsOneWorker)
+// Every plugin builds one worker per unit of concurrency, each owning its own client.
+TEST(BackendPools, ObjectStoragePoolRunsAWorkerPerUnit)
 {
-    std::atomic<unsigned> built{0};
-    auto counting = [&built]() -> std::unique_ptr<utils::Worker<Workload>>
-    {
-        ++built;
-        return std::make_unique<NoopWorker>();
-    };
-
-    BackendPools pools(run, noop_async_factory, counting, 2, /*object_storage_size=*/3);
-    ASSERT_EQ(pools.lock_object_plugin(BackendPools::Plugin::S3), common::ResponseCode::Success);
-
-    EXPECT_EQ(built.load(), 1u);
-}
-
-// GCS and Azure have no per-client capacity control, so they still reach it with one client per worker.
-TEST(BackendPools, OtherPluginsKeepAWorkerEach)
-{
-    for (const auto plugin : { BackendPools::Plugin::GCS, BackendPools::Plugin::Azure })
+    for (const auto plugin : { BackendPools::Plugin::S3, BackendPools::Plugin::GCS, BackendPools::Plugin::Azure })
     {
         std::atomic<unsigned> built{0};
         auto counting = [&built]() -> std::unique_ptr<utils::Worker<Workload>>

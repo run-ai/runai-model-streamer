@@ -175,8 +175,6 @@ S3Client::S3Client(const common::backend_api::ObjectClientConfig_t & config) :
     S3ClientBase(config),
     _stop(false),
     _application_retries_enabled(utils::getenv<unsigned long>("RUNAI_STREAMER_S3_TIMEOUT", 0UL) > 0),
-    // _chunk_bytesize comes from S3ClientBase, which is constructed first.
-    _client_config(config.concurrent_readers, _chunk_bytesize),
     _responder(nullptr)
 {
     if (_endpoint.has_value()) // endpoint passed as parameter by user application (in credentials)
