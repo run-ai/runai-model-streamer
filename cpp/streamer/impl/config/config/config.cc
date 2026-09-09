@@ -40,9 +40,9 @@ unsigned Config::to_concurrency(unsigned long value, const char * source)
     // deliberate zero. Both are silently wrong rather than merely too large.
     if (value > max_concurrency)
     {
-        LOG(WARNING) << "Concurrency " << value << " from " << source << " is above the limit of "
-                     << max_concurrency << " and is capped to it. Each unit costs a thread, and an"
-                     << " object storage unit also costs a client with its own connections";
+        LOG(WARNING) << "Value " << value << " from " << source << " is above the limit of "
+                     << max_concurrency << " and is capped to it. Each unit costs an OS thread and"
+                     << " its own I/O resources";
         return max_concurrency;
     }
 

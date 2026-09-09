@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <memory>
 #include <string>
 #include <thread>
 
@@ -25,9 +26,29 @@ unsigned expected(unsigned readers)
 
 } // namespace
 
+// The variable the formula reads is cleared before each test, so a test states only what it SETS. A
+// non-zero RUNAI_STREAMER_S3_MAX_CONNECTIONS replaces the formula outright, so a run that inherits it
+// fails these against correct code - `bazel test` scrubs the environment, but `--test_env` and a
+// direct binary run do not.
+class GcsConcurrency : public ::testing::Test
+{
+ protected:
+    void SetUp() override
+    {
+        _connections = std::make_unique<utils::temp::UnsetEnv>(std::string("RUNAI_STREAMER_S3_MAX_CONNECTIONS"));
+    }
+
+    void TearDown() override
+    {
+        _connections.reset();
+    }
+
+    std::unique_ptr<utils::temp::UnsetEnv> _connections;
+};
+
 // The threads are sized by the number of CLIENTS the caller will build, which reaches the plugin as a
 // client parameter - no environment variable is read for it here.
-TEST(GcsConcurrency, Threads_Follow_The_Reader_Count)
+TEST_F(GcsConcurrency, Threads_Follow_The_Reader_Count)
 {
     for (const unsigned readers : { 2U, 4U, 8U, 16U })
     {
@@ -40,7 +61,7 @@ TEST(GcsConcurrency, Threads_Follow_The_Reader_Count)
 //
 // Only reader counts that DIVIDE the total are checked. The division truncates otherwise, and that
 // loss belongs to the formula rather than to the count it was given.
-TEST(GcsConcurrency, The_Total_Thread_Count_Does_Not_Move)
+TEST_F(GcsConcurrency, The_Total_Thread_Count_Does_Not_Move)
 {
     const unsigned nprocs = std::thread::hardware_concurrency();
     ASSERT_GT(nprocs, 0u) << "the formula falls back to a fixed 8 with no cores to divide";
@@ -64,13 +85,13 @@ TEST(GcsConcurrency, The_Total_Thread_Count_Does_Not_Move)
 
 // Only a caller outside the streamer can send zero, and dividing by it would be a crash rather than a
 // misconfiguration. Floored to one - the streamer itself always states a count.
-TEST(GcsConcurrency, Zero_Is_Floored_Rather_Than_Dividing_By_Zero)
+TEST_F(GcsConcurrency, Zero_Is_Floored_Rather_Than_Dividing_By_Zero)
 {
     EXPECT_EQ(ClientConfiguration(0).max_concurrency, expected(1));
 }
 
 // An explicit connection count names the threads directly, so the reader count does not divide it.
-TEST(GcsConcurrency, An_Explicit_Connection_Count_Overrides_The_Formula)
+TEST_F(GcsConcurrency, An_Explicit_Connection_Count_Overrides_The_Formula)
 {
     utils::temp::Env connections(std::string("RUNAI_STREAMER_S3_MAX_CONNECTIONS"), 7UL);
 

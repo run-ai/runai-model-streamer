@@ -26,9 +26,10 @@ BackendPools::BackendPools(Handler filesystem_handler,
     _object_storage_size(object_storage_size),
     // Per queue depth and per PROCESS, not per node. Each engine has its own queue depth, so N
     // engines mean N times the depth of reads running at the device - and a thread and a ring each,
-    // which is why the same ceiling as the concurrencies applies.
-    _max_async_engines(std::min(utils::getenv_positive<unsigned>("RUNAI_STREAMER_FS_MAX_ENGINES", 1U),
-                                Config::max_concurrency))
+    // which is why to_concurrency caps it like the two concurrencies, and warns the same way.
+    _max_async_engines(Config::to_concurrency(
+        utils::getenv_positive<unsigned>("RUNAI_STREAMER_FS_MAX_ENGINES", 1U),
+        "RUNAI_STREAMER_FS_MAX_ENGINES"))
 {}
 
 void BackendPools::push(Pool pool, Workload && workload)

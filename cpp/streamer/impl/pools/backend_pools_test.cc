@@ -197,6 +197,7 @@ TEST(BackendPools, AnOversizedEngineCapDoesNotWrapToZero)
 
 // An engine costs a thread and a ring, so the limit takes the same ceiling as the concurrencies -
 // and it applies per depth, so an unbounded value would be multiplied by the depths configured.
+// Capped through Config::to_concurrency, which is also what warns; env-vars.md promises that warning.
 TEST(BackendPools, TheEngineCapIsBounded)
 {
     {
