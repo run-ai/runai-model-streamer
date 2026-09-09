@@ -1822,9 +1822,8 @@ TEST(Async, QueueDepthIsResolvedPerMount)
     utils::temp::Env group(std::string("RUNAI_STREAMER_PROCESS_GROUP_SIZE"), 1UL);
     utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("io_uring_buffered"));
 
-    // FS_MAX_ENGINES is deliberately NOT set: a per-type depth only reaches a mount that has its own
-    // engine, so the setting raises the engine floor itself. At the default of one engine the second
-    // mount would share the first one, and its depth with it.
+    // FS_MAX_ENGINES is deliberately NOT set. Engines are grouped by depth and the limit applies
+    // inside each group, so the default of one already gives 64 and 512 an engine each.
     utils::temp::UnsetEnv engines(std::string("RUNAI_STREAMER_FS_MAX_ENGINES"));
 
     std::mutex recorded_mutex;

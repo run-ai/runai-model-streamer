@@ -169,7 +169,7 @@ TEST(BackendHandle, GetPluginType_GCS)
 }
 
 // A typed field rather than a dictionary entry, so it needs no key, no parsing and no validation -
-// and every plugin reads the same number the streamer resolved.
+// and GCS and Azure divide by the same number the streamer resolved.
 TEST(Params, The_Reader_Count_Reaches_The_Client_Config)
 {
     std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
@@ -180,8 +180,9 @@ TEST(Params, The_Reader_Count_Reaches_The_Client_Config)
     EXPECT_EQ(params.to_config(initial_params).concurrent_readers, 8u);
 }
 
-// Only a default-constructed Params has no count, and it names no storage and builds no client.
-TEST(Params, An_Unstated_Reader_Count_Is_Zero)
+// The short constructor takes no credentials, and must still carry the count: it is not a default,
+// so an overload that dropped it would divide by a number nobody chose.
+TEST(Params, The_Reader_Count_Survives_The_Credentialless_Constructor)
 {
     std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
 

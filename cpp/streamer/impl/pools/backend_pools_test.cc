@@ -176,12 +176,9 @@ TEST(BackendPools, EnginePerMountUpToTheCap)
     EXPECT_EQ(pools.async_engines(), 3u);
 }
 
-// A cap too large for `unsigned` must not wrap to zero.
-//
-// Flooring with std::max(1UL, ...) promised at least one engine as an unsigned long, but the member
-// is unsigned, and on LP64 any non-zero multiple of 2^32 truncates to 0 on the way in. Zero is not a
-// small cap: the first push_async finds size() < 0 false, takes the sharing branch, and
-// least_loaded_async() searches a map that is still empty - an ASSERT that is fatal in every build.
+// A cap too large for `unsigned` must not wrap to zero. A zero cap is not a small one: no engine is
+// ever built, so every mount takes the sharing branch and least_loaded_async asserts on an empty
+// bucket - fatal in every build.
 //
 // 2^32 exactly, because that is the smallest value that truncates to zero rather than to something
 // merely wrong.

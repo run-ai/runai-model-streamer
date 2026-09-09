@@ -19,10 +19,10 @@ pip install runai-model-streamer
 To stream models from object storage, run the following command as well:
 
 ```bash
-pip install runai-model-streamer[s3]
+pip install 'runai-model-streamer[s3]'
 ```
 
-> **Warning:** Make sure you install the S3 dependency in the same version of your runai-model-streamer by running `pip install runai-model-streamer[s3]==0.3.1`.
+> **Warning:** Make sure you install the S3 dependency in the same version of your runai-model-streamer by running `pip install 'runai-model-streamer[s3]==0.3.1'`.
 
 <a id="azureCapabilityInstallation"></a>
 
@@ -31,10 +31,10 @@ pip install runai-model-streamer[s3]
 To stream models from Azure Blob Storage, install the Azure package:
 
 ```bash
-pip install runai-model-streamer[azure]
+pip install 'runai-model-streamer[azure]'
 ```
 
-> **Warning:** Make sure you install the Azure dependency in the same version of your runai-model-streamer by running `pip install runai-model-streamer[azure]==0.3.1`. 
+> **Warning:** Make sure you install the Azure dependency in the same version of your runai-model-streamer by running `pip install 'runai-model-streamer[azure]==0.3.1'`. 
 
 ### Matching versions
 
@@ -43,7 +43,7 @@ are one product built together, not independent plugins, so **always install the
 as `runai-model-streamer`**:
 
 ```bash
-pip install runai-model-streamer==0.17.0 runai-model-streamer[s3]==0.17.0
+pip install runai-model-streamer==0.17.0 'runai-model-streamer[s3]==0.17.0'
 ```
 
 Mixed versions are not supported. `pip` does not prevent them, and the streamer cannot detect every
