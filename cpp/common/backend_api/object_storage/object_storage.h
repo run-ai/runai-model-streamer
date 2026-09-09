@@ -49,9 +49,9 @@ struct ObjectClientConfig_t
                                                // (e.g., credentials, CA bundle, region) to be applied at creation. Can be NULL.
     unsigned num_initial_params;               // Number of parameters in initial_params. Must be 0 if initial_params is NULL.
 
-    // How many clients the caller will run at once. Every backend sizes itself by it - S3 gives one
-    // client the whole throughput target, GCS and Azure divide their threads by it - so no plugin
-    // reads the environment for it and the value has one source.
+    // How many clients the caller will run at once. GCS and Azure divide their per-client threads by
+    // it, so the total stays the same whatever the count. Passed rather than read from the
+    // environment, so the value has one source. S3 ignores it: its target is per client.
     unsigned concurrent_readers;
 };
 
