@@ -385,9 +385,9 @@ TEST(MountCapabilities, Direct_Block_Is_The_Smallest_The_Mount_Accepts)
 // would make the ladder's answer meaningful there, and if a kernel ever does that, this fails and the
 // comments around it need rewriting.
 //
-// The always-true half is the last check: memory_backed. Streamer::file_groups and
-// Streamer::direct_block_for both test it and skip such a mount, which is what keeps any of this off
-// the direct path.
+// The always-true half is the last check: memory_backed. FsAsyncRouter::groups and
+// FsAsyncRouter::direct_block_for both test it and skip such a mount, which is what keeps any of this
+// off the direct path.
 //
 // One consequence for the ladder: it stays UNEXERCISED here. statx answers on every real mount, and
 // tmpfs is skipped upstream.

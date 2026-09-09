@@ -1667,7 +1667,8 @@ TEST(Async, AchievedDepthOutlivesTheReads)
 // direct_block_for answers from the INJECTED probe when a test set one.
 //
 // Every measurement site has to honour the same seam. This one did not, so a test could answer for
-// file_groups and reads_directly and still get the build machine's real block back from this API -
+// the router's groups() and reads_directly and still get the build machine's real block back from
+// this API -
 // a number that changes with the filesystem the tests happen to run on.
 //
 // The two mounts answer differently on purpose. A request spanning both must report the LARGER, since
@@ -1717,7 +1718,7 @@ TEST(Streamer, Direct_Block_For_Uses_The_Injected_Probe)
 // A mount whose engine dies is read by the SYNCHRONOUS reader from then on, and the bytes are right.
 //
 // This is the end of the chain the pieces below only cover separately: the worker marks its engine
-// dead, tells the streamer which mount it served, and file_groups stops routing that mount to it.
+// dead, tells the streamer which mount it served, and the router's groups() stops routing it there.
 // Each link was where the bugs in this area lived, so the test drives all three.
 //
 // The engine is injected because a real one fails only when its ring or context is gone, which a test

@@ -458,7 +458,7 @@ common::ResponseCode MountCapabilities::direct_block(dev_t dev, const std::strin
     // there is no device to bypass; the pages are the page cache. So the ladder's first rung
     // "succeeds" and this reports 512 for a filesystem that cannot do direct I/O at all.
     //
-    // The callers keep that out: Streamer::file_groups and Streamer::direct_block_for both test
+    // The callers keep that out: FsAsyncRouter::groups and FsAsyncRouter::direct_block_for both test
     // memory_backed and skip such a mount before asking. The statfs magic check is the only thing that
     // works here, because a probe by definition cannot detect a filesystem that accepts everything.
     const int fd = ::open(file_path.c_str(), O_RDONLY | O_DIRECT);
