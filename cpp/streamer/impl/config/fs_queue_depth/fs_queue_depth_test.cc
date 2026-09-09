@@ -117,20 +117,5 @@ TEST(FsQueueDepth, It_Prints_What_It_Parsed)
     EXPECT_EQ(stream.str(), "512, nfs=64, virtiofs=256");
 }
 
-// The engine count follows from the setting: a mount is only tuned separately if it has its own
-// engine, so distinct values is the floor RUNAI_STREAMER_FS_MAX_ENGINES is raised to.
-TEST(FsQueueDepth, Distinct_Values_Counts_What_Needs_Its_Own_Engine)
-{
-    EXPECT_EQ(FsQueueDepth::parse("512").distinct_values(), 1u);
-    EXPECT_EQ(FsQueueDepth::parse("512,nfs=64").distinct_values(), 2u);
-    EXPECT_EQ(FsQueueDepth::parse("512,nfs=64,virtiofs=256").distinct_values(), 3u);
-
-    EXPECT_EQ(FsQueueDepth::parse("512,nfs=512").distinct_values(), 1u)
-        << "an entry equal to the default asks for nothing new";
-    EXPECT_EQ(FsQueueDepth::parse("512,nfs=64,ceph=64").distinct_values(), 2u)
-        << "two types at one value can share one engine";
-
-    EXPECT_EQ(FsQueueDepth(64).distinct_values(), 1u);
-}
 
 }; // namespace runai::llm::streamer::impl

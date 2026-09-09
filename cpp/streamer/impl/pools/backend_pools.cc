@@ -17,16 +17,15 @@ BackendPools::BackendPools(Handler filesystem_handler,
                            AsyncWorkerFactory filesystem_async_factory,
                            WorkerFactory object_storage_factory,
                            unsigned filesystem_size,
-                           unsigned object_storage_size, unsigned min_async_engines) :
+                           unsigned object_storage_size) :
     _filesystem_handler(std::move(filesystem_handler)),
     _filesystem_async_factory(std::move(filesystem_async_factory)),
     _object_storage_factory(std::move(object_storage_factory)),
     _filesystem_size(filesystem_size),
     _object_storage_size(object_storage_size),
-    // This limit is per PROCESS, not per node. Each engine has its own queue depth, so N engines mean
-    // N times the depth of reads running at the device.
-    _max_async_engines(std::max(utils::getenv_positive<unsigned>("RUNAI_STREAMER_FS_MAX_ENGINES", 1U),
-                                min_async_engines))
+    // Per queue depth and per PROCESS, not per node. Each engine has its own queue depth, so N
+    // engines mean N times the depth of reads running at the device.
+    _max_async_engines(utils::getenv_positive<unsigned>("RUNAI_STREAMER_FS_MAX_ENGINES", 1U))
 {}
 
 void BackendPools::push(Pool pool, Workload && workload)
@@ -65,60 +64,68 @@ void BackendPools::push_async(dev_t device, size_t block, unsigned depth, Worklo
             // completions and counts free slots. Moving a mount with reads running would lose both.
             pool = assigned->second;
         }
-        else if (_async_pools.size() < _max_async_engines)
-        {
-            // Lazy, like the synchronous pool: a streamer that never reads this mount never builds a
-            // ring or a thread for it. Nothing has to be AGREED first, unlike object storage's plugin
-            // lock - the strategy was settled before dispatch, and a mount needs no agreement at all.
-            // (The mutex above guards the map, not a decision.)
-            // The block is bound HERE, when this mount's engine is created, and never changes for
-            // it - which is right, because the engine serves this one mount for its whole life.
-            auto created = std::make_unique<utils::ThreadPool<Workload>>(
-                [factory = _filesystem_async_factory, device, block, depth]() { return factory(device, block, depth); }, 1);
-            pool = created.get();
-            _async_pools.emplace(device, std::move(created));
-            _async_by_device.emplace(device, pool);
-
-            LOG(DEBUG) << "Engine " << _async_pools.size() << " serves mount " << major(device) << ":"
-                       << minor(device);
-        }
         else
         {
-            // Above the limit: share the engine with the least work waiting. We do not wait for a
-            // free engine, because that would only move the delay to another place.
-            pool = least_loaded_async();
-            _async_by_device.emplace(device, pool);
-            ++_shared_mounts;
+            // Routed by the depth the mount resolved, so a mount never lands on an engine built for
+            // another depth. The cap applies within the depth, which is why discovery order cannot
+            // cost a mount its configured value.
+            auto & engines = _async_pools[depth];
 
-            // A warning, not a debug line, and it names the variable. Mounts are separated only up
-            // to the limit. Above it, a mount that stops responding also stops the mounts sharing its
-            // engine. Nothing else would show this. Logged once per mount, because the choice is
-            // permanent.
-            LOG(WARNING) << "Mount " << major(device) << ":" << minor(device) << " shares an engine: "
-                         << _async_pools.size() << " already in use, so it reads at that engine's"
-                         << " queue depth and direct-I/O block, not the " << depth << " and " << block
-                         << " it resolved. A stall on one of these mounts now stalls the others;"
-                         << " raise RUNAI_STREAMER_FS_MAX_ENGINES to separate them";
+            if (engines.size() < _max_async_engines)
+            {
+                // Lazy, like the synchronous pool: a streamer that never reads this mount never
+                // builds a ring or a thread for it. Nothing has to be AGREED first, unlike object
+                // storage's plugin lock - the strategy was settled before dispatch, and a mount needs
+                // no agreement at all. (The mutex above guards the map, not a decision.)
+                // The block is bound HERE and never changes for this engine.
+                auto created = std::make_unique<utils::ThreadPool<Workload>>(
+                    [factory = _filesystem_async_factory, device, block, depth]() { return factory(device, block, depth); }, 1);
+                pool = created.get();
+                engines.push_back(std::move(created));
+
+                LOG(DEBUG) << "Engine " << engines.size() << " at queue depth " << depth << " serves mount "
+                           << major(device) << ":" << minor(device);
+            }
+            else
+            {
+                // At the cap for this depth: share the engine with the least work waiting. We do not
+                // wait for a free engine, because that would only move the delay to another place.
+                pool = least_loaded_async(engines);
+                ++_shared_mounts;
+
+                // A warning, not a debug line, and it names the variable. The depth survives, because
+                // the engine was built for it; isolation does not. A mount that stops responding now
+                // also stops the mounts sharing its engine, and the sharer reads at the engine's
+                // direct-I/O block. Nothing else would show this. Once per mount, because the choice
+                // is permanent.
+                LOG(WARNING) << "Mount " << major(device) << ":" << minor(device) << " shares an engine at"
+                             << " queue depth " << depth << ": " << engines.size() << " already in use at"
+                             << " that depth, so it reads at that engine's direct-I/O block rather than the "
+                             << block << " it resolved. A stall on one of these mounts now stalls the"
+                             << " others; raise RUNAI_STREAMER_FS_MAX_ENGINES to separate them";
+            }
+
+            _async_by_device.emplace(device, pool);
         }
     }
 
     pool->push(std::move(workload));
 }
 
-utils::ThreadPool<Workload> * BackendPools::least_loaded_async() const
+utils::ThreadPool<Workload> * BackendPools::least_loaded_async(
+    const std::vector<std::unique_ptr<utils::ThreadPool<Workload>>> & engines)
 {
     // "Least loaded" means the fewest workloads waiting, not the fewest mounts. A mount that reads
     // nothing gives its engine no work, so counting mounts would say nothing about real load.
     //
     // This is only an estimate. It counts work that no worker has started yet, so an engine that is
     // busy with one very large workload looks free. That is good enough here, because this choice is
-    // made only above the limit, where mounts are no longer separated anyway.
+    // made only above the cap, where mounts are no longer separated anyway.
     utils::ThreadPool<Workload> * best = nullptr;
     size_t fewest = 0;
 
-    for (const auto & [device, pool] : _async_pools)
+    for (const auto & pool : engines)
     {
-        (void)device;
         const size_t queued = pool->pending();
         if (best == nullptr || queued < fewest)
         {
@@ -195,7 +202,7 @@ unsigned BackendPools::shared_engine_mounts() const
 unsigned BackendPools::async_engines() const
 {
     const auto guard = std::unique_lock<std::mutex>(_async_mutex);
-    return static_cast<unsigned>(_async_pools.size());
+    return count_async_engines();
 }
 
 unsigned BackendPools::pools_created() const
@@ -203,8 +210,19 @@ unsigned BackendPools::pools_created() const
     const auto guard = std::unique_lock<std::mutex>(_async_mutex);
 
     return (_filesystem_pool != nullptr ? 1u : 0u)
-         + static_cast<unsigned>(_async_pools.size())
+         + count_async_engines()
          + (_object_storage_pool != nullptr ? 1u : 0u);
+}
+
+unsigned BackendPools::count_async_engines() const
+{
+    unsigned total = 0;
+    for (const auto & [depth, engines] : _async_pools)
+    {
+        (void)depth;
+        total += static_cast<unsigned>(engines.size());
+    }
+    return total;
 }
 
 }; // namespace runai::llm::streamer::impl

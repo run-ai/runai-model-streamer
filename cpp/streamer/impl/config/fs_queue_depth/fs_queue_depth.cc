@@ -169,18 +169,6 @@ const std::vector<FsQueueDepth::Entry> & FsQueueDepth::entries() const
     return _entries;
 }
 
-unsigned FsQueueDepth::distinct_values() const
-{
-    std::set<unsigned> values{ _default };
-
-    for (const auto & entry : _entries)
-    {
-        values.insert(entry.value);
-    }
-
-    return static_cast<unsigned>(values.size());
-}
-
 std::ostream & operator<<(std::ostream & os, const FsQueueDepth & depth)
 {
     os << depth.default_value();

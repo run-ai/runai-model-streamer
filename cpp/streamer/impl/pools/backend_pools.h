@@ -5,6 +5,7 @@
 #include <mutex>
 #include <map>
 #include <optional>
+#include <vector>
 
 #include <sys/types.h>
 
@@ -61,14 +62,11 @@ class BackendPools
     // each worker owns its in-flight window).
     // filesystem_async_factory builds the AsyncIoWorker; its pool is always one thread, so no size is
     // taken for it.
-    // min_async_engines raises RUNAI_STREAMER_FS_MAX_ENGINES so a per-type queue depth can reach the
-    // mounts it names: a mount is only tuned separately if it has its own engine.
     BackendPools(Handler filesystem_handler,
                  AsyncWorkerFactory filesystem_async_factory,
                  WorkerFactory object_storage_factory,
                  unsigned filesystem_size,
-                 unsigned object_storage_size,
-                 unsigned min_async_engines = 1);
+                 unsigned object_storage_size);
 
     // Hand the workload to its pool. FileSystem and ObjectStorage only - Pool::FileSystemAsync is
     // REJECTED here (asserted), because an async workload is routed by its mount and there is no
@@ -83,12 +81,16 @@ class BackendPools
     // Hand an async filesystem workload to the engine for its mount, creating that engine on first
     // use. `device` is the mount's st_dev.
     //
-    // Above RUNAI_STREAMER_FS_MAX_ENGINES, mounts SHARE the engine that has the least work waiting.
-    // They do not wait for a free engine. Waiting would only move the delay to another place.
+    // The cap is per queue depth, so a mount only ever shares with a mount that resolved the SAME
+    // depth. A configured per-type depth therefore reaches its mounts whatever order the mounts are
+    // discovered in.
+    //
+    // Above the cap, mounts SHARE the engine in their depth that has the least work waiting. They do
+    // not wait for a free engine. Waiting would only move the delay to another place.
     //
     // Sharing is logged as a warning, once per mount, and the log names the variable. Without that
-    // warning the cost is invisible: mounts are separated only up to the limit. Above it, a mount
-    // that stops responding also stops the mounts that share its engine.
+    // warning the cost is invisible: a mount that stops responding also stops the mounts that share
+    // its engine, and the sharer reads at the engine's direct-I/O block rather than its own.
     //
     // A mount keeps the SAME engine for as long as the streamer lives. The engine holds the state
     // that routes completions and counts free slots, so a mount cannot move while it still has reads
@@ -130,26 +132,33 @@ class BackendPools
     std::once_flag _filesystem_once;
     std::unique_ptr<utils::ThreadPool<Workload>> _filesystem_pool;
 
-    // One pool per mount, keyed on st_dev. Each is created on first use and lives as long as the
-    // streamer. The mutex guards the two maps below. Several threads can submit at the same time, so
-    // the first workload for a mount can arrive on more than one thread at once.
+    // Engines grouped by the queue depth they were built with. The depth is what the grouping must
+    // preserve, and it is already an argument of push_async, so nothing else has to be plumbed in.
+    // Each engine is created on first use and lives as long as the streamer. The mutex guards both
+    // containers below. Several threads can submit at the same time, so the first workload for a
+    // mount can arrive on more than one thread at once.
     mutable std::mutex _async_mutex;
-    std::map<dev_t, std::unique_ptr<utils::ThreadPool<Workload>>> _async_pools;
+    std::map<unsigned, std::vector<std::unique_ptr<utils::ThreadPool<Workload>>>> _async_pools;
 
-    // Which engine each mount uses. This is separate from _async_pools because above the limit
-    // several mounts point at the same pool, and because a mount must keep the engine it was given.
+    // Which engine each mount uses. Separate from _async_pools because above the cap several mounts
+    // point at the same engine, and because a mount must keep the engine it was given.
     std::map<dev_t, utils::ThreadPool<Workload> *> _async_by_device;
 
-    // The largest number of engines. 1 puts every mount on one engine. That is the default, and it
-    // is also how an operator turns the feature off, because we have not measured the speed gain.
+    // The largest number of engines PER QUEUE DEPTH, so the worst case is this times the number of
+    // distinct depths configured. 1 puts every mount of one depth on one engine. That is the default,
+    // and it is also how an operator turns the feature off, because we have not measured the gain.
     const unsigned _max_async_engines;
 
     // Mounts that were given an engine already in use. Not the same as (mounts - engines): a mount
     // that arrives after the limit is reached is counted here even if it is the only one sharing.
     unsigned _shared_mounts = 0;
 
-    // The engine with the least queued work. Called under _async_mutex.
-    utils::ThreadPool<Workload> * least_loaded_async() const;
+    // The engine with the least queued work, among those of one depth. Called under _async_mutex.
+    static utils::ThreadPool<Workload> * least_loaded_async(
+        const std::vector<std::unique_ptr<utils::ThreadPool<Workload>>> & engines);
+
+    // Engines across every depth. Called under _async_mutex.
+    unsigned count_async_engines() const;
 
     std::unique_ptr<utils::ThreadPool<Workload>> _object_storage_pool;
 

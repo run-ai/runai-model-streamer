@@ -42,10 +42,6 @@ class FsQueueDepth
     // In the order written, which is the order for_type matches in.
     const std::vector<Entry> & entries() const;
 
-    // The number of distinct values, which is how many engines this setting needs: a mount is only
-    // tuned separately if it has its own engine.
-    unsigned distinct_values() const;
-
  private:
     FsQueueDepth() = default;
 

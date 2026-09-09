@@ -68,6 +68,27 @@ findmnt -no FSTYPE /path/to/model
 
 16 for `sync_buffered`
 
+### RUNAI_STREAMER_FS_MAX_ENGINES
+
+Since version 0.17.0
+
+Controls how many asynchronous engines are built for each queue depth. An engine reads its mounts on
+its own thread.
+
+Every depth in `RUNAI_STREAMER_FS_QUEUE_DEPTH` gets an engine, so this variable is not needed to make
+a per-filesystem-type depth work. Raise it to separate mounts that read at the same depth: above the
+limit they share an engine, and a slow mount then delays the mounts sharing it.
+
+Not used by `sync_buffered`, which serves all mounts from a single shared pool.
+
+#### Values accepted
+
+Positive integer
+
+#### Default value
+
+1
+
 ### RUNAI_STREAMER_CHUNK_BYTESIZE
 
 Controls the maximum size of memory each OS thread reads from the file at once.

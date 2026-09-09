@@ -54,9 +54,7 @@ Streamer::Streamer(Config config, Environment environment) :
         {
             return std::make_unique<ObjectStorageWorker>([state]() { return state->get(); });
         },
-        _config->concurrency, _config->s3_concurrency,
-        // a per-type depth reaches a mount only if that mount has its own engine
-        config.fs_async_queue_depth.distinct_values()),
+        _config->concurrency, _config->s3_concurrency),
     // One PERSISTENT responder for the streamer's lifetime, shared by all submissions and
     // demuxed by submission_id. increment() grows its expected count per accepted submission.
     _responder(std::make_shared<common::Responder>(0, common::QueueMode::PERSISTENT))
