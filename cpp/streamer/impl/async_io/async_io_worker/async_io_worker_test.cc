@@ -868,12 +868,13 @@ TEST(AsyncIoWorker, Scratch_Is_Returned)
 
     // The pool holds one buffer per in-flight read, so it is sized to the queue depth. A DEPTH OF 2
     // makes a leak show up almost at once: lose one buffer per region and the third region has none,
-    // and a read with no scratch is failed rather than silently made buffered.
-    Driver driver(Strategy::IoUringDirect, Block);
+    // and a read with no scratch is failed rather than silently made buffered. The depth reaches the
+    // worker through the Driver - the environment variable the fixture sets does not.
+    Driver driver(Strategy::IoUringDirect, Block, std::nullopt, 2 /* depth, so 2 scratch buffers */);
 
     for (int i = 0; i < 8; ++i)
     {
-        Fixture fixture({ ChunkSize }, 1, Start, 2 /* queue depth, so 2 scratch buffers */);
+        Fixture fixture({ ChunkSize }, 1, Start);
         fixture.request[0].ranges[0].dst = base + Start;
 
         driver.execute(fixture.workload());

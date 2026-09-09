@@ -1865,8 +1865,11 @@ TEST(Async, QueueDepthIsResolvedPerMount)
     const auto guard = std::unique_lock<std::mutex>(recorded_mutex);
     ASSERT_EQ(recorded.size(), 2u) << "one engine per mount, so two engines";
 
-    EXPECT_EQ(std::set<unsigned>(recorded.begin(), recorded.end()), (std::set<unsigned>{ 64, 512 }))
-        << "the nfs4 mount takes the nfs entry, the ext4 mount takes the default";
+    // In order, not as a set: the submissions are drained one at a time, so the nfs4 engine is always
+    // built first. A set would also pass with the two depths swapped, which is the very thing this
+    // asserts.
+    EXPECT_EQ(recorded, (std::vector<unsigned>{ 64, 512 }))
+        << "the nfs4 mount is submitted first and takes the nfs entry; the ext4 mount takes the default";
 }
 
 }; // namespace runai::llm::streamer::impl
