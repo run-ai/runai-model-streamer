@@ -84,6 +84,19 @@ class TestSafeDestinationPath(unittest.TestCase):
         result = files._safe_destination_path(self.dst, "", "config.json")
         self.assertEqual(result, os.path.realpath(os.path.join(self.dst, "config.json")))
 
+    def test_allows_leading_slash_object_key_when_base_dir_is_empty(self):
+        # A key with a literal leading "/" is unusual but valid; os.path.join
+        # would otherwise treat it as absolute and discard dst entirely.
+        result = files._safe_destination_path(self.dst, "", "/config.json")
+        self.assertEqual(result, os.path.realpath(os.path.join(self.dst, "config.json")))
+
+    def test_allows_double_slash_at_prefix_boundary(self):
+        # A doubled "/" right where base_dir ends leaves a leading "/" on the
+        # remainder after the prefix is stripped off.
+        result = files._safe_destination_path(
+            self.dst, "models/llama/", "models/llama//config.json")
+        self.assertEqual(result, os.path.realpath(os.path.join(self.dst, "config.json")))
+
 
 class TestPullFilesTraversalRegression(unittest.TestCase):
     """Exercises the real pull_files() loop end-to-end, with only the SDK
