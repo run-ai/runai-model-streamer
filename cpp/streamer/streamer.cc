@@ -77,8 +77,15 @@ int submit_request(impl::Streamer * s,
                    SubmissionId * out_submission_id,
                    unsigned num_files,
                    const char ** paths, unsigned * num_ranges,
-                   size_t * range_offsets, size_t * range_sizes, void ** range_dsts)
+                   size_t * range_offsets, size_t * range_sizes, void ** range_dsts,
+                   NvFileStreamerDevice device)
 {
+    // Rejected before anything is committed, so a submission this build cannot serve owes no responses.
+    if (device.type != NV_FILE_STREAMER_DEVICE_CPU)
+    {
+        return static_cast<int>(common::ResponseCode::UnsupportedDeviceType);
+    }
+
     if (num_files > 0 && (paths == nullptr || num_ranges == nullptr))
     {
         return static_cast<int>(common::ResponseCode::InvalidParameterError);
@@ -185,7 +192,8 @@ _RUNAI_EXTERN_C int runai_request(
     unsigned * num_ranges,
     size_t * range_offsets,
     size_t * range_sizes,
-    void ** range_dsts
+    void ** range_dsts,
+    NvFileStreamerDevice device
 )
 {
     // default the id to 0 ("none") so every return path - including early failures and a throw
@@ -204,7 +212,7 @@ _RUNAI_EXTERN_C int runai_request(
         }
 
         // credentials are streamer-scoped (runai_set_credentials), not per request
-        return submit_request(s, out_submission_id, num_files, paths, num_ranges, range_offsets, range_sizes, range_dsts);
+        return submit_request(s, out_submission_id, num_files, paths, num_ranges, range_offsets, range_sizes, range_dsts, device);
     }
     catch (const common::Exception & e)
     {

@@ -61,7 +61,7 @@ inline int submit(void * streamer, unsigned num_files, const char ** paths, size
 
     SubmissionId submission_id = 0;
     return runai_request(streamer, &submission_id, num_files, paths, num_ranges.data(),
-                         range_offsets.data(), range_sizes.data(), range_dsts.data());
+                         range_offsets.data(), range_sizes.data(), range_dsts.data(), NvFileStreamerDevice{});
 }
 
 // Single-file variant that reports the submission id, for the concurrent-submission tests. The sub ranges
@@ -84,7 +84,7 @@ inline int submit_one(void * streamer, SubmissionId * id, const char * path, siz
     }
 
     return runai_request(streamer, id, 1, &path, &num_ranges,
-                         range_offsets.data(), sizes.data(), range_dsts.data());
+                         range_offsets.data(), sizes.data(), range_dsts.data(), NvFileStreamerDevice{});
 }
 
 inline int next_response(void * streamer, unsigned * file_index, unsigned * index)
@@ -171,27 +171,27 @@ TEST(Request, Null_Parameters)
 
     const auto invalid = static_cast<int>(common::ResponseCode::InvalidParameterError);
 
-    EXPECT_EQ(runai_request(streamer, &id, 1, nullptr, &num_ranges, &offset, &size, &dst), invalid);
-    EXPECT_EQ(runai_request(streamer, &id, 1, &path, nullptr, &offset, &size, &dst), invalid);
-    EXPECT_EQ(runai_request(streamer, &id, 1, &path, &num_ranges, nullptr, &size, &dst), invalid);
-    EXPECT_EQ(runai_request(streamer, &id, 1, &path, &num_ranges, &offset, nullptr, &dst), invalid);
-    EXPECT_EQ(runai_request(streamer, &id, 1, &path, &num_ranges, &offset, &size, nullptr), invalid);
+    EXPECT_EQ(runai_request(streamer, &id, 1, nullptr, &num_ranges, &offset, &size, &dst, NvFileStreamerDevice{}), invalid);
+    EXPECT_EQ(runai_request(streamer, &id, 1, &path, nullptr, &offset, &size, &dst, NvFileStreamerDevice{}), invalid);
+    EXPECT_EQ(runai_request(streamer, &id, 1, &path, &num_ranges, nullptr, &size, &dst, NvFileStreamerDevice{}), invalid);
+    EXPECT_EQ(runai_request(streamer, &id, 1, &path, &num_ranges, &offset, nullptr, &dst, NvFileStreamerDevice{}), invalid);
+    EXPECT_EQ(runai_request(streamer, &id, 1, &path, &num_ranges, &offset, &size, nullptr, NvFileStreamerDevice{}), invalid);
 
     // a null path entry is caught before it is used to construct a std::string - the previous code built
     // the vector straight from the array, which was undefined behaviour on a null element
     const char * null_path = nullptr;
-    EXPECT_EQ(runai_request(streamer, &id, 1, &null_path, &num_ranges, &offset, &size, &dst), invalid);
+    EXPECT_EQ(runai_request(streamer, &id, 1, &null_path, &num_ranges, &offset, &size, &dst, NvFileStreamerDevice{}), invalid);
 
     // A null destination ELEMENT (the array itself is fine) is caught deeper, by verify_requests, which
     // throws rather than returning. The specific code has to survive the C boundary: UnknownError is what
     // tells a caller to abort everything, while an argument error is attributable and recoverable, so
     // collapsing this to UnknownError would turn a bad argument into a dead stream.
     void * null_dst = nullptr;
-    EXPECT_EQ(runai_request(streamer, &id, 1, &path, &num_ranges, &offset, &size, &null_dst), invalid);
+    EXPECT_EQ(runai_request(streamer, &id, 1, &path, &num_ranges, &offset, &size, &null_dst, NvFileStreamerDevice{}), invalid);
 
     // a zero-sized range writes nothing, so a null destination there is accepted
     size_t zero = 0;
-    EXPECT_EQ(runai_request(streamer, &id, 1, &path, &num_ranges, &offset, &zero, &null_dst),
+    EXPECT_EQ(runai_request(streamer, &id, 1, &path, &num_ranges, &offset, &zero, &null_dst, NvFileStreamerDevice{}),
               static_cast<int>(common::ResponseCode::Success));
 
     // The only submission accepted above, so it owes one response and must be drained before the test

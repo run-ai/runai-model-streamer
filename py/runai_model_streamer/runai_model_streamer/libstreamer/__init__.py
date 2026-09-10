@@ -8,6 +8,22 @@ STREAMER_LIBRARY = os.environ.get("STREAMER_LIBRARY", DEFAULT_STREAMER_LIBRARY)
 
 t_streamer = ctypes.c_void_p
 
+# NvFileStreamerDeviceType, from cpp/common/device/device.h. Only CPU is served today.
+NV_FILE_STREAMER_DEVICE_CPU = 0
+NV_FILE_STREAMER_DEVICE_CUDA = 1
+
+
+class NvFileStreamerDevice(ctypes.Structure):
+    """Mirrors the C struct of the same name, passed to runai_request BY VALUE.
+
+    Both fields are 4 bytes: a C enum whose enumerators are 0 and 1 is int-sized, and c_int matches its
+    size and alignment whichever signedness the compiler picks - only 0 and 1 ever cross."""
+
+    _fields_ = [
+        ("type", ctypes.c_int),
+        ("id", ctypes.c_int),      # the CUDA ordinal, ignored for CPU
+    ]
+
 
 class LibstreamerDLLWrapper:
     def __init__(self, library_path):
@@ -42,6 +58,7 @@ class LibstreamerDLLWrapper:
             ctypes.POINTER(ctypes.c_size_t),                 # range_offsets
             ctypes.POINTER(ctypes.c_size_t),                 # range_sizes
             ctypes.POINTER(ctypes.c_void_p),                 # range_dsts
+            NvFileStreamerDevice,                            # device, by value
         ]
         self.fn_runai_request.restype = ctypes.c_int
 
