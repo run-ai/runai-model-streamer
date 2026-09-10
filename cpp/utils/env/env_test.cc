@@ -148,9 +148,10 @@ TEST(Getenv_Unsigned_long, Sanity)
 // and what the code did. It reads as a deliberate huge number all the way down: nothing after the
 // parse can tell the two apart, because stoul also reports the whole string consumed.
 //
-// The damage is at the callers. RUNAI_STREAMER_CONCURRENCY=-1 narrows to UINT_MAX at Config and asks
-// for four billion threads. RUNAI_STREAMER_PROCESS_GROUP_SIZE=-1 is a divisor, so Azure concurrency
-// falls to one and the async queue depth falls to its minimum - slow, with no error anywhere.
+// The damage is at the callers. RUNAI_STREAMER_PROCESS_GROUP_SIZE=-1 is a divisor, so Azure
+// concurrency falls to one and the async queue depth falls to its minimum - slow, with no error
+// anywhere. RUNAI_STREAMER_CONCURRENCY=-1 would ask for a huge thread count; Config::to_concurrency
+// caps that one now, but a refusal here names the variable instead of quietly serving the ceiling.
 //
 // So it throws, exactly as "a" does, and runai_start turns that into InvalidParameterError.
 TEST(Getenv_Unsigned_long, Negative)

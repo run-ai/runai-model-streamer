@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <ostream>
 
-#include "streamer/impl/config/config.h"
+#include "streamer/impl/config/config/config.h"
 
 namespace runai::llm::streamer::impl
 {
@@ -20,10 +20,12 @@ namespace runai::llm::streamer::impl
 class AsyncIoSettings
 {
  public:
+    // node_wide_depth is resolved for this worker's mount, so the config is not consulted for it.
+    //
     // max_read_bytesize defaults to this host's kernel ceiling; it is a parameter so a test can check
     // the clamp without depending on the page size of the machine it runs on.
-    explicit AsyncIoSettings(const Config & config, size_t max_read_bytesize);
-    explicit AsyncIoSettings(const Config & config);
+    AsyncIoSettings(const Config & config, unsigned node_wide_depth, size_t max_read_bytesize);
+    AsyncIoSettings(const Config & config, unsigned node_wide_depth);
 
     // In-flight requests for THIS process: the node-wide figure divided by the number of streamer
     // processes on the node, then bounded at both ends by MinDepth and MaxDepth below.

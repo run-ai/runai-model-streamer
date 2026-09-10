@@ -67,8 +67,10 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     // `on_engine_dead` is called once, from this worker's thread, when the engine fails for good. The
     // streamer uses it to route this mount to the synchronous reader from then on - the files are
     // still readable, it is only the ring that is gone. Empty in tests that do not care.
+    // `node_wide_depth` is RUNAI_STREAMER_FS_QUEUE_DEPTH resolved for this mount's file system type.
     explicit AsyncIoWorker(posix_io::Strategy strategy,
                            size_t block = 0,
+                           unsigned node_wide_depth = Config::default_fs_async_queue_depth,
                            EngineFactory factory = posix_io::make_io_engine,
                            std::function<void()> on_engine_dead = {});
     ~AsyncIoWorker() override;
@@ -308,6 +310,8 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
 
     // False until a real measurement has been adopted. Only then does _block stop being provisional.
     bool _block_measured = false;
+
+    const unsigned _node_wide_depth;
 
     // Set once a measurement was refused for being larger than the scratch buffers. It only silences
     // the warning: _block_measured stays false, so a later submission reporting a block this engine

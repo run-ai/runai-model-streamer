@@ -9,7 +9,7 @@
 namespace runai::llm::streamer::impl::azure
 {
 
-ClientConfiguration::ClientConfiguration()
+ClientConfiguration::ClientConfiguration(unsigned concurrent_readers)
 {
 #ifdef AZURITE_TESTING
     // Connection string is only available for Azurite/local testing
@@ -58,9 +58,11 @@ ClientConfiguration::ClientConfiguration()
     unsigned nprocs = std::thread::hardware_concurrency();
     LOG(SPAM) << "Hardware concurrency detected: " << nprocs;
     unsigned default_max_concurrency = nprocs == 0 ? 8U : 1U;
-    // Both of these are DIVISORS below, and neither had any floor - a plain 0 in either variable
-    // was an integer division by zero, no 2^32 required (env.h).
-    unsigned worker_concurrency = utils::getenv_positive<unsigned>("RUNAI_STREAMER_CONCURRENCY", 8U);
+    // A DIVISOR below, so it must not be zero: an unstated count means the caller said nothing, not
+    // that it will build no clients.
+    // Floored, not defaulted: a zero would divide by zero, and only a caller outside the streamer can
+    // send one.
+    const unsigned worker_concurrency = std::max(1U, concurrent_readers);
     LOG(SPAM) << "Streamer worker concurrency: " << worker_concurrency;
     unsigned process_group_size = utils::getenv_positive<unsigned>("RUNAI_STREAMER_PROCESS_GROUP_SIZE", 1U);
     LOG(SPAM) << "Process group size: " << process_group_size;

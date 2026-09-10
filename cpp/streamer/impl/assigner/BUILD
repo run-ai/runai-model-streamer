@@ -7,7 +7,7 @@ runai_cc_auto_library(
         "//streamer/impl/request",
         "//common/exception",
         "//common/storage_uri",
-        "//streamer/impl/config",
+        "//streamer/impl/config/config",
         "//utils/logging"
     ],
 )

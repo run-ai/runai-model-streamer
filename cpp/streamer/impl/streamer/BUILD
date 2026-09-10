@@ -4,7 +4,7 @@ runai_cc_auto_library(
     name = "streamer",
     deps = [
         "//streamer/impl/assigner",
-        "//streamer/impl/config",
+        "//streamer/impl/config/config",
         "//streamer/impl/batches",
         "//streamer/impl/workload",
         "//streamer/impl/object_storage_worker",
@@ -15,6 +15,7 @@ runai_cc_auto_library(
         "//posix_io/alignment",
         "//posix_io/mount_capabilities",
         "//streamer/impl/async_io/async_io_worker",
+        "//streamer/impl/async_io/fs_async_router",
         "//streamer/impl/async_io/async_io_stats",
         "//common/responder",
         "//utils/threadpool",
@@ -27,6 +28,7 @@ runai_cc_test(
     srcs = ["streamer_test.cc"],
     deps = [
         "//posix_io/mock",
+        "//posix_io/io_uring_probe",
         ":streamer",
         "//utils/random",
         "//utils/fd",

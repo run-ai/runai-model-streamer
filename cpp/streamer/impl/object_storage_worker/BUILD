@@ -27,7 +27,7 @@ runai_cc_auto_library(
         "//streamer/impl/workload",
         "//streamer/impl/batch",
         "//streamer/impl/task",
-        "//streamer/impl/config",
+        "//streamer/impl/config/config",
         "//streamer/impl/reader",
         "//streamer/impl/s3",
     ],

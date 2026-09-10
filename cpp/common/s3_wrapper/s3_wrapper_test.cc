@@ -19,7 +19,7 @@ struct S3WrappertTest : ::testing::Test
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr),
             (utils::random::boolean() ? utils::random::string().c_str() : nullptr)),
-        params(std::make_shared<StorageUri>(uri), credentials, utils::random::number<size_t>())
+        params(std::make_shared<StorageUri>(uri), credentials, utils::random::number<size_t>(), 8)
     {
         auto ptr = utils::random::number<uintptr_t>();
         request_id = reinterpret_cast<common::backend_api::ObjectRequestId_t>(ptr);
@@ -107,7 +107,7 @@ TEST_F(S3WrappertTest, Endpoint_Exists)
     utils::temp::Env endpoint_env("AWS_ENDPOINT_URL", endpoint);
 
     Credentials credentials_;
-    S3ClientWrapper::Params params_(std::make_shared<StorageUri>(uri), credentials_, utils::random::number<size_t>());
+    S3ClientWrapper::Params params_(std::make_shared<StorageUri>(uri), credentials_, utils::random::number<size_t>(), 8);
     S3ClientWrapper wrapper(params);
 
     std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
@@ -120,7 +120,7 @@ TEST_F(S3WrappertTest, Endpoint_In_Credentials)
     auto endpoint = utils::random::string();
     Credentials credentials_(nullptr, nullptr, nullptr, nullptr, endpoint.c_str());
 
-    S3ClientWrapper::Params params_(std::make_shared<StorageUri>(uri), credentials_, utils::random::number<size_t>());
+    S3ClientWrapper::Params params_(std::make_shared<StorageUri>(uri), credentials_, utils::random::number<size_t>(), 8);
     S3ClientWrapper wrapper(params);
 
     std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
@@ -166,6 +166,29 @@ TEST(BackendHandle, GetPluginType_GCS)
     auto storage_uri = std::make_shared<StorageUri>("gs://bucket/path");
     ObjectPluginType plugin_type = S3ClientWrapper::BackendHandle::get_libstreamers_plugin_type(storage_uri);
     EXPECT_EQ(plugin_type, ObjectPluginType::ObjStorageGCS);
+}
+
+// A typed field rather than a dictionary entry, so it needs no key, no parsing and no validation -
+// and GCS and Azure divide by the same number the streamer resolved.
+TEST(Params, The_Reader_Count_Reaches_The_Client_Config)
+{
+    std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
+
+    const S3ClientWrapper::Params params(std::make_shared<StorageUri>("s3://bucket/path"), Credentials(),
+                                         8 * 1024 * 1024, 8);
+
+    EXPECT_EQ(params.to_config(initial_params).concurrent_readers, 8u);
+}
+
+// The short constructor takes no credentials, and must still carry the count: it is not a default,
+// so an overload that dropped it would divide by a number nobody chose.
+TEST(Params, The_Reader_Count_Survives_The_Credentialless_Constructor)
+{
+    std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
+
+    const S3ClientWrapper::Params params(std::make_shared<StorageUri>("s3://bucket/path"), 8 * 1024 * 1024, 4);
+
+    EXPECT_EQ(params.to_config(initial_params).concurrent_readers, 4u);
 }
 
 }; // namespace runai::llm::streamer::common::s3

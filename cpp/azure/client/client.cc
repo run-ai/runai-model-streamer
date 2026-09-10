@@ -29,6 +29,7 @@ constexpr char kAzureApplicationId[] = "azpartner-runai";
 
 AzureClient::AzureClient(const common::backend_api::ObjectClientConfig_t& config) :
     _stop(false),
+    _client_config(config.concurrent_readers),
     _responder(nullptr),
     _chunk_bytesize(config.default_storage_chunk_size)
 {
@@ -173,8 +174,9 @@ AzureClient::~AzureClient()
 
 bool AzureClient::verify_credentials(const common::backend_api::ObjectClientConfig_t & config) const
 {
-    // Parse config credentials without creating full client
-    ClientConfiguration temp_config;
+    // Parse config credentials without creating full client. The reader count is irrelevant here -
+    // only the credential fields are compared - but it is stated rather than assumed.
+    ClientConfiguration temp_config(config.concurrent_readers);
     std::optional<std::string> temp_account_name = temp_config.account_name;
     std::optional<std::string> temp_account_key = temp_config.account_key;
     std::optional<std::string> temp_sas_token = temp_config.sas_token;

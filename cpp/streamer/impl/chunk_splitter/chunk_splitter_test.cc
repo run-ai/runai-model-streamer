@@ -1,4 +1,4 @@
-#include "streamer/impl/async_io/chunk_splitter/chunk_splitter.h"
+#include "streamer/impl/chunk_splitter/chunk_splitter.h"
 
 #include <gtest/gtest.h>
 
@@ -9,7 +9,7 @@
 
 #include "streamer/impl/assigner/assigner.h"
 #include "streamer/impl/batches/batches.h"
-#include "streamer/impl/config/config.h"
+#include "streamer/impl/config/config/config.h"
 
 #include "common/exception/exception.h"
 #include "utils/random/random.h"

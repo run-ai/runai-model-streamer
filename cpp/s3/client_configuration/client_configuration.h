@@ -21,6 +21,7 @@ size_t inflight_window_bytes(size_t chunk_bytesize, double target_gbps);
 struct ClientConfiguration
 {
     ClientConfiguration();
+
     Aws::S3Crt::ClientConfiguration config;
 };
 

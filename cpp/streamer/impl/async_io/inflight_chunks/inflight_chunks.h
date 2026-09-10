@@ -5,7 +5,7 @@
 #include <map>
 
 #include "posix_io/io_engine/io_engine.h"
-#include "streamer/impl/async_io/chunk_splitter/chunk_splitter.h"
+#include "streamer/impl/chunk_splitter/chunk_splitter.h"
 
 namespace runai::llm::streamer::impl
 {

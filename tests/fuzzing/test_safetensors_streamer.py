@@ -106,15 +106,23 @@ class TestSafetensorStreamerFuzzing(unittest.TestCase):
 
     def test_truncated_data(self):
         """Tests that truncation within the data section raises an error."""
-        file_path = create_random_safetensors(self.temp_dir)
+        # Regenerated until the model has enough tensor data to cut in half. Two bytes, not one: the
+        # generator gives every tensor a 1-in-6 chance of being zero element, and can also emit a
+        # single one-element tensor of a one-byte dtype (I8, U8, BOOL, F8). Either way the halving
+        # below removes nothing, leaving a whole file that reads fine.
+        for _ in range(20):
+            file_path = create_random_safetensors(self.temp_dir)
 
-        with open(file_path, "rb") as f:
-            header_size = int.from_bytes(f.read(8), 'little')
+            with open(file_path, "rb") as f:
+                header_size = int.from_bytes(f.read(8), 'little')
 
-        # Header is fully intact, but data is cut short.
-        # We truncate at Header + 8 (size prefix) + a few bytes of data
-        header_end_pos = 8 + header_size
-        original_size = os.path.getsize(file_path)
+            header_end_pos = 8 + header_size
+            original_size = os.path.getsize(file_path)
+
+            if original_size - header_end_pos >= 2:
+                break
+        else:
+            self.fail("could not generate a model with at least two bytes of tensor data")
 
         # Truncate halfway through the actual tensor data
         truncated_size = header_end_pos + ((original_size - header_end_pos) // 2)

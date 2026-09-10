@@ -37,11 +37,12 @@ constexpr unsigned WaitTimeoutMs = 50;
 
 } // namespace
 
-AsyncIoWorker::AsyncIoWorker(posix_io::Strategy strategy, size_t block, EngineFactory factory,
-                             std::function<void()> on_engine_dead) :
+AsyncIoWorker::AsyncIoWorker(posix_io::Strategy strategy, size_t block, unsigned node_wide_depth,
+                             EngineFactory factory, std::function<void()> on_engine_dead) :
     _strategy(strategy),
     _block(block != 0 ? block : posix_io::MaxProbeBlock),
     _block_measured(block != 0),
+    _node_wide_depth(node_wide_depth),
     _factory(std::move(factory)),
     _on_engine_dead(std::move(on_engine_dead))
 {
@@ -78,7 +79,7 @@ std::size_t AsyncIoWorker::capacity(const Workload & first)
 
     // Resolved HERE, not at construction: depth is divided by RUNAI_STREAMER_PROCESS_GROUP_SIZE, and
     // the window size the base wants IS the engine's depth. One moment, one place.
-    _settings.emplace(*first.batches().front().config);
+    _settings.emplace(*first.batches().front().config, _node_wide_depth);
 
     posix_io::AsyncIoConfig config;
     config.depth = _settings->depth();

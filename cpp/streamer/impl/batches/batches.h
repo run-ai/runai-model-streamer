@@ -7,7 +7,7 @@
 #include "common/responder/responder.h"
 #include "common/storage_uri/storage_uri.h"
 #include "streamer/impl/batch/batch.h"
-#include "streamer/impl/config/config.h"
+#include "streamer/impl/config/config/config.h"
 #include "streamer/impl/request/request.h"
 #include "streamer/impl/reader/reader.h"
 #include "streamer/impl/assigner/file_read_task/file_read_task.h"

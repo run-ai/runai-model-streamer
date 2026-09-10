@@ -14,6 +14,9 @@
 #include <sys/syscall.h>
 
 #include <algorithm>
+#include <fstream>
+#include <sstream>
+#include <vector>
 #include <array>
 
 #include <cerrno>
@@ -171,12 +174,93 @@ constexpr bool ladder_is_usable(const std::array<size_t, N> & rungs)
     return N != 0 && rungs[N - 1] == MaxProbeBlock;
 }
 
+// Field 3 is "major:minor", which is st_dev, and the type is the field after the " - " separator:
+//
+//     36 25 252:1 / /mnt rw,relatime - ext4 /dev/sda1 rw
+//     ^^ ^^ ^^^^^                      ^^^^
+//     id parent DEVICE                 TYPE
+//
+// Read once and cached: mountinfo does not change under a running streamer in any way that matters,
+// and the alternative is one open and parse per mount probe. An empty map is normal - a container may
+// not present mountinfo, and the caller then keeps its global default.
+const std::map<dev_t, std::string> & fs_types_by_device()
+{
+    static const std::map<dev_t, std::string> types = []
+    {
+        std::map<dev_t, std::string> out;
+
+        std::ifstream mountinfo("/proc/self/mountinfo");
+        if (!mountinfo.is_open())
+        {
+            LOG(DEBUG) << "/proc/self/mountinfo is not readable; filesystem types are unknown here";
+            return out;
+        }
+
+        std::string line;
+        while (std::getline(mountinfo, line))
+        {
+            std::istringstream fields(line);
+            std::string field;
+            std::vector<std::string> before;
+
+            // Everything up to the separator. The optional fields between field 6 and the separator
+            // are why the type cannot be taken by index.
+            bool separated = false;
+            while (fields >> field)
+            {
+                if (field == "-")
+                {
+                    separated = true;
+                    break;
+                }
+                before.push_back(field);
+            }
+
+            std::string type;
+            if (!separated || before.size() < 3 || !(fields >> type))
+            {
+                continue;
+            }
+
+            const auto colon = before[2].find(':');
+            if (colon == std::string::npos)
+            {
+                continue;
+            }
+
+            try
+            {
+                const auto major_number = std::stoul(before[2].substr(0, colon));
+                const auto minor_number = std::stoul(before[2].substr(colon + 1));
+
+                // The FIRST entry for a device wins. A device can be mounted more than once, and the
+                // type is the same every time - so this only decides which duplicate we keep.
+                out.try_emplace(makedev(major_number, minor_number), type);
+            }
+            catch (const std::exception &)
+            {
+                continue;   // a line we cannot read tells us nothing about the ones after it
+            }
+        }
+
+        return out;
+    }();
+
+    return types;
+}
+
 } // namespace
 
 std::ostream & operator<<(std::ostream & os, const MountCapability & capability)
 {
-    return os << "mount " << major(capability.dev) << ":" << minor(capability.dev)
-              << (capability.memory_backed ? " memory-backed" : "");
+    os << "mount " << major(capability.dev) << ":" << minor(capability.dev);
+
+    if (!capability.fs_type.empty())
+    {
+        os << " (" << capability.fs_type << ")";
+    }
+
+    return os << (capability.memory_backed ? " memory-backed" : "");
 }
 
 std::ostream & operator<<(std::ostream & os, DirectSupport support)
@@ -192,7 +276,11 @@ std::ostream & operator<<(std::ostream & os, DirectSupport support)
 
 MountCapability MountCapabilities::remember(dev_t dev, bool memory_backed)
 {
-    const MountCapability capability{ dev, memory_backed };
+    const auto & types = fs_types_by_device();
+    const auto type = types.find(dev);
+
+    const MountCapability capability{ dev, memory_backed,
+                                      type == types.end() ? std::string() : type->second };
 
     std::unique_lock<std::mutex> lock(_mutex);
 
@@ -370,7 +458,7 @@ common::ResponseCode MountCapabilities::direct_block(dev_t dev, const std::strin
     // there is no device to bypass; the pages are the page cache. So the ladder's first rung
     // "succeeds" and this reports 512 for a filesystem that cannot do direct I/O at all.
     //
-    // The callers keep that out: Streamer::file_groups and Streamer::direct_block_for both test
+    // The callers keep that out: FsAsyncRouter::groups and FsAsyncRouter::direct_block_for both test
     // memory_backed and skip such a mount before asking. The statfs magic check is the only thing that
     // works here, because a probe by definition cannot detect a filesystem that accepts everything.
     const int fd = ::open(file_path.c_str(), O_RDONLY | O_DIRECT);

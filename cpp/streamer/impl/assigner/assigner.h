@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "streamer/impl/assigner/file_read_task/file_read_task.h"
-#include "streamer/impl/config/config.h"
+#include "streamer/impl/config/config/config.h"
 #include "streamer/impl/request/request.h"
 
 // Turn a multi-file read request into read assignments:

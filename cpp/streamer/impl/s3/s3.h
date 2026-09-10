@@ -5,7 +5,7 @@
 
 #include "common/s3_wrapper/s3_wrapper.h"
 #include "streamer/impl/reader/reader.h"
-#include "streamer/impl/config/config.h"
+#include "streamer/impl/config/config/config.h"
 
 namespace runai::llm::streamer::impl
 {

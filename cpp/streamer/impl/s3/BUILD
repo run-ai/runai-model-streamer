@@ -6,7 +6,7 @@ runai_cc_auto_library(
         "//common/s3_wrapper",
         "//common/exception",
         "//streamer/impl/reader",
-        "//streamer/impl/config",
+        "//streamer/impl/config/config",
         "//utils/logging",
     ],
 )

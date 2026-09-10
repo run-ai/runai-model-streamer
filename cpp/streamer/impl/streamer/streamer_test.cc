@@ -3,6 +3,7 @@
 #include "posix_io/mock/mock_io_engine.h"
 
 #include "posix_io/alignment/alignment.h"
+#include "posix_io/io_uring_probe/io_uring_probe.h"
 
 #include <unistd.h>
 
@@ -526,6 +527,26 @@ TEST(Async, DefaultStrategyPrefersIoUringDirect)
 
 // An unservable list is an error, not a quiet fall-through to the synchronous reader - and it must
 // fail the REQUEST, since that is the only place the caller can see it.
+// A request that reads nothing must not fail on a reader it will never use. An empty `s3://` entry
+// classifies as a file system submission, because is_object_storage_submission ignores files with no
+// ranges - so resolving before the empty-submission return refused a no-op object-storage request.
+TEST(Async, AnEmptySubmissionDoesNotResolveTheStrategy)
+{
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("libaio_direct"));
+
+    Streamer streamer(Config(), without(posix_io::Strategy::LibaioDirect));
+
+    for (const auto * path : { "s3://bucket/key", "/no/such/file" })
+    {
+        std::vector<FileRanges> request(1);
+        request[0].path = path;   // no ranges: nothing is read, so nothing needs a reader
+
+        SubmissionId submission_id = 0;
+        EXPECT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success) << path;
+        EXPECT_NE(submission_id, 0u) << path << ": the id is still minted and handed back";
+    }
+}
+
 TEST(Async, UnservableStrategyFailsTheRequest)
 {
     utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("libaio_direct"));
@@ -1646,7 +1667,8 @@ TEST(Async, AchievedDepthOutlivesTheReads)
 // direct_block_for answers from the INJECTED probe when a test set one.
 //
 // Every measurement site has to honour the same seam. This one did not, so a test could answer for
-// file_groups and reads_directly and still get the build machine's real block back from this API -
+// the router's groups() and reads_directly and still get the build machine's real block back from
+// this API -
 // a number that changes with the filesystem the tests happen to run on.
 //
 // The two mounts answer differently on purpose. A request spanning both must report the LARGER, since
@@ -1696,7 +1718,7 @@ TEST(Streamer, Direct_Block_For_Uses_The_Injected_Probe)
 // A mount whose engine dies is read by the SYNCHRONOUS reader from then on, and the bytes are right.
 //
 // This is the end of the chain the pieces below only cover separately: the worker marks its engine
-// dead, tells the streamer which mount it served, and file_groups stops routing that mount to it.
+// dead, tells the streamer which mount it served, and the router's groups() stops routing it there.
 // Each link was where the bugs in this area lived, so the test drives all three.
 //
 // The engine is injected because a real one fails only when its ring or context is gone, which a test
@@ -1763,6 +1785,91 @@ TEST(Async, ADeadEngineDropsItsMountToTheSynchronousReader)
         EXPECT_EQ(std::vector<uint8_t>(dst.begin(), dst.end()), data)
             << "a demotion is a performance decision, never a correctness one";
     }
+}
+
+// Two mounts of different types get the depth their type asks for, from one setting.
+//
+// The engine factory delegates to the real one and records the depth it was asked for - the only place
+// the resolution is observable, since everything downstream is the ring's own size. A mock engine
+// cannot be used here: it never completes, so the read would never return.
+//
+// Which means a REAL ring is built: the injected availability makes the resolver pick io_uring
+// whatever the host says, so without one the factory returns nullptr and this fails. Skipping is
+// silent, so RUNAI_STREAMER_REQUIRE_IO_URING - which CI passes - turns the skip into a failure rather
+// than hiding a broken CI host.
+TEST(Async, QueueDepthIsResolvedPerMount)
+{
+    const auto ring = posix_io::IoUringProbe::instance().capability();
+    if (!ring.available)
+    {
+        const char * const required = std::getenv("RUNAI_STREAMER_REQUIRE_IO_URING");
+        if (required != nullptr && std::string(required) == "1")
+        {
+            FAIL() << "io_uring is unavailable (" << ring.error << ") but "
+                   << "RUNAI_STREAMER_REQUIRE_IO_URING=1 says this host has it";
+        }
+        GTEST_SKIP() << "io_uring unavailable (" << ring.error << "); this test builds a real ring";
+    }
+
+    const auto data = utils::random::buffer(8192);
+    utils::temp::Dir dir_one;
+    utils::temp::Dir dir_two;
+    utils::temp::File nfs_file(dir_one.path, utils::random::string(), data);
+    utils::temp::File local_file(dir_two.path, utils::random::string(), data);
+
+    const std::string nfs_dir = dir_one.path;
+
+    utils::temp::Env depth(std::string("RUNAI_STREAMER_FS_QUEUE_DEPTH"), std::string("512,nfs=64"));
+    utils::temp::Env group(std::string("RUNAI_STREAMER_PROCESS_GROUP_SIZE"), 1UL);
+    utils::temp::Env strategy(std::string("RUNAI_STREAMER_FS_STRATEGY"), std::string("io_uring_buffered"));
+
+    // FS_MAX_ENGINES is deliberately NOT set. Engines are grouped by depth and the limit applies
+    // inside each group, so the default of one already gives 64 and 512 an engine each.
+    utils::temp::UnsetEnv engines(std::string("RUNAI_STREAMER_FS_MAX_ENGINES"));
+
+    std::mutex recorded_mutex;
+    std::vector<unsigned> recorded;
+
+    Streamer::Environment environment;
+    environment.availability = [](posix_io::Strategy) { return common::ResponseCode::Success; };
+    environment.mount = [nfs_dir](const std::string & directory) -> posix_io::MountCapability
+    {
+        const bool is_nfs = directory == nfs_dir;
+        return posix_io::MountCapability{ is_nfs ? makedev(8, 1) : makedev(8, 2), false,
+                                          is_nfs ? "nfs4" : "ext4" };
+    };
+    environment.engine = [&recorded, &recorded_mutex](posix_io::Strategy s, const posix_io::AsyncIoConfig & config)
+    {
+        {
+            const auto guard = std::unique_lock<std::mutex>(recorded_mutex);
+            recorded.push_back(config.depth);
+        }
+        return posix_io::make_io_engine(s, config);
+    };
+
+    Streamer streamer(Config(), std::move(environment));
+
+    for (const auto & path : { nfs_file.path, local_file.path })
+    {
+        std::vector<char> dst(data.size());
+        std::vector<FileRanges> request(1);
+        request[0].path = path;
+        request[0].ranges.push_back(ReadRange{ 0, data.size(), dst.data() });
+
+        SubmissionId submission_id = 0;
+        ASSERT_EQ(streamer.async_request(request, &submission_id), common::ResponseCode::Success);
+        EXPECT_EQ(recv(streamer).response.ret, common::ResponseCode::Success);
+        EXPECT_EQ(std::vector<uint8_t>(dst.begin(), dst.end()), data);
+    }
+
+    const auto guard = std::unique_lock<std::mutex>(recorded_mutex);
+    ASSERT_EQ(recorded.size(), 2u) << "one engine per mount, so two engines";
+
+    // In order, not as a set: the submissions are drained one at a time, so the nfs4 engine is always
+    // built first. A set would also pass with the two depths swapped, which is the very thing this
+    // asserts.
+    EXPECT_EQ(recorded, (std::vector<unsigned>{ 64, 512 }))
+        << "the nfs4 mount is submitted first and takes the nfs entry; the ext4 mount takes the default";
 }
 
 }; // namespace runai::llm::streamer::impl

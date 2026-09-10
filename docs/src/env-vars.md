@@ -2,17 +2,96 @@
 
 ### RUNAI_STREAMER_CONCURRENCY
 
-Controls the level of concurrency and number of OS threads reading tensors from the file to the CPU buffer.
+Controls the level of concurrency reading tensors into the CPU buffer.
+
+This variable is now a fallback for both backends. It supplies `RUNAI_STREAMER_OBJ_CONCURRENCY` for
+object storage, and `RUNAI_STREAMER_FS_QUEUE_DEPTH` for the file system, in each case only when that
+variable is unset. 
 
 #### Values accepted
 
-Positive integer value
+Positive integer value, at most 1024. A larger value is capped, with a warning.
 
 #### Default value
 
-16 for reading from file system
+See `RUNAI_STREAMER_OBJ_CONCURRENCY` and `RUNAI_STREAMER_FS_QUEUE_DEPTH` - each backend keeps its own
+default when nothing is set.
 
-8 for reading from object storage
+### RUNAI_STREAMER_OBJ_CONCURRENCY
+
+Since version 0.17.0
+
+Controls how much object-storage work runs at once.
+
+Each unit is one client. For S3 a client targets 10 gigabits per second, so a concurrency of 8 targets
+80 across the process.
+
+When this variable is unset, `RUNAI_STREAMER_CONCURRENCY` supplies the value if it is set.
+
+#### Values accepted
+
+Positive integer value, at most 1024. A larger value is capped, with a warning.
+
+#### Default value
+
+8
+
+### RUNAI_STREAMER_FS_QUEUE_DEPTH
+
+Since version 0.17.0
+
+Controls how many file system reads are in flight at once.
+
+#### Values accepted
+
+A positive integer, optionally followed by per-filesystem-type overrides:
+
+```
+RUNAI_STREAMER_FS_QUEUE_DEPTH=512                          # every mount
+RUNAI_STREAMER_FS_QUEUE_DEPTH="512,nfs=64"                 # 64 on NFS, 512 elsewhere
+RUNAI_STREAMER_FS_QUEUE_DEPTH="512,nfs=64,virtiofs=256"    # and 256 on virtiofs
+```
+
+The leading value is the default and is mandatory.
+A type key matches as a prefix, so `nfs` covers both `nfs` and `nfs4`. Where two keys both match, the first one written wins.
+
+The leading value is also the thread count for `sync_buffered`, and there it is capped at 1024. The
+depth for the asynchronous readers is not capped, because a read in flight costs a queue slot rather
+than a thread.
+
+The type is the filesystem name reported by `/proc/self/mountinfo` for that mount - for example `ext4`,
+`xfs`, `nfs`, `nfs4`, `virtiofs`, `overlay`. You can read the names on your own machine with:
+
+```
+findmnt -no FSTYPE /path/to/model
+```
+
+#### Default value
+
+512 for the asynchronous readers
+
+16 for `sync_buffered`
+
+### RUNAI_STREAMER_FS_MAX_ENGINES
+
+Since version 0.17.0
+
+Controls how many asynchronous engines are built for each queue depth. An engine reads its mounts on
+its own thread.
+
+Every depth in `RUNAI_STREAMER_FS_QUEUE_DEPTH` gets an engine, so this variable is not needed to make
+a per-filesystem-type depth work. Raise it to separate mounts that read at the same depth: above the
+limit they share an engine, and a slow mount then delays the mounts sharing it.
+
+Not used by `sync_buffered`, which serves all mounts from a single shared pool.
+
+#### Values accepted
+
+Positive integer, at most 1024. A larger value is capped, with a warning.
+
+#### Default value
+
+1
 
 ### RUNAI_STREAMER_CHUNK_BYTESIZE
 
@@ -101,6 +180,41 @@ Boolean `0` or `1`
 #### Default value
 
 `0`
+
+### RUNAI_STREAMER_S3_TARGET_GBPS
+
+Overrides the AWS CRT throughput target of each S3 client.
+
+The value is per client, so the process targets it times `RUNAI_STREAMER_OBJ_CONCURRENCY`. To give a
+single client the whole capacity, set the concurrency to `1` and this to the total you want.
+
+#### Values accepted
+
+Positive integer, in Gbps
+
+#### Default value
+
+The AWS CRT default of 10, per client
+
+### RUNAI_STREAMER_S3_MAX_CONNECTIONS
+
+Usage depends on object storage type
+
+For S3 it caps the connections each client may open.
+A resource guard, not a throughput control: the CRT already scales connections from the throughput target.
+Set it only to bound resource usage, for example against a file descriptor limit.
+
+For GCS it sets the per-client thread count directly.
+
+For Azure it is ignored.
+
+#### Values accepted
+
+Positive integer
+
+#### Default value
+
+Unset - the AWS CRT chooses
 
 ### RUNAI_STREAMER_S3_MAX_RETRIES
 

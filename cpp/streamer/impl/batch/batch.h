@@ -14,10 +14,10 @@
 #include "common/shared_queue/shared_queue.h"
 //#include "common/range/range.h"
 
-#include "streamer/impl/config/config.h"
+#include "streamer/impl/config/config/config.h"
 #include "streamer/impl/task/task.h"
 #include "streamer/impl/reader/reader.h"
-#include "streamer/impl/async_io/chunk_splitter/chunk_splitter.h"
+#include "streamer/impl/chunk_splitter/chunk_splitter.h"
 
 namespace runai::llm::streamer::impl
 {

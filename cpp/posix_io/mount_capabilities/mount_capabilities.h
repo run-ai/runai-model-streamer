@@ -29,6 +29,18 @@ struct MountCapability
 {
     dev_t dev = 0;
     bool  memory_backed = false;   // tmpfs / ramfs
+
+    // What the kernel calls this filesystem - "ext4", "nfs4", "virtiofs", "fuse.gvfsd". Empty when
+    // the mount is not in /proc/self/mountinfo, which is not an error: the caller falls back.
+    //
+    // From mountinfo, not the statfs magic that fills memory_backed. Measured on one host: the magic
+    // reports `fuseblk` or nothing for two different FUSE mounts, and `ext2/ext3` for ext4 - so it
+    // cannot separate virtiofs, which is FUSE-based, from any other FUSE mount. memory_backed stays
+    // on the magic because it gates the direct path and must not need a file a container may hide.
+    //
+    // It names the FILESYSTEM, not the device: NVMe and a spinning disk formatted ext4 both say
+    // "ext4". So it separates network storage from local, and says nothing about local speed.
+    std::string fs_type;
 };
 
 // Whether a mount can serve O_DIRECT.

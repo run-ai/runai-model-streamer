@@ -53,7 +53,11 @@ std::size_t ObjectStorageWorker::capacity(const Workload & first)
             // per-request path). The batch params carry only the URI; combine it with the credentials for the
             // client config.
             const auto credentials = _credentials_provider();
-            common::s3::S3ClientWrapper::Params client_params(batch.object_storage_params.uri, credentials, _chunk_bytesize);
+            // The whole object-storage capacity, not this worker's share: S3 runs one worker holding
+            // one client, so that client must be sized for all of it. Dropped for GCS and Azure, which
+            // reach the same capacity with one client per worker.
+            common::s3::S3ClientWrapper::Params client_params(batch.object_storage_params.uri, credentials,
+                                                              _chunk_bytesize, _config->s3_concurrency);
             auto client = std::make_shared<common::s3::S3ClientWrapper>(client_params);
             _reader = std::make_shared<S3>(client, *_config);
         }

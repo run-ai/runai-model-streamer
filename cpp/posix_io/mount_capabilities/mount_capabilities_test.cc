@@ -3,6 +3,11 @@
 #include "posix_io/alignment/alignment.h"   // direct_block_size - what the probe reads at
 
 #include <gtest/gtest.h>
+#include <sys/sysmacros.h>
+
+#include <fstream>
+#include <sstream>
+#include <vector>
 
 #include <fcntl.h>
 #include <linux/magic.h>
@@ -380,9 +385,9 @@ TEST(MountCapabilities, Direct_Block_Is_The_Smallest_The_Mount_Accepts)
 // would make the ladder's answer meaningful there, and if a kernel ever does that, this fails and the
 // comments around it need rewriting.
 //
-// The always-true half is the last check: memory_backed. Streamer::file_groups and
-// Streamer::direct_block_for both test it and skip such a mount, which is what keeps any of this off
-// the direct path.
+// The always-true half is the last check: memory_backed. FsAsyncRouter::groups and
+// FsAsyncRouter::direct_block_for both test it and skip such a mount, which is what keeps any of this
+// off the direct path.
 //
 // One consequence for the ladder: it stays UNEXERCISED here. statx answers on every real mount, and
 // tmpfs is skipped upstream.
@@ -516,6 +521,74 @@ TEST(MountCapabilities, A_Directory_Is_Not_A_Valid_Probe_Target)
     {
         EXPECT_NE(by_file, by_directory) << "which is exactly why the probe must be given a file";
     }
+}
+
+// The filesystem type comes from the kernel, and is checked against the kernel - not against a name
+// hard-coded here, which would only hold on the machine it was written on.
+TEST(MountCapabilities, Fs_Type_Matches_What_Mountinfo_Says)
+{
+    utils::temp::File file(utils::random::buffer(64));
+
+    MountCapabilities mounts;
+    const auto capability = mounts.of_path(file.path);
+
+    // The same lookup, done independently: find this device in mountinfo and take the field after the
+    // separator.
+    struct stat st;
+    ASSERT_EQ(::stat(file.path.c_str(), &st), 0);
+
+    std::string expected;
+    std::ifstream mountinfo("/proc/self/mountinfo");
+    ASSERT_TRUE(mountinfo.is_open()) << "this host does not present mountinfo; the test cannot judge";
+
+    std::string line;
+    while (std::getline(mountinfo, line))
+    {
+        std::istringstream fields(line);
+        std::string field, device;
+        std::vector<std::string> before;
+        bool separated = false;
+
+        while (fields >> field)
+        {
+            if (field == "-") { separated = true; break; }
+            before.push_back(field);
+        }
+        if (!separated || before.size() < 3) continue;
+
+        const auto colon = before[2].find(':');
+        if (colon == std::string::npos) continue;
+
+        if (::makedev(std::stoul(before[2].substr(0, colon)),
+                      std::stoul(before[2].substr(colon + 1))) == st.st_dev)
+        {
+            std::string type;
+            if (fields >> type && expected.empty())
+            {
+                expected = type;   // first entry for the device wins, as the implementation does
+            }
+        }
+    }
+
+    // Both outcomes are checked. A listed device must agree with mountinfo; an unlisted one must
+    // answer empty, which is the documented fallback and is otherwise unreachable - fs_type is only
+    // ever filled by of_path, keyed on the st_dev of a real path.
+    EXPECT_EQ(capability.fs_type, expected);
+}
+
+// The type cache is a process-wide static, so instances must not disagree about a device.
+//
+// The unknown-device case - an empty type rather than a guess or a throw - is NOT tested here and is
+// not reachable: fs_type is only ever filled by of_path, keyed on the st_dev of a real path, so a
+// device absent from mountinfo cannot be asked for.
+TEST(MountCapabilities, Every_Instance_Reports_The_Same_Fs_Type)
+{
+    utils::temp::File file(utils::random::buffer(64));
+
+    MountCapabilities one;
+    MountCapabilities two;
+
+    EXPECT_EQ(one.of_path(file.path).fs_type, two.of_path(file.path).fs_type);
 }
 
 }; // namespace runai::llm::streamer::posix_io

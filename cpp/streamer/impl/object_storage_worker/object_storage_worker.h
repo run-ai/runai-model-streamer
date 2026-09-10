@@ -12,7 +12,7 @@
 #include "common/response_code/response_code.h"
 #include "common/s3_credentials/s3_credentials.h"
 
-#include "streamer/impl/config/config.h"
+#include "streamer/impl/config/config/config.h"
 #include "streamer/impl/object_storage_worker/object_storage_retry.h"
 #include "streamer/impl/reader/reader.h"
 #include "streamer/impl/workload/workload.h"

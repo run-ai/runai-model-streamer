@@ -42,7 +42,7 @@ size_t block_size(const Limits & limits);
 // Read by two places that must agree:
 //
 //   the engines   IoUringEngine and LibaioEngine both report it as their Limits alignment
-//   routing       streamer.cc file_groups decides congruence before any engine exists, so it cannot
+//   routing       FsAsyncRouter::groups decides congruence before any engine exists, so it cannot
 //                 ask an engine and needs the number early
 //
 // They share the constant rather than each writing 4096, because a disagreement would be invisible.

@@ -15,7 +15,7 @@ runai_cc_test(
         ":chunk_splitter",
         "//streamer/impl/assigner",
         "//streamer/impl/batches",
-        "//streamer/impl/config",
+        "//streamer/impl/config/config",
         "//utils/random",
         "//utils/temp/env",
         "//utils/temp/file",
