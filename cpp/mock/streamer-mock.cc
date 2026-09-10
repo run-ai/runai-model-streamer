@@ -224,6 +224,13 @@ extern "C" int runai_request(
     NvFileStreamerDevice device
 )
 {
+    // Zeroed here, before anything that can fail, exactly as the real runai_request does: the contract
+    // says the id is left 0 when the call fails before one is assigned, and a caller reusing the
+    // variable would otherwise read the previous submission's id as if this one were live.
+    if (out_submission_id != nullptr) {
+        *out_submission_id = 0;
+    }
+
     // Refused like the real C API, so a Python test that asks for a device gets the same answer here.
     if (device.type != NV_FILE_STREAMER_DEVICE_CPU) {
         return static_cast<int>(common::ResponseCode::UnsupportedDeviceType);
