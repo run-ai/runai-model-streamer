@@ -5,6 +5,8 @@ runai_portable_so(
     srcs = ["streamer-mock.cc"],
     deps = [
         "//utils/fd",
+        "//common/device",
+        "//common/response_code",
         "//common/submission",
         # For runai_direct_block_size only. Checked: this pulls in no liburing and no libaio - the
         # mock stays free of the engines it is standing in for.

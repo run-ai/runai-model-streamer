@@ -60,6 +60,10 @@ enum class ResponseCode : int
     // it was, and with what errno, is in the log.
     FsAsyncEngineError,
 
+    // The submission named a device this build cannot serve. Appended, like the codes above, so no
+    // released number moves.
+    UnsupportedDeviceType,
+
     __Max,
 };
 

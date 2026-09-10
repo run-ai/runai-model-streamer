@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 
+#include "common/device/device.h"
 #include "common/submission/submission_id.h"
 
 namespace runai::llm::streamer
@@ -82,6 +83,7 @@ _RUNAI_EXTERN_C int runai_set_fs_strategy(
 // range_offsets : flat array of sum(num_ranges) source offsets, each within its owning file
 // range_sizes   : flat array of sum(num_ranges) range sizes in bytes
 // range_dsts    : flat array of sum(num_ranges) destination pointers
+// device        : where those destinations live - one device for the whole submission
 //
 // The three flat arrays are indexed identically and grouped by file in the order of paths: file f's
 // ranges occupy [sum(num_ranges[0..f)), sum(num_ranges[0..f])). Destinations must not overlap.
@@ -93,6 +95,11 @@ _RUNAI_EXTERN_C int runai_set_fs_strategy(
 // Size the response loop by that sum. runai_response blocks indefinitely at timeout_ms = 0, so a
 // caller that skips zero-sized ranges when counting waits for a response that has already been
 // delivered. A submission with sum(num_ranges) == 0 owes nothing and completes immediately.
+//
+// DEVICE - one per submission, so every destination in it lives on the same device. A load that
+// scatters across several GPUs is sent as several submissions, which run together and are drained by
+// their own ids. Only NV_FILE_STREAMER_DEVICE_CPU is served today; anything else returns UnsupportedDeviceType and
+// commits nothing, so no responses are owed for it.
 //
 // Credentials are NOT passed here - set them once via runai_set_credentials.
 //  out_submission_id : always set to this submission's id once one is assigned, and left 0 only
@@ -108,7 +115,8 @@ _RUNAI_EXTERN_C int runai_request(
     unsigned * num_ranges,
     size_t * range_offsets,
     size_t * range_sizes,
-    void ** range_dsts
+    void ** range_dsts,
+    NvFileStreamerDevice device
 );
 
 // Multi-request response. Returns the next ready range from any in-flight submission.

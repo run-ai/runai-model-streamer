@@ -62,7 +62,7 @@ inline int submit(void * streamer, unsigned num_files, const char ** paths, size
 
     SubmissionId submission_id = 0;
     return runai_request(streamer, &submission_id, num_files, paths, num_ranges.data(),
-                         range_offsets.data(), range_sizes.data(), range_dsts.data());
+                         range_offsets.data(), range_sizes.data(), range_dsts.data(), NvFileStreamerDevice{});
 }
 
 inline int next_response(void * streamer, unsigned * file_index, unsigned * index)
@@ -787,7 +787,7 @@ TEST_F(StreamerTest, Filesystem_And_Object_Storage_Submissions_Coexist)
         size_t size = fs_data.size();
 
         SubmissionId submission_id = 0;
-        EXPECT_EQ(runai_request(streamer, &submission_id, 1, &path, &num_ranges, &offset, &size, &dst_ptr),
+        EXPECT_EQ(runai_request(streamer, &submission_id, 1, &path, &num_ranges, &offset, &size, &dst_ptr, NvFileStreamerDevice{}),
                   static_cast<int>(common::ResponseCode::Success));
 
         unsigned file_index = 0;
@@ -868,7 +868,7 @@ TEST_F(StreamerTest, Object_Storage_Then_Filesystem_Submission)
         size_t size = fs_data.size();
 
         SubmissionId submission_id = 0;
-        EXPECT_EQ(runai_request(streamer, &submission_id, 1, &path, &n_ranges, &offset, &size, &dst_ptr),
+        EXPECT_EQ(runai_request(streamer, &submission_id, 1, &path, &n_ranges, &offset, &size, &dst_ptr, NvFileStreamerDevice{}),
                   static_cast<int>(common::ResponseCode::Success));
 
         unsigned file_index = 0;

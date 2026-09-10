@@ -10,6 +10,8 @@
 #include <vector>
 #include "utils/fd/fd.h"
 #include "utils/logging/logging.h"
+#include "common/device/device.h"
+#include "common/response_code/response_code.h"
 #include "common/submission/submission_id.h"
 
 
@@ -160,9 +162,7 @@ extern "C" int runai_start(void ** streamer)
     }
     catch (...)
     {
-        // Literal rather than the enum, following this file's convention: mock/BUILD deps are only
-        // //utils/fd and //common/submission, so common/response_code is not on the include path.
-        return 11;   // common::ResponseCode::UnknownError
+        return static_cast<int>(common::ResponseCode::UnknownError);
     }
     return 0;
 }
@@ -220,9 +220,22 @@ extern "C" int runai_request(
     unsigned * num_ranges,
     size_t * range_offsets,
     size_t * range_sizes,
-    void ** range_dsts
+    void ** range_dsts,
+    NvFileStreamerDevice device
 )
 {
+    // Zeroed here, before anything that can fail, exactly as the real runai_request does: the contract
+    // says the id is left 0 when the call fails before one is assigned, and a caller reusing the
+    // variable would otherwise read the previous submission's id as if this one were live.
+    if (out_submission_id != nullptr) {
+        *out_submission_id = 0;
+    }
+
+    // Refused like the real C API, so a Python test that asks for a device gets the same answer here.
+    if (device.type != NV_FILE_STREAMER_DEVICE_CPU) {
+        return static_cast<int>(common::ResponseCode::UnsupportedDeviceType);
+    }
+
     Submission submission;
 
     // The range arrays are flat and grouped by file in the order of paths; base walks that grouping.
