@@ -51,9 +51,7 @@ def pull_files(model_path: str,
         return
 
     for file in files:
-        destination_file = os.path.join(
-            dst,
-            removeprefix(file, base_dir).lstrip("/"))
+        destination_file = _safe_destination_path(dst, base_dir, file)
         local_dir = Path(destination_file).parent
         os.makedirs(local_dir, exist_ok=True)
         s3.download_file(bucket_name, file, destination_file)
@@ -114,6 +112,17 @@ def _filter_ignore(paths: List[str], patterns: List[str]) -> List[str]:
         path for path in paths
         if not any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
     ]
+
+def _safe_destination_path(dst: str, base_dir: str, file: str) -> str:
+    prefix = base_dir if base_dir == "" or base_dir.endswith("/") else base_dir + "/"
+    if not file.startswith(prefix):
+        raise ValueError(f"object key {file!r} does not start with expected prefix {prefix!r}")
+    relative = file[len(prefix):].lstrip("/")
+    dst_real = os.path.realpath(dst)
+    destination_file = os.path.realpath(os.path.join(dst_real, relative))
+    if os.path.commonpath([dst_real, destination_file]) != dst_real:
+        raise ValueError(f"refusing to write outside destination directory: {file!r}")
+    return destination_file
 
 def removeprefix(s: str, prefix: str) -> str:
     if s.startswith(prefix):
