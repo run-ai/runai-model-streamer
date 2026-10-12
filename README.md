@@ -152,17 +152,18 @@ Automatically created maintenance releases do not change GitHub's **Latest**
 release selection. Download all wheels and the checksum file into one directory
 and run `sha256sum --check SHA256SUMS` to verify them.
 
-If publication partially fails, use **Re-run failed jobs** on the same workflow
-run and approve again. The job reuses the tested bundle and verifies its
-checksums before uploading. The publishing actions skip files that already
-exist; they do not compare remote checksums. If files may have been uploaded
-from a different run, compare their checksums with `SHA256SUMS` before retrying.
-GitHub assets are not overwritten. PyPI and GitHub publication are not atomic,
-so a failed run may have published some wheels already. Do not use
-**Re-run all jobs** to recover a partial publication: rebuilt wheels can have
-different bytes. If the bundle has expired, use a new patch version instead of
-replacing published files. The tag and its release-branch membership are checked
-again after approval; do not move published release tags.
+PyPI uploads fail on duplicate filenames. If nothing reached PyPI, use
+**Re-run failed jobs** and approve again. If some wheels were uploaded, download
+the original saved bundle, verify that the existing files match its checksums,
+and manually upload only the missing wheels. If PyPI completed but GitHub
+publication failed, publish the original wheels and `SHA256SUMS` to GitHub
+separately, checking any existing assets before skipping them. GitHub assets
+are not overwritten, and remote checksums are not checked automatically.
+
+Do not rebuild for recovery: rebuilt wheels can have different bytes. If an
+existing PyPI file differs, or the saved bundle has expired, publish a new patch
+version. The tag and its release-branch membership are checked again after
+approval; do not move published release tags.
 
 Creating or editing a GitHub release does not trigger a second publication run;
 the version tag push is the single release trigger. A locally created tag must

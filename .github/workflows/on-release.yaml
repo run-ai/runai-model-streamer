@@ -56,7 +56,9 @@ jobs:
           echo "::error::Publish the release branch devcontainer before running release CI: $image"
           exit 1
         fi
-        resolved=$(docker image inspect "$image" --format '{{index .RepoDigests 0}}')
+        resolved=$(docker image inspect "$image" --format '{{json .RepoDigests}}' \
+          | jq -r --arg prefix "ghcr.io/$repository/devcontainer@" \
+            '[.[]? | select(startswith($prefix))][0] // empty')
         if [[ ! "$resolved" =~ @sha256:[0-9a-f]{64}$ ]]; then
           echo '::error::Could not resolve the release devcontainer to a digest.'
           exit 1
@@ -109,16 +111,10 @@ jobs:
         path: py
         merge-multiple: true
 
-    - name: Configure release devcontainer
-      run: |
-        jq --null-input --arg image "$CI_IMAGE" \
-          '{image: $image, runArgs: ["--security-opt", "seccomp=unconfined"]}' \
-          > "$RUNNER_TEMP/devcontainer.json"
-
     - name: Run integration tests and filesystem strategies
       uses: devcontainers/ci@v0.3
       with:
-        configFile: ${{ runner.temp }}/devcontainer.json
+        configFile: .devcontainer/release/devcontainer.json
         push: never
         env: |
           PACKAGE_VERSION
@@ -195,7 +191,6 @@ jobs:
       with:
         password: ${{ secrets.PYPI_API_TOKEN }}
         packages-dir: release-bundle/wheels/
-        skip-existing: true
         print-hash: true
 
     - name: Publish GitHub release assets
