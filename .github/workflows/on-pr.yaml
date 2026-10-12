@@ -21,6 +21,8 @@ jobs:
     outputs:
       package_version: ${{ steps.version.outputs.PACKAGE_VERSION }}
       devcontainer_changed: ${{ steps.devcontainer_changes.outputs.any_modified }}
+      baseline_tag: ${{ steps.image.outputs.baseline_tag }}
+      baseline_image: ${{ steps.image.outputs.baseline_image }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v5
@@ -35,8 +37,45 @@ jobs:
         files: |
           .devcontainer/**
           .github/workflows/devcontainer.yml
+          .github/workflows/build-devcontainer.yml
         skip_initial_fetch: true
         output_renamed_files_as_deleted_and_added: true
+
+    - name: Select target branch devcontainer
+      id: image
+      env:
+        BASE_BRANCH: ${{ github.base_ref }}
+      run: |
+        set -euo pipefail
+        tag=latest
+        if [[ "$BASE_BRANCH" =~ ^release/[0-9]+\.[0-9]+$ ]]; then
+          tag="release-${BASE_BRANCH#release/}"
+        fi
+        repository="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+        printf 'baseline_tag=%s\nbaseline_image=ghcr.io/%s/devcontainer:%s\n' \
+          "$tag" "$repository" "$tag" >> "$GITHUB_OUTPUT"
+
+    - name: Log in to GitHub Container Registry
+      if: steps.devcontainer_changes.outputs.any_modified != 'true' && steps.image.outputs.baseline_tag != 'latest'
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Require published release devcontainer
+      if: steps.devcontainer_changes.outputs.any_modified != 'true' && steps.image.outputs.baseline_tag != 'latest'
+      env:
+        BASELINE_IMAGE: ${{ steps.image.outputs.baseline_image }}
+        BASE_BRANCH: ${{ github.base_ref }}
+      run: |
+        set -euo pipefail
+        if ! docker manifest inspect "$BASELINE_IMAGE" > /dev/null; then
+          echo "::error::Cannot access release devcontainer $BASELINE_IMAGE. Check registry access and the branch's Build and Push DevContainer run. If the image is missing, initialize it with the command below, wait for publication, then rerun this PR workflow."
+          printf 'gh workflow run build-devcontainer.yml --repo %q --ref %q\n' \
+            "$GITHUB_REPOSITORY" "$BASE_BRANCH"
+          exit 1
+        fi
 
     - name: Set PACKAGE_VERSION
       id: version
@@ -55,6 +94,7 @@ jobs:
     uses: ./.github/workflows/devcontainer.yml
     with:
       publish: false
+      baseline_tag: ${{ needs.setup.outputs.baseline_tag }}
 
   build_x86:
     name: Build & tests (${{ matrix.component }}, x86_64)
@@ -72,7 +112,7 @@ jobs:
       arch: x86_64
       component: ${{ matrix.component }}
       package_version: ${{ needs.setup.outputs.package_version }}
-      devcontainer_image: ${{ needs.devcontainer.outputs.image || format('ghcr.io/{0}/devcontainer:latest', github.repository) }}
+      devcontainer_image: ${{ needs.devcontainer.outputs.image || needs.setup.outputs.baseline_image }}
       devcontainer_artifact: ${{ needs.devcontainer.outputs.artifact }}
 
   build_arm:
@@ -91,7 +131,7 @@ jobs:
       arch: aarch64
       component: ${{ matrix.component }}
       package_version: ${{ needs.setup.outputs.package_version }}
-      devcontainer_image: ${{ needs.devcontainer.outputs.image || format('ghcr.io/{0}/devcontainer:latest', github.repository) }}
+      devcontainer_image: ${{ needs.devcontainer.outputs.image || needs.setup.outputs.baseline_image }}
       devcontainer_artifact: ${{ needs.devcontainer.outputs.artifact }}
 
   tests:
@@ -101,7 +141,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PACKAGE_VERSION: ${{ needs.setup.outputs.package_version }}
-      CI_IMAGE: ${{ needs.devcontainer.outputs.image || format('ghcr.io/{0}/devcontainer:latest', github.repository) }}
+      CI_IMAGE: ${{ needs.devcontainer.outputs.image || needs.setup.outputs.baseline_image }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v5

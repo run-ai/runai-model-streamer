@@ -1,22 +1,66 @@
 name: Build and Push DevContainer
 
 on:
+  create:
   push:
     branches:
       - master
+      - 'release/*'
     paths:
       - '.devcontainer/**'
       - '.github/workflows/devcontainer.yml'
       - '.github/workflows/build-devcontainer.yml'
   workflow_dispatch:
 
+concurrency:
+  group: publish-devcontainer-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
 jobs:
+  select-branch:
+    name: Select devcontainer branch
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.branch.outputs.publish }}
+      baseline_tag: ${{ steps.branch.outputs.baseline_tag }}
+    steps:
+    - name: Select branch image tag
+      id: branch
+      shell: bash
+      env:
+        BRANCH: ${{ github.ref_name }}
+        REF_TYPE: ${{ github.ref_type }}
+        EVENT_NAME: ${{ github.event_name }}
+        BRANCH_CREATED: ${{ github.event.created }}
+      run: |
+        set -euo pipefail
+        # The create event initializes release branches, including empty diffs.
+        # Ignore tags and the duplicate push event for a newly created branch.
+        if [[ "$REF_TYPE" != branch ||
+              ( "$EVENT_NAME" == push && "$BRANCH_CREATED" == true ) ||
+              ( "$EVENT_NAME" == create && "$BRANCH" == master ) ]]; then
+          exit 0
+        fi
+        if [[ "$BRANCH" == master ]]; then
+          tag=latest
+        elif [[ "$BRANCH" =~ ^release/[0-9]+\.[0-9]+$ ]]; then
+          tag="release-${BRANCH#release/}"
+        else
+          exit 0
+        fi
+        printf 'publish=true\nbaseline_tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+
   build-devcontainer:
     name: Build & Push DevContainer Image
-    if: github.ref == 'refs/heads/master'
+    needs: select-branch
+    if: needs.select-branch.outputs.publish == 'true'
     permissions:
       contents: read
       packages: write
     uses: ./.github/workflows/devcontainer.yml
     with:
       publish: true
+      baseline_tag: ${{ needs.select-branch.outputs.baseline_tag }}

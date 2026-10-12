@@ -70,3 +70,42 @@ pip3 install py/runai_model_streamer py/runai_model_streamer_s3
 > [!IMPORTANT]
 > In order to the CPP to run, you need to install libcurl4 and libssl1.1_1
 
+### Release-branch CI
+
+Branches named `release/<major>.<minor>` have independent CI environments. For
+example, PRs targeting `release/0.17` use
+`ghcr.io/dsx-ai-factory/model-streamer/devcontainer:release-0.17`, while PRs
+targeting `master` continue to use `latest`. Other PR targets retain the existing
+`latest` behavior. CI selects the environment from the PR's target branch, not
+the contributor's branch name.
+
+Create a release branch from a commit containing these workflows. Creating the
+branch automatically starts **Build and Push DevContainer**, even if no
+devcontainer files changed. Wait for that run to finish before running ordinary
+PRs against the branch. The image is rebuilt when changes to `.devcontainer/`,
+the reusable devcontainer workflow, or its publishing workflow land on that
+branch. Each branch updates only its own image tag.
+
+PRs changing those files build a temporary image and use it for component builds
+and integration tests. They do not publish the temporary image. Builds use the
+target branch's image as a cache when available and can build from source when
+the cache does not yet exist.
+
+If initialization fails, or an existing release branch has just received these
+workflow changes, run **Build and Push DevContainer** manually with the release
+branch selected in GitHub Actions, or use:
+
+```sh
+gh workflow run build-devcontainer.yml --repo dsx-ai-factory/model-streamer --ref release/0.17
+```
+
+Wait for successful publication, then rerun the PR workflow. An ordinary release
+PR fails if its published image is unavailable; it never falls back to `master`.
+Manual publication is supported only for `master` and `release/<major>.<minor>`.
+Tags and unrelated branch creation do not publish images. Branch image tags
+track the latest successfully published environment on their branch.
+
+This CI support is independent of the dependency upgrade and keeps the existing
+build and test matrix. Release tagging and package publication are a separate
+follow-up tracked in [issue #240](https://github.com/dsx-ai-factory/model-streamer/issues/240).
+
