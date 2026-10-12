@@ -109,3 +109,16 @@ This CI support is independent of the dependency upgrade and keeps the existing
 build and test matrix. Release tagging and package publication are a separate
 follow-up tracked in [issue #240](https://github.com/dsx-ai-factory/model-streamer/issues/240).
 
+## Licensing
+
+Model Streamer is licensed under the [Apache License 2.0](LICENSE).
+
+- `py/runai_model_streamer*/LICENSE` are symbolic links to the root [LICENSE](LICENSE), so
+  that each Python wheel carries the license text. They are the same license, not a separate one.
+- The native libraries statically link third-party code. Their notices and the full upstream
+  license texts live in [`third_party_notices/`](third_party_notices/README.md):
+  - `third_party_notices/licenses/<component>/` holds the verbatim license and NOTICE files
+    of each third-party component (Apache-2.0, MIT, BSD, zlib, curl, LGPL-2.1 and others).
+  - `libstreamer.txt`, `libstreamers3.txt`, `libstreamergcs.txt` and `libstreamerazure.txt`
+    are the consolidated notices for each wheel. `sdk.txt` is the notice for the C/C++ SDK archive.
+

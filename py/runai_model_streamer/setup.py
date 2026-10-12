@@ -43,7 +43,7 @@ assert_lib_exists()
 setup(
     name="runai-model-streamer",
     version=VERSION,
-    license_files=("LICENSE",),
+    license_files=("LICENSE", "THIRD_PARTY_NOTICES.txt"),
     packages=find_packages(),
     package_data={"runai_model_streamer": [LIB]},
     install_requires=["torch>=2.0.0, <3.0.0", "humanize", "numpy"],

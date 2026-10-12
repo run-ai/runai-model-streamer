@@ -31,9 +31,18 @@ EXEMPT_SUFFIXES = (".md", ".rst", ".txt", ".yaml", ".yml", ".json", ".toml", ".c
                    ".ipynb", ".png", ".jpg", ".svg", ".safetensors", ".so")
 EXEMPT_NAMES = ("LICENSE", "NOTICE", "DCO", "CODEOWNERS")
 
-# Files to skip on purpose, for example if OSRB says a file must not get the header. Empty today.
+# Files to skip on purpose, for example if OSRB says a file must not get the header.
 # Write each path relative to the repo root, such as "cpp/s3/s3.cc".
-SKIP = []
+# The upstream license texts below are third-party files that must stay verbatim.
+SKIP = [
+    "third_party_notices/licenses/curl-7.69.1/COPYING",
+    "third_party_notices/licenses/curl/COPYING",
+    "third_party_notices/licenses/gcc-runtime/COPYING.RUNTIME",
+    "third_party_notices/licenses/gcc-runtime/COPYING3",
+    "third_party_notices/licenses/libaio/COPYING",
+    "third_party_notices/licenses/libxml2/Copyright",
+    "third_party_notices/licenses/nlohmann-json/LICENSE.MIT",
+]
 
 # Comment syntax per file type. A file type in neither list is reported, never skipped silently.
 C_STYLE = (".c", ".cc", ".cpp", ".h", ".hpp", ".ldscript")
