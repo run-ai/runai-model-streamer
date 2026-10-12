@@ -105,7 +105,68 @@ Manual publication is supported only for `master` and `release/<major>.<minor>`.
 Tags and unrelated branch creation do not publish images. Branch image tags
 track the latest successfully published environment on their branch.
 
-This CI support is independent of the dependency upgrade and keeps the existing
-build and test matrix. Release tagging and package publication are a separate
-follow-up tracked in [issue #240](https://github.com/dsx-ai-factory/model-streamer/issues/240).
+### Publishing a release
+
+Release tags use `X.Y.Z` without a `v` prefix or prerelease suffix. For example,
+`0.17.2` must identify a commit contained in `release/0.17`. Git tags do not
+record a source branch, so CI checks ancestry against the matching release
+branch. The tagged commit must already contain the release workflow and scripts.
+
+Before the first release, configure **Settings → Environments → pypi** with
+required reviewers who have repository admin access. Disable administrator
+bypass to require approval for every publication. The setup job fails if this
+environment is missing or has no required reviewers. The publishing job uses
+the existing `PYPI_API_TOKEN` secret; an environment secret of the same name can
+be used to scope it to approved jobs. Keep the reviewer list updated when
+repository admins change.
+
+Wait for the branch's devcontainer publication to succeed, then manually create
+and push the tag from the release branch, for example:
+
+```sh
+git switch release/0.17
+git pull --ff-only
+git tag -a 0.17.2 -m "Release 0.17.2"
+git push origin refs/tags/0.17.2
+```
+
+The tag push triggers **RunAI Model Streamer Library - Release**. It validates
+the tag, selects `devcontainer:release-0.17`, and resolves that image to a digest
+shared by all jobs. CI builds all four packages for x86_64 and aarch64 and runs
+the existing x86_64 C++, Python, integration, and filesystem-strategy tests.
+There is no fallback to master's devcontainer. Ensure the branch image matches
+the tagged source's build requirements, especially when tagging an older commit.
+
+After every build and test succeeds, CI validates the eight wheels and saves
+them with `SHA256SUMS` in a workflow artifact retained for 30 days. Review the
+version, commit, image digest, and checksums in the job summaries, then approve
+the **pypi** deployment in the Actions run. Rejection prevents publication.
+
+Approval publishes those exact wheels to the existing PyPI projects and attaches
+the same eight wheels plus `SHA256SUMS` to the GitHub release. Publication does
+not rebuild anything. A GitHub release is created if needed, initially as a
+draft until every asset is uploaded. Existing release notes are preserved.
+Automatically created maintenance releases do not change GitHub's **Latest**
+release selection. Download all wheels and the checksum file into one directory
+and run `sha256sum --check SHA256SUMS` to verify them.
+
+If publication partially fails, use **Re-run failed jobs** on the same workflow
+run and approve again. The job reuses the tested bundle and skips only existing
+PyPI files or GitHub assets whose SHA-256 matches. Conflicting bytes stop the
+release; existing files are never overwritten. PyPI and GitHub publication are
+not atomic, so a failed run may have published some wheels already. Do not use
+**Re-run all jobs** to recover a partial publication: rebuilt wheels can have
+different bytes. If the bundle has expired, use a new patch version instead of
+replacing published files. The tag and its release-branch membership are checked
+again after approval; do not move published release tags.
+
+Creating or editing a GitHub release does not trigger a second publication run;
+the version tag push is the single release trigger. A locally created tag must
+be pushed to GitHub before any workflow starts.
+
+Validate release automation locally with:
+
+```sh
+python3 -B -m unittest discover -s .github/scripts -p 'test_release*.py' -v
+```
 

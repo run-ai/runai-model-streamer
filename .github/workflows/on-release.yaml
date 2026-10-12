@@ -1,21 +1,113 @@
-name: RunAI Model Streamer Library - Resease
+name: RunAI Model Streamer Library - Release
 
 on:
-  release:
-    types:
-      - created
+  push:
+    tags:
+      - '[0-9]*.[0-9]*.[0-9]*'
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
-  build-and-push:
-    name: Build & Push
+  setup:
+    name: Validate release
+    if: github.event.deleted == false
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      actions: read
+      contents: read
       packages: read
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      image: ${{ steps.image.outputs.image }}
     steps:
-    - name: Checkout code
+    - name: Checkout tagged source
       uses: actions/checkout@v5
       with:
+        ref: ${{ github.sha }}
+        fetch-depth: 0
+        persist-credentials: false
+
+    - name: Validate tag and release branch
+      id: release
+      run: bash .github/scripts/validate-release.sh
+
+    - name: Require configured publication approval
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        gh api "repos/$GITHUB_REPOSITORY/environments/pypi" > "$RUNNER_TEMP/pypi-environment.json"
+        if ! jq -e 'any(.protection_rules[]?; .type == "required_reviewers" and (.reviewers | length) > 0)' "$RUNNER_TEMP/pypi-environment.json" > /dev/null; then
+          echo "::error::Configure required reviewers on the pypi environment before creating a release tag."
+          exit 1
+        fi
+
+    - name: Log in to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Resolve release devcontainer digest
+      id: image
+      env:
+        VERSION: ${{ steps.release.outputs.version }}
+      run: |
+        set -euo pipefail
+        repository="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+        image="ghcr.io/$repository/devcontainer:release-${VERSION%.*}"
+        if ! docker pull "$image"; then
+          echo "::error::Publish the release branch devcontainer before running release CI: $image"
+          exit 1
+        fi
+        resolved=$(docker image inspect "$image" --format '{{index .RepoDigests 0}}')
+        if [[ ! "$resolved" =~ @sha256:[0-9a-f]{64}$ ]]; then
+          echo '::error::Could not resolve the release devcontainer to a digest.'
+          exit 1
+        fi
+        printf 'image=%s\n' "$resolved" >> "$GITHUB_OUTPUT"
+        printf 'Version: `%s`\n\nCommit: `%s`\n\nImage: `%s`\n' "$VERSION" "$(git rev-parse HEAD)" "$resolved" >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build (${{ matrix.component }}, ${{ matrix.arch }})
+    needs: setup
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [streamer, s3, gcs, azure]
+        arch: [x86_64, aarch64]
+    uses: ./.github/workflows/build.yml
+    with:
+      arch: ${{ matrix.arch }}
+      component: ${{ matrix.component }}
+      package_version: ${{ needs.setup.outputs.version }}
+      devcontainer_image: ${{ needs.setup.outputs.image }}
+
+  test-and-bundle:
+    name: Integration tests and release bundle
+    needs: [setup, build]
+    runs-on: ubuntu-latest
+    outputs:
+      artifact_id: ${{ steps.bundle.outputs.artifact-id }}
+    env:
+      PACKAGE_VERSION: ${{ needs.setup.outputs.version }}
+      CI_IMAGE: ${{ needs.setup.outputs.image }}
+    steps:
+    - name: Checkout tagged source
+      uses: actions/checkout@v5
+      with:
+        ref: ${{ github.sha }}
         persist-credentials: false
 
     - name: Log in to GitHub Container Registry
@@ -25,49 +117,88 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Set PACKAGE_VERSION
-      run: echo "PACKAGE_VERSION=${GITHUB_REF/refs\/tags\//}" >> $GITHUB_ENV
+    - name: Download x86_64 wheels for integration tests
+      uses: actions/download-artifact@v7
+      with:
+        pattern: packages-*-x86_64
+        path: py
+        merge-multiple: true
 
-    - name: Build package
+    - name: Configure release devcontainer
+      run: |
+        jq --null-input --arg image "$CI_IMAGE" \
+          '{image: $image, runArgs: ["--security-opt", "seccomp=unconfined"]}' \
+          > "$RUNNER_TEMP/devcontainer.json"
+
+    - name: Run integration tests and filesystem strategies
       uses: devcontainers/ci@v0.3
       with:
-        imageName: ghcr.io/${{ github.repository }}/devcontainer
-        cacheFrom: ghcr.io/${{ github.repository }}/devcontainer
+        configFile: ${{ runner.temp }}/devcontainer.json
         push: never
-        runCmd: |
-          PACKAGE_VERSION=${{ env.PACKAGE_VERSION }} make build
+        env: |
+          PACKAGE_VERSION
+        runCmd: make ci-test-integration BAZEL_TEST_FLAGS=--test_env=RUNAI_STREAMER_REQUIRE_IO_URING=1
 
-    - name: Upload As Release Asset
-      uses: softprops/action-gh-release@v1
+    - name: Download all release wheels
+      uses: actions/download-artifact@v7
       with:
-        files: py/*/dist/*.whl
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        pattern: packages-*
+        path: packages
+        merge-multiple: true
 
-    - name: Publish streamer package distributions to PyPI
+    - name: Validate wheels and generate checksums
+      run: |
+        python3 .github/scripts/release_artifacts.py bundle --version "$PACKAGE_VERSION"
+        cat release-bundle/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Preserve tested release bundle
+      id: bundle
+      uses: actions/upload-artifact@v6
+      with:
+        name: release-${{ needs.setup.outputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: release-bundle/
+        if-no-files-found: error
+        retention-days: 30
+
+  publish:
+    name: Approve and publish release
+    needs: [setup, test-and-bundle]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: write
+    env:
+      PACKAGE_VERSION: ${{ needs.setup.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+    - name: Checkout release publication scripts
+      uses: actions/checkout@v5
+      with:
+        ref: ${{ github.sha }}
+        fetch-depth: 0
+        persist-credentials: false
+
+    - name: Recheck release tag before publication
+      run: bash .github/scripts/validate-release.sh
+
+    - name: Download the tested release bundle
+      uses: actions/download-artifact@v7
+      with:
+        artifact-ids: ${{ needs.test-and-bundle.outputs.artifact_id }}
+        path: release-bundle
+        merge-multiple: true
+
+    - name: Verify checksums and prepare unpublished wheels
+      id: prepare
+      run: python3 .github/scripts/release_artifacts.py prepare-publish --version "$PACKAGE_VERSION"
+
+    - name: Publish wheels to PyPI
+      if: steps.prepare.outputs.pending != '0'
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
         password: ${{ secrets.PYPI_API_TOKEN }}
-        packages-dir: py/runai_model_streamer/dist/
+        packages-dir: pypi-upload/
         print-hash: true
 
-    - name: Publish s3 streamer package distributions to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
-      with:
-        password: ${{ secrets.PYPI_API_TOKEN }}
-        packages-dir: py/runai_model_streamer_s3/dist/
-        print-hash: true
-
-    - name: Publish GCS streamer package distributions to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
-      with:
-        password: ${{ secrets.PYPI_API_TOKEN }}
-        packages-dir: py/runai_model_streamer_gcs/dist/
-        print-hash: true
-
-    - name: Publish Azure streamer package distributions to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
-      with:
-        password: ${{ secrets.PYPI_API_TOKEN }}
-        packages-dir: py/runai_model_streamer_azure/dist/
-        print-hash: true
+    - name: Publish GitHub release assets
+      run: python3 .github/scripts/release_artifacts.py publish-github --version "$PACKAGE_VERSION"
