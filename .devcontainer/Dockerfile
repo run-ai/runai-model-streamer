@@ -8,14 +8,14 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
-# `make build` runs `setup.py bdist_wheel` directly, with no PEP 517 isolation, so it never
-# reads py/*/pyproject.toml's setuptools pin. Keep this in sync with that pin by hand. Exact
-# pin, not a floor, to match this file's other dependencies. Newest versions still compatible
-# with this image's Python 3.8 - setuptools 76.0.0 needs >=3.9, wheel 0.46.0 needs >=3.9.
-# Upgrade Ubuntu's pip before setuptools to avoid legacy version-parsing failures.
-# pip 25.1 drops Python 3.8 support.
-RUN python3 -m pip install --upgrade "pip==25.0.1" \
-    && python3 -m pip install "setuptools==75.3.4" "wheel==0.45.1"
+# The wheel build tools, pinned in requirements-build.txt. `make build` runs `setup.py bdist_wheel`
+# directly, with no PEP 517 isolation, so it never reads py/*/pyproject.toml's [build-system]
+# floor: this pin is the setuptools that builds the wheels. Newest versions still compatible with
+# this image's Python 3.8 - setuptools 76.0.0 needs >=3.9, wheel 0.46.0 needs >=3.9, pip 25.1
+# drops 3.8. pip is upgraded first, on its own, so Ubuntu's old pip never parses the rest.
+COPY requirements-build.txt requirements-dev.txt /tmp/requirements/
+RUN python3 -m pip install --upgrade "$(grep '^pip==' /tmp/requirements/requirements-build.txt)" \
+    && python3 -m pip install -r /tmp/requirements/requirements-build.txt
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     gcc-x86-64-linux-gnu g++-x86-64-linux-gnu binutils-x86-64-linux-gnu \
@@ -48,10 +48,8 @@ RUN printf '%s\n' \
          || x86_64-linux-gnu-gcc -c -fPIC /tmp/tsan_preinit.c -o "$TSAN_DIR/libtsan_preinit.o"; } \
     && rm /tmp/tsan_preinit.c
 
-RUN pip install \
-    boto3 \
-    cpplint==1.5.4 \
-    pytest
+# Tests and lint (pytest, cpplint, boto3 for the S3 tests), pinned in requirements-dev.txt.
+RUN python3 -m pip install -r /tmp/requirements/requirements-dev.txt
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     cmake \
@@ -92,7 +90,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && npm install -g azurite \
     && rm -rf /var/lib/apt/lists/*
 
-# attribution: shipped module=cpp
+# attribution: shipped module=py/runai_model_streamer_s3,py/runai_model_streamer_azure
 # renovate: datasource=github-tags depName=openssl/openssl extractVersion=^openssl-(?<version>\d+\.\d+\.\d+)$
 ARG OPENSSL_VERSION=3.5.0
 RUN curl -fsSL -o openssl-${OPENSSL_VERSION}.tar.gz https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz && \
@@ -114,7 +112,7 @@ RUN curl -fsSL -o openssl-${OPENSSL_VERSION}.tar.gz https://www.openssl.org/sour
     cd - && \
     rm -rf openssl-${OPENSSL_VERSION} openssl-${OPENSSL_VERSION}.tar.gz
 
-# attribution: shipped module=cpp
+# attribution: shipped module=py/runai_model_streamer_s3,py/runai_model_streamer_azure
 # renovate: datasource=github-releases depName=curl/curl versioning=regex:^(?<major>\d+)_(?<minor>\d+)_(?<patch>\d+)$ extractVersion=^curl-(?<version>\d+_\d+_\d+)$
 ARG CURL_VERSION=8_13_0
 RUN CURL_DOTTED="$(echo "${CURL_VERSION}" | tr _ .)" && \
@@ -151,7 +149,7 @@ RUN CURL_DOTTED="$(echo "${CURL_VERSION}" | tr _ .)" && \
     cd - && \
     rm -rf curl-${CURL_DOTTED} curl-${CURL_DOTTED}.tar.gz
 
-# attribution: shipped module=cpp
+# attribution: shipped module=py/runai_model_streamer_s3,py/runai_model_streamer_azure
 # renovate: datasource=github-releases depName=madler/zlib extractVersion=^v(?<version>.*)$
 ARG ZLIB_VERSION=1.3.1
 RUN curl -fsSL -o zlib-${ZLIB_VERSION}.tar.gz https://github.com/madler/zlib/releases/download/v${ZLIB_VERSION}/zlib-${ZLIB_VERSION}.tar.gz && \
@@ -184,7 +182,7 @@ RUN curl -fsSL -o zlib-${ZLIB_VERSION}.tar.gz https://github.com/madler/zlib/rel
 
 ADD aarch64-linux-gnu.cmake /opt/toolchains/aarch64-linux-gnu.cmake
 ADD x86_64-linux-gnu.cmake /opt/toolchains/x86_64-linux-gnu.cmake
-# attribution: shipped module=cpp
+# attribution: shipped module=py/runai_model_streamer_s3
 # renovate: datasource=github-tags depName=aws/aws-sdk-cpp
 ARG AWS_SDK_CPP_VERSION=1.11.584
 RUN git clone --recurse-submodules --depth 1 --branch "${AWS_SDK_CPP_VERSION}" https://github.com/aws/aws-sdk-cpp /opt/aws-sdk-cpp && \
@@ -234,7 +232,7 @@ RUN git clone --recurse-submodules --depth 1 --branch "${AWS_SDK_CPP_VERSION}" h
     make install && \
     rm -rf /opt/aws-sdk-cpp
 
-# attribution: shipped module=cpp
+# attribution: shipped module=py/runai_model_streamer_azure
 # renovate: datasource=github-tags depName=GNOME/libxml2 extractVersion=^v(?<version>.*)$
 ARG LIBXML2_VERSION=2.13.5
 RUN curl -fsSL -o libxml2-${LIBXML2_VERSION}.tar.xz https://download.gnome.org/sources/libxml2/${LIBXML2_VERSION%.*}/libxml2-${LIBXML2_VERSION}.tar.xz && \
@@ -279,7 +277,7 @@ RUN curl -fsSL -o libxml2-${LIBXML2_VERSION}.tar.xz https://download.gnome.org/s
 
 # Build Azure SDK for C++ (optimized with shared CMake options)
 SHELL ["/bin/bash", "-c"]
-# attribution: shipped module=cpp
+# attribution: shipped module=py/runai_model_streamer_azure
 # renovate: datasource=github-tags depName=Azure/azure-sdk-for-cpp extractVersion=^azure-storage-blobs_(?<version>.*)$
 ARG AZURE_STORAGE_BLOBS_VERSION=12.15.0
 RUN git clone --recurse-submodules https://github.com/Azure/azure-sdk-for-cpp /opt/azure-sdk-cpp && \
@@ -363,7 +361,7 @@ RUN NATIVE_ARCH=$(uname -m | sed 's/x86_64/x86_64/;s/aarch64/aarch64/') && \
 # libstreamer.so and shipped, silently. With one, a regenerated archive fails the image build loudly -
 # and a loud failure that needs a one-line update beats an unverified dependency in a release
 # artifact.
-# attribution: shipped module=cpp
+# attribution: shipped module=py/runai_model_streamer
 # renovate: datasource=github-tags depName=axboe/liburing extractVersion=^liburing-(?<version>.*)$
 ARG LIBURING_VERSION=2.14
 ARG LIBURING_SHA256=5f80964108981c6ad979c735f0b4877d5f49914c2a062f8e88282f26bf61de0c
@@ -409,7 +407,7 @@ RUN curl -fsSL -o liburing-${LIBURING_VERSION}.tar.gz https://github.com/axboe/l
 #               (deb.debian.org/debian/pool/main/liba/libaio/libaio_0.3.113.orig.tar.gz), and its
 #               src/ matches the libaio-0.3.113 git tag. If this host disappears too, point the URL
 #               at any mirror - a wrong tarball then fails here instead of shipping.
-# attribution: shipped module=cpp
+# attribution: shipped module=py/runai_model_streamer
 # renovate: datasource=git-tags depName=libaio packageName=https://pagure.io/libaio.git extractVersion=^libaio-(?<version>.*)$
 ARG LIBAIO_VERSION=0.3.113
 ARG LIBAIO_SHA256=2c44d1c5fd0d43752287c9ae1eb9c023f04ef848ea8d4aafa46e9aedb678200b

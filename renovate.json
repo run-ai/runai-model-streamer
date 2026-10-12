@@ -3,6 +3,7 @@
   "extends": [
     "config:recommended",
     "github>run-ai/runai-actions//renovate/presets/cpp-common",
+    "github>run-ai/runai-actions//renovate/presets/custom_annotation",
     "github>run-ai/runai-actions//renovate/presets/notice",
     "github>run-ai/runai-actions//renovate/presets/copyright"
   ],
@@ -11,5 +12,14 @@
     ".devcontainer/**",
     "py/**",
     ".github/**"
+  ],
+  "packageRules": [
+    {
+      "description": "The devcontainer runs Python 3.8 (ubuntu:20.04, kept for the glibc 2.31 wheel tags), and these pins are the newest releases that still install on it: pip 25.1, setuptools 76, wheel 0.46, pytest 8.4 and boto3 1.38 need Python 3.9. Re-enable them when the image's Python moves.",
+      "matchManagers": ["pip_requirements"],
+      "matchFileNames": [".devcontainer/requirements-*.txt"],
+      "matchPackageNames": ["pip", "setuptools", "wheel", "pytest", "boto3"],
+      "enabled": false
+    }
   ]
 }

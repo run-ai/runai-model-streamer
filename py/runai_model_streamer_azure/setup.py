@@ -1,3 +1,6 @@
+# Name and dependencies are in pyproject.toml; this file keeps what needs code (the version
+# from PACKAGE_VERSION, the platform wheel tag, the bundled .so and its check) and the license
+# files.
 import os
 from setuptools import setup, find_packages
 from setuptools.command.bdist_wheel import bdist_wheel as _bdist_wheel
@@ -36,11 +39,12 @@ def assert_lib_exists():
 
 assert_lib_exists()
 setup(
-    name="runai-model-streamer-azure",
     version=VERSION,
-    license_files=("LICENSE", "../../cpp/NOTICE"),
+    # The wheel ships this directory's NOTICE: the third-party attribution of what its .so links,
+    # kept current by the Renovate pipeline. Here rather than PEP 639's [project].license-files,
+    # which needs setuptools >= 77 and so Python >= 3.9; the devcontainer builds with Python 3.8.
+    license_files=("LICENSE", "NOTICE"),  # attribution: ships NOTICE
     packages=find_packages(),
-    install_requires=["azure-storage-blob", "azure-identity"],
     data_files=[("/runai_model_streamer/libstreamer/lib/", [LIB])],
     cmdclass={"bdist_wheel": bdist_wheel},
 )

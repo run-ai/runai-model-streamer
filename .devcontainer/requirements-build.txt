@@ -1,0 +1,7 @@
+# Wheel build tools for the devcontainer (.devcontainer/Dockerfile). Exact pins: the newest
+# releases that still run on the image's Python 3.8 (pip 25.1, setuptools 76 and wheel 0.46
+# need 3.9). `make build` runs `setup.py bdist_wheel` without build isolation, so this
+# setuptools is the one that builds every wheel.
+pip==25.0.1
+setuptools==75.3.4
+wheel==0.45.1

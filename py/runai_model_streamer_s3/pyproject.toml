@@ -1,2 +1,11 @@
 [build-system]
 requires = ["setuptools>=70.1"]
+
+[project]
+name = "runai-model-streamer-s3"
+dependencies = [
+    "boto3",
+]
+# version comes from PACKAGE_VERSION, set in setup.py; license files are set there too
+# (see the comment on license_files).
+dynamic = ["version"]
