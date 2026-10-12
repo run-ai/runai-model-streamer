@@ -3,6 +3,10 @@ name: Build devcontainer
 on:
   workflow_call:
     inputs:
+      baseline_tag:
+        description: Published branch image tag to update or use as a build cache.
+        type: string
+        default: latest
       publish:
         description: Push to GHCR; otherwise export the image as a workflow artifact.
         type: boolean
@@ -33,10 +37,16 @@ jobs:
       shell: bash
       env:
         PUBLISH: ${{ inputs.publish }}
+        BASELINE_TAG: ${{ inputs.baseline_tag }}
       run: |
+        set -euo pipefail
+        if [[ "$BASELINE_TAG" != latest && ! "$BASELINE_TAG" =~ ^release-[0-9]+\.[0-9]+$ ]]; then
+          echo "::error::Unsupported devcontainer baseline tag" >&2
+          exit 1
+        fi
         repository="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
         image_name="ghcr.io/${repository}/devcontainer"
-        tag=latest
+        tag="$BASELINE_TAG"
         artifact=
         if [[ "$PUBLISH" != true ]]; then
           tag="pr-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -52,12 +62,25 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
+    - name: Select available branch cache
+      id: cache
+      shell: bash
+      env:
+        BASELINE_IMAGE: ${{ steps.image.outputs.name }}:${{ inputs.baseline_tag }}
+      run: |
+        set -euo pipefail
+        if docker manifest inspect "$BASELINE_IMAGE" > /dev/null 2>&1; then
+          printf 'image=%s\n' "$BASELINE_IMAGE" >> "$GITHUB_OUTPUT"
+        else
+          echo "Branch cache unavailable; building the devcontainer from source."
+        fi
+
     - name: Build devcontainer
       uses: devcontainers/ci@v0.3
       with:
         imageName: ${{ steps.image.outputs.name }}
         imageTag: ${{ steps.image.outputs.tag }}
-        cacheFrom: ${{ steps.image.outputs.name }}:latest
+        cacheFrom: ${{ steps.cache.outputs.image }}
         push: ${{ inputs.publish && 'always' || 'never' }}
 
     - name: Export devcontainer image
