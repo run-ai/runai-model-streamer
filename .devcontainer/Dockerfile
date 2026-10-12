@@ -8,14 +8,14 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
-# `make build` runs `setup.py bdist_wheel` directly, with no PEP 517 isolation, so it never
-# reads py/*/pyproject.toml's setuptools pin. Keep this in sync with that pin by hand. Exact
-# pin, not a floor, to match this file's other dependencies. Newest versions still compatible
-# with this image's Python 3.8 - setuptools 76.0.0 needs >=3.9, wheel 0.46.0 needs >=3.9.
-# Upgrade Ubuntu's pip before setuptools to avoid legacy version-parsing failures.
-# pip 25.1 drops Python 3.8 support.
-RUN python3 -m pip install --upgrade "pip==25.0.1" \
-    && python3 -m pip install "setuptools==75.3.4" "wheel==0.45.1"
+# The wheel build tools, pinned in requirements-build.txt. `make build` runs `setup.py bdist_wheel`
+# directly, with no PEP 517 isolation, so it never reads py/*/pyproject.toml's [build-system]
+# floor: this pin is the setuptools that builds the wheels. Newest versions still compatible with
+# this image's Python 3.8 - setuptools 76.0.0 needs >=3.9, wheel 0.46.0 needs >=3.9, pip 25.1
+# drops 3.8. pip is upgraded first, on its own, so Ubuntu's old pip never parses the rest.
+COPY requirements-build.txt requirements-dev.txt /tmp/requirements/
+RUN python3 -m pip install --upgrade "$(grep '^pip==' /tmp/requirements/requirements-build.txt)" \
+    && python3 -m pip install -r /tmp/requirements/requirements-build.txt
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     gcc-x86-64-linux-gnu g++-x86-64-linux-gnu binutils-x86-64-linux-gnu \
@@ -48,10 +48,8 @@ RUN printf '%s\n' \
          || x86_64-linux-gnu-gcc -c -fPIC /tmp/tsan_preinit.c -o "$TSAN_DIR/libtsan_preinit.o"; } \
     && rm /tmp/tsan_preinit.c
 
-RUN pip install \
-    boto3 \
-    cpplint==1.5.4 \
-    pytest
+# Tests and lint (pytest, cpplint, boto3 for the S3 tests), pinned in requirements-dev.txt.
+RUN python3 -m pip install -r /tmp/requirements/requirements-dev.txt
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     cmake \
@@ -92,9 +90,12 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && npm install -g azurite \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL -o openssl-3.5.0.tar.gz https://www.openssl.org/source/openssl-3.5.0.tar.gz && \
-    tar zxf openssl-3.5.0.tar.gz && \
-    cd openssl-3.5.0 && \
+# attribution: shipped module=py/runai_model_streamer_s3,py/runai_model_streamer_azure
+# renovate: datasource=github-tags depName=openssl/openssl extractVersion=^openssl-(?<version>\d+\.\d+\.\d+)$
+ARG OPENSSL_VERSION=3.5.0
+RUN curl -fsSL -o openssl-${OPENSSL_VERSION}.tar.gz https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz && \
+    tar zxf openssl-${OPENSSL_VERSION}.tar.gz && \
+    cd openssl-${OPENSSL_VERSION} && \
 
     ./Configure no-ssl2 no-zlib no-shared no-comp no-dynamic-engine enable-ec_nistp_64_gcc_128 --cross-compile-prefix=/usr/bin/x86_64-linux-gnu- --prefix=/opt/x86_64-ssl --openssldir=/opt/x86_64-ssl --libdir=lib linux-x86_64 && \
         make -j4 > /dev/null && \
@@ -109,11 +110,15 @@ RUN curl -fsSL -o openssl-3.5.0.tar.gz https://www.openssl.org/source/openssl-3.
         make distclean > /dev/null && \
 
     cd - && \
-    rm -rf openssl-3.5.0 openssl-3.5.0.tar.gz
+    rm -rf openssl-${OPENSSL_VERSION} openssl-${OPENSSL_VERSION}.tar.gz
 
-RUN curl -fsSL -o curl-8.13.0.tar.gz https://github.com/curl/curl/releases/download/curl-8_13_0/curl-8.13.0.tar.gz && \
-    tar zxf curl-8.13.0.tar.gz && \
-    cd curl-8.13.0 && \
+# attribution: shipped module=py/runai_model_streamer_s3,py/runai_model_streamer_azure
+# renovate: datasource=github-releases depName=curl/curl versioning=regex:^(?<major>\d+)_(?<minor>\d+)_(?<patch>\d+)$ extractVersion=^curl-(?<version>\d+_\d+_\d+)$
+ARG CURL_VERSION=8_13_0
+RUN CURL_DOTTED="$(echo "${CURL_VERSION}" | tr _ .)" && \
+    curl -fsSL -o curl-${CURL_DOTTED}.tar.gz https://github.com/curl/curl/releases/download/curl-${CURL_VERSION}/curl-${CURL_DOTTED}.tar.gz && \
+    tar zxf curl-${CURL_DOTTED}.tar.gz && \
+    cd curl-${CURL_DOTTED} && \
 
     AR=/usr/bin/x86_64-linux-gnu-ar \
     AS=/usr/bin/x86_64-linux-gnu-as \
@@ -142,11 +147,14 @@ RUN curl -fsSL -o curl-8.13.0.tar.gz https://github.com/curl/curl/releases/downl
         make clean > /dev/null && \
 
     cd - && \
-    rm -rf curl-7.83.1 curl-7.83.1.tar.gz
+    rm -rf curl-${CURL_DOTTED} curl-${CURL_DOTTED}.tar.gz
 
-RUN curl -fsSL -o zlib-1.3.1.tar.gz https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz && \
-    tar zxf zlib-1.3.1.tar.gz && \
-    cd zlib-1.3.1 && \
+# attribution: shipped module=py/runai_model_streamer_s3,py/runai_model_streamer_azure
+# renovate: datasource=github-releases depName=madler/zlib extractVersion=^v(?<version>.*)$
+ARG ZLIB_VERSION=1.3.1
+RUN curl -fsSL -o zlib-${ZLIB_VERSION}.tar.gz https://github.com/madler/zlib/releases/download/v${ZLIB_VERSION}/zlib-${ZLIB_VERSION}.tar.gz && \
+    tar zxf zlib-${ZLIB_VERSION}.tar.gz && \
+    cd zlib-${ZLIB_VERSION} && \
 
     AR=/usr/bin/x86_64-linux-gnu-ar \
     AS=/usr/bin/x86_64-linux-gnu-as \
@@ -170,11 +178,14 @@ RUN curl -fsSL -o zlib-1.3.1.tar.gz https://github.com/madler/zlib/releases/down
         make install > /dev/null && \
         make clean > /dev/null && \
     cd - && \
-    rm -rf zlib-1.3.1 zlib-1.3.1.tar.gz
+    rm -rf zlib-${ZLIB_VERSION} zlib-${ZLIB_VERSION}.tar.gz
 
 ADD aarch64-linux-gnu.cmake /opt/toolchains/aarch64-linux-gnu.cmake
 ADD x86_64-linux-gnu.cmake /opt/toolchains/x86_64-linux-gnu.cmake
-RUN git clone --recurse-submodules --depth 1 --branch "1.11.584" https://github.com/aws/aws-sdk-cpp /opt/aws-sdk-cpp && \
+# attribution: shipped module=py/runai_model_streamer_s3
+# renovate: datasource=github-tags depName=aws/aws-sdk-cpp
+ARG AWS_SDK_CPP_VERSION=1.11.584
+RUN git clone --recurse-submodules --depth 1 --branch "${AWS_SDK_CPP_VERSION}" https://github.com/aws/aws-sdk-cpp /opt/aws-sdk-cpp && \
     cd /opt/aws-sdk-cpp && \
     
     cmake -DCMAKE_TOOLCHAIN_FILE=/opt/toolchains/x86_64-linux-gnu.cmake \
@@ -221,9 +232,12 @@ RUN git clone --recurse-submodules --depth 1 --branch "1.11.584" https://github.
     make install && \
     rm -rf /opt/aws-sdk-cpp
 
-RUN curl -fsSL -o libxml2-2.13.5.tar.xz https://download.gnome.org/sources/libxml2/2.13/libxml2-2.13.5.tar.xz && \
-    tar xf libxml2-2.13.5.tar.xz && \
-    cd libxml2-2.13.5 && \
+# attribution: shipped module=py/runai_model_streamer_azure
+# renovate: datasource=github-tags depName=GNOME/libxml2 extractVersion=^v(?<version>.*)$
+ARG LIBXML2_VERSION=2.13.5
+RUN curl -fsSL -o libxml2-${LIBXML2_VERSION}.tar.xz https://download.gnome.org/sources/libxml2/${LIBXML2_VERSION%.*}/libxml2-${LIBXML2_VERSION}.tar.xz && \
+    tar xf libxml2-${LIBXML2_VERSION}.tar.xz && \
+    cd libxml2-${LIBXML2_VERSION} && \
 
     AR=/usr/bin/x86_64-linux-gnu-ar \
     AS=/usr/bin/x86_64-linux-gnu-as \
@@ -259,13 +273,16 @@ RUN curl -fsSL -o libxml2-2.13.5.tar.xz https://download.gnome.org/sources/libxm
         make distclean > /dev/null && \
 
     cd - && \
-    rm -rf libxml2-2.13.5 libxml2-2.13.5.tar.xz
+    rm -rf libxml2-${LIBXML2_VERSION} libxml2-${LIBXML2_VERSION}.tar.xz
 
 # Build Azure SDK for C++ (optimized with shared CMake options)
 SHELL ["/bin/bash", "-c"]
+# attribution: shipped module=py/runai_model_streamer_azure
+# renovate: datasource=github-tags depName=Azure/azure-sdk-for-cpp extractVersion=^azure-storage-blobs_(?<version>.*)$
+ARG AZURE_STORAGE_BLOBS_VERSION=12.15.0
 RUN git clone --recurse-submodules https://github.com/Azure/azure-sdk-for-cpp /opt/azure-sdk-cpp && \
     cd /opt/azure-sdk-cpp && \
-    git checkout azure-storage-blobs_12.15.0 && \
+    git checkout azure-storage-blobs_${AZURE_STORAGE_BLOBS_VERSION} && \
     \
     # Helper function to build Azure SDK components
     build_azure_sdk_components() { \
@@ -344,10 +361,14 @@ RUN NATIVE_ARCH=$(uname -m | sed 's/x86_64/x86_64/;s/aarch64/aarch64/') && \
 # libstreamer.so and shipped, silently. With one, a regenerated archive fails the image build loudly -
 # and a loud failure that needs a one-line update beats an unverified dependency in a release
 # artifact.
-RUN curl -fsSL -o liburing-2.14.tar.gz https://github.com/axboe/liburing/archive/refs/tags/liburing-2.14.tar.gz && \
-    echo "5f80964108981c6ad979c735f0b4877d5f49914c2a062f8e88282f26bf61de0c  liburing-2.14.tar.gz" | sha256sum -c - && \
-    tar zxf liburing-2.14.tar.gz && \
-    cd liburing-liburing-2.14 && \
+# attribution: shipped module=py/runai_model_streamer
+# renovate: datasource=github-tags depName=axboe/liburing extractVersion=^liburing-(?<version>.*)$
+ARG LIBURING_VERSION=2.14
+ARG LIBURING_SHA256=5f80964108981c6ad979c735f0b4877d5f49914c2a062f8e88282f26bf61de0c
+RUN curl -fsSL -o liburing-${LIBURING_VERSION}.tar.gz https://github.com/axboe/liburing/archive/refs/tags/liburing-${LIBURING_VERSION}.tar.gz && \
+    echo "${LIBURING_SHA256}  liburing-${LIBURING_VERSION}.tar.gz" | sha256sum -c - && \
+    tar zxf liburing-${LIBURING_VERSION}.tar.gz && \
+    cd liburing-liburing-${LIBURING_VERSION} && \
 
     CC=/usr/bin/x86_64-linux-gnu-gcc \
     ./configure --use-libc --prefix=/opt/x86_64-uring --libdir=/opt/x86_64-uring/lib && \
@@ -368,7 +389,7 @@ RUN curl -fsSL -o liburing-2.14.tar.gz https://github.com/axboe/liburing/archive
         make clean > /dev/null && \
 
     cd - && \
-    rm -rf liburing-liburing-2.14 liburing-2.14.tar.gz
+    rm -rf liburing-liburing-${LIBURING_VERSION} liburing-${LIBURING_VERSION}.tar.gz
 
 # libaio, for the fallback engine where io_uring is unavailable. Static only, same reasoning as
 # liburing. Its symbols carry .symver directives, which need no version nodes here because
@@ -386,10 +407,14 @@ RUN curl -fsSL -o liburing-2.14.tar.gz https://github.com/axboe/liburing/archive
 #               (deb.debian.org/debian/pool/main/liba/libaio/libaio_0.3.113.orig.tar.gz), and its
 #               src/ matches the libaio-0.3.113 git tag. If this host disappears too, point the URL
 #               at any mirror - a wrong tarball then fails here instead of shipping.
-RUN curl -fsSL -o libaio-0.3.113.tar.gz https://releases.pagure.org/libaio/libaio-0.3.113.tar.gz && \
-    echo "2c44d1c5fd0d43752287c9ae1eb9c023f04ef848ea8d4aafa46e9aedb678200b  libaio-0.3.113.tar.gz" | sha256sum -c - && \
-    tar zxf libaio-0.3.113.tar.gz && \
-    cd libaio-0.3.113 && \
+# attribution: shipped module=py/runai_model_streamer
+# renovate: datasource=git-tags depName=libaio packageName=https://pagure.io/libaio.git extractVersion=^libaio-(?<version>.*)$
+ARG LIBAIO_VERSION=0.3.113
+ARG LIBAIO_SHA256=2c44d1c5fd0d43752287c9ae1eb9c023f04ef848ea8d4aafa46e9aedb678200b
+RUN curl -fsSL -o libaio-${LIBAIO_VERSION}.tar.gz https://releases.pagure.org/libaio/libaio-${LIBAIO_VERSION}.tar.gz && \
+    echo "${LIBAIO_SHA256}  libaio-${LIBAIO_VERSION}.tar.gz" | sha256sum -c - && \
+    tar zxf libaio-${LIBAIO_VERSION}.tar.gz && \
+    cd libaio-${LIBAIO_VERSION} && \
 
     AR=/usr/bin/x86_64-linux-gnu-ar \
     RANLIB=/usr/bin/x86_64-linux-gnu-ranlib \
@@ -410,5 +435,5 @@ RUN curl -fsSL -o libaio-0.3.113.tar.gz https://releases.pagure.org/libaio/libai
         make -C src clean > /dev/null && \
 
     cd - && \
-    rm -rf libaio-0.3.113 libaio-0.3.113.tar.gz
+    rm -rf libaio-${LIBAIO_VERSION} libaio-${LIBAIO_VERSION}.tar.gz
 

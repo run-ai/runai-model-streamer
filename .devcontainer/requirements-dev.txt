@@ -1,0 +1,6 @@
+# Test and lint tools for the devcontainer (.devcontainer/Dockerfile), for the image's Python 3.8.
+# The Python package's own test dependencies stay in py/runai_model_streamer/requirements.dev,
+# which `make -C py test` installs.
+boto3==1.37.38
+cpplint==1.5.4
+pytest==8.3.5
