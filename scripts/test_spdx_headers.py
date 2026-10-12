@@ -169,6 +169,41 @@ class EndToEndTests(unittest.TestCase):
         with open(path) as f:
             self.assertEqual(f.read(), "#!/usr/bin/env python3\n" + HASH_HEADER + "\nprint('hi')\n")
 
+    def test_fix_handles_a_shebang_without_a_newline(self):
+        path = self.add_file("tool.py", "#!/usr/bin/env python3")
+        code, _ = self.run_script("--fix")
+        self.assertEqual(code, 0)
+        with open(path) as f:
+            self.assertEqual(f.read(), "#!/usr/bin/env python3\n" + HASH_HEADER + "\n")
+
+    def test_fix_refuses_a_file_that_is_not_utf8_and_leaves_it_unchanged(self):
+        original = b"// caf\xe9\nint x;\n"
+        path = os.path.join(self.repo, "a.cc")
+        with open(path, "wb") as f:
+            f.write(original)
+        subprocess.check_call(["git", "-C", self.repo, "add", "a.cc"])
+        code, out = self.run_script("--fix")
+        self.assertEqual(code, 1)
+        self.assertIn("not UTF-8", out)
+        with open(path, "rb") as f:
+            self.assertEqual(f.read(), original)
+
+    def test_non_utf8_file_that_already_has_the_header_passes(self):
+        path = os.path.join(self.repo, "a.cc")
+        with open(path, "wb") as f:
+            f.write(C_HEADER.encode() + b"// caf\xe9\n")
+        subprocess.check_call(["git", "-C", self.repo, "add", "a.cc"])
+        self.assertEqual(self.run_script(), (0, ""))
+
+    def test_fix_keeps_crlf_line_endings(self):
+        path = os.path.join(self.repo, "a.py")
+        with open(path, "wb") as f:
+            f.write(b"import os\r\n")
+        subprocess.check_call(["git", "-C", self.repo, "add", "a.py"])
+        self.run_script("--fix")
+        with open(path, "rb") as f:
+            self.assertTrue(f.read().endswith(b"\n\nimport os\r\n"))
+
     def test_relative_file_path_is_resolved_from_the_current_folder(self):
         # Two files miss the header: sub/a.py and other.py.
         self.add_file("sub/a.py", "import os\n")

@@ -71,7 +71,8 @@ def add_header(text, style):
     header = "\n".join(header_for(style)) + "\n\n"
     # A shebang line (#!/usr/bin/env python3) must stay first, so the header goes after it.
     if text.startswith("#!"):
-        shebang, rest = text.split("\n", 1)
+        # partition() also works when the shebang is the whole file and has no newline.
+        shebang, _, rest = text.partition("\n")
         return shebang + "\n" + header + rest
     return header + text
 
@@ -96,7 +97,7 @@ def main():
         out = subprocess.check_output(["git", "-C", root, "ls-files", "-z"])
         files = [f for f in out.decode().split("\0") if f]
 
-    missing, unknown, fixed = [], [], []
+    missing, unknown, not_utf8, fixed = [], [], [], []
     # From here on, rel is always relative to the repo root, however the file was given.
     for rel in files:
         full = os.path.join(root, rel)
@@ -111,6 +112,7 @@ def main():
         # Empty and binary files.
         if not data.strip() or b"\0" in data[:8192]:
             continue
+        # Lossy decoding is fine for reading: the header is plain ASCII.
         text = data.decode("utf-8", errors="replace")
         if has_header(text):
             continue
@@ -118,7 +120,14 @@ def main():
         if style is None:
             unknown.append(rel)
         elif args.fix:
-            with open(full, "w") as f:
+            # Writing the lossy text back would change the file's bytes, so refuse a non-UTF-8 file.
+            try:
+                text = data.decode("utf-8")
+            except UnicodeDecodeError:
+                not_utf8.append(rel)
+                continue
+            # newline="" keeps the line endings (CRLF) as they are.
+            with open(full, "w", encoding="utf-8", newline="") as f:
                 f.write(add_header(text, style))
             fixed.append(rel)
         else:
@@ -126,13 +135,15 @@ def main():
 
     for rel in unknown:
         print("unknown file type (edit scripts/spdx_headers.py): " + rel)
+    for rel in not_utf8:
+        print("not UTF-8, add the header by hand: " + rel)
     for rel in missing:
         print("missing SPDX header (run scripts/spdx_headers.py --fix): " + rel)
     for rel in fixed:
         print("fixed   " + rel)
     if fixed:
         print("Fixed %d file(s)." % len(fixed))
-    return 1 if (missing or unknown) else 0
+    return 1 if (missing or unknown or not_utf8) else 0
 
 
 if __name__ == "__main__":

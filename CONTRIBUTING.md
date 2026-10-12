@@ -100,7 +100,7 @@ SPDX-License-Identifier: Apache-2.0
 
 Documentation, configuration and data files (for example `.md`, `.yaml`, `.json`) do not need one.
 A pull request check fails when a file is missing the header. To add it, run
-`python3 scripts/spdx_headers.py --fix` from anywhere in the repository.
+`python3 scripts/spdx_headers.py --fix` from the repository root.
 
 To add the header automatically on every commit, install [pre-commit](https://pre-commit.com) and run
 `pre-commit install` once.
