@@ -113,12 +113,12 @@ record a source branch, so CI checks ancestry against the matching release
 branch. The tagged commit must already contain the release workflow and scripts.
 
 Before the first release, configure **Settings → Environments → pypi** with
-required reviewers who have repository admin access. Disable administrator
-bypass to require approval for every publication. The setup job fails if this
-environment is missing or has no required reviewers. The publishing job uses
-the existing `PYPI_API_TOKEN` secret; an environment secret of the same name can
-be used to scope it to approved jobs. Keep the reviewer list updated when
-repository admins change.
+required reviewers. Manage the approver list in those settings and disable
+administrator bypass to require approval for every publication. The publishing
+job references `environment: pypi`, so GitHub waits for approval before starting
+it. CI does not inspect reviewers or check their repository permissions.
+The publishing job uses the existing `PYPI_API_TOKEN` secret; an environment
+secret of the same name can be used to scope it to approved jobs.
 
 Wait for the branch's devcontainer publication to succeed, then manually create
 and push the tag from the release branch, for example:

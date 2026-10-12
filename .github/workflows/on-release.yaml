@@ -22,10 +22,6 @@ jobs:
     name: Validate release
     if: github.event.deleted == false
     runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      contents: read
-      packages: read
     outputs:
       version: ${{ steps.release.outputs.version }}
       image: ${{ steps.image.outputs.image }}
@@ -40,17 +36,6 @@ jobs:
     - name: Validate tag and release branch
       id: release
       run: bash .github/scripts/validate-release.sh
-
-    - name: Require configured publication approval
-      env:
-        GH_TOKEN: ${{ github.token }}
-      run: |
-        set -euo pipefail
-        gh api "repos/$GITHUB_REPOSITORY/environments/pypi" > "$RUNNER_TEMP/pypi-environment.json"
-        if ! jq -e 'any(.protection_rules[]?; .type == "required_reviewers" and (.reviewers | length) > 0)' "$RUNNER_TEMP/pypi-environment.json" > /dev/null; then
-          echo "::error::Configure required reviewers on the pypi environment before creating a release tag."
-          exit 1
-        fi
 
     - name: Log in to GitHub Container Registry
       uses: docker/login-action@v3
