@@ -137,24 +137,28 @@ the existing x86_64 C++, Python, integration, and filesystem-strategy tests.
 There is no fallback to master's devcontainer. Ensure the branch image matches
 the tagged source's build requirements, especially when tagging an older commit.
 
-After every build and test succeeds, CI validates the eight wheels and saves
+After every build and test succeeds, CI collects one wheel for each package and
+architecture at the tagged version and saves all eight
 them with `SHA256SUMS` in a workflow artifact retained for 30 days. Review the
 version, commit, image digest, and checksums in the job summaries, then approve
 the **pypi** deployment in the Actions run. Rejection prevents publication.
 
 Approval publishes those exact wheels to the existing PyPI projects and attaches
 the same eight wheels plus `SHA256SUMS` to the GitHub release. Publication does
-not rebuild anything. A GitHub release is created if needed, initially as a
-draft until every asset is uploaded. Existing release notes are preserved.
+not rebuild anything. The existing publishing actions handle the uploads:
+`pypa/gh-action-pypi-publish` for PyPI and `softprops/action-gh-release` for GitHub.
+A GitHub release is created if needed. Existing release notes are preserved.
 Automatically created maintenance releases do not change GitHub's **Latest**
 release selection. Download all wheels and the checksum file into one directory
 and run `sha256sum --check SHA256SUMS` to verify them.
 
 If publication partially fails, use **Re-run failed jobs** on the same workflow
-run and approve again. The job reuses the tested bundle and skips only existing
-PyPI files or GitHub assets whose SHA-256 matches. Conflicting bytes stop the
-release; existing files are never overwritten. PyPI and GitHub publication are
-not atomic, so a failed run may have published some wheels already. Do not use
+run and approve again. The job reuses the tested bundle and verifies its
+checksums before uploading. The publishing actions skip files that already
+exist; they do not compare remote checksums. If files may have been uploaded
+from a different run, compare their checksums with `SHA256SUMS` before retrying.
+GitHub assets are not overwritten. PyPI and GitHub publication are not atomic,
+so a failed run may have published some wheels already. Do not use
 **Re-run all jobs** to recover a partial publication: rebuilt wheels can have
 different bytes. If the bundle has expired, use a new patch version instead of
 replacing published files. The tag and its release-branch membership are checked
@@ -167,6 +171,6 @@ be pushed to GitHub before any workflow starts.
 Validate release automation locally with:
 
 ```sh
-python3 -B -m unittest discover -s .github/scripts -p 'test_release*.py' -v
+python3 -B -m unittest discover -s .github/scripts -p 'test_release.py' -v
 ```
 

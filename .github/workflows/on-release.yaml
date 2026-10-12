@@ -146,9 +146,22 @@ jobs:
         path: packages
         merge-multiple: true
 
-    - name: Validate wheels and generate checksums
+    - name: Collect wheels and generate checksums
       run: |
-        python3 .github/scripts/release_artifacts.py bundle --version "$PACKAGE_VERSION"
+        set -euo pipefail
+        shopt -s nullglob
+        mkdir -p release-bundle/wheels
+        for package in runai_model_streamer runai_model_streamer_s3 runai_model_streamer_gcs runai_model_streamer_azure; do
+          for arch in x86_64 aarch64; do
+            wheels=(packages/"$package"/dist/"$package"-"$PACKAGE_VERSION"-py3-none-*_"$arch".whl)
+            if [[ ${#wheels[@]} != 1 ]]; then
+              echo "::error::Expected one $package wheel for $arch at version $PACKAGE_VERSION."
+              exit 1
+            fi
+            cp "${wheels[0]}" release-bundle/wheels/
+          done
+        done
+        (cd release-bundle/wheels && sha256sum *.whl > ../SHA256SUMS)
         cat release-bundle/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
 
     - name: Preserve tested release bundle
@@ -188,17 +201,25 @@ jobs:
         path: release-bundle
         merge-multiple: true
 
-    - name: Verify checksums and prepare unpublished wheels
-      id: prepare
-      run: python3 .github/scripts/release_artifacts.py prepare-publish --version "$PACKAGE_VERSION"
+    - name: Verify tested wheel checksums
+      working-directory: release-bundle/wheels
+      run: sha256sum --check ../SHA256SUMS
 
     - name: Publish wheels to PyPI
-      if: steps.prepare.outputs.pending != '0'
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
         password: ${{ secrets.PYPI_API_TOKEN }}
-        packages-dir: pypi-upload/
+        packages-dir: release-bundle/wheels/
+        skip-existing: true
         print-hash: true
 
     - name: Publish GitHub release assets
-      run: python3 .github/scripts/release_artifacts.py publish-github --version "$PACKAGE_VERSION"
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ needs.setup.outputs.version }}
+        files: |
+          release-bundle/wheels/*.whl
+          release-bundle/SHA256SUMS
+        fail_on_unmatched_files: true
+        overwrite_files: false
+        make_latest: false
