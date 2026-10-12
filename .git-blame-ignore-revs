@@ -1,0 +1,6 @@
+# Commits that GitHub and `git blame --ignore-revs-file` should skip.
+# Run once locally to use it with plain git:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# chore: add the NVIDIA SPDX copyright header to source files (#237)
+edf2d98bd8c9c552e4cba68bb66cdb385edcf39c
