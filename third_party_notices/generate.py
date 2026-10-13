@@ -50,18 +50,26 @@ def load_sources():
         return json.load(f)
 
 
+def sha256(path):
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def up_to_date(component, entry, sources):
+    """True if the file exists, came from the URL (and archive member) in the manifest, and is unmodified."""
+    path = local_path(component, entry)
+    record = sources.get(source_key(component, entry))
+    if not isinstance(record, dict):
+        return False
+    return (os.path.exists(path) and record.get("url") == entry["url"] and record.get("member") == entry.get("member")
+            and record.get("sha256") == sha256(path))
+
+
 def stale_sources():
-    """Downloaded files that are missing, or that came from a URL other than the one in the manifest."""
+    """Downloaded files that are missing, modified, or that came from a source other than the manifest's."""
     sources = load_sources()
-    stale = []
-    for component in load()["components"]:
-        for entry in component["files"]:
-            if "local" in entry:
-                continue
-            key = source_key(component, entry)
-            if not os.path.exists(local_path(component, entry)) or sources.get(key) != entry["url"]:
-                stale.append(key)
-    return stale
+    return [source_key(c, e) for c in load()["components"] for e in c["files"]
+            if "local" not in e and not up_to_date(c, e, sources)]
 
 
 def fetch():
@@ -73,7 +81,7 @@ def fetch():
                 continue
             path = local_path(component, entry)
             key = source_key(component, entry)
-            if os.path.exists(path) and sources.get(key) == entry["url"]:
+            if up_to_date(component, entry, sources):
                 continue
             os.makedirs(os.path.dirname(path), exist_ok=True)
             try:
@@ -88,7 +96,9 @@ def fetch():
                     data = archive.extractfile(sorted(names, key=len)[0]).read()
             with open(path, "wb") as f:
                 f.write(data)
-            sources[key] = entry["url"]
+            sources[key] = {"url": entry["url"], "sha256": sha256(path)}
+            if "member" in entry:
+                sources[key]["member"] = entry["member"]
             print("fetched", component["id"], entry["name"])
     with open(SOURCES, "w") as f:
         json.dump(sources, f, indent=1, sort_keys=True)

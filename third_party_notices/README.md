@@ -11,7 +11,7 @@ holds those notices and the tooling to regenerate them.
 |---|---|
 | `components.json` | Manifest, the source of truth: one entry per third-party component (name, version, SPDX license, copyright, linkage, which libraries use it, upstream license/NOTICE file URLs). |
 | `licenses/<id>/` | Upstream license and NOTICE files, downloaded verbatim from the pinned version. Committed. |
-| `licenses/sources.json` | The URL each downloaded file came from. `fetch` re-downloads a file whose URL in `components.json` changed, and `check` fails if they differ. |
+| `licenses/sources.json` | The URL, archive member and SHA-256 of each downloaded file. `fetch` re-downloads a file whose URL or member in `components.json` changed. `check` fails if a file is missing, was edited by hand or does not match the manifest. |
 | `generate.py` | `fetch` downloads the files, `build` writes the outputs, `check` fails if the outputs or the downloaded files are stale. |
 | `list_linked_components.py` | Reads linker maps and lists what was really linked. |
 | `libstreamer.txt`, `libstreamers3.txt`, `libstreamergcs.txt`, `libstreamerazure.txt` | Generated. One notice per native library. |
