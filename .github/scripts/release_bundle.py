@@ -161,9 +161,11 @@ def verify_bundle(bundle, version):
     for arch in ARCHITECTURES:
         name = sdk_name(version, arch)
         with tarfile.open(bundle / "cpp" / f"{name}.tar.gz") as archive:
-            members = set(archive.getnames())
+            members = {member.name: member for member in archive.getmembers()}
         for required in ("LICENSE", NOTICE_NAME):
-            require(f"{name}/{required}" in members, f"{name}.tar.gz does not contain {required}")
+            member = members.get(f"{name}/{required}")
+            require(member is not None and member.isfile() and member.size > 0,
+                    f"{name}.tar.gz does not contain a regular, non-empty {required}")
 
 
 def main():
