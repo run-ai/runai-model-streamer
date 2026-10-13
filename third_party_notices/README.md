@@ -52,6 +52,19 @@ Run these whenever a dependency version, a build flag or the set of linked libra
    The map lists every archive that supplied an object file. Anything linked that is not in
    `components.json` is missing from the notices. The x86_64 and aarch64 sets must be compared;
    they differ slightly (see the notes in `components.json`).
+
+   **Build the way CI builds.** `cpp/Makefile` passes `--define USE_SYSTEM_LIBS=${USE_SYSTEM_LIBS}`
+   to the s3, gcs and azure builds, and `cpp/third_party/*.BUILD` and `*.bzl` select static or
+   dynamic libraries on it. Before building the maps, check how the release workflow
+   (`.github/workflows/on-release.yaml` and `build.yml`) sets it, and use the same value. At the time
+   of writing CI leaves it unset, which is the default (static) branch. The setting does not change
+   everything: for example `-lxml2` in `azure.bzl` is outside the select, and it links the static
+   `/opt/<arch>-xml2/lib/libxml2.a` because that directory holds no shared library.
+
+   **Trust the binary, not the build files.** A comment or a README may say a library is shared when
+   it is linked statically, or the reverse. For each library, check the map (`libxml2.a` supplying
+   object files means static) and `readelf -d lib<name>.so | grep NEEDED` (a library listed there is
+   dynamic and is not distributed by us). Both must agree with `components.json`.
 3. **Resolve versions.**
    - `/opt` libraries: the pins in `.devcontainer/Dockerfile`. For aws-sdk-cpp, the `crt/` submodule
      SHAs of the pinned tag give aws-crt-cpp, aws-c-*, aws-checksums and s2n-tls versions
