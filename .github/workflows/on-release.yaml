@@ -127,22 +127,17 @@ jobs:
         path: packages
         merge-multiple: true
 
-    - name: Collect wheels and generate checksums
+    - name: Download all C++ components
+      uses: actions/download-artifact@v7
+      with:
+        pattern: cpp-*
+        path: cpp-artifacts
+        merge-multiple: false
+
+    - name: Collect release assets and generate checksums
       run: |
         set -euo pipefail
-        shopt -s nullglob
-        mkdir -p release-bundle/wheels
-        for package in runai_model_streamer runai_model_streamer_s3 runai_model_streamer_gcs runai_model_streamer_azure; do
-          for arch in x86_64 aarch64; do
-            wheels=(packages/"$package"/dist/"$package"-"$PACKAGE_VERSION"-py3-none-*_"$arch".whl)
-            if [[ ${#wheels[@]} != 1 ]]; then
-              echo "::error::Expected one $package wheel for $arch at version $PACKAGE_VERSION."
-              exit 1
-            fi
-            cp "${wheels[0]}" release-bundle/wheels/
-          done
-        done
-        (cd release-bundle/wheels && sha256sum *.whl > ../SHA256SUMS)
+        python3 .github/scripts/release_bundle.py create --version "$PACKAGE_VERSION"
         cat release-bundle/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
 
     - name: Preserve tested release bundle
@@ -182,9 +177,8 @@ jobs:
         path: release-bundle
         merge-multiple: true
 
-    - name: Verify tested wheel checksums
-      working-directory: release-bundle/wheels
-      run: sha256sum --check ../SHA256SUMS
+    - name: Verify release bundle completeness and checksums
+      run: python3 .github/scripts/release_bundle.py verify --version "$PACKAGE_VERSION"
 
     - name: Publish wheels to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
@@ -199,6 +193,7 @@ jobs:
         tag_name: ${{ needs.setup.outputs.version }}
         files: |
           release-bundle/wheels/*.whl
+          release-bundle/cpp/*.tar.gz
           release-bundle/SHA256SUMS
         fail_on_unmatched_files: true
         overwrite_files: false
