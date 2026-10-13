@@ -39,6 +39,7 @@ SKIP = [
     "third_party_notices/licenses/curl/COPYING",
     "third_party_notices/licenses/gcc-runtime/COPYING.RUNTIME",
     "third_party_notices/licenses/gcc-runtime/COPYING3",
+    "third_party_notices/licenses/glibc-nonshared/COPYING.LIB",
     "third_party_notices/licenses/libaio/COPYING",
     "third_party_notices/licenses/libxml2/Copyright",
     "third_party_notices/licenses/nlohmann-json/LICENSE.MIT",

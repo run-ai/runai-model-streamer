@@ -11,7 +11,8 @@ holds those notices and the tooling to regenerate them.
 |---|---|
 | `components.json` | Manifest, the source of truth: one entry per third-party component (name, version, SPDX license, copyright, linkage, which libraries use it, upstream license/NOTICE file URLs). |
 | `licenses/<id>/` | Upstream license and NOTICE files, downloaded verbatim from the pinned version. Committed. |
-| `generate.py` | `fetch` downloads the files, `build` writes the outputs, `check` fails if the outputs are stale. |
+| `licenses/sources.json` | The URL each downloaded file came from. `fetch` re-downloads a file whose URL in `components.json` changed, and `check` fails if they differ. |
+| `generate.py` | `fetch` downloads the files, `build` writes the outputs, `check` fails if the outputs or the downloaded files are stale. |
 | `list_linked_components.py` | Reads linker maps and lists what was really linked. |
 | `libstreamer.txt`, `libstreamers3.txt`, `libstreamergcs.txt`, `libstreamerazure.txt` | Generated. One notice per native library. |
 | `sdk.txt` | Generated. The union of the four, for the C/C++ SDK archive. |
@@ -34,13 +35,16 @@ The wheel files are symlinks, and each `setup.py` lists `THIRD_PARTY_NOTICES.txt
 
 Run these whenever a dependency version, a build flag or the set of linked libraries changes.
 
-1. **Use the current devcontainer**: `docker pull ghcr.io/<org>/model-streamer/devcontainer:latest`
+1. **Use the current devcontainer**: `docker pull ghcr.io/dsx-ai-factory/model-streamer/devcontainer:latest`
    (see `.github/workflows/build-devcontainer.yml`). Prebuilt libraries live in `/opt/<arch>-*`.
 2. **Get a linker map per library and architecture**, inside the container, on a copy of the repo:
    ```
    cd cpp
-   bazel build streamer:libstreamer.so s3:libstreamers3.so gcs:libstreamergcs.so azure:libstreamerazure.so \
-       --config=x86_64 --linkopt=-Wl,-Map=/tmp/<name>.map     # one build per library, then repeat with --config=aarch64
+   bazel build streamer:libstreamer.so --config=x86_64 --linkopt=-Wl,-Map=/tmp/libstreamer.map
+   bazel build s3:libstreamers3.so --config=x86_64 --linkopt=-Wl,-Map=/tmp/libstreamers3.map
+   bazel build gcs:libstreamergcs.so --config=x86_64 --linkopt=-Wl,-Map=/tmp/libstreamergcs.map
+   bazel build azure:libstreamerazure.so --config=x86_64 --linkopt=-Wl,-Map=/tmp/libstreamerazure.map
+   # then repeat the four builds with --config=aarch64 and different map names
    python3 ../third_party_notices/list_linked_components.py /tmp/*.map
    ```
    The map lists every archive that supplied an object file. Anything linked that is not in
@@ -72,7 +76,7 @@ Run these whenever a dependency version, a build flag or the set of linked libra
    ```
    python3 third_party_notices/generate.py fetch    # downloads any new license/NOTICE file
    python3 third_party_notices/generate.py build    # rewrites the generated *.txt
-   python3 third_party_notices/generate.py check    # CI-style freshness check
+   python3 third_party_notices/generate.py check    # freshness check, also run by the SPDX headers workflow
    ```
    `fetch` reports files that do not exist upstream; remove those entries.
 6. **Verify the deliverables**: build the wheels and confirm `dist-info/LICENSE` and
@@ -89,9 +93,7 @@ Run these whenever a dependency version, a build flag or the set of linked libra
   text itself carries the copyright (MIT, BSD, zlib, curl) the text is authoritative.
 - Dual-licensed components record the option used (liburing: MIT).
 
-## Open items
+## Notes
 
-- libaio is LGPL-2.1-or-later and linked statically. It is listed like the other components. OSRB
-  guidance on static linking of LGPL code is pending; adjust when it arrives.
 - The CUDA driver header (`cuda.h`) is compiled against only (`libcuda.so` is loaded with
   `dlopen`); its notice is included because the header requires the disclaimer to be reproduced.

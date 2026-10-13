@@ -46,7 +46,12 @@
     "libstreamergcs",
     "libstreamerazure"
    ],
-   "files": [],
+   "files": [
+    {
+     "name": "COPYING.LIB",
+     "url": "https://raw.githubusercontent.com/bminor/glibc/glibc-2.31/COPYING.LIB"
+    }
+   ],
    "note": "Small glibc start-up/compatibility stubs linked statically on x86_64 only; all other glibc use is through the dynamic system libc.so.6 and is not distributed."
   },
   {
@@ -86,7 +91,7 @@
      "member": "COPYING"
     }
    ],
-   "note": "Linked statically. Source headers grant LGPL 'version 2 [sic, text is 2.1] or (at your option) any later version'. LGPL static-linking treatment is pending OSRB guidance; handled like the other components for now."
+   "note": "Linked statically. Source headers grant LGPL 'version 2 [sic, text is 2.1] or (at your option) any later version'."
   },
   {
    "id": "nvidia-cuda-headers",

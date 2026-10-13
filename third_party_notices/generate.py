@@ -5,7 +5,8 @@
 
     python3 generate.py fetch   download every license/NOTICE file listed in components.json
     python3 generate.py build   write <library>.txt for each native library, and sdk.txt (their union)
-    python3 generate.py check   fail if the committed output differs from what build would write
+    python3 generate.py check   fail if the committed output differs from what build would write,
+                                or a downloaded file does not match its URL in components.json
 
 See README.md for how components.json is produced and kept up to date.
 """
@@ -22,6 +23,7 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LICENSES = os.path.join(HERE, "licenses")
+SOURCES = os.path.join(LICENSES, "sources.json")
 APACHE_MARKER = "END OF TERMS AND CONDITIONS"
 RULE = "=" * 78
 
@@ -37,14 +39,41 @@ def local_path(component, entry):
     return os.path.join(LICENSES, component["id"], entry["name"])
 
 
+def source_key(component, entry):
+    return component["id"] + "/" + entry["name"]
+
+
+def load_sources():
+    if not os.path.exists(SOURCES):
+        return {}
+    with open(SOURCES) as f:
+        return json.load(f)
+
+
+def stale_sources():
+    """Downloaded files that are missing, or that came from a URL other than the one in the manifest."""
+    sources = load_sources()
+    stale = []
+    for component in load()["components"]:
+        for entry in component["files"]:
+            if "local" in entry:
+                continue
+            key = source_key(component, entry)
+            if not os.path.exists(local_path(component, entry)) or sources.get(key) != entry["url"]:
+                stale.append(key)
+    return stale
+
+
 def fetch():
     missing = []
+    sources = load_sources()
     for component in load()["components"]:
         for entry in component["files"]:
             if "local" in entry:
                 continue
             path = local_path(component, entry)
-            if os.path.exists(path):
+            key = source_key(component, entry)
+            if os.path.exists(path) and sources.get(key) == entry["url"]:
                 continue
             os.makedirs(os.path.dirname(path), exist_ok=True)
             try:
@@ -59,7 +88,11 @@ def fetch():
                     data = archive.extractfile(sorted(names, key=len)[0]).read()
             with open(path, "wb") as f:
                 f.write(data)
+            sources[key] = entry["url"]
             print("fetched", component["id"], entry["name"])
+    with open(SOURCES, "w") as f:
+        json.dump(sources, f, indent=1, sort_keys=True)
+        f.write("\n")
     if missing:
         sys.exit("not found upstream, remove from components.json if the project has no such file:\n  " + "\n  ".join(missing))
 
@@ -147,6 +180,9 @@ def main():
                 stale.append(name)
         if stale:
             sys.exit("out of date, run generate.py build: " + ", ".join(stale))
+        old = stale_sources()
+        if old:
+            sys.exit("license files do not match components.json, run generate.py fetch: " + ", ".join(old))
         print("up to date")
     else:
         sys.exit(__doc__)
