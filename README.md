@@ -105,9 +105,115 @@ Manual publication is supported only for `master` and `release/<major>.<minor>`.
 Tags and unrelated branch creation do not publish images. Branch image tags
 track the latest successfully published environment on their branch.
 
-This CI support is independent of the dependency upgrade and keeps the existing
-build and test matrix. Release tagging and package publication are a separate
-follow-up tracked in [issue #240](https://github.com/dsx-ai-factory/model-streamer/issues/240).
+### Publishing a release
+
+Release tags use `X.Y.Z` without a `v` prefix or prerelease suffix. For example,
+`0.17.2` must identify a commit contained in `release/0.17`. Git tags do not
+record a source branch, so CI checks ancestry against the matching release
+branch. The tagged commit must already contain the release workflow and scripts.
+
+Before the first release, configure **Settings → Environments → pypi** with
+required reviewers. Manage the approver list in those settings and disable
+administrator bypass to require approval for every publication. The publishing
+job references `environment: pypi`, so GitHub waits for approval before starting
+it. CI does not inspect reviewers or check their repository permissions.
+The publishing job uses the existing `PYPI_API_TOKEN` secret; an environment
+secret of the same name can be used to scope it to approved jobs.
+
+Wait for the branch's devcontainer publication to succeed, then manually create
+and push the tag from the release branch, for example:
+
+```sh
+git switch release/0.17
+git pull --ff-only
+git tag -a 0.17.2 -m "Release 0.17.2"
+git push origin refs/tags/0.17.2
+```
+
+The tag push triggers **RunAI Model Streamer Library - Release**. It validates
+the tag, selects `devcontainer:release-0.17`, and resolves that image to a digest
+shared by all jobs. CI builds all four packages for x86_64 and aarch64 and runs
+the existing x86_64 C++, Python, integration, and filesystem-strategy tests.
+There is no fallback to master's devcontainer. Ensure the branch image matches
+the tagged source's build requirements, especially when tagging an older commit.
+
+After every build and test succeeds, CI collects one wheel for each package and
+architecture at the tagged version, plus the C++ component artifacts from the
+same run. It packages one C++ SDK per architecture, checking the ELF architecture
+and matching public headers and licenses across all components. The eight wheels,
+two SDK archives, and combined `SHA256SUMS` are saved in a workflow artifact
+retained for 30 days. Review the version, commit, image digest, and checksums in
+the job summaries, then approve the **pypi** deployment in the Actions run.
+Rejection prevents publication.
+
+After approval, CI checks that the saved bundle contains all ten assets and that
+every checksum matches. It publishes those exact wheels to the existing PyPI
+projects and attaches the same eight wheels, both C++ SDK archives, and
+`SHA256SUMS` to the GitHub release. Publication does not rebuild anything.
+The existing publishing actions handle the uploads:
+`pypa/gh-action-pypi-publish` for PyPI and `softprops/action-gh-release` for GitHub.
+A GitHub release is created if needed. Existing release notes are preserved.
+Automatically created maintenance releases do not change GitHub's **Latest**
+release selection.
+
+For C/C++ applications, download the native SDK with headers and shared libraries.
+To use the Azure library, also install your Linux distribution's shared `libxml2`
+library; it is required by `libstreamerazure.so` and is not included in the SDK.
+For the Python API, install `runai-model-streamer` with pip or use its `.whl`
+release assets; the Python package bundles its native library.
+
+The SDK archives are named
+`runai-model-streamer-cpp-sdk-<version>-linux-x86_64.tar.gz` and
+`runai-model-streamer-cpp-sdk-<version>-linux-aarch64.tar.gz`. Each extracts into a
+directory with the same name (without `.tar.gz`) containing:
+
+```text
+include/streamer/    Public C API headers, usable from C and C++
+lib/libstreamer.so
+lib/libstreamers3.so
+lib/libstreamergcs.so
+lib/libstreamerazure.so
+LICENSE
+```
+
+The archives contain the original build outputs without rebuilding or modifying
+the library and header bytes. They use normalized ordering, permissions,
+ownership, and timestamps. Wheels remain under `wheels/` in the saved workflow
+bundle; SDK archives are under `cpp/`. Only the wheels are sent to PyPI.
+
+GitHub release assets and `SHA256SUMS` use plain filenames. Download all assets
+and the checksum file into one directory and run `sha256sum --check SHA256SUMS`.
+To verify only the SDK for your architecture, download it and `SHA256SUMS` into
+one directory and run `sha256sum --check --ignore-missing SHA256SUMS`.
+To verify an extracted workflow bundle before manual recovery, use:
+
+```sh
+python3 .github/scripts/release_bundle.py verify --version 0.17.2 --bundle release-bundle
+```
+
+PyPI uploads fail on duplicate filenames. If nothing reached PyPI, use
+**Re-run failed jobs** and approve again. If some wheels were uploaded, download
+the original saved bundle, verify that the existing files match its checksums,
+and manually upload only the missing wheels. If PyPI completed but GitHub
+publication failed, publish the original wheels, both C++ SDK archives, and
+`SHA256SUMS` to GitHub separately, checking any existing assets before skipping
+them. GitHub assets are not overwritten, and remote checksums are not checked
+automatically.
+
+Do not rebuild for recovery: rebuilt wheels can have different bytes. If an
+existing PyPI file differs, or the saved bundle has expired, publish a new patch
+version. The tag and its release-branch membership are checked again after
+approval; do not move published release tags.
+
+Creating or editing a GitHub release does not trigger a second publication run;
+the version tag push is the single release trigger. A locally created tag must
+be pushed to GitHub before any workflow starts.
+
+Validate release automation locally with:
+
+```sh
+python3 -B -m unittest discover -s .github/scripts -p 'test_release.py' -v
+```
 
 ## Licensing
 
