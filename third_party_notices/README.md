@@ -28,8 +28,10 @@ holds those notices and the tooling to regenerate them.
 | C/C++ SDK archive (all four `.so`) | root `LICENSE` | `third_party_notices/sdk.txt`, packaged as `THIRD_PARTY_NOTICES.txt` at the archive root |
 
 The wheel files are symlinks, and each `setup.py` lists `THIRD_PARTY_NOTICES.txt` in
-`license_files`, so it lands in `<wheel>.dist-info/`. The archive packaging step
-(`sdk/package.py`, where present) must copy `sdk.txt` the same way it copies `LICENSE`.
+`license_files`, so it lands in `<wheel>.dist-info/`. The release job
+(`.github/scripts/release_bundle.py create`) adds `sdk.txt` to each SDK archive as
+`THIRD_PARTY_NOTICES.txt`, and `verify` fails if an archive lacks it or the `LICENSE`.
+The two SDK archives (x86_64 and aarch64) get the same file, the union of the four libraries.
 
 ## Regenerating after a change
 

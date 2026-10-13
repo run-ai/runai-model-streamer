@@ -157,8 +157,8 @@ Automatically created maintenance releases do not change GitHub's **Latest**
 release selection.
 
 For C/C++ applications, download the native SDK with headers and shared libraries.
-To use the Azure library, also install your Linux distribution's shared `libxml2`
-library; it is required by `libstreamerazure.so` and is not included in the SDK.
+The libraries link their third-party dependencies, including `libxml2`, statically,
+so the SDK needs only the system C and C++ runtime libraries.
 For the Python API, install `runai-model-streamer` with pip or use its `.whl`
 release assets; the Python package bundles its native library.
 
@@ -174,6 +174,7 @@ lib/libstreamers3.so
 lib/libstreamergcs.so
 lib/libstreamerazure.so
 LICENSE
+THIRD_PARTY_NOTICES.txt    Licenses of the third-party code linked into the libraries
 ```
 
 The archives contain the original build outputs without rebuilding or modifying

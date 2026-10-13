@@ -4,6 +4,7 @@
 """Exercise release asset packaging, verification, and tag validation locally."""
 
 import hashlib
+import io
 import os
 from pathlib import Path
 import shutil
@@ -31,6 +32,9 @@ class ReleaseBundleTests(unittest.TestCase):
                 path = directory / f"{package}-{VERSION}-py3-none-manylinux_2_30_{arch}.whl"
                 path.write_bytes(b"fixture wheel content")
                 self.paths.append(path)
+        self.notices = self.root / "third_party_notices" / "sdk.txt"
+        self.notices.parent.mkdir()
+        self.notices.write_text("fixture third-party notices\n")
         self.cpp = self.root / "cpp-artifacts"
         self.libraries = []
         for arch, machine in (("x86_64", 62), ("aarch64", 183)):
@@ -84,6 +88,7 @@ class ReleaseBundleTests(unittest.TestCase):
             for directory in self.cpp.glob(f"cpp-*-{arch}"):
                 expected.update({f"{root}/{path.relative_to(directory).as_posix()}": path.read_bytes()
                                  for path in directory.rglob("*") if path.is_file()})
+            expected[f"{root}/THIRD_PARTY_NOTICES.txt"] = self.notices.read_bytes()
             with tarfile.open(self.archive_path(arch)) as archive:
                 self.assertEqual({member.name: archive.extractfile(member).read()
                                   for member in archive.getmembers() if member.isfile()}, expected)
@@ -159,6 +164,27 @@ class ReleaseBundleTests(unittest.TestCase):
     def test_different_license_rejected(self):
         (self.cpp / "cpp-gcs-aarch64" / "LICENSE").write_text("different license")
         self.assertNotEqual(self.collect().returncode, 0)
+
+    def test_missing_third_party_notices_rejected(self):
+        self.notices.unlink()
+        self.assertNotEqual(self.collect().returncode, 0)
+
+    def test_sdk_without_third_party_notices_rejected(self):
+        self.collect_ok()
+        path = self.archive_path()
+        with tarfile.open(path) as archive:
+            members = [(member, archive.extractfile(member).read() if member.isfile() else None)
+                       for member in archive.getmembers() if not member.name.endswith("THIRD_PARTY_NOTICES.txt")]
+        with tarfile.open(path, "w:gz") as archive:
+            for member, data in members:
+                archive.addfile(member, None if data is None else io.BytesIO(data))
+        manifest = self.bundle / "SHA256SUMS"
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        manifest.write_text("".join(f"{digest}  {path.name}\n" if path.name in line else line
+                                    for line in manifest.read_text().splitlines(keepends=True)))
+        result = self.verify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("THIRD_PARTY_NOTICES.txt", result.stderr)
 
     def test_wrong_architecture_rejected(self):
         self.libraries[0].write_bytes(self.libraries[4].read_bytes())
