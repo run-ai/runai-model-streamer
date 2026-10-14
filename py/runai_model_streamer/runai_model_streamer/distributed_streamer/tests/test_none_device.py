@@ -5,11 +5,16 @@ import os
 import shutil
 import tempfile
 import unittest
+from datetime import timedelta
 from unittest.mock import patch
 
 import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+from safetensors.torch import save_file
 
 from runai_model_streamer.distributed_streamer.distributed_streamer import DistributedStreamer
+from runai_model_streamer import SafetensorsStreamer
 from runai_model_streamer.file_streamer.requests_iterator import (
     FileChunks,
     RUNAI_STREAMER_MEMORY_LIMIT_ENV_VAR_NAME,
@@ -30,6 +35,21 @@ TIGHT_RING = {
     RUNAI_STREAMER_RING_BUFFERS_ENV_VAR_NAME: "2",
     RUNAI_STREAMER_MAX_PADS_PER_BUFFER_ENV_VAR_NAME: "0",
 }
+
+
+def _read_on_one_rank(rank, rendezvous, path):
+    dist.init_process_group("gloo", init_method=rendezvous, rank=rank, world_size=2,
+                            timeout=timedelta(seconds=20))
+    try:
+        if rank == 1:
+            with SafetensorsStreamer() as streamer:
+                streamer.stream_file(path, device="cpu", is_distributed=False)
+                weights = dict(streamer.get_tensors())
+            torch.testing.assert_close(weights["weight"], torch.arange(6))
+            assert streamer.file_streamer.ring_info()[0] == rank
+        dist.barrier()
+    finally:
+        dist.destroy_process_group()
 
 
 class TestOwnedFollowsTheDestination(unittest.TestCase):
@@ -56,6 +76,13 @@ class TestOwnedFollowsTheDestination(unittest.TestCase):
         with open(path, "w") as handle:
             handle.write("".join(expected[i] for i in range(count)))
         return path, expected
+
+    @patch.dict(os.environ, {"RUNAI_STREAMER_DIST_TIMEOUT": "10"})
+    def test_non_distributed_safetensors_read_does_not_require_peers(self):
+        path = os.path.join(self.temp_dir, "rank_local.safetensors")
+        save_file({"weight": torch.arange(6)}, path)
+        rendezvous = "file://" + os.path.join(self.temp_dir, "process_group")
+        mp.spawn(_read_on_one_rank, args=(rendezvous, path), nprocs=2, join=True)
 
     @patch.dict(os.environ, TIGHT_RING)
     def test_every_host_spelling_hands_the_ring_over(self):

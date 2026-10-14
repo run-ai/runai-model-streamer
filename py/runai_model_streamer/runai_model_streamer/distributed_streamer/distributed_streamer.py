@@ -164,7 +164,10 @@ class DistributedStreamer:
         # nothing rather than whatever the previous call left behind.
         self._ring_info = None
 
-        self.params.set_params(file_stream_requests)
+        if is_distributed:
+            self.params.set_params(file_stream_requests)
+        else:
+            self.params.my_global_rank = dist.get_rank() if dist.is_initialized() else 0
 
         # check if distributed streaming can be used
         self.set_is_distributed(is_distributed, device)
