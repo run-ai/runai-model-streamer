@@ -59,6 +59,15 @@ class DockerfileTest(unittest.TestCase):
     def test_apt_packages_skip_flags_and_comments(self):
         self.assertEqual([p for _, p in dockerfile.apt_packages(SAMPLE)], [["python3", "wget"]])
 
+    def test_apt_pins_keep_the_package_and_option_values_are_skipped(self):
+        text = "RUN apt-get install -y -o Dpkg::Options=x foo=1.2 bar\n"
+        self.assertEqual([p for _, p in dockerfile.apt_packages(text)], [["foo", "bar"]])
+
+    def test_registry_port_is_not_a_tag(self):
+        images = dockerfile.base_images("FROM localhost:5000/team/app:1 AS x\nFROM localhost:5000/team/app\n")
+        self.assertEqual([i[1:] for i in images], [("localhost:5000/team/app", "1", None, "x"),
+                                                   ("localhost:5000/team/app", None, None, None)])
+
     def test_pip_and_npm_packages(self):
         self.assertEqual([p for _, p in dockerfile.pip_packages(SAMPLE)], [["pip==25.0.1"], ["boto3", "cpplint==1.5.4"]])
         self.assertEqual([p for _, p in dockerfile.npm_packages(SAMPLE)], [["azurite"]])
@@ -104,6 +113,12 @@ class InputsTest(unittest.TestCase):
         self.assertIn("python3", roots)
         self.assertIn("vim", roots)
         self.assertEqual(roots["nodejs"]["categories"], ["test"])
+
+    def test_makefile_installs_are_test_packages(self):
+        test = inputs.pip_groups(util.REPO)["test"]
+        self.assertEqual(test["declared_by"]["azure-identity"], ["py/runai_model_streamer_azure/Makefile"])
+        self.assertIn("azure-storage-blob", test["specs"])
+        self.assertFalse([s for s in test["specs"] if "/" in s or s.startswith(("-", "."))])  # no paths or wheels of ours
 
     def test_pip_groups(self):
         groups = inputs.pip_groups(util.REPO)

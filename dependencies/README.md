@@ -2,7 +2,9 @@
 
 `dependencies.json` lists everything this repository depends on to **build, test and run**, with
 the exact version and where to download it (URL, hash, and the commit for git repositories).
-Nothing is downloaded by the tooling here, except to compute a hash that no file pins.
+The tooling keeps and stores no dependency, but collecting does download: Bazel fetches the
+external repositories into a temporary cache, and an archive that no file pins is downloaded once
+to compute its hash.
 
 ## What is in the list
 
@@ -69,8 +71,10 @@ so one run of the image covers the build and the tests for both.
    ```
    python3 dependencies/collect.py collect --image ghcr.io/dsx-ai-factory/model-streamer/devcontainer:latest
    ```
-   It writes `dependencies/dependencies.json` and takes tens of minutes; the Bazel fetch is the
-   longest part. `--no-hash` skips the downloads that only compute a hash. `--out` writes elsewhere.
+   It writes `dependencies/dependencies.json` and takes tens of minutes; the Bazel fetch, which
+   downloads the external repositories for both architectures into a temporary cache inside the
+   container, is the longest part and needs several GB of disk. `--no-hash` skips the downloads
+   that only compute a hash. `--out` writes elsewhere.
 4. **Validate and test:**
    ```
    python3 dependencies/collect.py check
@@ -138,8 +142,10 @@ What else to check after the change:
   (`generated`). A mutable reference (`ubuntu:20.04`, an unpinned `pip install boto3`) resolves to
   what it points to now. The Dockerfile does not pin those, so a rebuilt image can differ.
 - An apt package whose exact version has left the index has no download URL; the entry says so.
-- Python is resolved for 3.8, the devcontainer's Python. The wheels are `py3-none`, so users on
-  other Python versions resolve other dependency versions.
+- Python is resolved for 3.8, the devcontainer's Python. Our own wheels are `py3-none`, so users on
+  other Python versions resolve other dependency versions. The dependency wheels in the list are
+  either universal (`py3-none-any`) or specific to Python 3.8 and an architecture (`cp38`,
+  `manylinux`).
 - Archives that no file pins (OpenSSL, curl, zlib, libxml2, fake-gcs-server) get a SHA-256 computed
   from the download; the entry says `computed from the download`.
 - Git submodule entries take the highest release tag that points to the pinned commit.

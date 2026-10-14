@@ -7,7 +7,9 @@
     python3 dependencies/collect.py check                    validate dependencies.json
     python3 dependencies/collect.py resolve ...              (runs inside the devcontainer, started by collect)
 
-Nothing is downloaded except to compute a hash that no file pins. See README.md.
+No dependency is kept or stored. Collecting does download: Bazel fetches the external repositories
+into a temporary cache, and an archive that no file pins is downloaded once to compute its hash.
+See README.md.
 """
 
 import argparse
@@ -96,7 +98,20 @@ def tag_ship(entries):
     return sorted(unmatched)
 
 
+def base_commit():
+    """The master commit the list is based on: where this branch left master, or HEAD when no master
+    ref exists (a shallow clone). Resolved before the slow steps so that a failure costs nothing."""
+    for ref in ("origin/master", "master"):
+        result = subprocess.run(["git", "merge-base", "HEAD", ref], cwd=REPO, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, universal_newlines=True)
+        if result.returncode == 0:
+            return result.stdout.strip()
+    log("no master ref found; recording HEAD as the base commit")
+    return run(["git", "rev-parse", "HEAD"], cwd=REPO).strip()
+
+
 def collect(args):
+    base_commit_id = base_commit()
     entries = static_sources.collect(REPO, compute_hashes=not args.no_hash)
     _, image, tag, _, _ = dockerfile.base_images(inputs.read(REPO, inputs.DOCKERFILE))[-1]  # the last FROM is the base
     base = next(e for e in entries if e["ecosystem"] == "docker-image" and (e["name"], e["version"]) == (image, tag or "latest"))
@@ -107,7 +122,7 @@ def collect(args):
         sys.exit("categories.json `ship` names dependencies that were not found: " + ", ".join(unmatched))
     result = {
         "generated": datetime.datetime.utcnow().strftime("%Y-%m-%d"),
-        "base_commit": run(["git", "merge-base", "HEAD", "origin/master"], cwd=REPO).strip(),  # the master commit the list is based on
+        "base_commit": base_commit_id,
         "devcontainer_image": {"image": args.image, "digest": local_image_digest(args.image)},
         "categories": {
             "ship": "code linked into a native library we distribute",

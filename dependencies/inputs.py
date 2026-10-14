@@ -104,6 +104,13 @@ def pip_groups(repo):
             add("test", name, os.path.relpath(makefile, repo))
             if index not in groups["test"]["extra_index_urls"]:
                 groups["test"]["extra_index_urls"].append(index)
+        for command in re.findall(r"pip3? install\s+([^&\\\n]*)", read(repo, makefile)):
+            skip = False
+            for token in command.split():
+                if skip or token.startswith("-r"):
+                    skip = token == "-r"  # the name after -r is a requirements file, listed elsewhere
+                elif not token.startswith(("-", ".", "$")) and "/" not in token:  # a package name, not a path or a wheel of ours
+                    add("test", token, os.path.relpath(makefile, repo))
     for pyproject in sorted(glob.glob(os.path.join(repo, "py", "*", "pyproject.toml"))):
         match = re.search(r"requires\s*=\s*\[([^\]]*)\]", read(repo, pyproject))
         for spec in re.findall(r"[\"']([^\"']+)[\"']", match.group(1) if match else ""):

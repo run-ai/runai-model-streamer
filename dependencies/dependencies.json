@@ -12557,7 +12557,8 @@
    "version": "1.33.0",
    "ecosystem": "pip",
    "categories": [
-    "run"
+    "run",
+    "test"
    ],
    "declared_by": [
     "(dependency of a declared package)"
@@ -12577,9 +12578,11 @@
    "version": "1.21.0",
    "ecosystem": "pip",
    "categories": [
-    "run"
+    "run",
+    "test"
    ],
    "declared_by": [
+    "py/runai_model_streamer_azure/Makefile",
     "py/runai_model_streamer_azure/setup.py"
    ],
    "files": [
@@ -12597,9 +12600,11 @@
    "version": "12.26.0",
    "ecosystem": "pip",
    "categories": [
-    "run"
+    "run",
+    "test"
    ],
    "declared_by": [
+    "py/runai_model_streamer_azure/Makefile",
     "py/runai_model_streamer_azure/setup.py"
    ],
    "files": [
@@ -12660,7 +12665,8 @@
    "version": "2026.7.22",
    "ecosystem": "pip",
    "categories": [
-    "run"
+    "run",
+    "test"
    ],
    "declared_by": [
     "(dependency of a declared package)"
@@ -12680,7 +12686,8 @@
    "version": "1.17.1",
    "ecosystem": "pip",
    "categories": [
-    "run"
+    "run",
+    "test"
    ],
    "declared_by": [
     "(dependency of a declared package)"
@@ -12707,7 +12714,8 @@
    "version": "3.5.2",
    "ecosystem": "pip",
    "categories": [
-    "run"
+    "run",
+    "test"
    ],
    "declared_by": [
     "(dependency of a declared package)"
@@ -12754,7 +12762,8 @@
    "version": "47.0.0",
    "ecosystem": "pip",
    "categories": [
-    "run"
+    "run",
+    "test"
    ],
    "declared_by": [
     "(dependency of a declared package)"
@@ -13030,7 +13039,8 @@
    "version": "3.15",
    "ecosystem": "pip",
    "categories": [
-    "run"
+    "run",
+    "test"
    ],
    "declared_by": [
     "(dependency of a declared package)"
@@ -13070,7 +13080,8 @@
    "version": "0.7.2",
    "ecosystem": "pip",
    "categories": [
-    "run"
+    "run",
+    "test"
    ],
    "declared_by": [
     "(dependency of a declared package)"
@@ -13195,7 +13206,8 @@
    "version": "1.36.0",
    "ecosystem": "pip",
    "categories": [
-    "run"
+    "run",
+    "test"
    ],
    "declared_by": [
     "(dependency of a declared package)"
@@ -13215,7 +13227,8 @@
    "version": "1.3.0",
    "ecosystem": "pip",
    "categories": [
-    "run"
+    "run",
+    "test"
    ],
    "declared_by": [
     "(dependency of a declared package)"
@@ -13672,7 +13685,8 @@
    "version": "2.23",
    "ecosystem": "pip",
    "categories": [
-    "run"
+    "run",
+    "test"
    ],
    "declared_by": [
     "(dependency of a declared package)"
@@ -13692,7 +13706,8 @@
    "version": "2.9.0",
    "ecosystem": "pip",
    "categories": [
-    "run"
+    "run",
+    "test"
    ],
    "declared_by": [
     "(dependency of a declared package)"
@@ -13753,7 +13768,8 @@
    "version": "2.32.4",
    "ecosystem": "pip",
    "categories": [
-    "run"
+    "run",
+    "test"
    ],
    "declared_by": [
     "(dependency of a declared package)"

@@ -68,7 +68,7 @@ def base_images(text):
     for number, word, rest in instructions(text):
         if word != "FROM":
             continue
-        match = re.match(r"(\S+?)(?::([^@\s]+))?(?:@(sha256:[0-9a-f]+))?(?:\s+AS\s+(\S+))?$", rest, re.I)
+        match = re.match(r"(\S+?)(?::([^@\s/]+))?(?:@(sha256:[0-9a-f]+))?(?:\s+AS\s+(\S+))?$", rest, re.I)
         found.append((number, match.group(1), match.group(2), match.group(3), match.group(4)))
     return found
 
@@ -110,7 +110,12 @@ def apt_packages(text):
         for segment in _segments(rest):
             match = re.search(r"apt-get install\s+(.*)", segment)
             if match:
-                packages = [t for t in _tokens(match.group(1)) if not t.startswith("-") and "=" not in t]
+                packages, skip = [], False
+                for token in _tokens(match.group(1)):
+                    if skip or token.startswith("-"):
+                        skip = token in ("-o", "-t", "-c")  # these options take the next word as their value
+                    else:
+                        packages.append(token.split("=")[0])  # foo=1.2 names foo
                 if packages:
                     found.append((number, packages))
     return found
