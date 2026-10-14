@@ -137,11 +137,12 @@ the existing x86_64 C++, Python, integration, and filesystem-strategy tests.
 There is no fallback to master's devcontainer. Ensure the branch image matches
 the tagged source's build requirements, especially when tagging an older commit.
 
-After every build and test succeeds, CI collects one wheel for each package and
-architecture at the tagged version, plus the C++ component artifacts from the
-same run. It packages one C++ SDK per architecture, checking the ELF architecture
-and matching public headers and licenses across all components. The eight wheels,
-two SDK archives, and combined `SHA256SUMS` are saved in a workflow artifact
+CI packages one C++ SDK per architecture from the component artifacts, checking
+the ELF architecture and matching public headers and licenses across components.
+Standalone consumer tests exercise both SDKs on glibc 2.30 and a current Ubuntu
+image, including filesystem reads, S3 reads, and plugin loading. After every build
+and test succeeds, CI collects the eight wheels, the exact tested SDK archives,
+and combined `SHA256SUMS` in a workflow artifact
 retained for 30 days. Review the version, commit, image digest, and checksums in
 the job summaries, then approve the **pypi** deployment in the Actions run.
 Rejection prevents publication.
@@ -157,8 +158,8 @@ Automatically created maintenance releases do not change GitHub's **Latest**
 release selection.
 
 For C/C++ applications, download the native SDK with headers and shared libraries.
-To use the Azure library, also install your Linux distribution's shared `libxml2`
-library; it is required by `libstreamerazure.so` and is not included in the SDK.
+Azure builds linked against shared `libxml2` also require your distribution's
+`libxml2` package; that system library is not bundled in the SDK.
 For the Python API, install `runai-model-streamer` with pip or use its `.whl`
 release assets; the Python package bundles its native library.
 
@@ -173,8 +174,16 @@ lib/libstreamer.so
 lib/libstreamers3.so
 lib/libstreamergcs.so
 lib/libstreamerazure.so
+lib/pkgconfig/runai-streamer.pc
+lib/cmake/runai-streamer/runai-streamer-config.cmake
+examples/hello_streamer/
+VERSION
 LICENSE
 ```
+
+See [the C/C++ SDK guide](docs/cpp_sdk.md) for installation, examples, runtime requirements,
+and ABI compatibility. The existing `SHA256SUMS` manifest covers both SDK archives
+and all wheels.
 
 The archives contain the original build outputs without rebuilding or modifying
 the library and header bytes. They use normalized ordering, permissions,

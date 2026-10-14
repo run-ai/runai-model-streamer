@@ -22,8 +22,8 @@
 #   Our node. It needs a name because ld does not allow an anonymous tag next to a named one. Our
 #   symbols become runai_file_streamer_start@@RUNAI_FILE_STREAMER_1.0 instead of plain runai_file_streamer_start.
 #
-#   RUNAI_FILE_STREAMER is the agreed public ABI prefix. Finalize the versioning policy, including
-#   its relationship to Python package versions, before the first standalone release. Native programs
+#   RUNAI_FILE_STREAMER is the public ABI prefix, independent of Python/package versions.
+#   sdk/abi.json freezes the export map; docs/cpp_sdk.md describes the policy. Native programs
 #   record the full version node when linking; renaming or removing it later breaks those programs.
 #
 # Without version nodes, a program built against a newer streamer.h and run against an older

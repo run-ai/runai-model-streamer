@@ -1,0 +1,20 @@
+{
+  "LIBAIO_0.4": {
+    "parent": "",
+    "symbols": []
+  },
+  "RUNAI_FILE_STREAMER_1.0": {
+    "parent": "",
+    "symbols": [
+      "runai_file_streamer_end",
+      "runai_file_streamer_list_files",
+      "runai_file_streamer_probe_direct_block_size",
+      "runai_file_streamer_request",
+      "runai_file_streamer_response",
+      "runai_file_streamer_response_str",
+      "runai_file_streamer_set_credentials",
+      "runai_file_streamer_set_fs_strategy",
+      "runai_file_streamer_start"
+    ]
+  }
+}

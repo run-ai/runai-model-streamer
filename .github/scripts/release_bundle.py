@@ -7,6 +7,7 @@ import argparse
 import fnmatch
 import gzip
 import hashlib
+import io
 from pathlib import Path
 import re
 import shutil
@@ -18,6 +19,7 @@ COMPONENTS = {"streamer": "libstreamer.so", "s3": "libstreamers3.so",
               "gcs": "libstreamergcs.so", "azure": "libstreamerazure.so"}
 ARCHITECTURES = {"x86_64": 62, "aarch64": 183}  # ELF e_machine values
 HEADERS = {"streamer.h", "device.h", "response_code.h", "submission_id.h"}
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def require(condition, message):
@@ -108,28 +110,48 @@ def write_sdk(destination, root, files):
                 else:
                     path = files[name[len(root) + 1:]]
                     info.mode = 0o644
-                    info.size = path.stat().st_size
-                    with path.open("rb") as stream:
-                        archive.addfile(info, stream)
+                    if isinstance(path, bytes):
+                        info.size = len(path)
+                        archive.addfile(info, io.BytesIO(path))
+                    else:
+                        info.size = path.stat().st_size
+                        with path.open("rb") as stream:
+                            archive.addfile(info, stream)
 
 
-def create_bundle(wheels, cpp, bundle, version):
-    wheel_paths = select_wheels(regular_files(wheels).values(), version)
+def create_sdks(cpp, destination, version):
     sdks = sdk_inputs(cpp)
+    destination.mkdir(parents=True, exist_ok=False)
+    for arch, files in sdks.items():
+        files.update({
+            "VERSION": (version + "\n").encode(),
+            "lib/pkgconfig/runai-streamer.pc": (ROOT / "sdk/runai-streamer.pc.in").read_text().replace(
+                "@VERSION@", version).encode(),
+            "lib/cmake/runai-streamer/runai-streamer-config.cmake": ROOT / "sdk/runai-streamer-config.cmake",
+        })
+        for name in ("hello_streamer.c", "CMakeLists.txt"):
+            files[f"examples/hello_streamer/{name}"] = ROOT / "examples/hello_streamer" / name
+        name = sdk_name(version, arch)
+        archive = destination / f"{name}.tar.gz"
+        write_sdk(archive, name, files)
+
+
+def create_bundle(wheels, cpp, bundle, version, sdks=None):
+    wheel_paths = select_wheels(regular_files(wheels).values(), version)
     # A fresh output directory prevents leftover assets from entering a release.
     bundle.mkdir(parents=True, exist_ok=False)
     (bundle / "wheels").mkdir()
-    (bundle / "cpp").mkdir()
+    if sdks is None:
+        create_sdks(cpp, bundle / "cpp", version)
+    else:
+        regular_files(sdks)
+        shutil.copytree(sdks, bundle / "cpp")
     assets = []
     for path in wheel_paths:
         destination = bundle / "wheels" / path.name
         shutil.copyfile(path, destination)
         assets.append(destination)
-    for arch, files in sdks.items():
-        name = sdk_name(version, arch)
-        destination = bundle / "cpp" / f"{name}.tar.gz"
-        write_sdk(destination, name, files)
-        assets.append(destination)
+    assets.extend((bundle / "cpp").glob("*.tar.gz"))
     (bundle / "SHA256SUMS").write_text("".join(
         f"{checksum(path)}  {path.name}\n" for path in sorted(assets, key=lambda path: path.name)),
         encoding="utf-8")
@@ -158,17 +180,23 @@ def verify_bundle(bundle, version):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("create", "verify"))
+    parser.add_argument("command", choices=("create", "verify", "sdk"))
     parser.add_argument("--version", required=True)
     parser.add_argument("--bundle", type=Path, default=Path("release-bundle"))
     parser.add_argument("--wheels", type=Path, default=Path("packages"))
     parser.add_argument("--cpp", type=Path, default=Path("cpp-artifacts"))
+    parser.add_argument("--sdks", type=Path, help="Already tested SDK directory to copy into the release bundle")
     args = parser.parse_args()
     try:
-        require(re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", args.version),
+        pattern = r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
+        if args.command == "sdk":
+            pattern += r"(?:\+dev\.[0-9a-f]{7})?"
+        require(re.fullmatch(pattern, args.version),
                 "Release version must have the form X.Y.Z")
-        if args.command == "create":
-            create_bundle(args.wheels, args.cpp, args.bundle, args.version)
+        if args.command == "sdk":
+            create_sdks(args.cpp, args.bundle, args.version)
+        elif args.command == "create":
+            create_bundle(args.wheels, args.cpp, args.bundle, args.version, args.sdks)
         else:
             verify_bundle(args.bundle, args.version)
     except (OSError, ValueError) as error:

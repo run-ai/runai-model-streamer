@@ -81,9 +81,16 @@ jobs:
       package_version: ${{ needs.setup.outputs.version }}
       devcontainer_image: ${{ needs.setup.outputs.image }}
 
+  sdk:
+    name: SDK
+    needs: [setup, build]
+    uses: ./.github/workflows/sdk.yml
+    with:
+      package_version: ${{ needs.setup.outputs.version }}
+
   test-and-bundle:
     name: Integration tests and release bundle
-    needs: [setup, build]
+    needs: [setup, build, sdk]
     runs-on: ubuntu-latest
     outputs:
       artifact_id: ${{ steps.bundle.outputs.artifact-id }}
@@ -127,17 +134,16 @@ jobs:
         path: packages
         merge-multiple: true
 
-    - name: Download all C++ components
+    - name: Download tested SDK archives
       uses: actions/download-artifact@v7
       with:
-        pattern: cpp-*
-        path: cpp-artifacts
-        merge-multiple: false
+        name: standalone-sdks
+        path: tested-sdks
 
     - name: Collect release assets and generate checksums
       run: |
         set -euo pipefail
-        python3 .github/scripts/release_bundle.py create --version "$PACKAGE_VERSION"
+        python3 .github/scripts/release_bundle.py create --version "$PACKAGE_VERSION" --sdks tested-sdks
         cat release-bundle/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
 
     - name: Preserve tested release bundle

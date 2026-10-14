@@ -14,11 +14,8 @@ def runai_cc_test_dependencies():
         strip_prefix = "googletest-9816b96a6ddc0430671693df90192bbee57108b6",
     )
 
-def _runai_cc_binary(rule, linkopts=[], rpath_origin=False, **kwargs):
+def _runai_cc_binary(rule, linkopts=[], **kwargs):
     linkopts = linkopts + ["-Wl,--gc-sections", "-Wl,--fatal-warnings"]
-
-    if rpath_origin:
-        linkopts = linkopts + ["-Wl,-rpath=$$ORIGIN,--disable-new-dtags"] # tell the linker (gold) to emit `DT_RPATH` instead of `DT_RUNPATH` (https://stackoverflow.com/a/47243544/9540328)
 
     rule(
         linkopts=linkopts,

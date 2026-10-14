@@ -84,6 +84,12 @@ class ReleaseBundleTests(unittest.TestCase):
             for directory in self.cpp.glob(f"cpp-*-{arch}"):
                 expected.update({f"{root}/{path.relative_to(directory).as_posix()}": path.read_bytes()
                                  for path in directory.rglob("*") if path.is_file()})
+            expected[f"{root}/VERSION"] = (VERSION + "\n").encode()
+            repo = BUNDLE_SCRIPT.parents[2]
+            expected[f"{root}/lib/pkgconfig/runai-streamer.pc"] = (repo / "sdk/runai-streamer.pc.in").read_text().replace("@VERSION@", VERSION).encode()
+            expected[f"{root}/lib/cmake/runai-streamer/runai-streamer-config.cmake"] = (repo / "sdk/runai-streamer-config.cmake").read_bytes()
+            for name in ("hello_streamer.c", "CMakeLists.txt"):
+                expected[f"{root}/examples/hello_streamer/{name}"] = (repo / "examples/hello_streamer" / name).read_bytes()
             with tarfile.open(self.archive_path(arch)) as archive:
                 self.assertEqual({member.name: archive.extractfile(member).read()
                                   for member in archive.getmembers() if member.isfile()}, expected)
@@ -103,6 +109,28 @@ class ReleaseBundleTests(unittest.TestCase):
         result = subprocess.run(["sha256sum", "--check", "SHA256SUMS"], cwd=downloads,
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_sdk_checksums_work_without_wheels(self):
+        self.collect_ok()
+        result = subprocess.run(["sha256sum", "--check", "--ignore-missing", "../SHA256SUMS"],
+                                cwd=self.bundle / "cpp", capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_release_copies_exact_tested_sdks(self):
+        self.collect_ok()
+        result = subprocess.run([sys.executable, str(BUNDLE_SCRIPT), "create", "--version", VERSION,
+                                 "--bundle", "published", "--sdks", str(self.bundle / "cpp")],
+                                cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for asset in (self.bundle / "cpp").iterdir():
+            self.assertEqual(asset.read_bytes(), (self.root / "published/cpp" / asset.name).read_bytes())
+
+    def test_sdk_only_packaging_accepts_ci_version(self):
+        result = subprocess.run([sys.executable, str(BUNDLE_SCRIPT), "sdk",
+                                 "--version", "0.0.0+dev.123abcd", "--bundle", "pr-sdks"],
+                                cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(list((self.root / "pr-sdks").glob("*.tar.gz"))), 2)
 
     def test_repackaging_ignores_source_metadata(self):
         self.collect_ok()

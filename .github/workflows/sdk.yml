@@ -1,0 +1,107 @@
+name: Standalone C and C++ SDK
+
+on:
+  workflow_call:
+    inputs:
+      package_version:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        persist-credentials: false
+    - name: Test packaging and ABI guards
+      run: |
+        python3 -B -m unittest discover -s .github/scripts -p test_release.py
+        python3 -B -m unittest discover -s scripts -p test_sdk_abi.py
+        python3 scripts/check_sdk_abi.py
+    - uses: actions/download-artifact@v7
+      with:
+        pattern: cpp-*
+        path: cpp-artifacts
+    - name: Package both architectures
+      env:
+        PACKAGE_VERSION: ${{ inputs.package_version }}
+      run: |
+        python3 .github/scripts/release_bundle.py sdk --version "$PACKAGE_VERSION" --bundle sdks
+    - name: Verify binary exports, plugin search path, and glibc floor
+      run: |
+        for arch in x86_64 aarch64; do
+          mkdir -p "$RUNNER_TEMP/sdk-$arch"
+          tar -xzf sdks/*-linux-$arch.tar.gz -C "$RUNNER_TEMP/sdk-$arch" --strip-components=1
+          python3 scripts/check_sdk_abi.py --lib-dir "$RUNNER_TEMP/sdk-$arch/lib"
+        done
+    - uses: actions/upload-artifact@v6
+      with:
+        name: standalone-sdks
+        path: sdks/
+        if-no-files-found: error
+
+  consumer:
+    needs: package
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ['19.10', '24.04']
+        arch: [x86_64, aarch64]
+        include:
+        - arch: x86_64
+          runner: ubuntu-24.04
+        - arch: aarch64
+          runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        persist-credentials: false
+    - uses: actions/download-artifact@v7
+      with:
+        name: standalone-sdks
+        path: sdks
+    - name: Start isolated S3 fixture
+      run: |
+        docker network create sdk-test
+        docker run --detach --name sdk-s3 --network sdk-test \
+          chrislusf/seaweedfs:3.80 server -s3 -s3.port=8333
+        # Provision from a separate client container; the consumer has no Python or SDK packages.
+        docker run --name sdk-seed --network sdk-test --entrypoint /bin/sh \
+          amazon/aws-cli:2.22.35 -ec '
+            export AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test AWS_DEFAULT_REGION=us-east-1
+            for attempt in $(seq 1 60); do
+              if aws --endpoint-url http://sdk-s3:8333 s3 mb s3://sdk-test; then break; fi
+              sleep 1
+            done
+            printf "hello from the standalone SDK\n" > /tmp/input
+            aws --endpoint-url http://sdk-s3:8333 s3 cp /tmp/input s3://sdk-test/input
+          '
+    - name: Build clean consumer image
+      env:
+        CONSUMER_OS: ${{ matrix.os }}
+      run: docker build --build-arg "BASE=ubuntu:$CONSUMER_OS" -f sdk/consumer.Dockerfile -t sdk-consumer .
+    - name: Read files and S3 objects through the relocated SDK
+      env:
+        ARCH: ${{ matrix.arch }}
+      run: |
+        archive=$(find sdks -name "*-linux-$ARCH.tar.gz" -print)
+        docker run --name sdk-consumer --network sdk-test \
+          --volume "$PWD/sdks:/downloads:ro" \
+          --volume "$PWD/sdk/test-consumer.sh:/test-consumer.sh:ro" \
+          --env AWS_ACCESS_KEY_ID=test --env AWS_SECRET_ACCESS_KEY=test \
+          --env AWS_DEFAULT_REGION=us-east-1 --env AWS_REGION=us-east-1 \
+          --env AWS_EC2_METADATA_DISABLED=true --env AWS_ENDPOINT_URL=http://sdk-s3:8333 \
+          --env RUNAI_STREAMER_S3_USE_VIRTUAL_ADDRESSING=0 --env SDK_S3_URI=s3://sdk-test/input \
+          sdk-consumer bash /test-consumer.sh "/downloads/$(basename "$archive")"
+    - name: S3 server diagnostics
+      if: failure()
+      run: docker logs sdk-s3

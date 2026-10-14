@@ -193,18 +193,28 @@ jobs:
           PACKAGE_VERSION
         runCmd: make ci-test-integration BAZEL_TEST_FLAGS=--test_env=RUNAI_STREAMER_REQUIRE_IO_URING=1
 
+  sdk:
+    name: SDK
+    needs: [setup, build_x86, build_arm]
+    if: ${{ !cancelled() && needs.build_x86.result == 'success' && needs.build_arm.result == 'success' }}
+    uses: ./.github/workflows/sdk.yml
+    with:
+      package_version: ${{ needs.setup.outputs.package_version }}
+
   lifecycle-install-tests:
     name: Test, Build & Push
     if: always()
-    needs: [build_x86, build_arm, tests]
+    needs: [build_x86, build_arm, tests, sdk]
     runs-on: ubuntu-latest
     steps:
     - name: Require all builds and tests to succeed
       env:
         X86_RESULT: ${{ needs.build_x86.result }}
         ARM_RESULT: ${{ needs.build_arm.result }}
+        SDK_RESULT: ${{ needs.sdk.result }}
         TEST_RESULT: ${{ needs.tests.result }}
       run: |
         test "$X86_RESULT" = success
         test "$ARM_RESULT" = success
         test "$TEST_RESULT" = success
+        test "$SDK_RESULT" = success
