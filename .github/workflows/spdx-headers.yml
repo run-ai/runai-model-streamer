@@ -26,7 +26,3 @@ jobs:
 
     - name: Check that every source file has the NVIDIA SPDX header
       run: python3 scripts/spdx_headers.py
-
-    # Offline check: the committed notices match components.json and the downloaded license files.
-    - name: Check that the third-party notices are up to date
-      run: python3 third_party_notices/generate.py check

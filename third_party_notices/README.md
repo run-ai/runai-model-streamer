@@ -91,7 +91,7 @@ Run these whenever a dependency version, a build flag or the set of linked libra
    ```
    python3 third_party_notices/generate.py fetch    # downloads any new license/NOTICE file
    python3 third_party_notices/generate.py build    # rewrites the generated *.txt
-   python3 third_party_notices/generate.py check    # freshness check, also run by the SPDX headers workflow
+   python3 third_party_notices/generate.py check    # freshness check; CI does not run it yet
    ```
    `fetch` reports files that do not exist upstream; remove those entries.
 6. **Verify the deliverables**: build the wheels and confirm `dist-info/LICENSE` and
