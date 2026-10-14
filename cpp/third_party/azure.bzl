@@ -21,7 +21,6 @@ def azure_library(name, arch):
             "-Wl,--no-whole-archive",
             "-lpthread",
             "-ldl",
-            "-lm",
             "-lrt",
             "-L/opt/%s-curl/lib" % arch,
             "-L/opt/%s-ssl/lib" % arch,
@@ -36,5 +35,9 @@ def azure_library(name, arch):
                 "-l:libcrypto.a",
                 "-lxml2",  # Use shared libxml2 to avoid conflicts
             ],
-        }),
+        }) + [
+            # Static dependencies (including libxml2) reference libm. Keep it last so
+            # --as-needed retains it when the plugin is loaded outside Python.
+            "-lm",
+        ],
     )
