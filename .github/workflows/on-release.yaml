@@ -124,7 +124,7 @@ jobs:
     uses: ./.github/workflows/assemble-bundle.yml
     with:
       package_version: ${{ needs.setup.outputs.version }}
-      artifact_name: release-${{ needs.setup.outputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
+      artifact_name: release-bundle-${{ needs.setup.outputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
       retention_days: 30
 
   publish:

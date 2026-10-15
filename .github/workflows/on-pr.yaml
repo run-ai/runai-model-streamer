@@ -202,7 +202,7 @@ jobs:
     uses: ./.github/workflows/assemble-bundle.yml
     with:
       package_version: ${{ needs.setup.outputs.package_version }}
-      artifact_name: pr-bundle-${{ github.run_id }}-${{ github.run_attempt }}
+      artifact_name: release-bundle-pr-${{ github.run_id }}-${{ github.run_attempt }}
       retention_days: 7
       allow_development_version: true
 

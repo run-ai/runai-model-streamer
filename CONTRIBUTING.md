@@ -246,7 +246,7 @@ The build jobs upload eight intermediate `ci-packages-<component>-<arch>`
 artifacts, retained for seven days for use by later CI jobs. The **Assemble packages**
 job runs alongside integration tests after both architectures finish building.
 It calls the reusable `assemble-bundle.yml` workflow to create one final download,
-`pr-bundle-<run>-<attempt>`, with the same layout as the release bundle:
+`release-bundle-pr-<run>-<attempt>`, with the same layout as the release bundle:
 eight wheels under `wheels/`, two complete C++ SDK
 archives under `cpp/`, and `SHA256SUMS`. SDK archives contain the libraries,
 public headers, license, and third-party notices. The bundler checks completeness,
@@ -257,7 +257,8 @@ runs independently of integration tests; require the final **Test, Build & Push*
 check to pass before using a PR build.
 Intermediate wheel and C++ artifacts are retained for seven days in both PR and
 release builds to support retries. Final PR bundles are retained for seven days;
-tested release bundles are retained for 30 days for approval and recovery.
+tested `release-bundle-<version>-<run>-<attempt>` bundles are retained for 30 days
+for approval and recovery.
 Release CI calls the same assembly workflow after integration tests succeed,
 then passes its bundle artifact ID to the approval-gated publication job.
 The shared workflow downloads components, tests the packaging code, assembles
@@ -278,7 +279,7 @@ To verify an extracted PR bundle locally, substitute its development version:
 
 ```sh
 python3 .github/scripts/release_bundle.py verify \
-  --version 0.0.0+dev.abc1234 --allow-development-version --bundle pr-bundle
+  --version 0.0.0+dev.abc1234 --allow-development-version --bundle release-bundle
 ```
 
 ## Getting Help
