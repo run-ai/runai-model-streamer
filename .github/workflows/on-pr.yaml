@@ -199,79 +199,13 @@ jobs:
     name: Assemble packages
     needs: [setup, build_x86, build_arm]
     if: ${{ !cancelled() && needs.build_x86.result == 'success' && needs.build_arm.result == 'success' }}
-    runs-on: ubuntu-latest
-    env:
-      PACKAGE_VERSION: ${{ needs.setup.outputs.package_version }}
-    steps:
-    - name: Checkout packaging scripts and notices
-      uses: actions/checkout@v5
-      with:
-        persist-credentials: false
-
-    - name: Test bundle packaging
-      run: python3 -B -m unittest discover -s .github/scripts -p 'test_release.py' -v
-
-    - name: Download both architectures
-      uses: actions/download-artifact@v7
-      with:
-        pattern: ci-packages-*
-        path: packages
-        merge-multiple: true
-
-    - name: Download all C++ components
-      uses: actions/download-artifact@v7
-      with:
-        pattern: cpp-*
-        path: cpp-artifacts
-        merge-multiple: false
-
-    - name: Assemble and verify PR bundle
-      run: |
-        set -euo pipefail
-        python3 .github/scripts/release_bundle.py create \
-          --version "$PACKAGE_VERSION" --allow-development-version \
-          --bundle pr-bundle
-        cat pr-bundle/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
-
-    - name: Upload PR bundle
-      uses: actions/upload-artifact@v6
-      with:
-        name: pr-bundle-${{ github.run_id }}-${{ github.run_attempt }}
-        path: pr-bundle/
-        if-no-files-found: error
-        retention-days: 7
-
-    - name: Upload streamer package to github action
-      uses: actions/upload-artifact@v6
-      with:
-        name: runai_model_streamer
-        path: pr-bundle/wheels/runai_model_streamer-*.whl
-        if-no-files-found: error
-        retention-days: 7
-
-    - name: Upload s3 streamer package to github action
-      uses: actions/upload-artifact@v6
-      with:
-        name: runai_model_streamer_s3
-        path: pr-bundle/wheels/runai_model_streamer_s3-*.whl
-        if-no-files-found: error
-        retention-days: 7
-
-    - name: Upload GCS streamer package to github action
-      uses: actions/upload-artifact@v6
-      with:
-        name: runai_model_streamer_gcs
-        path: pr-bundle/wheels/runai_model_streamer_gcs-*.whl
-        if-no-files-found: error
-        retention-days: 7
-
-    - name: Upload Azure streamer package to github action
-      uses: actions/upload-artifact@v6
-      with:
-        name: runai_model_streamer_azure
-        path: pr-bundle/wheels/runai_model_streamer_azure-*.whl
-        if-no-files-found: error
-        retention-days: 7
+    uses: ./.github/workflows/assemble-bundle.yml
+    with:
+      package_version: ${{ needs.setup.outputs.package_version }}
+      artifact_name: pr-bundle-${{ github.run_id }}-${{ github.run_attempt }}
+      retention_days: 7
+      allow_development_version: true
+      upload_python_packages: true
 
   lifecycle-install-tests:
     name: Test, Build & Push

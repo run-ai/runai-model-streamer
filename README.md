@@ -137,7 +137,8 @@ the existing x86_64 C++, Python, integration, and filesystem-strategy tests.
 There is no fallback to master's devcontainer. Ensure the branch image matches
 the tagged source's build requirements, especially when tagging an older commit.
 
-After every build and test succeeds, CI collects one wheel for each package and
+After every build and test succeeds, CI calls the reusable `assemble-bundle.yml`
+workflow, also used for PR bundles. It collects one wheel for each package and
 architecture at the tagged version, plus the C++ component artifacts from the
 same run. It packages one C++ SDK per architecture, checking the ELF architecture
 and matching public headers and licenses across all components. The eight wheels,

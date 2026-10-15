@@ -1,0 +1,125 @@
+name: Assemble artifact bundle
+
+on:
+  workflow_call:
+    inputs:
+      package_version:
+        description: Version embedded in the component wheels and SDK filenames.
+        type: string
+        required: true
+      artifact_name:
+        description: Name of the assembled bundle artifact.
+        type: string
+        required: true
+      retention_days:
+        description: Retention for the bundle and optional Python package downloads.
+        type: number
+        default: 30
+      allow_development_version:
+        description: Accept PR development versions in addition to release versions.
+        type: boolean
+        default: false
+      upload_python_packages:
+        description: Also upload the four combined Python package downloads.
+        type: boolean
+        default: false
+    outputs:
+      artifact_id:
+        description: ID of the verified bundle artifact, for later publication.
+        value: ${{ jobs.assemble.outputs.artifact_id }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  assemble:
+    name: Assemble and verify bundle
+    runs-on: ubuntu-latest
+    outputs:
+      artifact_id: ${{ steps.bundle.outputs.artifact-id }}
+    env:
+      PACKAGE_VERSION: ${{ inputs.package_version }}
+      ALLOW_DEVELOPMENT_VERSION: ${{ inputs.allow_development_version }}
+    steps:
+    - name: Checkout packaging scripts and notices
+      uses: actions/checkout@v5
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+
+    - name: Test bundle packaging
+      run: python3 -B -m unittest discover -s .github/scripts -p 'test_release.py' -v
+
+    - name: Download both architectures
+      uses: actions/download-artifact@v7
+      with:
+        pattern: ci-packages-*
+        path: packages
+        merge-multiple: true
+
+    - name: Download all C++ components
+      uses: actions/download-artifact@v7
+      with:
+        pattern: cpp-*
+        path: cpp-artifacts
+        merge-multiple: false
+
+    - name: Assemble and verify bundle
+      run: |
+        set -euo pipefail
+        args=()
+        if [[ "$ALLOW_DEVELOPMENT_VERSION" == true ]]; then
+          args+=(--allow-development-version)
+        fi
+        python3 .github/scripts/release_bundle.py create \
+          --version "$PACKAGE_VERSION" "${args[@]}"
+        cat release-bundle/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Upload verified bundle
+      id: bundle
+      uses: actions/upload-artifact@v6
+      with:
+        name: ${{ inputs.artifact_name }}
+        path: release-bundle/
+        if-no-files-found: error
+        retention-days: ${{ inputs.retention_days }}
+
+    - name: Upload streamer package to github action
+      if: inputs.upload_python_packages
+      uses: actions/upload-artifact@v6
+      with:
+        name: runai_model_streamer
+        path: release-bundle/wheels/runai_model_streamer-*.whl
+        if-no-files-found: error
+        retention-days: ${{ inputs.retention_days }}
+
+    - name: Upload s3 streamer package to github action
+      if: inputs.upload_python_packages
+      uses: actions/upload-artifact@v6
+      with:
+        name: runai_model_streamer_s3
+        path: release-bundle/wheels/runai_model_streamer_s3-*.whl
+        if-no-files-found: error
+        retention-days: ${{ inputs.retention_days }}
+
+    - name: Upload GCS streamer package to github action
+      if: inputs.upload_python_packages
+      uses: actions/upload-artifact@v6
+      with:
+        name: runai_model_streamer_gcs
+        path: release-bundle/wheels/runai_model_streamer_gcs-*.whl
+        if-no-files-found: error
+        retention-days: ${{ inputs.retention_days }}
+
+    - name: Upload Azure streamer package to github action
+      if: inputs.upload_python_packages
+      uses: actions/upload-artifact@v6
+      with:
+        name: runai_model_streamer_azure
+        path: release-bundle/wheels/runai_model_streamer_azure-*.whl
+        if-no-files-found: error
+        retention-days: ${{ inputs.retention_days }}
