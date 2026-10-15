@@ -121,6 +121,7 @@ jobs:
         name: ci-cpp-${{ inputs.component }}-${{ inputs.arch }}
         path: ${{ runner.temp }}/cpp-artifact/
         if-no-files-found: error
+        overwrite: true
         retention-days: ${{ inputs.artifact_retention_days }}
 
     - name: Upload architecture packages
@@ -130,4 +131,5 @@ jobs:
         # Keep package/dist paths inside each artifact for the existing install targets.
         path: py/*/dist/*.whl
         if-no-files-found: error
+        overwrite: true
         retention-days: ${{ inputs.artifact_retention_days }}
