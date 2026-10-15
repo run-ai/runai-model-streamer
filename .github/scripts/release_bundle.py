@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Assemble and verify the wheel and C++ assets saved before release approval."""
+"""Assemble and verify wheel and C++ assets for PR downloads and releases."""
 
 import argparse
 import fnmatch
@@ -172,6 +172,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("create", "verify"))
     parser.add_argument("--version", required=True)
+    parser.add_argument("--allow-development-version", action="store_true",
+                        help="also accept PR versions of the form 0.0.0+dev.<7-character SHA>")
     parser.add_argument("--bundle", type=Path, default=Path("release-bundle"))
     parser.add_argument("--wheels", type=Path, default=Path("packages"))
     parser.add_argument("--cpp", type=Path, default=Path("cpp-artifacts"))
@@ -179,7 +181,10 @@ def main():
                         help="third-party notice added to each SDK archive")
     args = parser.parse_args()
     try:
-        require(re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", args.version),
+        development_version = args.allow_development_version and re.fullmatch(
+            r"0\.0\.0\+dev\.[0-9a-f]{7}", args.version)
+        require(development_version or re.fullmatch(
+                    r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", args.version),
                 "Release version must have the form X.Y.Z")
         if args.command == "create":
             create_bundle(args.wheels, args.cpp, args.bundle, args.version, args.notices)

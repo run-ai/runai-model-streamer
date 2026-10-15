@@ -54,12 +54,14 @@ class ReleaseBundleTests(unittest.TestCase):
                 path.write_bytes(elf + f"{component}-{arch}".encode())
                 self.libraries.append(path)
 
-    def collect(self, bundle="release-bundle"):
-        return subprocess.run([sys.executable, str(BUNDLE_SCRIPT), "create", "--version", VERSION,
-                               "--bundle", bundle], cwd=self.root, capture_output=True, text=True)
+    def collect(self, bundle="release-bundle", version=VERSION, extra_args=()):
+        return subprocess.run([sys.executable, str(BUNDLE_SCRIPT), "create", "--version", version,
+                               "--bundle", bundle, *extra_args],
+                              cwd=self.root, capture_output=True, text=True)
 
-    def verify(self):
-        return subprocess.run([sys.executable, str(BUNDLE_SCRIPT), "verify", "--version", VERSION],
+    def verify(self, bundle="release-bundle", version=VERSION, extra_args=()):
+        return subprocess.run([sys.executable, str(BUNDLE_SCRIPT), "verify", "--version", version,
+                               "--bundle", bundle, *extra_args],
                               cwd=self.root, capture_output=True, text=True)
 
     def collect_ok(self):
@@ -97,6 +99,55 @@ class ReleaseBundleTests(unittest.TestCase):
                     self.assertEqual((member.uid, member.gid, member.mtime), (0, 0, 0))
                     self.assertEqual((member.uname, member.gname), ("", ""))
                     self.assertEqual(member.mode, 0o755 if member.isdir() else 0o644)
+
+    def test_development_bundle_matches_release_layout(self):
+        self.collect_ok()
+        version = "0.0.0+dev.abc1234"
+        for path in self.paths:
+            path.rename(path.with_name(path.name.replace(VERSION, version)))
+        options = {"bundle": "pr-bundle", "version": version,
+                   "extra_args": ("--allow-development-version",)}
+        result = self.collect(**options)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        pr_bundle = self.root / "pr-bundle"
+        release_files = {path.relative_to(self.bundle).as_posix(): path
+                         for path in self.bundle.rglob("*") if path.is_file()}
+        pr_files = {path.relative_to(pr_bundle).as_posix().replace(version, VERSION): path
+                    for path in pr_bundle.rglob("*") if path.is_file()}
+        self.assertEqual(release_files.keys(), pr_files.keys())
+        for name, release_path in release_files.items():
+            if name.startswith("wheels/"):
+                self.assertEqual(release_path.read_bytes(), pr_files[name].read_bytes())
+            elif name.startswith("cpp/"):
+                with tarfile.open(release_path) as archive:
+                    release_members = {member.name: archive.extractfile(member).read()
+                                       for member in archive.getmembers() if member.isfile()}
+                with tarfile.open(pr_files[name]) as archive:
+                    pr_members = {member.name.replace(version, VERSION): archive.extractfile(member).read()
+                                  for member in archive.getmembers() if member.isfile()}
+                self.assertEqual(release_members, pr_members)
+        result = self.verify(**options)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        next((pr_bundle / "wheels").glob("*.whl")).write_bytes(b"changed")
+        result = self.verify(**options)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Checksum mismatch", result.stderr)
+
+    def test_development_version_requires_opt_in(self):
+        for operation in (self.collect, self.verify):
+            with self.subTest(operation=operation.__name__):
+                result = operation(version="0.0.0+dev.abc1234")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("form X.Y.Z", result.stderr)
+
+    def test_invalid_development_versions_rejected(self):
+        for version in ("0.0.0+dev.abc123", "0.0.0+dev.abc12345", "0.0.0+dev.xyz1234",
+                        "0.17.2+dev.abc1234", "0.0.0+dev.abc1234/../../output", "0.0.0+dev.abc1234\n"):
+            for operation in (self.collect, self.verify):
+                with self.subTest(version=version, operation=operation.__name__):
+                    result = operation(version=version, extra_args=("--allow-development-version",))
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("form X.Y.Z", result.stderr)
 
     def test_checksum_manifest_works_for_flat_downloads(self):
         self.collect_ok()

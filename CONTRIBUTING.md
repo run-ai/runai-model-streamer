@@ -244,9 +244,18 @@ the full sequential local entry point and builds from source as before.
 
 The build jobs upload eight intermediate `ci-packages-<component>-<arch>`
 artifacts, retained for seven days for use by later CI jobs. The **Assemble packages**
-job runs alongside integration tests after both architectures finish building. It combines their
-wheels into the `runai_model_streamer`, `runai_model_streamer_s3`,
-`runai_model_streamer_gcs`, and `runai_model_streamer_azure` artifacts.
+job runs alongside integration tests after both architectures finish building.
+It uses the release bundler to create `pr-bundle-<run>-<attempt>` with the same
+layout as the release bundle: eight wheels under `wheels/`, two complete C++ SDK
+archives under `cpp/`, and `SHA256SUMS`. SDK archives contain the libraries,
+public headers, license, and third-party notices. The bundler checks completeness,
+ELF architectures, matching headers/licenses, and checksums before upload.
+PR versions use `0.0.0+dev.<commit>`; release publication still requires `X.Y.Z`.
+The four `runai_model_streamer`, `runai_model_streamer_s3`,
+`runai_model_streamer_gcs`, and `runai_model_streamer_azure` downloads contain
+the same verified wheels for convenience. Bundle assembly runs independently of
+integration tests; require the final **Test, Build & Push** check to pass before
+using a PR build.
 All PR wheel and C++ artifacts are retained for seven days. Release builds retain
 their component artifacts and tested release bundle for 30 days.
 Each build job also uploads a `cpp-<component>-<arch>`
@@ -259,6 +268,13 @@ than Bazel symlinks. The `Test, Build & Push` required check succeeds
 only when all eight builds (including their C++ and Python tests), integration
 tests, and package assembly succeed. Changed devcontainers are built once before
 the matrix starts; peak matrix concurrency remains eight runners.
+
+To verify an extracted PR bundle locally, substitute its development version:
+
+```sh
+python3 .github/scripts/release_bundle.py verify \
+  --version 0.0.0+dev.abc1234 --allow-development-version --bundle pr-bundle
+```
 
 ## Getting Help
 Need support or have a question? We're here to help:
