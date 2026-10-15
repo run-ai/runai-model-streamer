@@ -205,7 +205,6 @@ jobs:
       artifact_name: pr-bundle-${{ github.run_id }}-${{ github.run_attempt }}
       retention_days: 7
       allow_development_version: true
-      upload_python_packages: true
 
   lifecycle-install-tests:
     name: Test, Build & Push

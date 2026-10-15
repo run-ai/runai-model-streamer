@@ -40,7 +40,7 @@ class ReleaseBundleTests(unittest.TestCase):
         for arch, machine in (("x86_64", 62), ("aarch64", 183)):
             for component, library in (("streamer", "libstreamer.so"), ("s3", "libstreamers3.so"),
                                        ("gcs", "libstreamergcs.so"), ("azure", "libstreamerazure.so")):
-                directory = self.cpp / f"cpp-{component}-{arch}"
+                directory = self.cpp / f"ci-cpp-{component}-{arch}"
                 (directory / "include" / "streamer").mkdir(parents=True)
                 (directory / "lib").mkdir()
                 (directory / "LICENSE").write_text("fixture license\n")
@@ -87,7 +87,7 @@ class ReleaseBundleTests(unittest.TestCase):
         for arch in ("x86_64", "aarch64"):
             root = f"runai-model-streamer-cpp-sdk-{VERSION}-linux-{arch}"
             expected = {}
-            for directory in self.cpp.glob(f"cpp-*-{arch}"):
+            for directory in self.cpp.glob(f"ci-cpp-*-{arch}"):
                 expected.update({f"{root}/{path.relative_to(directory).as_posix()}": path.read_bytes()
                                  for path in directory.rglob("*") if path.is_file()})
             expected[f"{root}/THIRD_PARTY_NOTICES.txt"] = self.notices.read_bytes()
@@ -194,7 +194,7 @@ class ReleaseBundleTests(unittest.TestCase):
         self.assertNotEqual(self.verify().returncode, 0)
 
     def test_missing_component_rejected(self):
-        path = self.cpp / "cpp-azure-aarch64"
+        path = self.cpp / "ci-cpp-azure-aarch64"
         path.rename(path.with_name("unavailable"))
         self.assertNotEqual(self.collect().returncode, 0)
 
@@ -203,17 +203,17 @@ class ReleaseBundleTests(unittest.TestCase):
         self.assertNotEqual(self.collect().returncode, 0)
 
     def test_missing_header_rejected(self):
-        path = self.cpp / "cpp-streamer-x86_64" / "include" / "streamer" / "device.h"
+        path = self.cpp / "ci-cpp-streamer-x86_64" / "include" / "streamer" / "device.h"
         path.rename(path.with_suffix(".unavailable"))
         self.assertNotEqual(self.collect().returncode, 0)
 
     def test_different_headers_rejected(self):
-        path = self.cpp / "cpp-azure-aarch64" / "include" / "streamer" / "device.h"
+        path = self.cpp / "ci-cpp-azure-aarch64" / "include" / "streamer" / "device.h"
         path.write_text("different header")
         self.assertNotEqual(self.collect().returncode, 0)
 
     def test_different_license_rejected(self):
-        (self.cpp / "cpp-gcs-aarch64" / "LICENSE").write_text("different license")
+        (self.cpp / "ci-cpp-gcs-aarch64" / "LICENSE").write_text("different license")
         self.assertNotEqual(self.collect().returncode, 0)
 
     def test_missing_third_party_notices_rejected(self):

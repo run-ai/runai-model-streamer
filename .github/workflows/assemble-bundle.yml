@@ -12,15 +12,11 @@ on:
         type: string
         required: true
       retention_days:
-        description: Retention for the bundle and optional Python package downloads.
+        description: Retention for the verified final bundle in days.
         type: number
         default: 30
       allow_development_version:
         description: Accept PR development versions in addition to release versions.
-        type: boolean
-        default: false
-      upload_python_packages:
-        description: Also upload the four combined Python package downloads.
         type: boolean
         default: false
     outputs:
@@ -64,7 +60,7 @@ jobs:
     - name: Download all C++ components
       uses: actions/download-artifact@v7
       with:
-        pattern: cpp-*
+        pattern: ci-cpp-*
         path: cpp-artifacts
         merge-multiple: false
 
@@ -85,41 +81,5 @@ jobs:
       with:
         name: ${{ inputs.artifact_name }}
         path: release-bundle/
-        if-no-files-found: error
-        retention-days: ${{ inputs.retention_days }}
-
-    - name: Upload streamer package to github action
-      if: inputs.upload_python_packages
-      uses: actions/upload-artifact@v6
-      with:
-        name: runai_model_streamer
-        path: release-bundle/wheels/runai_model_streamer-*.whl
-        if-no-files-found: error
-        retention-days: ${{ inputs.retention_days }}
-
-    - name: Upload s3 streamer package to github action
-      if: inputs.upload_python_packages
-      uses: actions/upload-artifact@v6
-      with:
-        name: runai_model_streamer_s3
-        path: release-bundle/wheels/runai_model_streamer_s3-*.whl
-        if-no-files-found: error
-        retention-days: ${{ inputs.retention_days }}
-
-    - name: Upload GCS streamer package to github action
-      if: inputs.upload_python_packages
-      uses: actions/upload-artifact@v6
-      with:
-        name: runai_model_streamer_gcs
-        path: release-bundle/wheels/runai_model_streamer_gcs-*.whl
-        if-no-files-found: error
-        retention-days: ${{ inputs.retention_days }}
-
-    - name: Upload Azure streamer package to github action
-      if: inputs.upload_python_packages
-      uses: actions/upload-artifact@v6
-      with:
-        name: runai_model_streamer_azure
-        path: release-bundle/wheels/runai_model_streamer_azure-*.whl
         if-no-files-found: error
         retention-days: ${{ inputs.retention_days }}

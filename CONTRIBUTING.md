@@ -245,26 +245,25 @@ the full sequential local entry point and builds from source as before.
 The build jobs upload eight intermediate `ci-packages-<component>-<arch>`
 artifacts, retained for seven days for use by later CI jobs. The **Assemble packages**
 job runs alongside integration tests after both architectures finish building.
-It calls the reusable `assemble-bundle.yml` workflow to create
-`pr-bundle-<run>-<attempt>` with the same
-layout as the release bundle: eight wheels under `wheels/`, two complete C++ SDK
+It calls the reusable `assemble-bundle.yml` workflow to create one final download,
+`pr-bundle-<run>-<attempt>`, with the same layout as the release bundle:
+eight wheels under `wheels/`, two complete C++ SDK
 archives under `cpp/`, and `SHA256SUMS`. SDK archives contain the libraries,
 public headers, license, and third-party notices. The bundler checks completeness,
 ELF architectures, matching headers/licenses, and checksums before upload.
 PR versions use `0.0.0+dev.<commit>`; release publication still requires `X.Y.Z`.
-The four `runai_model_streamer`, `runai_model_streamer_s3`,
-`runai_model_streamer_gcs`, and `runai_model_streamer_azure` downloads contain
-the same verified wheels for convenience. Bundle assembly runs independently of
-integration tests; require the final **Test, Build & Push** check to pass before
-using a PR build.
-All PR wheel and C++ artifacts are retained for seven days. Release builds retain
-their component artifacts and tested release bundle for 30 days.
+Download the bundle for Python wheels and complete C++ SDKs. Bundle assembly
+runs independently of integration tests; require the final **Test, Build & Push**
+check to pass before using a PR build.
+Intermediate wheel and C++ artifacts are retained for seven days in both PR and
+release builds to support retries. Final PR bundles are retained for seven days;
+tested release bundles are retained for 30 days for approval and recovery.
 Release CI calls the same assembly workflow after integration tests succeed,
 then passes its bundle artifact ID to the approval-gated publication job.
 The shared workflow downloads components, tests the packaging code, assembles
 and verifies the bundle, and uploads it. Callers select the version, artifact
-name, retention, development-version opt-in, and optional Python downloads.
-Each build job also uploads a `cpp-<component>-<arch>`
+name, final-bundle retention, and development-version opt-in.
+Each build job also uploads an intermediate `ci-cpp-<component>-<arch>`
 artifact containing its shared library under `lib/` and the repository license.
 All C++ artifacts include public C/C++ headers under
 `include/streamer/`. Backend artifacts contain their plugin library; use them

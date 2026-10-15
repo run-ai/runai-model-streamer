@@ -24,9 +24,9 @@ on:
         type: string
         default: ''
       artifact_retention_days:
-        description: Retention for component artifacts in days.
+        description: Retention for intermediate wheel and C++ artifacts in days.
         type: number
-        default: 30
+        default: 7
 
 permissions:
   contents: read
@@ -118,7 +118,7 @@ jobs:
     - name: Upload C++ library
       uses: actions/upload-artifact@v6
       with:
-        name: cpp-${{ inputs.component }}-${{ inputs.arch }}
+        name: ci-cpp-${{ inputs.component }}-${{ inputs.arch }}
         path: ${{ runner.temp }}/cpp-artifact/
         if-no-files-found: error
         retention-days: ${{ inputs.artifact_retention_days }}

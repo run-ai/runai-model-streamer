@@ -72,7 +72,7 @@ def sdk_inputs(artifacts, notices):
     for arch, machine in ARCHITECTURES.items():
         sdk = {}
         for component, library in COMPONENTS.items():
-            directory = artifacts / f"cpp-{component}-{arch}"
+            directory = artifacts / f"ci-cpp-{component}-{arch}"
             files = regular_files(directory)
             shared = {name: path for name, path in files.items()
                       if name == "LICENSE" or name.startswith("include/streamer/")}
