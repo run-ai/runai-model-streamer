@@ -242,16 +242,20 @@ the two C++ strategy test targets and the Azure testing variant. `make test` rem
 the full sequential local entry point and builds from source as before.
 
 Wheels are available in eight `packages-<component>-<arch>` artifacts, uploaded
-by the individual build jobs. Each job also uploads a `cpp-<component>-<arch>`
+by the individual build jobs. The **Assemble packages** job runs alongside
+integration tests after both architectures finish building. It combines their
+wheels into the `runai_model_streamer`, `runai_model_streamer_s3`,
+`runai_model_streamer_gcs`, and `runai_model_streamer_azure` artifacts.
+Each build job also uploads a `cpp-<component>-<arch>`
 artifact containing its shared library under `lib/` and the repository license.
 All C++ artifacts include public C/C++ headers under
 `include/streamer/`. Backend artifacts contain their plugin library; use them
 alongside the core library for the same architecture. Libraries are copied out
 of the container before it stops so the downloads contain real files rather
 than Bazel symlinks. The `Test, Build & Push` required check succeeds
-only when all eight builds (including their C++ and Python tests) and integration
-tests succeed. Changed devcontainers are built once before the matrix starts;
-peak matrix concurrency remains eight runners.
+only when all eight builds (including their C++ and Python tests), integration
+tests, and package assembly succeed. Changed devcontainers are built once before
+the matrix starts; peak matrix concurrency remains eight runners.
 
 ## Getting Help
 Need support or have a question? We're here to help:

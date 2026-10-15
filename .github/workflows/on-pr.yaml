@@ -193,18 +193,61 @@ jobs:
           PACKAGE_VERSION
         runCmd: make ci-test-integration BAZEL_TEST_FLAGS=--test_env=RUNAI_STREAMER_REQUIRE_IO_URING=1
 
+  packages:
+    name: Assemble packages
+    needs: [build_x86, build_arm]
+    if: ${{ !cancelled() && needs.build_x86.result == 'success' && needs.build_arm.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download both architectures
+      uses: actions/download-artifact@v7
+      with:
+        pattern: packages-*
+        path: py
+        merge-multiple: true
+
+    - name: Upload streamer package to github action
+      uses: actions/upload-artifact@v6
+      with:
+        name: runai_model_streamer
+        path: py/runai_model_streamer/dist/*
+        if-no-files-found: error
+
+    - name: Upload s3 streamer package to github action
+      uses: actions/upload-artifact@v6
+      with:
+        name: runai_model_streamer_s3
+        path: py/runai_model_streamer_s3/dist/*
+        if-no-files-found: error
+
+    - name: Upload GCS streamer package to github action
+      uses: actions/upload-artifact@v6
+      with:
+        name: runai_model_streamer_gcs
+        path: py/runai_model_streamer_gcs/dist/*
+        if-no-files-found: error
+
+    - name: Upload Azure streamer package to github action
+      uses: actions/upload-artifact@v6
+      with:
+        name: runai_model_streamer_azure
+        path: py/runai_model_streamer_azure/dist/*
+        if-no-files-found: error
+
   lifecycle-install-tests:
     name: Test, Build & Push
     if: always()
-    needs: [build_x86, build_arm, tests]
+    needs: [build_x86, build_arm, tests, packages]
     runs-on: ubuntu-latest
     steps:
-    - name: Require all builds and tests to succeed
+    - name: Require all builds, tests, and package uploads to succeed
       env:
         X86_RESULT: ${{ needs.build_x86.result }}
         ARM_RESULT: ${{ needs.build_arm.result }}
         TEST_RESULT: ${{ needs.tests.result }}
+        PACKAGES_RESULT: ${{ needs.packages.result }}
       run: |
         test "$X86_RESULT" = success
         test "$ARM_RESULT" = success
         test "$TEST_RESULT" = success
+        test "$PACKAGES_RESULT" = success
