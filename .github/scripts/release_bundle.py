@@ -66,6 +66,7 @@ def sdk_name(version, arch):
 
 
 def sdk_inputs(artifacts, notices):
+    """Validate component artifacts and return SDK files grouped by architecture."""
     require(notices.is_file() and not notices.is_symlink(), f"Missing third-party notices: {notices}")
     shared_hashes = None
     sdks = {}
@@ -169,6 +170,7 @@ def verify_bundle(bundle, version):
 
 
 def main():
+    """Parse CLI options and create or verify a bundle with an allowed version."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("create", "verify"))
     parser.add_argument("--version", required=True)

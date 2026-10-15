@@ -21,6 +21,7 @@ BUNDLE_SCRIPT = Path(__file__).with_name("release_bundle.py").resolve()
 
 class ReleaseBundleTests(unittest.TestCase):
     def setUp(self):
+        """Create wheel, ELF library, header, license, and notice fixtures for both architectures."""
         self.root = Path(tempfile.mkdtemp(prefix="release-bundle-test-"))
         self.bundle = self.root / "release-bundle"
         self.paths = []
@@ -55,16 +56,19 @@ class ReleaseBundleTests(unittest.TestCase):
                 self.libraries.append(path)
 
     def collect(self, bundle="release-bundle", version=VERSION, extra_args=()):
+        """Run bundle creation with the fixture inputs and return the captured process result."""
         return subprocess.run([sys.executable, str(BUNDLE_SCRIPT), "create", "--version", version,
                                "--bundle", bundle, *extra_args],
                               cwd=self.root, capture_output=True, text=True)
 
     def verify(self, bundle="release-bundle", version=VERSION, extra_args=()):
+        """Run bundle verification and return the captured process result."""
         return subprocess.run([sys.executable, str(BUNDLE_SCRIPT), "verify", "--version", version,
                                "--bundle", bundle, *extra_args],
                               cwd=self.root, capture_output=True, text=True)
 
     def collect_ok(self):
+        """Create the default release bundle and assert that packaging succeeds."""
         result = self.collect()
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -83,6 +87,7 @@ class ReleaseBundleTests(unittest.TestCase):
                              (self.bundle / "wheels" / path.name).read_bytes())
 
     def test_archive_layout_contents_and_metadata(self):
+        """Check SDK archive paths, file contents, and normalized metadata for both architectures."""
         self.collect_ok()
         for arch in ("x86_64", "aarch64"):
             root = f"runai-model-streamer-cpp-sdk-{VERSION}-linux-{arch}"
@@ -101,6 +106,7 @@ class ReleaseBundleTests(unittest.TestCase):
                     self.assertEqual(member.mode, 0o755 if member.isdir() else 0o644)
 
     def test_development_bundle_matches_release_layout(self):
+        """Check PR and release asset parity, successful PR verification, and tampering detection."""
         self.collect_ok()
         version = "0.0.0+dev.abc1234"
         for path in self.paths:
@@ -134,6 +140,7 @@ class ReleaseBundleTests(unittest.TestCase):
         self.assertIn("Checksum mismatch", result.stderr)
 
     def test_development_version_requires_opt_in(self):
+        """Reject development versions during creation and verification unless explicitly allowed."""
         for operation in (self.collect, self.verify):
             with self.subTest(operation=operation.__name__):
                 result = operation(version="0.0.0+dev.abc1234")
@@ -141,6 +148,7 @@ class ReleaseBundleTests(unittest.TestCase):
                 self.assertIn("form X.Y.Z", result.stderr)
 
     def test_invalid_development_versions_rejected(self):
+        """Reject malformed development versions even when development versions are enabled."""
         for version in ("0.0.0+dev.abc123", "0.0.0+dev.abc12345", "0.0.0+dev.xyz1234",
                         "0.17.2+dev.abc1234", "0.0.0+dev.abc1234/../../output", "0.0.0+dev.abc1234\n"):
             for operation in (self.collect, self.verify):
@@ -150,6 +158,7 @@ class ReleaseBundleTests(unittest.TestCase):
                     self.assertIn("form X.Y.Z", result.stderr)
 
     def test_checksum_manifest_works_for_flat_downloads(self):
+        """Check that SHA256SUMS verifies assets downloaded into a single directory."""
         self.collect_ok()
         downloads = self.root / "downloads"
         downloads.mkdir()
@@ -189,34 +198,41 @@ class ReleaseBundleTests(unittest.TestCase):
         self.assertNotEqual(self.collect().returncode, 0)
 
     def test_checksum_detects_modified_wheel(self):
+        """Reject a bundle when a wheel no longer matches its recorded checksum."""
         self.collect_ok()
         (self.bundle / "wheels" / self.paths[0].name).write_bytes(b"changed")
         self.assertNotEqual(self.verify().returncode, 0)
 
     def test_missing_component_rejected(self):
+        """Reject packaging when a required component artifact directory is missing."""
         path = self.cpp / "ci-cpp-azure-aarch64"
         path.rename(path.with_name("unavailable"))
         self.assertNotEqual(self.collect().returncode, 0)
 
     def test_missing_library_rejected(self):
+        """Reject packaging when a component artifact lacks its expected shared library."""
         self.libraries[0].rename(self.libraries[0].with_suffix(".unavailable"))
         self.assertNotEqual(self.collect().returncode, 0)
 
     def test_missing_header_rejected(self):
+        """Reject packaging when an artifact lacks a required public header."""
         path = self.cpp / "ci-cpp-streamer-x86_64" / "include" / "streamer" / "device.h"
         path.rename(path.with_suffix(".unavailable"))
         self.assertNotEqual(self.collect().returncode, 0)
 
     def test_different_headers_rejected(self):
+        """Reject packaging when public header contents differ between component artifacts."""
         path = self.cpp / "ci-cpp-azure-aarch64" / "include" / "streamer" / "device.h"
         path.write_text("different header")
         self.assertNotEqual(self.collect().returncode, 0)
 
     def test_different_license_rejected(self):
+        """Reject packaging when license contents differ between component artifacts."""
         (self.cpp / "ci-cpp-gcs-aarch64" / "LICENSE").write_text("different license")
         self.assertNotEqual(self.collect().returncode, 0)
 
     def test_missing_third_party_notices_rejected(self):
+        """Reject packaging when the third-party notice input is missing."""
         self.notices.unlink()
         self.assertNotEqual(self.collect().returncode, 0)
 
