@@ -121,7 +121,7 @@ jobs:
     - name: Upload architecture packages
       uses: actions/upload-artifact@v6
       with:
-        name: packages-${{ inputs.component }}-${{ inputs.arch }}
+        name: ci-packages-${{ inputs.component }}-${{ inputs.arch }}
         # Keep package/dist paths inside each artifact for the existing install targets.
         path: py/*/dist/*.whl
         if-no-files-found: error

@@ -187,7 +187,8 @@ The setup job checks whether `.devcontainer/**` changed. If it did, a single
 preparation job builds the checked-out devcontainer using the reusable
 `devcontainer.yml` workflow and the published image as a build cache. With
 `publish: false`, it saves the image as a temporary Actions artifact, retained for
-one day. The artifact and image tags include the run ID and attempt to isolate
+one day. The artifact is named `ci-devcontainer-<run>-<attempt>`. The artifact
+and image tags include the run ID and attempt to isolate
 retries. This is a per-run image handoff, not a cache restored across PR runs.
 
 All eight build jobs and the integration job download and load that same image.
@@ -241,8 +242,8 @@ The same tests still run for all four strategies. The integration job still buil
 the two C++ strategy test targets and the Azure testing variant. `make test` remains
 the full sequential local entry point and builds from source as before.
 
-Wheels are available in eight `packages-<component>-<arch>` artifacts, uploaded
-by the individual build jobs. The **Assemble packages** job runs alongside
+The build jobs upload eight intermediate `ci-packages-<component>-<arch>`
+artifacts for use by later CI jobs. The **Assemble packages** job runs alongside
 integration tests after both architectures finish building. It combines their
 wheels into the `runai_model_streamer`, `runai_model_streamer_s3`,
 `runai_model_streamer_gcs`, and `runai_model_streamer_azure` artifacts.

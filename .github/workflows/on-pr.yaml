@@ -177,7 +177,7 @@ jobs:
     - name: Download native packages
       uses: actions/download-artifact@v7
       with:
-        pattern: packages-*-x86_64
+        pattern: ci-packages-*-x86_64
         path: py
         merge-multiple: true
 
@@ -202,7 +202,7 @@ jobs:
     - name: Download both architectures
       uses: actions/download-artifact@v7
       with:
-        pattern: packages-*
+        pattern: ci-packages-*
         path: py
         merge-multiple: true
 
