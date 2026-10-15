@@ -81,12 +81,10 @@ jobs:
       package_version: ${{ needs.setup.outputs.version }}
       devcontainer_image: ${{ needs.setup.outputs.image }}
 
-  test-and-bundle:
-    name: Integration tests and release bundle
+  tests:
+    name: Integration tests and filesystem strategies
     needs: [setup, build]
     runs-on: ubuntu-latest
-    outputs:
-      artifact_id: ${{ steps.bundle.outputs.artifact-id }}
     env:
       PACKAGE_VERSION: ${{ needs.setup.outputs.version }}
       CI_IMAGE: ${{ needs.setup.outputs.image }}
@@ -107,7 +105,7 @@ jobs:
     - name: Download x86_64 wheels for integration tests
       uses: actions/download-artifact@v7
       with:
-        pattern: packages-*-x86_64
+        pattern: ci-packages-*-x86_64
         path: py
         merge-multiple: true
 
@@ -120,38 +118,18 @@ jobs:
           PACKAGE_VERSION
         runCmd: make ci-test-integration BAZEL_TEST_FLAGS=--test_env=RUNAI_STREAMER_REQUIRE_IO_URING=1
 
-    - name: Download all release wheels
-      uses: actions/download-artifact@v7
-      with:
-        pattern: packages-*
-        path: packages
-        merge-multiple: true
-
-    - name: Download all C++ components
-      uses: actions/download-artifact@v7
-      with:
-        pattern: cpp-*
-        path: cpp-artifacts
-        merge-multiple: false
-
-    - name: Collect release assets and generate checksums
-      run: |
-        set -euo pipefail
-        python3 .github/scripts/release_bundle.py create --version "$PACKAGE_VERSION"
-        cat release-bundle/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
-
-    - name: Preserve tested release bundle
-      id: bundle
-      uses: actions/upload-artifact@v6
-      with:
-        name: release-${{ needs.setup.outputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
-        path: release-bundle/
-        if-no-files-found: error
-        retention-days: 30
+  bundle:
+    name: Assemble release bundle
+    needs: [setup, tests]
+    uses: ./.github/workflows/assemble-bundle.yml
+    with:
+      package_version: ${{ needs.setup.outputs.version }}
+      artifact_name: release-bundle-${{ needs.setup.outputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
+      retention_days: 30
 
   publish:
     name: Approve and publish release
-    needs: [setup, test-and-bundle]
+    needs: [setup, bundle]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -173,7 +151,7 @@ jobs:
     - name: Download the tested release bundle
       uses: actions/download-artifact@v7
       with:
-        artifact-ids: ${{ needs.test-and-bundle.outputs.artifact_id }}
+        artifact-ids: ${{ needs.bundle.outputs.artifact_id }}
         path: release-bundle
         merge-multiple: true
 

@@ -50,7 +50,7 @@ jobs:
         artifact=
         if [[ "$PUBLISH" != true ]]; then
           tag="pr-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          artifact="devcontainer-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          artifact="ci-devcontainer-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
         fi
         printf 'name=%s\ntag=%s\nimage=%s:%s\nartifact=%s\n' \
           "$image_name" "$tag" "$image_name" "$tag" "$artifact" >> "$GITHUB_OUTPUT"
