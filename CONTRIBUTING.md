@@ -243,10 +243,12 @@ the two C++ strategy test targets and the Azure testing variant. `make test` rem
 the full sequential local entry point and builds from source as before.
 
 The build jobs upload eight intermediate `ci-packages-<component>-<arch>`
-artifacts for use by later CI jobs. The **Assemble packages** job runs alongside
-integration tests after both architectures finish building. It combines their
+artifacts, retained for seven days for use by later CI jobs. The **Assemble packages**
+job runs alongside integration tests after both architectures finish building. It combines their
 wheels into the `runai_model_streamer`, `runai_model_streamer_s3`,
 `runai_model_streamer_gcs`, and `runai_model_streamer_azure` artifacts.
+All PR wheel and C++ artifacts are retained for seven days. Release builds retain
+their component artifacts and tested release bundle for 30 days.
 Each build job also uploads a `cpp-<component>-<arch>`
 artifact containing its shared library under `lib/` and the repository license.
 All C++ artifacts include public C/C++ headers under

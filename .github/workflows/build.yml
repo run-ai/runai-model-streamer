@@ -23,6 +23,10 @@ on:
         description: Optional image artifact from this run; empty to use the registry.
         type: string
         default: ''
+      artifact_retention_days:
+        description: Retention for component artifacts in days.
+        type: number
+        default: 30
 
 permissions:
   contents: read
@@ -117,6 +121,7 @@ jobs:
         name: cpp-${{ inputs.component }}-${{ inputs.arch }}
         path: ${{ runner.temp }}/cpp-artifact/
         if-no-files-found: error
+        retention-days: ${{ inputs.artifact_retention_days }}
 
     - name: Upload architecture packages
       uses: actions/upload-artifact@v6
@@ -125,3 +130,4 @@ jobs:
         # Keep package/dist paths inside each artifact for the existing install targets.
         path: py/*/dist/*.whl
         if-no-files-found: error
+        retention-days: ${{ inputs.artifact_retention_days }}

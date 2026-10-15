@@ -111,6 +111,7 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       arch: x86_64
+      artifact_retention_days: 7
       component: ${{ matrix.component }}
       package_version: ${{ needs.setup.outputs.package_version }}
       devcontainer_image: ${{ needs.devcontainer.outputs.image || needs.setup.outputs.baseline_image }}
@@ -130,6 +131,7 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       arch: aarch64
+      artifact_retention_days: 7
       component: ${{ matrix.component }}
       package_version: ${{ needs.setup.outputs.package_version }}
       devcontainer_image: ${{ needs.devcontainer.outputs.image || needs.setup.outputs.baseline_image }}
@@ -212,6 +214,7 @@ jobs:
         name: runai_model_streamer
         path: py/runai_model_streamer/dist/*
         if-no-files-found: error
+        retention-days: 7
 
     - name: Upload s3 streamer package to github action
       uses: actions/upload-artifact@v6
@@ -219,6 +222,7 @@ jobs:
         name: runai_model_streamer_s3
         path: py/runai_model_streamer_s3/dist/*
         if-no-files-found: error
+        retention-days: 7
 
     - name: Upload GCS streamer package to github action
       uses: actions/upload-artifact@v6
@@ -226,6 +230,7 @@ jobs:
         name: runai_model_streamer_gcs
         path: py/runai_model_streamer_gcs/dist/*
         if-no-files-found: error
+        retention-days: 7
 
     - name: Upload Azure streamer package to github action
       uses: actions/upload-artifact@v6
@@ -233,6 +238,7 @@ jobs:
         name: runai_model_streamer_azure
         path: py/runai_model_streamer_azure/dist/*
         if-no-files-found: error
+        retention-days: 7
 
   lifecycle-install-tests:
     name: Test, Build & Push
