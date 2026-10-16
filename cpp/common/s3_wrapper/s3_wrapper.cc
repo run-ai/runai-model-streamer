@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <type_traits>
+#include <limits>
 
 #include "common/s3_wrapper/s3_wrapper.h"
 #include "common/s3_credentials/s3_credentials.h"
@@ -27,7 +28,7 @@ S3ClientWrapper::Params::Params(std::shared_ptr<StorageUri> uri, const Credentia
     uri(uri),
     credentials(credentials),
     concurrent_readers(concurrent_readers),
-    _process_group_size(std::to_string(process_group_size))
+    _process_group_size(process_group_size)
 {
     if (auto ep = credentials.endpoint(); ep.has_value()) // endpoint passed as parameter by user application (in credentials)
     {
@@ -57,14 +58,18 @@ const common::backend_api::ObjectClientConfig_t S3ClientWrapper::Params::to_conf
     config.endpoint_url = _endpoint.empty() ? nullptr : _endpoint.c_str();
 
     credentials.to_object_client_config(initial_params);
-    if (uri && uri->is_azure())
-    {
-        initial_params.push_back({"process_group_size", _process_group_size.c_str()});
-    }
     config.num_initial_params = initial_params.size();
     config.initial_params = initial_params.data();
     config.default_storage_chunk_size = chunk_bytesize;
     config.concurrent_readers = concurrent_readers;
+    // Azure already divides by an explicit environment override in the plugin.
+    // Otherwise pass the total client count using the existing integer parameter.
+    if (uri && uri->is_azure() && !utils::env_exists("RUNAI_STREAMER_PROCESS_GROUP_SIZE"))
+    {
+        const uint64_t clients = uint64_t(std::max(1U, concurrent_readers)) * _process_group_size;
+        config.concurrent_readers = static_cast<unsigned>(
+            std::min<uint64_t>(clients, std::numeric_limits<unsigned>::max()));
+    }
     return config;
 }
 

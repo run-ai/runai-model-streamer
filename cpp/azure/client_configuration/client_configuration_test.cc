@@ -60,29 +60,9 @@ TEST_F(AzureConcurrency, Threads_Follow_The_Reader_Count)
     }
 }
 
-TEST_F(AzureConcurrency, Handle_Count_Is_Used_Unless_The_User_Overrides_It)
-{
-    const common::backend_api::ObjectConfigParam_t param{"process_group_size", "8"};
-    common::backend_api::ObjectClientConfig_t config{};
-    config.concurrent_readers = 4;
-    config.initial_params = &param;
-    config.num_initial_params = 1;
-
-    EXPECT_EQ(ClientConfiguration(config).max_concurrency, expected(32));
-    utils::temp::Env override(std::string("RUNAI_STREAMER_PROCESS_GROUP_SIZE"), 2UL);
-    EXPECT_EQ(ClientConfiguration(config).max_concurrency, expected(8));
-}
-
 TEST_F(AzureConcurrency, Large_Process_Group_Does_Not_Overflow_The_Divisor)
 {
-    const common::backend_api::ObjectConfigParam_t param{"process_group_size", "1073741824"};
-    common::backend_api::ObjectClientConfig_t config{};
-    config.concurrent_readers = 4;
-    config.initial_params = &param;
-    config.num_initial_params = 1;
     const unsigned floor = std::thread::hardware_concurrency() == 0 ? 8U : 1U;
-
-    EXPECT_EQ(ClientConfiguration(config).max_concurrency, floor);
     utils::temp::Env override(std::string("RUNAI_STREAMER_PROCESS_GROUP_SIZE"), 1UL << 30);
     EXPECT_EQ(ClientConfiguration(4).max_concurrency, floor);
 }

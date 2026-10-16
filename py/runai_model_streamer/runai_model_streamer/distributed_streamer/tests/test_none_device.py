@@ -40,21 +40,9 @@ TIGHT_RING = {
 
 
 def _check_group_read(path, rank, count, **kwargs):
-    submission_counts = []
-    handle_counts = {}
     previous_override = os.environ.get("RUNAI_STREAMER_PROCESS_GROUP_SIZE")
-
-    def start(process_group_size=1):
-        handle = runai_start(process_group_size=process_group_size)
-        handle_counts[handle.value] = process_group_size
-        return handle
-
-    def submit(*args, **kw):
-        submission_counts.append(handle_counts[args[0].value])
-        return runai_request(*args, **kw)
-
-    with patch("runai_model_streamer.file_streamer.file_streamer.runai_request", side_effect=submit), \
-            patch("runai_model_streamer.file_streamer.file_streamer.runai_start", side_effect=start):
+    with patch("runai_model_streamer.file_streamer.file_streamer.runai_request", wraps=runai_request) as submit, \
+            patch("runai_model_streamer.file_streamer.file_streamer.runai_start", wraps=runai_start) as start:
         with SafetensorsStreamer() as streamer:
             streamer.stream_file(path, device="cpu", **kwargs)
             weights = dict(streamer.get_tensors())
@@ -62,9 +50,9 @@ def _check_group_read(path, rank, count, **kwargs):
             if ring is not None:
                 assert ring[0] == rank
     torch.testing.assert_close(weights["weight"], torch.arange(6))
-    assert len(handle_counts) == 1, handle_counts
-    assert len(submission_counts) >= 2
-    assert set(submission_counts) == {count}, submission_counts
+    start.assert_called_once_with(process_group_size=count)
+    assert submit.call_count >= 2
+    assert len({call.args[0].value for call in submit.call_args_list}) == 1
     assert os.environ.get("RUNAI_STREAMER_PROCESS_GROUP_SIZE") == previous_override
 
 

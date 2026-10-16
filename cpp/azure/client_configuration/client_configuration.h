@@ -5,8 +5,6 @@
 
 #pragma once
 
-#include "common/backend_api/object_storage/object_storage.h"
-
 #include <string>
 #include <optional>
 
@@ -31,8 +29,7 @@ struct ClientConfiguration
     // How many clients the caller will build. The threads are divided by it, so the process-wide
     // total stays the same whatever that count is. No default: the streamer resolves it in Config and
     // always states it.
-    explicit ClientConfiguration(unsigned concurrent_readers, unsigned process_group_size = 1);
-    explicit ClientConfiguration(const common::backend_api::ObjectClientConfig_t & config);
+    explicit ClientConfiguration(unsigned concurrent_readers);
 };
 
 } // namespace runai::llm::streamer::impl::azure

@@ -91,26 +91,19 @@ class DistributedStreamer:
 
     def set_process_group(self, process_group: object = _DEFAULT_PROCESS_GROUP) -> None:
         """Select the readers for this handle before its first request. None is a single reader."""
+        selected = self.params.process_group
         if process_group is _DEFAULT_PROCESS_GROUP:
-            if self.params.process_group_selected:
+            if selected is not _DEFAULT_PROCESS_GROUP:
                 return
-            group = dist.group.WORLD if dist.is_initialized() else None
-        else:
-            group = process_group
-        if group is not None:
-            if not dist.is_initialized() or not isinstance(group, dist.ProcessGroup):
-                raise ValueError("process_group must be an initialized Torch process group or None")
-            if dist.get_rank(group=group) < 0:
-                raise ValueError("The current rank must belong to process_group")
-        if self.params.process_group_selected:
-            if group is not self.params.process_group:
-                raise ValueError("process_group cannot change on an open streamer handle")
-            return
-        self.params.process_group = group
-        self.params.process_group_selected = True
+            process_group = dist.group.WORLD if dist.is_initialized() else None
+        if selected is not _DEFAULT_PROCESS_GROUP and process_group is not selected:
+            raise ValueError("process_group cannot change on an open streamer handle")
+        if process_group is not None and dist.get_rank(group=process_group) < 0:
+            raise ValueError("The current rank must belong to process_group")
+        self.params.process_group = process_group
     
     def get_group_size(self) -> int:
-        if self.params.process_group is None:
+        if self.params.process_group is _DEFAULT_PROCESS_GROUP or self.params.process_group is None:
             return 1
         return dist.get_world_size(group=self.params.process_group)
 
@@ -254,8 +247,7 @@ class _distributedStreamerParams:
         self.groups_by_ranks = []
         self.broadcast_timeout = DEFAULT_BROADCAST_TIMEOUT
         self.max_chunk = 0
-        self.process_group: Optional[dist.ProcessGroup] = None
-        self.process_group_selected = False
+        self.process_group = _DEFAULT_PROCESS_GROUP
  
     def get_broadcast_timeout(self) -> timedelta:
         timeout_val = os.environ.get("RUNAI_STREAMER_DIST_TIMEOUT")

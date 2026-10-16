@@ -88,7 +88,7 @@ struct S3ClientWrapper
          const common::backend_api::ObjectClientConfig_t to_config(std::vector<common::backend_api::ObjectConfigParam_t> & initial_params) const;
 
        private:
-         std::string _process_group_size = "1";
+         unsigned _process_group_size = 1;
          std::string _endpoint;
       };
 

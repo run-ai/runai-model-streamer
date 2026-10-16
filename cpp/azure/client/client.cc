@@ -34,7 +34,7 @@ constexpr char kAzureApplicationId[] = "azpartner-runai";
 
 AzureClient::AzureClient(const common::backend_api::ObjectClientConfig_t& config) :
     _stop(false),
-    _client_config(config),
+    _client_config(config.concurrent_readers),
     _responder(nullptr),
     _chunk_bytesize(config.default_storage_chunk_size)
 {

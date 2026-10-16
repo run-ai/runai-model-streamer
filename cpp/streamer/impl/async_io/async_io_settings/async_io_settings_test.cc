@@ -56,21 +56,12 @@ TEST(AsyncIoSettings, Depth_Is_Divided_By_The_Process_Group)
 {
     utils::temp::Env group(std::string("RUNAI_STREAMER_PROCESS_GROUP_SIZE"), 8UL);
 
-    const auto settings = settings_for(8 << 20, 512);
+    auto config = config_with(8 << 20);
+    config.process_group_size = 4; // The explicit override takes precedence over the handle.
+    const AsyncIoSettings settings(config, 512);
 
     EXPECT_EQ(settings.process_group_size(), 8);
     EXPECT_EQ(settings.depth(), 64) << "the device sees 8 x this, which is the configured 512";
-}
-
-TEST(AsyncIoSettings, User_Override_Takes_Precedence_Over_Handle_Count)
-{
-    utils::temp::Env group(std::string("RUNAI_STREAMER_PROCESS_GROUP_SIZE"), 4UL);
-    auto config = config_with(8 << 20);
-    config.process_group_size = 8;
-    const AsyncIoSettings settings(config, 64);
-
-    EXPECT_EQ(settings.process_group_size(), 4);
-    EXPECT_EQ(settings.depth(), 16);
 }
 
 // A negative process group size is refused at startup, not treated as a huge one.
