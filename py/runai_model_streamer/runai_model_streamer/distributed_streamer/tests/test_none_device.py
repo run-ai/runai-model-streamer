@@ -80,7 +80,17 @@ def _read_with_groups(rank, rendezvous, path):
         members = [1, 3, 5, 7]
         group = dist.new_group(ranks=members)
         if rank in members:
-            _check_group_read(path, rank, 4, process_group=group, is_distributed=True)
+            with patch.object(dist, "all_gather_object", wraps=dist.all_gather_object) as discover, \
+                    patch.object(dist, "broadcast", wraps=dist.broadcast) as broadcast, \
+                    patch.object(dist, "destroy_process_group", wraps=dist.destroy_process_group) as destroy:
+                _check_group_read(path, rank, 4, process_group=group, is_distributed=True)
+            discovery_group = discover.call_args.kwargs["group"]
+            distribution_group = broadcast.call_args.kwargs["group"]
+            assert discovery_group is not group
+            assert distribution_group is not group
+            assert {call.kwargs["group"] for call in destroy.call_args_list} == {
+                discovery_group, distribution_group,
+            }
             dist.barrier(group=group)
             dist.destroy_process_group(group=group)
         dist.barrier()

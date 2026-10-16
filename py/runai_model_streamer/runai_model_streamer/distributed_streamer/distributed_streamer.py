@@ -260,8 +260,8 @@ class _distributedStreamerParams:
         """
         Returns the number of processes on the node, global rank and the list of ranks on each node
 
-        Discovery is confined to the supplied reader group. The default group retains
-        the existing temporary-group path to avoid persistent discovery allocations.
+        Use a temporary group with the selected readers so discovery's NCCL allocations
+        can be released without destroying the caller's group.
         """
         my_global_rank = dist.get_rank() if dist.is_initialized() else 0
         if self.process_group is None:
@@ -272,19 +272,17 @@ class _distributedStreamerParams:
         if world_size == 1:
             return 1, my_global_rank, [[my_global_rank]]
 
-        discovery_group = self.process_group
-        if discovery_group is dist.group.WORLD:
-            discovery_group = dist.new_group(
-                ranks=dist.get_process_group_ranks(self.process_group),
-                backend=dist.get_backend(group=self.process_group),
-                timeout=self.broadcast_timeout,
-            )
+        discovery_group = dist.new_group(
+            ranks=dist.get_process_group_ranks(self.process_group),
+            backend=dist.get_backend(group=self.process_group),
+            timeout=self.broadcast_timeout,
+            use_local_synchronization=self.process_group is not dist.group.WORLD,
+        )
         all_hostnames = [None] * world_size
         try:
             dist.all_gather_object(all_hostnames, (my_global_rank, socket.gethostname()), group=discovery_group)
         finally:
-            if discovery_group is not self.process_group:
-                dist.destroy_process_group(group=discovery_group)
+            dist.destroy_process_group(group=discovery_group)
  
         # 2. Create a list of rank lists, one for each unique host.
         # e.g., [[0,1,2,3,4,5,6,7], [8,9,10,11,12,13,14,15]]
@@ -348,8 +346,7 @@ class _distributedStreamer:
                 if exc_type is None:
                     torch.distributed.barrier(group=self.distribution_group)
             finally:
-                if self.distribution_group is not self.process_group:
-                    torch.distributed.destroy_process_group(group=self.distribution_group)
+                torch.distributed.destroy_process_group(group=self.distribution_group)
                 self.distribution_group = None
         return
 
@@ -359,7 +356,12 @@ class _distributedStreamer:
 
         if self.process_group is not dist.group.WORLD:
             self.local_group_global_ranks = dist.get_process_group_ranks(self.process_group)
-            return self.process_group
+            return dist.new_group(
+                ranks=self.local_group_global_ranks,
+                backend=dist.get_backend(group=self.process_group),
+                timeout=self.broadcast_timeout,
+                use_local_synchronization=True,
+            )
 
         is_global_group = int(os.environ.get("RUNAI_STREAMER_DIST_GLOBAL", "0")) == 1
 

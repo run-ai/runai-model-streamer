@@ -142,11 +142,13 @@ weights and single-reader tables. The count is passed when creating each native 
 changing the environment. `RUNAI_STREAMER_PROCESS_GROUP_SIZE`, if explicitly set,
 remains a user override for native filesystem queue sizing and Azure client concurrency.
 
-A supplied non-default group is reused for weight exchange and is not destroyed by
-the streamer. Choose its members to define the distribution scope. The global/local
-mode settings below retain their existing behavior for the default group. Normal
-cleanup performs a barrier on the supplied group; all members must enter cleanup
-before any starts another collective on that group.
+A supplied non-default group defines the members and backend for temporary discovery
+and weight-exchange groups. Only its members participate in creating these groups.
+The streamer destroys the temporary groups so their NCCL allocations can be released;
+the supplied group remains owned by the caller. `RUNAI_STREAMER_DIST_TIMEOUT` applies
+to the temporary groups. The global/local mode settings below retain their existing
+behavior for the default group. Ranks shared by overlapping groups must create,
+consume, and close streams in a consistent order.
 
 Distributed streaming is enabled by default when streaming from object storage to CUDA devices.
 It is possible to disable distributed streaming by setting `RUNAI_STREAMER_DIST=0`
