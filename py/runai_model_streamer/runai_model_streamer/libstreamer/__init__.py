@@ -39,6 +39,10 @@ class LibstreamerDLLWrapper:
         self.fn_runai_end = self.lib.runai_file_streamer_end
         self.fn_runai_end.argtypes = [t_streamer]
 
+        self.fn_runai_set_process_group_size = self.lib.runai_file_streamer_set_process_group_size
+        self.fn_runai_set_process_group_size.argtypes = [t_streamer, ctypes.c_uint]
+        self.fn_runai_set_process_group_size.restype = ctypes.c_int
+
         # Set the streamer's object-storage credentials as a key/value dict (canonical config-param keys).
         self.fn_runai_set_credentials = self.lib.runai_file_streamer_set_credentials
         self.fn_runai_set_credentials.argtypes = [

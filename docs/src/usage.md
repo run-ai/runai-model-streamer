@@ -136,14 +136,17 @@ if Torch distributed is initialized. This skips discovery collectives and keeps 
 actual global rank for reporting.
 
 The group also applies to metadata reads, so filesystem queue sizing is resolved
-before the first header request. Explicit groups determine the reader count on each
+before the first header request. The selected group determines the reader count on each
 node. A handle keeps the same group until closed; use separate handles for ordinary
-weights and single-reader tables. Automatic process-count environment changes are
-restored on close.
+weights and single-reader tables. The count is passed to each native handle without
+changing the environment. `RUNAI_STREAMER_PROCESS_GROUP_SIZE`, if explicitly set,
+remains a user override for native filesystem queue sizing and Azure client concurrency.
 
 A supplied non-default group is reused for weight exchange and is not destroyed by
 the streamer. Choose its members to define the distribution scope. The global/local
-mode settings below retain their existing behavior for the default group.
+mode settings below retain their existing behavior for the default group. Normal
+cleanup performs a barrier on the supplied group; all members must enter cleanup
+before any starts another collective on that group.
 
 Distributed streaming is enabled by default when streaming from object storage to CUDA devices.
 It is possible to disable distributed streaming by setting `RUNAI_STREAMER_DIST=0`

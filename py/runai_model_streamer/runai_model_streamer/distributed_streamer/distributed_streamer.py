@@ -6,7 +6,6 @@ from typing import List, Iterator, Optional, Tuple
 import torch
 import torch.distributed as dist
 import os
-from contextlib import ExitStack
 from datetime import timedelta
 import socket
 
@@ -36,6 +35,7 @@ from runai_model_streamer.s3_utils.s3_utils import (
 )
 
 from timeit import default_timer as timer
+from runai_model_streamer.libstreamer.libstreamer import runai_set_process_group_size
 
 import logging
 import humanize
@@ -79,19 +79,17 @@ class DistributedStreamer:
 
     def __enter__(self) -> DistributedStreamer:
         self.params = _distributedStreamerParams()
-        with ExitStack() as stack:
-            previous_size = os.environ.get("RUNAI_STREAMER_PROCESS_GROUP_SIZE")
-            if previous_size is None:
-                stack.callback(os.environ.pop, "RUNAI_STREAMER_PROCESS_GROUP_SIZE", None)
-            else:
-                stack.callback(os.environ.update, {"RUNAI_STREAMER_PROCESS_GROUP_SIZE": previous_size})
-            stack.enter_context(self.file_streamer)
-            stack.enter_context(self.distributed_streamer)
-            self._exit_stack = stack.pop_all()
+        self.file_streamer.__enter__()
+        self.distributed_streamer.__enter__()
         return self
 
-    def __exit__(self, exc_type: any, exc_value: any, traceback: any) -> Optional[bool]:
-        return self._exit_stack.__exit__(exc_type, exc_value, traceback)
+    def __exit__(self, exc_type: any, exc_value: any, traceback: any) -> None:
+        try:
+            self.distributed_streamer.__exit__(exc_type, exc_value, traceback)
+        finally:
+            # Ensure the second __exit__ is always called
+            self.file_streamer.__exit__(exc_type, exc_value, traceback)
+        return
 
     def set_process_group(self, process_group: object = _DEFAULT_PROCESS_GROUP) -> None:
         """Select the readers for this handle before its first request. None is a single reader."""
@@ -99,10 +97,8 @@ class DistributedStreamer:
             if self.params.process_group_selected:
                 return
             group = dist.group.WORLD if dist.is_initialized() else None
-            explicit = False
         else:
             group = process_group
-            explicit = True
         if group is not None:
             if not dist.is_initialized() or not isinstance(group, dist.ProcessGroup):
                 raise ValueError("process_group must be an initialized Torch process group or None")
@@ -114,7 +110,6 @@ class DistributedStreamer:
             return
         self.params.process_group = group
         self.params.process_group_selected = True
-        self.params.explicit_process_group = explicit
     
     def get_group_size(self) -> int:
         if self.params.process_group is None:
@@ -195,6 +190,7 @@ class DistributedStreamer:
 
         self.set_process_group(process_group)
         self.params.set_params(file_stream_requests)
+        runai_set_process_group_size(self.file_streamer.streamer, self.params.num_processes_on_node)
 
         # check if distributed streaming can be used
         self.set_is_distributed(is_distributed, device)
@@ -261,7 +257,6 @@ class _distributedStreamerParams:
         self.max_chunk = 0
         self.process_group: Optional[dist.ProcessGroup] = None
         self.process_group_selected = False
-        self.explicit_process_group = False
  
     def get_broadcast_timeout(self) -> timedelta:
         timeout_val = os.environ.get("RUNAI_STREAMER_DIST_TIMEOUT")
@@ -327,12 +322,8 @@ class _distributedStreamerParams:
         max_chunks_per_file = (fc.max_chunk_size() for fc in file_stream_requests if fc.sizes)
         self.max_chunk = max(max_chunks_per_file, default=0)
 
-        # set the value of RUNAI_STREAMER_PROCESS_GROUP_SIZE to be the number of processes in the distribution group (or 1 if process group is not initialized)
-        # This is useful for auto adjustments in the CPP layer, which depends on the number of processes of this workload
         if self.num_processes_on_node is None:
             self.num_processes_on_node, self.my_global_rank, self.groups_by_ranks = self.find_local_ranks()
-        if self.explicit_process_group or os.environ.get("RUNAI_STREAMER_PROCESS_GROUP_SIZE") is None:
-            os.environ["RUNAI_STREAMER_PROCESS_GROUP_SIZE"] = str(self.num_processes_on_node)
 
 class _distributedStreamer:
     def __init__(self, file_streamer : FileStreamer) -> None:

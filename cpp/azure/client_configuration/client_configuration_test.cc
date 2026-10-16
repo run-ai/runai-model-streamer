@@ -60,6 +60,19 @@ TEST_F(AzureConcurrency, Threads_Follow_The_Reader_Count)
     }
 }
 
+TEST_F(AzureConcurrency, Handle_Count_Is_Used_Unless_The_User_Overrides_It)
+{
+    const common::backend_api::ObjectConfigParam_t param{"process_group_size", "8"};
+    common::backend_api::ObjectClientConfig_t config{};
+    config.concurrent_readers = 4;
+    config.initial_params = &param;
+    config.num_initial_params = 1;
+
+    EXPECT_EQ(ClientConfiguration(config).max_concurrency, expected(32));
+    utils::temp::Env override(std::string("RUNAI_STREAMER_PROCESS_GROUP_SIZE"), 2UL);
+    EXPECT_EQ(ClientConfiguration(config).max_concurrency, expected(8));
+}
+
 // The property the divisor exists for: N clients with nprocs*2/N threads each is the same total
 // whatever N is.
 //

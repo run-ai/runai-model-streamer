@@ -10,11 +10,42 @@
 
 #include <thread>
 #include <algorithm>
+#include <charconv>
+#include <cstring>
+#include <stdexcept>
 
 namespace runai::llm::streamer::impl::azure
 {
 
-ClientConfiguration::ClientConfiguration(unsigned concurrent_readers)
+namespace
+{
+unsigned process_group_size(const common::backend_api::ObjectClientConfig_t & config)
+{
+    for (unsigned i = 0; config.initial_params && i < config.num_initial_params; ++i)
+    {
+        const auto & param = config.initial_params[i];
+        if (param.key && std::strcmp(param.key, "process_group_size") == 0)
+        {
+            unsigned count = 0;
+            const char * end = param.value ? param.value + std::strlen(param.value) : "";
+            const char * begin = param.value ? param.value : end;
+            const auto parsed = std::from_chars(begin, end, count);
+            if (parsed.ec != std::errc() || parsed.ptr != end || count == 0)
+            {
+                throw std::invalid_argument("process_group_size must be a positive unsigned integer");
+            }
+            return count;
+        }
+    }
+    return 1;
+}
+} // namespace
+
+ClientConfiguration::ClientConfiguration(const common::backend_api::ObjectClientConfig_t & config) :
+    ClientConfiguration(config.concurrent_readers, process_group_size(config))
+{}
+
+ClientConfiguration::ClientConfiguration(unsigned concurrent_readers, unsigned process_group_size)
 {
 #ifdef AZURITE_TESTING
     // Connection string is only available for Azurite/local testing
@@ -69,7 +100,7 @@ ClientConfiguration::ClientConfiguration(unsigned concurrent_readers)
     // send one.
     const unsigned worker_concurrency = std::max(1U, concurrent_readers);
     LOG(SPAM) << "Streamer worker concurrency: " << worker_concurrency;
-    unsigned process_group_size = utils::getenv_positive<unsigned>("RUNAI_STREAMER_PROCESS_GROUP_SIZE", 1U);
+    process_group_size = utils::getenv_positive<unsigned>("RUNAI_STREAMER_PROCESS_GROUP_SIZE", process_group_size);
     LOG(SPAM) << "Process group size: " << process_group_size;
     max_concurrency = std::max(default_max_concurrency, nprocs * 2 / (worker_concurrency * process_group_size));
     LOG(DEBUG) << "Azure Blob Storage per-client concurrency is set to: " << max_concurrency;

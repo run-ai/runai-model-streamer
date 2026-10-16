@@ -196,4 +196,17 @@ TEST(Params, The_Reader_Count_Survives_The_Credentialless_Constructor)
     EXPECT_EQ(params.to_config(initial_params).concurrent_readers, 4u);
 }
 
+TEST(Params, Azure_Receives_The_Handle_Process_Group_Size)
+{
+    std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
+    const S3ClientWrapper::Params params(std::make_shared<StorageUri>("az://account/container/path"),
+                                         Credentials(), 8 * 1024 * 1024, 8, 4);
+    const auto config = params.to_config(initial_params);
+
+    ASSERT_EQ(config.num_initial_params, 1);
+    EXPECT_STREQ(config.initial_params[0].key, "process_group_size");
+    EXPECT_STREQ(config.initial_params[0].value, "4");
+    EXPECT_EQ(config.concurrent_readers, 8);
+}
+
 }; // namespace runai::llm::streamer::common::s3
