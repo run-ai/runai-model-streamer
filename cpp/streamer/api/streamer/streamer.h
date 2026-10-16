@@ -77,10 +77,10 @@ int runai_file_streamer_set_fs_strategy(
     const char * candidates
 );
 
-// Set the number of readers on this node before the first read. Must be positive.
+// Create a streamer with a fixed number of readers on this node. Must be positive.
 // RUNAI_STREAMER_PROCESS_GROUP_SIZE, when set by the user, overrides this value.
-// Changing the value after reads begin returns InvalidParameterError.
-int runai_file_streamer_set_process_group_size(void * streamer, unsigned process_group_size);
+// The original start function uses one reader.
+int runai_file_streamer_start_with_process_group_size(void ** streamer, unsigned process_group_size);
 
 // Multi-request submit: read multiple files concurrently.
 //

@@ -64,9 +64,12 @@ def runai_set_credentials(
             f"Could not set credentials in libstreamer due to: {runai_response_str(error_code)}"
         )
 
-def runai_start() -> t_streamer:
+def runai_start(process_group_size: int = 1) -> t_streamer:
+    """Create a handle with its fixed local reader count."""
+    if not 0 < process_group_size < UINT32_LIMIT:
+        raise ValueError("process_group_size must be a positive unsigned 32-bit integer")
     streamer = t_streamer(0)
-    error_code = dll.fn_runai_start(ctypes.byref(streamer))
+    error_code = dll.fn_runai_start(ctypes.byref(streamer), process_group_size)
     if error_code != SUCCESS_ERROR_CODE:
         # Changed from Exception to ValueError
         raise ValueError(
@@ -77,14 +80,6 @@ def runai_start() -> t_streamer:
 
 def runai_end(streamer: t_streamer) -> None:
     return dll.fn_runai_end(streamer)
-
-
-def runai_set_process_group_size(streamer: t_streamer, process_group_size: int) -> None:
-    if not 0 < process_group_size < UINT32_LIMIT:
-        raise ValueError("process_group_size must be a positive unsigned 32-bit integer")
-    error_code = dll.fn_runai_set_process_group_size(streamer, process_group_size)
-    if error_code != SUCCESS_ERROR_CODE:
-        raise ValueError(f"Could not set process group size: {runai_response_str(error_code)}")
 
 def runai_request(
     streamer: t_streamer,

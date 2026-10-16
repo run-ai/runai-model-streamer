@@ -35,7 +35,6 @@ from runai_model_streamer.s3_utils.s3_utils import (
 )
 
 from timeit import default_timer as timer
-from runai_model_streamer.libstreamer.libstreamer import runai_set_process_group_size
 
 import logging
 import humanize
@@ -79,7 +78,6 @@ class DistributedStreamer:
 
     def __enter__(self) -> DistributedStreamer:
         self.params = _distributedStreamerParams()
-        self.file_streamer.__enter__()
         self.distributed_streamer.__enter__()
         return self
 
@@ -190,7 +188,8 @@ class DistributedStreamer:
 
         self.set_process_group(process_group)
         self.params.set_params(file_stream_requests)
-        runai_set_process_group_size(self.file_streamer.streamer, self.params.num_processes_on_node)
+        if self.file_streamer.streamer is None:
+            self.file_streamer.start(process_group_size=self.params.num_processes_on_node)
 
         # check if distributed streaming can be used
         self.set_is_distributed(is_distributed, device)

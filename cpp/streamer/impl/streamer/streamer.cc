@@ -186,21 +186,6 @@ common::ResponseCode Streamer::set_credentials(const common::s3::Credentials & c
     return _credentials_state->set(credentials);
 }
 
-common::ResponseCode Streamer::set_process_group_size(unsigned process_group_size)
-{
-    if (process_group_size == 0 || (_reads_started && process_group_size != _config->process_group_size))
-    {
-        return common::ResponseCode::InvalidParameterError;
-    }
-    if (process_group_size != _config->process_group_size)
-    {
-        auto config = std::make_shared<Config>(*_config);
-        config->process_group_size = process_group_size;
-        _config = std::move(config);
-    }
-    return common::ResponseCode::Success;
-}
-
 common::s3::Credentials Streamer::credentials() const
 {
     return _credentials_state->get();
@@ -266,7 +251,6 @@ common::ResponseCode Streamer::async_request(
 
     // verify input
     verify_requests(request);
-    _reads_started = true;
 
     // A streamer serves a single object-storage plugin; reject a submission that mixes object-storage plugins
     // or differs from the locked plugin. Nothing is committed yet, so returning is clean. Credentials are

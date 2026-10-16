@@ -138,7 +138,7 @@ actual global rank for reporting.
 The group also applies to metadata reads, so filesystem queue sizing is resolved
 before the first header request. The selected group determines the reader count on each
 node. A handle keeps the same group until closed; use separate handles for ordinary
-weights and single-reader tables. The count is passed to each native handle without
+weights and single-reader tables. The count is passed when creating each native handle without
 changing the environment. `RUNAI_STREAMER_PROCESS_GROUP_SIZE`, if explicitly set,
 remains a user override for native filesystem queue sizing and Azure client concurrency.
 

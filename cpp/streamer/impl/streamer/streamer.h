@@ -6,7 +6,6 @@
 
 #pragma once
 
-#include <atomic>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -66,8 +65,6 @@ struct Streamer
     // Set the streamer's object-storage credentials 
     // Set-once and thread-safe
     common::ResponseCode set_credentials(const common::s3::Credentials & credentials);
-
-    common::ResponseCode set_process_group_size(unsigned process_group_size);
 
     // Submit a read request: a list of files, each with the ranges to read from it. A range is an
     // arbitrary (offset, size) within its file with its own destination - ranges need not be contiguous
@@ -170,7 +167,6 @@ struct Streamer
 
  private:
     std::shared_ptr<const Config> _config;
-    std::atomic<bool> _reads_started{false};
 
     // Streamer-scoped object-storage credentials with their own (encapsulated) mutex. Set-once: the first
     // set wins; setting the same value again succeeds; a different value is rejected (CredentialsAlreadySet).

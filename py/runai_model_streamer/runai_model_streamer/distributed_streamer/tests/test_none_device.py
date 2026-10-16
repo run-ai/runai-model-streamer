@@ -15,7 +15,7 @@ from safetensors.torch import save_file
 
 from runai_model_streamer.distributed_streamer.distributed_streamer import DistributedStreamer
 from runai_model_streamer.file_streamer.file_streamer import runai_request
-from runai_model_streamer.libstreamer.libstreamer import runai_set_process_group_size
+from runai_model_streamer.libstreamer.libstreamer import runai_start
 from runai_model_streamer import SafetensorsStreamer
 from runai_model_streamer.file_streamer.requests_iterator import (
     FileChunks,
@@ -44,17 +44,17 @@ def _check_group_read(path, rank, count, **kwargs):
     handle_counts = {}
     previous_override = os.environ.get("RUNAI_STREAMER_PROCESS_GROUP_SIZE")
 
-    def set_count(handle, reader_count):
-        handle_counts[handle.value] = reader_count
-        runai_set_process_group_size(handle, reader_count)
+    def start(process_group_size=1):
+        handle = runai_start(process_group_size=process_group_size)
+        handle_counts[handle.value] = process_group_size
+        return handle
 
     def submit(*args, **kw):
         submission_counts.append(handle_counts[args[0].value])
         return runai_request(*args, **kw)
 
     with patch("runai_model_streamer.file_streamer.file_streamer.runai_request", side_effect=submit), \
-            patch("runai_model_streamer.distributed_streamer.distributed_streamer.runai_set_process_group_size",
-                  side_effect=set_count):
+            patch("runai_model_streamer.file_streamer.file_streamer.runai_start", side_effect=start):
         with SafetensorsStreamer() as streamer:
             streamer.stream_file(path, device="cpu", **kwargs)
             weights = dict(streamer.get_tensors())
@@ -62,6 +62,7 @@ def _check_group_read(path, rank, count, **kwargs):
             if ring is not None:
                 assert ring[0] == rank
     torch.testing.assert_close(weights["weight"], torch.arange(6))
+    assert len(handle_counts) == 1, handle_counts
     assert len(submission_counts) >= 2
     assert set(submission_counts) == {count}, submission_counts
     assert os.environ.get("RUNAI_STREAMER_PROCESS_GROUP_SIZE") == previous_override

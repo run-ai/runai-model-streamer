@@ -39,12 +39,17 @@ int main(void)
     check(rc == RUNAI_FILE_STREAMER_RESPONSE_SUCCESS, "start returns Success");
     check(streamer != NULL, "start sets the handle");
 
-    rc = runai_file_streamer_set_process_group_size(streamer, 0);
+    runai_file_streamer_end(streamer);
+    streamer = NULL;
+
+    rc = runai_file_streamer_start_with_process_group_size(&streamer, 0);
     check(rc == RUNAI_FILE_STREAMER_RESPONSE_INVALID_PARAMETER_ERROR, "zero reader count is rejected");
-    rc = runai_file_streamer_set_process_group_size(NULL, 8);
-    check(rc == RUNAI_FILE_STREAMER_RESPONSE_INVALID_PARAMETER_ERROR, "null handle is rejected");
-    rc = runai_file_streamer_set_process_group_size(streamer, 8);
-    check(rc == RUNAI_FILE_STREAMER_RESPONSE_SUCCESS, "reader count is accepted before reads");
+    check(streamer == NULL, "invalid count creates no handle");
+    rc = runai_file_streamer_start_with_process_group_size(NULL, 8);
+    check(rc == RUNAI_FILE_STREAMER_RESPONSE_INVALID_PARAMETER_ERROR, "null output is rejected");
+    rc = runai_file_streamer_start_with_process_group_size(&streamer, 8);
+    check(rc == RUNAI_FILE_STREAMER_RESPONSE_SUCCESS, "start accepts the reader count");
+    check(streamer != NULL, "start with reader count sets the handle");
 
     const char * message = runai_file_streamer_response_str(RUNAI_FILE_STREAMER_RESPONSE_SUCCESS);
     check(message != NULL && strlen(message) > 0, "response_str returns a message");
@@ -59,11 +64,6 @@ int main(void)
     RunaiFileStreamerSubmissionId id = 12345;
     rc = runai_file_streamer_request(streamer, &id, 0, NULL, NULL, NULL, NULL, NULL, host);
     check(rc == RUNAI_FILE_STREAMER_RESPONSE_SUCCESS, "empty request is accepted");
-
-    rc = runai_file_streamer_set_process_group_size(streamer, 8);
-    check(rc == RUNAI_FILE_STREAMER_RESPONSE_SUCCESS, "same reader count remains accepted");
-    rc = runai_file_streamer_set_process_group_size(streamer, 1);
-    check(rc == RUNAI_FILE_STREAMER_RESPONSE_INVALID_PARAMETER_ERROR, "reader count cannot change after reads");
 
     runai_file_streamer_end(streamer);
 

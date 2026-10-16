@@ -1830,11 +1830,11 @@ TEST(Async, OverlappingHandlesUseTheirOwnReaderCounts)
     };
 
     Streamer single(Config(), environment_for(single_depth));
-    ASSERT_EQ(single.set_process_group_size(1), common::ResponseCode::Success);
     ASSERT_EQ(single.sync_read(file.path, 0, dst.size(), dst.data()), common::ResponseCode::Success);
 
-    Streamer distributed(Config(), environment_for(distributed_depth));
-    ASSERT_EQ(distributed.set_process_group_size(8), common::ResponseCode::Success);
+    Config distributed_config;
+    distributed_config.process_group_size = 8;
+    Streamer distributed(distributed_config, environment_for(distributed_depth));
     ASSERT_EQ(distributed.sync_read(file.path, 0, dst.size(), dst.data()), common::ResponseCode::Success);
 
     EXPECT_EQ(single_depth.load(), 64);
