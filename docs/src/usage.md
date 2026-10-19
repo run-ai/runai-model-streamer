@@ -279,7 +279,7 @@ The streamer supports pluggable cache providers for Azure Blob Storage. When a c
 ###### How it works
 
 1. Install the cache provider package alongside `runai-model-streamer` (e.g., `pip install dacs-client`)
-2. At startup, the streamer auto-discovers the cache library in Python site-packages via `dladdr`
+2. At startup, the streamer checks `RUNAI_STREAMER_EXPERIMENTAL_AZURE_CACHE_LIB`, defaulting to `/opt/cache-client/usr/local/lib/python3.10/dist-packages/py_dacs_client/libStorageDirect.so`. If the path is missing or not a regular file, it is ignored and the streamer auto-discovers the cache library in the `py_dacs_client` package in Python site-packages via `dladdr`
 3. The library is loaded via `dlopen` and the `blob_read` symbol is resolved
 4. All subsequent Azure blob reads are served through the cache provider
 5. If no cache provider is installed, reads go directly to Azure Blob Storage — no regression
@@ -331,7 +331,7 @@ export RUNAI_STREAMER_LOG_LEVEL=DEBUG
 
 You should see:
 ```text
-AzCacheProvider: auto-discovered cache library: /path/to/site-packages/dacs_client/libStorageDirect.so
+AzCacheProvider: auto-discovered cache library: /path/to/site-packages/py_dacs_client/libStorageDirect.so
 AzCacheProvider: cache provider loaded successfully from /path/to/...
 ```
 
