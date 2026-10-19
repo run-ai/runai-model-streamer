@@ -116,13 +116,13 @@ Help us keep the docs clear and useful by fixing typos, updating outdated inform
 - Fork and Clone – Begin by forking the repository and cloning it to your local machine.
 - Create a Branch – Use a descriptive branch name, such as `feature/add-cool-feature` or `bugfix/fix-issue123`.
 - Make Changes – Keep your commits small, focused, and well-documented. For build and test instructions, refer to the [Development section](README.md#development) of the README.
-- Submit a PR – Open a pull request and link it to its issue (for example `Fixes #123` or `Relates to #123` in the description).
+- Submit a PR – For non-trivial changes, link the pull request to its issue (for example `Fixes #123` or `Relates to #123` in the description).
 - Coverage - Please look at the coverage change details and create unit tests, integration tests or end-to-end tests to cover new functionality or changes.
 
 ### Linking Pull Requests to Issues
 
-We ask that pull requests reference an issue. The issue is the single place where
-the problem, the scope, and the design discussion live. A pull request without
+We ask that non-trivial pull requests reference an issue. The issue is the single place where
+the problem, the scope, and the design discussion live. A non-trivial pull request without
 an issue is hard to track, especially when:
 
 - Changes are unified or split across several pull requests.
