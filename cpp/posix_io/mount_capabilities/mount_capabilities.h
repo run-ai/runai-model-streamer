@@ -111,7 +111,8 @@ class MountCapabilities
     // STATX_DIOALIGN can say, so that stays future work.
     DirectSupport direct_support(dev_t dev, const std::string & file_path);
 
-    // The SMALLEST block this mount will accept.
+    // The block selected for this mount: statx's requirement, a probe at least as large as the page
+    // size, or the operator's explicit override.
     //
     // Returns a CODE, not just the number, because "measured 0" and "could not measure" are different
     // answers and the caller must act differently on them:

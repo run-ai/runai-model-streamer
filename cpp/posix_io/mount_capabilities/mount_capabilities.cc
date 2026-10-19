@@ -388,23 +388,14 @@ size_t MountCapabilities::measure_direct_block(const std::string & file_path)
         return 0;   // the caller already distinguishes "mount refuses" from "cannot tell"
     }
 
-    // ASCENDING, and the first success wins. The smallest workable block is the one we want: a larger
-    // one pads more between ranges and bounces more of every chunk's head and tail. 512 is the
-    // smallest logical block any device reports; 65536 covers every size announced so far.
+    // ASCENDING, and the first success at or above the page size wins. A larger block pads more
+    // between ranges and bounces more of every chunk's head and tail.
     //
-    // A GUESS, and weaker than statx above. It assumes the filesystem REFUSES a badly aligned read.
-    // Most do - measured on this container's overlay, a wrong offset, a wrong length and a wrong
-    // buffer address are each rejected with EINVAL. But a lenient filesystem accepts the read and
-    // quietly serves it buffered instead, with no error.
-    //
-    // On such a filesystem the first rung always "works", so this returns 512 for a mount that really
-    // needs 4096. Nothing fails: we would believe reads are direct while the kernel copies through
-    // its cache, and the log would agree with us. Slower than we think, and silent about it.
-    //
-    // Reachable only when BOTH hold: statx cannot answer (below kernel 6.1, or a filesystem that does
-    // not implement STATX_DIOALIGN), AND that filesystem is lenient about alignment. Phase 1's EINVAL
-    // fallback does not help here either - a lenient filesystem never returns EINVAL, which is the
-    // whole problem.
+    // A probe is weaker than statx: accepting one read does not prove that later reads at that
+    // alignment work. A Lustre client accepted the 512-byte probe but refused later reads with
+    // EINVAL, followed by a corrupted safetensors header during buffered fallback (issue #262).
+    // Without an exact statx answer, keep the probe at least page aligned. Larger requirements can
+    // still be discovered by the remaining rungs.
     //
     // The top rung IS MaxProbeBlock, not a literal that happens to equal it, so lowering that constant
     // cannot leave a rung behind that overruns the probe buffer. ladder_is_usable checks that and the
@@ -414,8 +405,16 @@ size_t MountCapabilities::measure_direct_block(const std::string & file_path)
                   "a rung must be a power of two, divide MaxProbeBlock, and come after the rung below"
                   " it; the last rung must be MaxProbeBlock");
 
+    const long page = ::sysconf(_SC_PAGESIZE);
+    const size_t page_floor = page > 0 ? static_cast<size_t>(page) : 4096;
+
     for (const size_t candidate : ladder)
     {
+        if (candidate < page_floor)
+        {
+            continue;
+        }
+
         if (direct_read_at(fd, candidate))
         {
             ::close(fd);
@@ -461,7 +460,7 @@ common::ResponseCode MountCapabilities::direct_block(dev_t dev, const std::strin
     // MEASURED on tmpfs, kernel 6.8: an O_DIRECT open succeeds AND every read is accepted - an
     // unaligned buffer, an odd length, an odd offset, all of them. tmpfs enforces nothing, because
     // there is no device to bypass; the pages are the page cache. So the ladder's first rung
-    // "succeeds" and this reports 512 for a filesystem that cannot do direct I/O at all.
+    // "succeeds" for a filesystem that cannot do direct I/O at all.
     //
     // The callers keep that out: FsAsyncRouter::groups and FsAsyncRouter::direct_block_for both test
     // memory_backed and skip such a mount before asking. The statfs magic check is the only thing that

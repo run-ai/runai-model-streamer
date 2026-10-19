@@ -284,12 +284,9 @@ TEST(MountCapabilities, Direct_Support_Matches_A_Real_Aligned_Read)
     EXPECT_EQ(support, really_supported ? DirectSupport::Yes : DirectSupport::No);
 }
 
-// The measured block must be usable, and must be the SMALLEST the mount accepts.
-//
-// Smallest is the whole point of measuring. A block larger than the mount needs pads more between
-// ranges and bounces more of every chunk's head and tail - measured on NFS under the chunks policy,
-// a 64 KiB block against a 4 KiB mount cost 2.4x the load time.
-TEST(MountCapabilities, Direct_Block_Is_The_Smallest_The_Mount_Accepts)
+// Prefer statx's exact alignment. Without statx, choose the first working probe rung at or above the
+// page size, since a sub-page probe can underestimate the alignment required by Lustre.
+TEST(MountCapabilities, Direct_Block_Matches_Statx_Or_Page_Sized_Probe)
 {
     const auto data = utils::random::buffer(64 * 1024);
     utils::temp::File file(data);
@@ -346,30 +343,67 @@ TEST(MountCapabilities, Direct_Block_Is_The_Smallest_The_Mount_Accepts)
     }
     else
     {
-        // No statx answer, so the ladder produced this - and the ladder returns the FIRST rung that
-        // works, so by construction nothing smaller may work.
-        //
-        // Only meaningful above the ladder's floor. At 512 this loop has no iterations at all, and an
-        // earlier version of this test asserted minimality in exactly that vacuous way on every host
-        // where the floor is the answer - claiming to check something it never ran.
-        if (block == 512)
-        {
-            GTEST_SKIP() << "the ladder returned its floor, so there is no smaller rung to rule out";
-        }
+        // A sub-page read can succeed on Lustre even though later reads at that alignment fail.
+        // Without statx, the probe must never select such a block (issue #262).
+        const long page = ::sysconf(_SC_PAGESIZE);
+        const size_t page_floor = page > 0 ? static_cast<size_t>(page) : 4096;
+        EXPECT_GE(block, page_floor);
 
-        for (size_t smaller = 512; smaller < block; smaller <<= 1)
+        // Only earlier, eligible rungs must have been refused. Sub-page reads are deliberately
+        // excluded even if the filesystem accepts them.
+        for (const size_t smaller : { 512u, 4096u, 16384u })
         {
-            void * small = nullptr;
-            ASSERT_EQ(::posix_memalign(&small, smaller, smaller), 0);
+            if (smaller < page_floor || smaller >= block)
+            {
+                continue;
+            }
+
+            // Exactly this alignment: an accidentally over-aligned allocation could make a smaller
+            // rung succeed on a filesystem that really requires the larger block.
+            void * base = nullptr;
+            ASSERT_EQ(::posix_memalign(&base, MaxProbeBlock, 2 * MaxProbeBlock), 0);
+            char * const small = static_cast<char *>(base) + smaller;
             const ssize_t r = ::pread(fd, small, smaller, 0);
             const bool worked = r >= 0 || errno != EINVAL;
-            ::free(small);
+            ::free(base);
 
-            EXPECT_FALSE(worked) << smaller << " also works, so " << block << " was not the smallest";
+            EXPECT_FALSE(worked) << "the earlier eligible rung " << smaller << " also works";
         }
     }
 
     ::close(fd);
+}
+
+// tmpfs supplies the conditions behind #262 without requiring Lustre: no statx alignment and, on
+// newer kernels, lenient O_DIRECT reads. Routing excludes tmpfs in production; call the probe directly
+// here to exercise the fallback ladder even on hosts where statx answers for every disk filesystem.
+TEST(MountCapabilities, Probe_Never_Selects_A_Subpage_Block)
+{
+    if (!is_tmpfs("/dev/shm") || direct_block_override() != 0)
+    {
+        GTEST_SKIP() << "requires tmpfs and no direct-block override";
+    }
+
+    utils::temp::File file("/dev/shm", utils::random::string(), utils::random::buffer(MaxProbeBlock));
+    if (raw_statx_dio_align(file.path).answered)
+    {
+        GTEST_SKIP() << "requires a filesystem without STATX_DIOALIGN";
+    }
+
+    const int fd = ::open(file.path.c_str(), O_RDONLY | O_DIRECT);
+    if (fd < 0)
+    {
+        GTEST_SKIP() << "this kernel refuses O_DIRECT on tmpfs";
+    }
+    ::close(fd);
+
+    const long page = ::sysconf(_SC_PAGESIZE);
+    ASSERT_GT(page, 0);
+
+    MountCapabilities mounts;
+    size_t block = 0;
+    ASSERT_EQ(mounts.direct_block(device_of(file.path), file.path, block), common::ResponseCode::Success);
+    EXPECT_GE(block, static_cast<size_t>(page));
 }
 
 // A probe cannot recognise tmpfs, on any kernel - so statfs magic has to.
@@ -377,8 +411,8 @@ TEST(MountCapabilities, Direct_Block_Is_The_Smallest_The_Mount_Accepts)
 // This test was written to reach the ladder. tmpfs is the one mount here where statx reports no
 // DIOALIGN, so a probe would fall through to it. Measured on kernel 6.8, tmpfs then accepts EVERY
 // direct read - unaligned buffer, odd length, odd offset. It enforces nothing, because there is no
-// device to bypass. The ladder's first rung succeeds and the answer is 512 for a filesystem with no
-// direct I/O at all.
+// device to bypass. The ladder's first eligible rung succeeds for a filesystem with no direct I/O
+// at all.
 //
 // That behaviour is KERNEL-DEPENDENT and this test does not assert it. Older kernels refuse the
 // O_DIRECT open itself, because the VFS rejected an open on a mapping with no direct_IO operation.
@@ -394,8 +428,7 @@ TEST(MountCapabilities, Direct_Block_Is_The_Smallest_The_Mount_Accepts)
 // FsAsyncRouter::direct_block_for both test it and skip such a mount, which is what keeps any of this
 // off the direct path.
 //
-// One consequence for the ladder: it stays UNEXERCISED here. statx answers on every real mount, and
-// tmpfs is skipped upstream.
+// Probe_Never_Selects_A_Subpage_Block above calls the ladder directly on tmpfs to check its floor.
 TEST(MountCapabilities, Tmpfs_Can_Never_Be_Probed_For_A_Block)
 {
     if (!is_tmpfs("/dev/shm"))
