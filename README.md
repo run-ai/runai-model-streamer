@@ -142,7 +142,8 @@ the existing x86_64 C++, Python, integration, and filesystem-strategy tests.
 There is no fallback to master's devcontainer. Ensure the branch image matches
 the tagged source's build requirements, especially when tagging an older commit.
 
-After every build and test succeeds, CI collects one wheel for each package and
+After every build and test succeeds, CI calls the reusable `assemble-bundle.yml`
+workflow, also used for PR bundles. It collects one wheel for each package and
 architecture at the tagged version, plus the C++ component artifacts from the
 same run. It packages one C++ SDK per architecture, checking the ELF architecture
 and matching public headers and licenses across all components. The eight wheels,
@@ -162,8 +163,8 @@ Automatically created maintenance releases do not change GitHub's **Latest**
 release selection.
 
 For C/C++ applications, download the native SDK with headers and shared libraries.
-To use the Azure library, also install your Linux distribution's shared `libxml2`
-library; it is required by `libstreamerazure.so` and is not included in the SDK.
+The libraries link their third-party dependencies, including `libxml2`, statically,
+so the SDK needs only the system C and C++ runtime libraries.
 For the Python API, install `runai-model-streamer` with pip or use its `.whl`
 release assets; the Python package bundles its native library.
 
@@ -179,6 +180,7 @@ lib/libstreamers3.so
 lib/libstreamergcs.so
 lib/libstreamerazure.so
 LICENSE
+THIRD_PARTY_NOTICES.txt    Licenses of the third-party code linked into the libraries
 ```
 
 The archives contain the original build outputs without rebuilding or modifying
@@ -219,4 +221,17 @@ Validate release automation locally with:
 ```sh
 python3 -B -m unittest discover -s .github/scripts -p 'test_release.py' -v
 ```
+
+## Licensing
+
+Model Streamer is licensed under the [Apache License 2.0](LICENSE).
+
+- `py/runai_model_streamer*/LICENSE` are symbolic links to the root [LICENSE](LICENSE), so
+  that each Python wheel carries the license text. They are the same license, not a separate one.
+- The native libraries statically link third-party code. Their notices and the full upstream
+  license texts live in [`third_party_notices/`](third_party_notices/README.md):
+  - `third_party_notices/licenses/<component>/` holds the verbatim license and NOTICE files
+    of each third-party component (Apache-2.0, MIT, BSD, zlib, curl, LGPL-2.1 and others).
+  - `libstreamer.txt`, `libstreamers3.txt`, `libstreamergcs.txt` and `libstreamerazure.txt`
+    are the consolidated notices for each wheel. `sdk.txt` is the notice for the C/C++ SDK archive.
 

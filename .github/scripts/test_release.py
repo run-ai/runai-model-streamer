@@ -4,6 +4,7 @@
 """Exercise release asset packaging, verification, and tag validation locally."""
 
 import hashlib
+import io
 import os
 from pathlib import Path
 import shutil
@@ -20,6 +21,7 @@ BUNDLE_SCRIPT = Path(__file__).with_name("release_bundle.py").resolve()
 
 class ReleaseBundleTests(unittest.TestCase):
     def setUp(self):
+        """Create wheel, ELF library, header, license, and notice fixtures for both architectures."""
         self.root = Path(tempfile.mkdtemp(prefix="release-bundle-test-"))
         self.bundle = self.root / "release-bundle"
         self.paths = []
@@ -31,12 +33,15 @@ class ReleaseBundleTests(unittest.TestCase):
                 path = directory / f"{package}-{VERSION}-py3-none-manylinux_2_30_{arch}.whl"
                 path.write_bytes(b"fixture wheel content")
                 self.paths.append(path)
+        self.notices = self.root / "third_party_notices" / "sdk.txt"
+        self.notices.parent.mkdir()
+        self.notices.write_text("fixture third-party notices\n")
         self.cpp = self.root / "cpp-artifacts"
         self.libraries = []
         for arch, machine in (("x86_64", 62), ("aarch64", 183)):
             for component, library in (("streamer", "libstreamer.so"), ("s3", "libstreamers3.so"),
                                        ("gcs", "libstreamergcs.so"), ("azure", "libstreamerazure.so")):
-                directory = self.cpp / f"cpp-{component}-{arch}"
+                directory = self.cpp / f"ci-cpp-{component}-{arch}"
                 (directory / "include" / "streamer").mkdir(parents=True)
                 (directory / "lib").mkdir()
                 (directory / "LICENSE").write_text("fixture license\n")
@@ -50,15 +55,20 @@ class ReleaseBundleTests(unittest.TestCase):
                 path.write_bytes(elf + f"{component}-{arch}".encode())
                 self.libraries.append(path)
 
-    def collect(self, bundle="release-bundle"):
-        return subprocess.run([sys.executable, str(BUNDLE_SCRIPT), "create", "--version", VERSION,
-                               "--bundle", bundle], cwd=self.root, capture_output=True, text=True)
+    def collect(self, bundle="release-bundle", version=VERSION, extra_args=()):
+        """Run bundle creation with the fixture inputs and return the captured process result."""
+        return subprocess.run([sys.executable, str(BUNDLE_SCRIPT), "create", "--version", version,
+                               "--bundle", bundle, *extra_args],
+                              cwd=self.root, capture_output=True, text=True)
 
-    def verify(self):
-        return subprocess.run([sys.executable, str(BUNDLE_SCRIPT), "verify", "--version", VERSION],
+    def verify(self, bundle="release-bundle", version=VERSION, extra_args=()):
+        """Run bundle verification and return the captured process result."""
+        return subprocess.run([sys.executable, str(BUNDLE_SCRIPT), "verify", "--version", version,
+                               "--bundle", bundle, *extra_args],
                               cwd=self.root, capture_output=True, text=True)
 
     def collect_ok(self):
+        """Create the default release bundle and assert that packaging succeeds."""
         result = self.collect()
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -77,13 +87,15 @@ class ReleaseBundleTests(unittest.TestCase):
                              (self.bundle / "wheels" / path.name).read_bytes())
 
     def test_archive_layout_contents_and_metadata(self):
+        """Check SDK archive paths, file contents, and normalized metadata for both architectures."""
         self.collect_ok()
         for arch in ("x86_64", "aarch64"):
             root = f"runai-model-streamer-cpp-sdk-{VERSION}-linux-{arch}"
             expected = {}
-            for directory in self.cpp.glob(f"cpp-*-{arch}"):
+            for directory in self.cpp.glob(f"ci-cpp-*-{arch}"):
                 expected.update({f"{root}/{path.relative_to(directory).as_posix()}": path.read_bytes()
                                  for path in directory.rglob("*") if path.is_file()})
+            expected[f"{root}/THIRD_PARTY_NOTICES.txt"] = self.notices.read_bytes()
             with tarfile.open(self.archive_path(arch)) as archive:
                 self.assertEqual({member.name: archive.extractfile(member).read()
                                   for member in archive.getmembers() if member.isfile()}, expected)
@@ -93,7 +105,60 @@ class ReleaseBundleTests(unittest.TestCase):
                     self.assertEqual((member.uname, member.gname), ("", ""))
                     self.assertEqual(member.mode, 0o755 if member.isdir() else 0o644)
 
+    def test_development_bundle_matches_release_layout(self):
+        """Check PR and release asset parity, successful PR verification, and tampering detection."""
+        self.collect_ok()
+        version = "0.0.0+dev.abc1234"
+        for path in self.paths:
+            path.rename(path.with_name(path.name.replace(VERSION, version)))
+        options = {"bundle": "pr-bundle", "version": version,
+                   "extra_args": ("--allow-development-version",)}
+        result = self.collect(**options)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        pr_bundle = self.root / "pr-bundle"
+        release_files = {path.relative_to(self.bundle).as_posix(): path
+                         for path in self.bundle.rglob("*") if path.is_file()}
+        pr_files = {path.relative_to(pr_bundle).as_posix().replace(version, VERSION): path
+                    for path in pr_bundle.rglob("*") if path.is_file()}
+        self.assertEqual(release_files.keys(), pr_files.keys())
+        for name, release_path in release_files.items():
+            if name.startswith("wheels/"):
+                self.assertEqual(release_path.read_bytes(), pr_files[name].read_bytes())
+            elif name.startswith("cpp/"):
+                with tarfile.open(release_path) as archive:
+                    release_members = {member.name: archive.extractfile(member).read()
+                                       for member in archive.getmembers() if member.isfile()}
+                with tarfile.open(pr_files[name]) as archive:
+                    pr_members = {member.name.replace(version, VERSION): archive.extractfile(member).read()
+                                  for member in archive.getmembers() if member.isfile()}
+                self.assertEqual(release_members, pr_members)
+        result = self.verify(**options)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        next((pr_bundle / "wheels").glob("*.whl")).write_bytes(b"changed")
+        result = self.verify(**options)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Checksum mismatch", result.stderr)
+
+    def test_development_version_requires_opt_in(self):
+        """Reject development versions during creation and verification unless explicitly allowed."""
+        for operation in (self.collect, self.verify):
+            with self.subTest(operation=operation.__name__):
+                result = operation(version="0.0.0+dev.abc1234")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("form X.Y.Z", result.stderr)
+
+    def test_invalid_development_versions_rejected(self):
+        """Reject malformed development versions even when development versions are enabled."""
+        for version in ("0.0.0+dev.abc123", "0.0.0+dev.abc12345", "0.0.0+dev.xyz1234",
+                        "0.17.2+dev.abc1234", "0.0.0+dev.abc1234/../../output", "0.0.0+dev.abc1234\n"):
+            for operation in (self.collect, self.verify):
+                with self.subTest(version=version, operation=operation.__name__):
+                    result = operation(version=version, extra_args=("--allow-development-version",))
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("form X.Y.Z", result.stderr)
+
     def test_checksum_manifest_works_for_flat_downloads(self):
+        """Check that SHA256SUMS verifies assets downloaded into a single directory."""
         self.collect_ok()
         downloads = self.root / "downloads"
         downloads.mkdir()
@@ -133,32 +198,80 @@ class ReleaseBundleTests(unittest.TestCase):
         self.assertNotEqual(self.collect().returncode, 0)
 
     def test_checksum_detects_modified_wheel(self):
+        """Reject a bundle when a wheel no longer matches its recorded checksum."""
         self.collect_ok()
         (self.bundle / "wheels" / self.paths[0].name).write_bytes(b"changed")
         self.assertNotEqual(self.verify().returncode, 0)
 
     def test_missing_component_rejected(self):
-        path = self.cpp / "cpp-azure-aarch64"
+        """Reject packaging when a required component artifact directory is missing."""
+        path = self.cpp / "ci-cpp-azure-aarch64"
         path.rename(path.with_name("unavailable"))
         self.assertNotEqual(self.collect().returncode, 0)
 
     def test_missing_library_rejected(self):
+        """Reject packaging when a component artifact lacks its expected shared library."""
         self.libraries[0].rename(self.libraries[0].with_suffix(".unavailable"))
         self.assertNotEqual(self.collect().returncode, 0)
 
     def test_missing_header_rejected(self):
-        path = self.cpp / "cpp-streamer-x86_64" / "include" / "streamer" / "device.h"
+        """Reject packaging when an artifact lacks a required public header."""
+        path = self.cpp / "ci-cpp-streamer-x86_64" / "include" / "streamer" / "device.h"
         path.rename(path.with_suffix(".unavailable"))
         self.assertNotEqual(self.collect().returncode, 0)
 
     def test_different_headers_rejected(self):
-        path = self.cpp / "cpp-azure-aarch64" / "include" / "streamer" / "device.h"
+        """Reject packaging when public header contents differ between component artifacts."""
+        path = self.cpp / "ci-cpp-azure-aarch64" / "include" / "streamer" / "device.h"
         path.write_text("different header")
         self.assertNotEqual(self.collect().returncode, 0)
 
     def test_different_license_rejected(self):
-        (self.cpp / "cpp-gcs-aarch64" / "LICENSE").write_text("different license")
+        """Reject packaging when license contents differ between component artifacts."""
+        (self.cpp / "ci-cpp-gcs-aarch64" / "LICENSE").write_text("different license")
         self.assertNotEqual(self.collect().returncode, 0)
+
+    def test_missing_third_party_notices_rejected(self):
+        """Reject packaging when the third-party notice input is missing."""
+        self.notices.unlink()
+        self.assertNotEqual(self.collect().returncode, 0)
+
+    def test_sdk_without_third_party_notices_rejected(self):
+        self.collect_ok()
+        path = self.archive_path()
+        with tarfile.open(path) as archive:
+            members = [(member, archive.extractfile(member).read() if member.isfile() else None)
+                       for member in archive.getmembers() if not member.name.endswith("THIRD_PARTY_NOTICES.txt")]
+        with tarfile.open(path, "w:gz") as archive:
+            for member, data in members:
+                archive.addfile(member, None if data is None else io.BytesIO(data))
+        manifest = self.bundle / "SHA256SUMS"
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        manifest.write_text("".join(f"{digest}  {path.name}\n" if path.name in line else line
+                                    for line in manifest.read_text().splitlines(keepends=True)))
+        result = self.verify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("THIRD_PARTY_NOTICES.txt", result.stderr)
+
+    def test_sdk_with_a_link_as_third_party_notices_rejected(self):
+        self.collect_ok()
+        path = self.archive_path()
+        with tarfile.open(path) as archive:
+            members = [(member, archive.extractfile(member).read() if member.isfile() else None)
+                       for member in archive.getmembers() if not member.name.endswith("THIRD_PARTY_NOTICES.txt")]
+        with tarfile.open(path, "w:gz") as archive:
+            for member, data in members:
+                archive.addfile(member, None if data is None else io.BytesIO(data))
+            link = tarfile.TarInfo(members[0][0].name.split("/")[0] + "/THIRD_PARTY_NOTICES.txt")
+            link.type, link.linkname = tarfile.SYMTYPE, "LICENSE"
+            archive.addfile(link)
+        manifest = self.bundle / "SHA256SUMS"
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        manifest.write_text("".join(f"{digest}  {path.name}\n" if path.name in line else line
+                                    for line in manifest.read_text().splitlines(keepends=True)))
+        result = self.verify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("regular, non-empty THIRD_PARTY_NOTICES.txt", result.stderr)
 
     def test_wrong_architecture_rejected(self):
         self.libraries[0].write_bytes(self.libraries[4].read_bytes())
