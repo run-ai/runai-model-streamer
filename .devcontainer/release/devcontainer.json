@@ -1,0 +1,4 @@
+{
+    "image": "${localEnv:CI_IMAGE}",
+    "runArgs": ["--security-opt", "seccomp=unconfined"]
+}

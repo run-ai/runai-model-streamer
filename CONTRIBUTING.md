@@ -89,6 +89,22 @@ NVIDIA contributors and maintainers must follow the
 [NVIDIA IP review process](https://nv/ip_review_process) for ongoing changes
 and third-party contributions before accepting or distributing them.
 
+### Source File Headers
+
+Every source file needs this two-line NVIDIA SPDX header, written in the comment style of the file type:
+
+```text
+SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+```
+
+Documentation, configuration and data files (for example `.md`, `.yaml`, `.json`) do not need one.
+A pull request check fails when a file is missing the header. To add it, run
+`python3 scripts/spdx_headers.py --fix` from the repository root.
+
+To add the header automatically on every commit, install [pre-commit](https://pre-commit.com) and run
+`pre-commit install` once.
+
 ### Reporting Issues
 Open an issue with a clear description, steps to reproduce, and relevant environment details.
 
@@ -96,11 +112,30 @@ Open an issue with a clear description, steps to reproduce, and relevant environ
 Help us keep the docs clear and useful by fixing typos, updating outdated information, or adding examples.
 
 ### Contributing Changes
+- Open or Find an Issue – Non-trivial pull requests should be associated with a GitHub issue. Search existing issues first; if none fits, open one before you start work. See [Linking Pull Requests to Issues](#linking-pull-requests-to-issues).
 - Fork and Clone – Begin by forking the repository and cloning it to your local machine.
 - Create a Branch – Use a descriptive branch name, such as `feature/add-cool-feature` or `bugfix/fix-issue123`.
 - Make Changes – Keep your commits small, focused, and well-documented. For build and test instructions, refer to the [Development section](README.md#development) of the README.
-- Submit a PR – Open a pull request and reference any relevant issues or discussions.
+- Submit a PR – For non-trivial changes, link the pull request to its issue (for example `Fixes #123` or `Relates to #123` in the description).
 - Coverage - Please look at the coverage change details and create unit tests, integration tests or end-to-end tests to cover new functionality or changes.
+
+### Linking Pull Requests to Issues
+
+We ask that non-trivial pull requests reference an issue. The issue is the single place where
+the problem, the scope, and the design discussion live. A non-trivial pull request without
+an issue is hard to track, especially when:
+
+- Changes are unified or split across several pull requests.
+- The scope of a change shifts during review.
+- Maintainers need to see why a change was made, or what else is related to it.
+
+Use `Fixes #<issue>` or `Closes #<issue>` when the pull request completes the
+issue, and `Relates to #<issue>` when it is only a part of it. If review changes
+the scope, update the issue, or open follow-up issues for the work that moves out.
+
+Trivial changes, such as typo fixes or small documentation updates, don't need
+an issue. Maintainers may ask for one if a change turns out to be larger than it
+first appeared.
 
 ### PR Title Guidelines
 
@@ -163,6 +198,7 @@ Each pull request should meet the following requirements:
 - Test coverage – Add or update tests for any affected code.
 - Documentation – Update relevant documentation to reflect your changes.
 - PR description – Clearly describe what changed and why.
+- Linked issue – For non-trivial changes, the description references the associated issue (`Fixes #123`).
 - DCO – Every commit has the contributor's `Signed-off-by` line.
 
 ## Pull Request CI Environment
@@ -171,7 +207,8 @@ The setup job checks whether `.devcontainer/**` changed. If it did, a single
 preparation job builds the checked-out devcontainer using the reusable
 `devcontainer.yml` workflow and the published image as a build cache. With
 `publish: false`, it saves the image as a temporary Actions artifact, retained for
-one day. The artifact and image tags include the run ID and attempt to isolate
+one day. The artifact is named `ci-devcontainer-<run>-<attempt>`. The artifact
+and image tags include the run ID and attempt to isolate
 retries. This is a per-run image handoff, not a cache restored across PR runs.
 
 All eight build jobs and the integration job download and load that same image.
@@ -225,17 +262,45 @@ The same tests still run for all four strategies. The integration job still buil
 the two C++ strategy test targets and the Azure testing variant. `make test` remains
 the full sequential local entry point and builds from source as before.
 
-Wheels are available in eight `packages-<component>-<arch>` artifacts, uploaded
-by the individual build jobs. Each job also uploads a `cpp-<component>-<arch>`
+The build jobs upload eight intermediate `ci-packages-<component>-<arch>`
+artifacts, retained for seven days for use by later CI jobs. The **Assemble packages**
+job runs alongside integration tests after both architectures finish building.
+It calls the reusable `assemble-bundle.yml` workflow to create one final download,
+`release-bundle-pr-<run>-<attempt>`, with the same layout as the release bundle:
+eight wheels under `wheels/`, two complete C++ SDK
+archives under `cpp/`, and `SHA256SUMS`. SDK archives contain the libraries,
+public headers, license, and third-party notices. The bundler checks completeness,
+ELF architectures, matching headers/licenses, and checksums before upload.
+PR versions use `0.0.0+dev.<commit>`; release publication still requires `X.Y.Z`.
+Download the bundle for Python wheels and complete C++ SDKs. Bundle assembly
+runs independently of integration tests; require the final **Test, Build & Push**
+check to pass before using a PR build.
+Intermediate wheel and C++ artifacts are retained for seven days in both PR and
+release builds to support retries. Final PR bundles are retained for seven days;
+tested `release-bundle-<version>-<run>-<attempt>` bundles are retained for 30 days
+for approval and recovery.
+Release CI calls the same assembly workflow after integration tests succeed,
+then passes its bundle artifact ID to the approval-gated publication job.
+The shared workflow downloads components, tests the packaging code, assembles
+and verifies the bundle, and uploads it. Callers select the version, artifact
+name, final-bundle retention, and development-version opt-in.
+Each build job also uploads an intermediate `ci-cpp-<component>-<arch>`
 artifact containing its shared library under `lib/` and the repository license.
 All C++ artifacts include public C/C++ headers under
 `include/streamer/`. Backend artifacts contain their plugin library; use them
 alongside the core library for the same architecture. Libraries are copied out
 of the container before it stops so the downloads contain real files rather
 than Bazel symlinks. The `Test, Build & Push` required check succeeds
-only when all eight builds (including their C++ and Python tests) and integration
-tests succeed. Changed devcontainers are built once before the matrix starts;
-peak matrix concurrency remains eight runners.
+only when all eight builds (including their C++ and Python tests), integration
+tests, and package assembly succeed. Changed devcontainers are built once before
+the matrix starts; peak matrix concurrency remains eight runners.
+
+To verify an extracted PR bundle locally, substitute its development version:
+
+```sh
+python3 .github/scripts/release_bundle.py verify \
+  --version 0.0.0+dev.abc1234 --allow-development-version --bundle release-bundle
+```
 
 ## Getting Help
 Need support or have a question? We're here to help:
