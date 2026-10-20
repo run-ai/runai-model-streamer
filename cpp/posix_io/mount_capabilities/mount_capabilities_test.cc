@@ -457,6 +457,176 @@ TEST(MountCapabilities, Tmpfs_Can_Never_Be_Probed_For_A_Block)
     ::unlink(path.c_str());
 }
 
+// The reported block must work where we READ, not only at offset 0.
+//
+// Every chunk after the first starts inside the file, and a direct pass rounds that offset down to
+// the block - so the offsets we issue are block-aligned and nothing more. A mount that enforces its
+// alignment on the file offset refuses them while accepting offset 0, which is aligned to every
+// block. This asks the kernel the harder question directly.
+TEST(MountCapabilities, The_Reported_Block_Works_At_A_Non_Zero_Offset)
+{
+    const auto data = utils::random::buffer(256 * 1024);
+    utils::temp::File file(data);
+
+    MountCapabilities mounts;
+    size_t block = 0;
+    mounts.direct_block(device_of(file.path), file.path, block);
+
+    if (block == 0)
+    {
+        return;   // no direct I/O here, so there is no offset to check
+    }
+
+    const int fd = ::open(file.path.c_str(), O_RDONLY | O_DIRECT);
+    ASSERT_GE(fd, 0);
+
+    // Aligned to `block` and NOT to twice it, the way the probe builds its own buffer: an address
+    // aligned to more would let a mount that needs more than `block` accept this read.
+    void * base = nullptr;
+    ASSERT_EQ(::posix_memalign(&base, 2 * block, 4 * block), 0);
+    char * const buffer = static_cast<char *>(base) + block;
+
+    const ssize_t got = ::pread(fd, buffer, block, static_cast<off_t>(block));
+    const int error = errno;
+
+    ::free(base);
+    ::close(fd);
+
+    EXPECT_TRUE(got >= 0 || error != EINVAL)
+        << "block " << block << " is accepted at offset 0 but refused at offset " << block
+        << ", so every chunk after the first would fail or fall back to buffered reads";
+}
+
+// A file too short to place a rung's read cannot answer for its mount.
+//
+// Each rung is probed at its own offset, so a short file reads at EOF and returns 0 - which is not
+// EINVAL, so the rung would pass without the kernel ever checking the alignment. The size guard
+// skips such a rung and the host page size stands in for the measurement.
+//
+// tmpfs is the only mount here that reaches the ladder: statx reports nothing for it, and (kernel
+// 6.8) it accepts every direct read, so a rung that IS tested always succeeds. That is what makes
+// the pair below sharp. The large file must reach a rung; the short one must not, on the same mount.
+// Both outcomes still allow a kernel that refuses the O_DIRECT open, which reports no block at all.
+TEST(MountCapabilities, A_Short_File_Cannot_Reach_A_Rung)
+{
+    if (!is_tmpfs("/dev/shm"))
+    {
+        GTEST_SKIP() << "/dev/shm is not tmpfs here";
+    }
+
+    const auto write_shm = [](const std::string & path, size_t bytes)
+    {
+        const int fd = ::open(path.c_str(), O_CREAT | O_RDWR, 0600);
+        if (fd < 0)
+        {
+            return false;
+        }
+
+        const auto data = utils::random::buffer(bytes);
+        const bool ok = ::write(fd, data.data(), data.size()) == static_cast<ssize_t>(data.size());
+        ::close(fd);
+        return ok;
+    };
+
+    const std::string large = "/dev/shm/runai_rung_large_" + utils::random::string();
+    const std::string short_file = "/dev/shm/runai_rung_short_" + utils::random::string();
+
+    ASSERT_TRUE(write_shm(large, 256 * 1024));
+    ASSERT_TRUE(write_shm(short_file, 100));
+
+    ASSERT_FALSE(raw_statx_dio_align(large).answered)
+        << "statx now answers on tmpfs, so neither file reaches the ladder";
+
+    // One instance each: direct_block caches by st_dev, and both files are on the same mount.
+    size_t large_block = 0;
+    size_t short_block = 0;
+    MountCapabilities().direct_block(device_of(large), large, large_block);
+    MountCapabilities().direct_block(device_of(short_file), short_file, short_block);
+
+    ::unlink(large.c_str());
+    ::unlink(short_file.c_str());
+
+    if (large_block == 0 && short_block == 0)
+    {
+        RecordProperty("tmpfs_o_direct_open", "refused");
+        return;   // this kernel refuses the open, so no probe ran for either file
+    }
+
+    const auto page = static_cast<size_t>(::sysconf(_SC_PAGESIZE));
+
+    EXPECT_EQ(large_block, 512u) << "tmpfs accepts every read, so the first rung should answer";
+    EXPECT_EQ(short_block, page)
+        << "100 bytes cannot place any rung's read; reporting " << short_block
+        << " means a rung passed on a file too short to test it";
+}
+
+// The ladder's rules, with the read replaced by an answer a test chooses.
+//
+// The ladder only runs where statx is silent, and the only such mount available here is tmpfs - which
+// accepts every direct read. So the cases below - a mount that needs more than the first rung, and a
+// file too short to reach the rung that would have worked - have no fixture.
+namespace
+{
+
+// A mount that serves direct reads at `needs` and refuses anything smaller.
+std::function<bool(size_t)> accepts_from(size_t needs)
+{
+    return [needs](size_t candidate) { return candidate >= needs; };
+}
+
+constexpr off_t Plenty = 1024 * 1024;   // long enough to place every rung
+
+}  // namespace
+
+TEST(LadderDirectBlock, Takes_The_Smallest_Rung_That_Works)
+{
+    const auto decided = ladder_direct_block(Plenty, 4096, accepts_from(512));
+
+    EXPECT_EQ(decided.block, 512u);
+    EXPECT_TRUE(decided.measured);
+}
+
+TEST(LadderDirectBlock, Climbs_Until_A_Rung_Is_Accepted)
+{
+    const auto decided = ladder_direct_block(Plenty, 4096, accepts_from(4096));
+
+    EXPECT_EQ(decided.block, 4096u);
+    EXPECT_TRUE(decided.measured);
+}
+
+// The assumed block must never be one the ladder already DISPROVED.
+//
+// 20 KiB places 512 and 4096 - both refused - but not 16384, which is what this mount needs. Taking
+// the page size alone would answer 4096 here, a rung that was just measured as refused, and every
+// read would then fail with EINVAL.
+TEST(LadderDirectBlock, Never_Assumes_A_Rung_That_Was_Refused)
+{
+    const auto decided = ladder_direct_block(20 * 1024, 4096, accepts_from(16384));
+
+    EXPECT_EQ(decided.block, 16384u) << "the smallest rung the file was too short to rule out";
+    EXPECT_FALSE(decided.measured);
+}
+
+// Nothing could be placed, so the mount was never asked - whatever it would have said.
+TEST(LadderDirectBlock, A_File_Too_Short_For_Any_Rung_Is_Never_Measured)
+{
+    const auto decided = ladder_direct_block(100, 4096, accepts_from(512));
+
+    EXPECT_EQ(decided.block, 4096u) << "the page size is the floor under the smallest rung";
+    EXPECT_FALSE(decided.measured);
+    EXPECT_NE(decided.block, 512u) << "the first rung passed on a file too short to test it";
+}
+
+// Zero is an ANSWER, not a failure: the mount accepts an O_DIRECT open and serves no block we use.
+// direct_block remembers it, so it must come only from rungs that were actually tried.
+TEST(LadderDirectBlock, Every_Rung_Refused_Is_A_Measured_Zero)
+{
+    const auto decided = ladder_direct_block(Plenty, 4096, accepts_from(MaxProbeBlock * 2));
+
+    EXPECT_EQ(decided.block, 0u);
+    EXPECT_TRUE(decided.measured);
+}
+
 // The two answers come from ONE probe, so they cannot disagree: a mount with no usable block serves
 // no direct reads, and a mount with one does.
 TEST(MountCapabilities, Direct_Block_And_Direct_Support_Agree)
