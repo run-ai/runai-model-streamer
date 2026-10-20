@@ -22,6 +22,7 @@ runai_cc_test(
     deps = [
         ":mount_capabilities",
         "//posix_io/alignment",
+        "//utils/fd",
         "//utils/random",
         "//utils/temp/file",
     ],

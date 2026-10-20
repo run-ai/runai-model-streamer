@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <vector>
 #include <array>
@@ -120,18 +121,17 @@ DioAlign statx_dio_align(const std::string & path)
 // every rung would pass.
 bool direct_read_at(int fd, size_t block, off_t offset)
 {
-    void * base = nullptr;
-    if (::posix_memalign(&base, MaxProbeBlock, 2 * MaxProbeBlock) != 0)
+    void * raw = nullptr;
+    if (::posix_memalign(&raw, MaxProbeBlock, 2 * MaxProbeBlock) != 0)
     {
-        return false;
+        return false;   // nothing was allocated - posix_memalign leaves raw untouched on failure
     }
 
-    char * const buffer = static_cast<char *>(base) + block;
+    const std::unique_ptr<char, void (*)(void *)> base(static_cast<char *>(raw), &std::free);
+    char * const buffer = base.get() + block;
 
     const ssize_t got = ::pread(fd, buffer, block, offset);
     const int error = errno;
-
-    ::free(base);
 
     // EINVAL is the alignment answer. Anything else belongs to this file or this moment.
     return got >= 0 || error != EINVAL;
@@ -501,29 +501,33 @@ common::ResponseCode MountCapabilities::direct_block(dev_t dev, const std::strin
     // The callers keep that out: FsAsyncRouter::groups and FsAsyncRouter::direct_block_for both test
     // memory_backed and skip such a mount before asking. The statfs magic check is the only thing that
     // works here, because a probe by definition cannot detect a filesystem that accepts everything.
-    const int fd = ::open(file_path.c_str(), O_RDONLY | O_DIRECT);
-    if (fd < 0)
+    //
+    // Only the OPEN is the question here, so the descriptor is scoped to it and measure_direct_block
+    // below opens its own.
     {
-        const int error = errno;
-
-        if (error == EINVAL || error == EOPNOTSUPP)
+        const utils::Fd fd(::open(file_path.c_str(), O_RDONLY | O_DIRECT));
+        if (fd.fd() < 0)
         {
-            // The mount itself refuses O_DIRECT. That belongs to the mount, so it is remembered.
-            LOG(INFO) << "Mount " << major(dev) << ":" << minor(dev) << " does not support O_DIRECT ("
-                      << std::strerror(error) << ")";
-            const auto guard = std::unique_lock<std::mutex>(_mutex);
-            _direct.try_emplace(dev, 0);
-            return common::ResponseCode::FileAccessError;
-        }
+            const int error = errno;
 
-        // Anything else is about the FILE - it is missing, or we may not read it. Nothing is
-        // remembered, so the next file answers instead of one bad path condemning the mount.
-        // Deliberately NOT remembered, so the next file - or the next submission - measures again.
-        LOG(DEBUG) << "Cannot tell whether " << file_path << " supports O_DIRECT: "
-                   << std::strerror(error);
-        return common::ResponseCode::UnknownError;
+            if (error == EINVAL || error == EOPNOTSUPP)
+            {
+                // The mount itself refuses O_DIRECT. That belongs to the mount, so it is remembered.
+                LOG(INFO) << "Mount " << major(dev) << ":" << minor(dev) << " does not support"
+                          << " O_DIRECT (" << std::strerror(error) << ")";
+                const auto guard = std::unique_lock<std::mutex>(_mutex);
+                _direct.try_emplace(dev, 0);
+                return common::ResponseCode::FileAccessError;
+            }
+
+            // Anything else is about the FILE - it is missing, or we may not read it. Nothing is
+            // remembered, so the next file answers instead of one bad path condemning the mount.
+            // Deliberately NOT remembered, so the next file - or the next submission - measures again.
+            LOG(DEBUG) << "Cannot tell whether " << file_path << " supports O_DIRECT: "
+                       << std::strerror(error);
+            return common::ResponseCode::UnknownError;
+        }
     }
-    ::close(fd);
 
     // An override replaces the MEASUREMENT, not the capability check above. It must not turn a
     // missing file or a directory into "this mount serves direct reads" - the open decides that, and

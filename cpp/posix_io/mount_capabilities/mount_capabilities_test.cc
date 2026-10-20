@@ -11,6 +11,7 @@
 #include <sys/sysmacros.h>
 
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <vector>
 
@@ -30,6 +31,7 @@
 #include <string>
 
 #include "common/exception/exception.h"
+#include "utils/fd/fd.h"
 #include "utils/random/random.h"
 #include "utils/temp/file/file.h"
 
@@ -105,6 +107,24 @@ dev_t device_of(const std::string & path)
     return ::stat(path.c_str(), &st) == 0 ? st.st_dev : 0;
 }
 
+// The same ownership ScratchPool uses for its buffers, so an ASSERT between the allocation and the
+// read cannot leak one - a gtest ASSERT returns from the test.
+//
+// Empty when posix_memalign refuses the request. It leaves the pointer untouched on failure, so the
+// null it was built with is what the caller sees.
+using Aligned = std::unique_ptr<char, void (*)(void *)>;
+
+Aligned aligned_bytes(size_t alignment, size_t bytes)
+{
+    void * raw = nullptr;
+    if (::posix_memalign(&raw, alignment, bytes) != 0)
+    {
+        return Aligned(nullptr, &std::free);
+    }
+
+    return Aligned(static_cast<char *>(raw), &std::free);
+}
+
 } // namespace
 
 TEST(MountCapabilities, Regular_File_Agrees_With_The_Filesystem)
@@ -138,9 +158,10 @@ TEST(MountCapabilities, Tmpfs_Is_Memory_Backed)
     }
 
     const std::string path = "/dev/shm/runai_mount_test_" + utils::random::string();
-    const int fd = ::open(path.c_str(), O_CREAT | O_RDWR, 0600);
-    ASSERT_GE(fd, 0);
-    ::close(fd);
+    {
+        const utils::Fd created(::open(path.c_str(), O_CREAT | O_RDWR, 0600));
+        ASSERT_GE(created.fd(), 0);
+    }   // the file exists now; the descriptor was only needed to make it
 
     MountCapabilities mounts;
     const auto capability = mounts.of_path(path);
@@ -178,10 +199,9 @@ TEST(MountCapabilities, Of_Fd_Agrees_With_Of_Path)
     const auto by_path = mounts.of_path(file.path);
     EXPECT_EQ(mounts.size(), 1);
 
-    const int fd = ::open(file.path.c_str(), O_RDONLY);
-    ASSERT_GE(fd, 0);
+    const utils::Fd fd(::open(file.path.c_str(), O_RDONLY));
+    ASSERT_GE(fd.fd(), 0);
     const auto by_fd = mounts.of_fd(fd);
-    ::close(fd);
 
     EXPECT_EQ(mounts.size(), 1);
     EXPECT_EQ(by_fd.dev, by_path.dev);
@@ -195,9 +215,10 @@ TEST(MountCapabilities, Distinct_Mounts_Are_Distinct_Entries)
     utils::temp::File regular(utils::random::buffer(64));
 
     const std::string shm = "/dev/shm/runai_mount_test_" + utils::random::string();
-    const int fd = ::open(shm.c_str(), O_CREAT | O_RDWR, 0600);
-    ASSERT_GE(fd, 0);
-    ::close(fd);
+    {
+        const utils::Fd created(::open(shm.c_str(), O_CREAT | O_RDWR, 0600));
+        ASSERT_GE(created.fd(), 0);
+    }   // the file exists now; the descriptor was only needed to make it
 
     // Whether these are two mounts is a fact about the machine, so ask the machine.
     if (device_of(regular.path) == device_of(shm))
@@ -241,8 +262,8 @@ TEST(MountCapabilities, Direct_Support_Matches_A_Real_Aligned_Read)
     utils::temp::File file(data);
 
     bool really_supported = false;
-    int fd = ::open(file.path.c_str(), O_RDONLY | O_DIRECT);
-    if (fd >= 0)
+    const utils::Fd fd(::open(file.path.c_str(), O_RDONLY | O_DIRECT));
+    if (fd.fd() >= 0)
     {
         // ANY rung the mount accepts proves direct reads work here, because that is the question
         // direct_support answers: not "does this one block work" but "can this mount serve direct
@@ -258,15 +279,14 @@ TEST(MountCapabilities, Direct_Support_Matches_A_Real_Aligned_Read)
         // oracle that imported the values it is checking would agree with a wrong implementation.
         for (const size_t block : { size_t(512), size_t(4096), size_t(16384), size_t(65536) })
         {
-            void * buffer = nullptr;
-            if (::posix_memalign(&buffer, block, block) != 0)
+            const auto buffer = aligned_bytes(block, block);
+            if (buffer == nullptr)
             {
                 continue;
             }
 
-            const ssize_t got = ::pread(fd, buffer, block, 0);
+            const ssize_t got = ::pread(fd, buffer.get(), block, 0);
             const bool worked = got >= 0 || errno != EINVAL;
-            ::free(buffer);
 
             if (worked)
             {
@@ -274,8 +294,6 @@ TEST(MountCapabilities, Direct_Support_Matches_A_Real_Aligned_Read)
                 break;
             }
         }
-
-        ::close(fd);
     }
 
     MountCapabilities mounts;
@@ -319,14 +337,13 @@ TEST(MountCapabilities, Direct_Block_Is_The_Smallest_The_Mount_Accepts)
     EXPECT_LE(block, 65536u) << "larger than any rung on the ladder, so it cannot have been measured";
 
     // Asked of the kernel, not of the code under test: the reported block must actually work...
-    int fd = ::open(file.path.c_str(), O_RDONLY | O_DIRECT);
-    ASSERT_GE(fd, 0);
+    const utils::Fd fd(::open(file.path.c_str(), O_RDONLY | O_DIRECT));
+    ASSERT_GE(fd.fd(), 0);
 
-    void * buffer = nullptr;
-    ASSERT_EQ(::posix_memalign(&buffer, block, block), 0);
-    const ssize_t got = ::pread(fd, buffer, block, 0);
+    const auto buffer = aligned_bytes(block, block);
+    ASSERT_NE(buffer, nullptr);
+    const ssize_t got = ::pread(fd, buffer.get(), block, 0);
     EXPECT_TRUE(got >= 0 || errno != EINVAL) << "the reported block " << block << " is refused";
-    ::free(buffer);
 
     // Which property holds depends on WHERE the number came from, so ask the kernel the same
     // question the implementation asks.
@@ -359,17 +376,20 @@ TEST(MountCapabilities, Direct_Block_Is_The_Smallest_The_Mount_Accepts)
 
         for (size_t smaller = 512; smaller < block; smaller <<= 1)
         {
-            void * small = nullptr;
-            ASSERT_EQ(::posix_memalign(&small, smaller, smaller), 0);
-            const ssize_t r = ::pread(fd, small, smaller, 0);
+            // The same question the ladder asked, or this can contradict a correct answer. All three
+            // of the things O_DIRECT constrains must be aligned to `smaller` and not to twice it: at
+            // offset 0, or from a posix_memalign that over-aligned, a mount needing `block` can still
+            // accept the read, and the rung the ladder rightly refused would look workable here.
+            const auto base = aligned_bytes(2 * smaller, 4 * smaller);
+            ASSERT_NE(base, nullptr);
+
+            const ssize_t r = ::pread(fd, base.get() + smaller, smaller,
+                                      static_cast<off_t>(smaller));
             const bool worked = r >= 0 || errno != EINVAL;
-            ::free(small);
 
             EXPECT_FALSE(worked) << smaller << " also works, so " << block << " was not the smallest";
         }
     }
-
-    ::close(fd);
 }
 
 // A probe cannot recognise tmpfs, on any kernel - so statfs magic has to.
@@ -404,23 +424,24 @@ TEST(MountCapabilities, Tmpfs_Can_Never_Be_Probed_For_A_Block)
     }
 
     const std::string path = "/dev/shm/runai_tmpfs_direct_" + utils::random::string();
-    int fd = ::open(path.c_str(), O_CREAT | O_RDWR, 0600);
-    ASSERT_GE(fd, 0);
-    const auto data = utils::random::buffer(256 * 1024);
-    ASSERT_EQ(::write(fd, data.data(), data.size()), static_cast<ssize_t>(data.size()));
-    ::close(fd);
+    {
+        const utils::Fd fd(::open(path.c_str(), O_CREAT | O_RDWR, 0600));
+        ASSERT_GE(fd.fd(), 0);
+        const auto data = utils::random::buffer(256 * 1024);
+        ASSERT_EQ(::write(fd, data.data(), data.size()), static_cast<ssize_t>(data.size()));
+    }
 
     // Nothing upstream of the ladder answers here, which is what would leave the ladder deciding.
     EXPECT_FALSE(raw_statx_dio_align(path).answered)
         << "statx now answers on tmpfs, so this reasoning needs revisiting";
 
-    fd = ::open(path.c_str(), O_RDONLY | O_DIRECT);
+    const utils::Fd fd(::open(path.c_str(), O_RDONLY | O_DIRECT));
 
     // ONE tail for both branches. Written as if/else rather than an early return because everything
     // below applies to both, and duplicating it is how the two got out of step: the refused branch
     // unlinked the file before asking of_path about it, and of_path stats the path first, so it threw
     // instead of asserting.
-    if (fd < 0)
+    if (fd.fd() < 0)
     {
         // This kernel refuses at open, so a probe never gets to ask. Recorded, not asserted - the
         // other branch is equally acceptable.
@@ -441,8 +462,6 @@ TEST(MountCapabilities, Tmpfs_Can_Never_Be_Probed_For_A_Block)
         const bool tolerated = ::pread(fd, buffer + 1, 4096, 0) >= 0   // unaligned buffer
                             || ::pread(fd, buffer, 4095, 0) >= 0       // odd length
                             || ::pread(fd, buffer, 4096, 1) >= 0;      // odd offset
-
-        ::close(fd);
 
         EXPECT_TRUE(tolerated)
             << "tmpfs both accepted an O_DIRECT open and enforced alignment on this kernel;"
@@ -477,20 +496,16 @@ TEST(MountCapabilities, The_Reported_Block_Works_At_A_Non_Zero_Offset)
         return;   // no direct I/O here, so there is no offset to check
     }
 
-    const int fd = ::open(file.path.c_str(), O_RDONLY | O_DIRECT);
-    ASSERT_GE(fd, 0);
+    const utils::Fd fd(::open(file.path.c_str(), O_RDONLY | O_DIRECT));
+    ASSERT_GE(fd.fd(), 0);
 
     // Aligned to `block` and NOT to twice it, the way the probe builds its own buffer: an address
     // aligned to more would let a mount that needs more than `block` accept this read.
-    void * base = nullptr;
-    ASSERT_EQ(::posix_memalign(&base, 2 * block, 4 * block), 0);
-    char * const buffer = static_cast<char *>(base) + block;
+    const auto base = aligned_bytes(2 * block, 4 * block);
+    ASSERT_NE(base, nullptr);
 
-    const ssize_t got = ::pread(fd, buffer, block, static_cast<off_t>(block));
+    const ssize_t got = ::pread(fd, base.get() + block, block, static_cast<off_t>(block));
     const int error = errno;
-
-    ::free(base);
-    ::close(fd);
 
     EXPECT_TRUE(got >= 0 || error != EINVAL)
         << "block " << block << " is accepted at offset 0 but refused at offset " << block
@@ -516,16 +531,14 @@ TEST(MountCapabilities, A_Short_File_Cannot_Reach_A_Rung)
 
     const auto write_shm = [](const std::string & path, size_t bytes)
     {
-        const int fd = ::open(path.c_str(), O_CREAT | O_RDWR, 0600);
-        if (fd < 0)
+        const utils::Fd fd(::open(path.c_str(), O_CREAT | O_RDWR, 0600));
+        if (fd.fd() < 0)
         {
             return false;
         }
 
         const auto data = utils::random::buffer(bytes);
-        const bool ok = ::write(fd, data.data(), data.size()) == static_cast<ssize_t>(data.size());
-        ::close(fd);
-        return ok;
+        return ::write(fd, data.data(), data.size()) == static_cast<ssize_t>(data.size());
     };
 
     const std::string large = "/dev/shm/runai_rung_large_" + utils::random::string();
