@@ -177,52 +177,11 @@ RUN curl -fsSL -o zlib-1.3.1.tar.gz https://github.com/madler/zlib/releases/down
 
 ADD aarch64-linux-gnu.cmake /opt/toolchains/aarch64-linux-gnu.cmake
 ADD x86_64-linux-gnu.cmake /opt/toolchains/x86_64-linux-gnu.cmake
-RUN git clone --recurse-submodules --depth 1 --branch "1.11.584" https://github.com/aws/aws-sdk-cpp /opt/aws-sdk-cpp && \
-    cd /opt/aws-sdk-cpp && \
-    
-    cmake -DCMAKE_TOOLCHAIN_FILE=/opt/toolchains/x86_64-linux-gnu.cmake \
-          -DBUILD_ONLY="s3-crt" \
-          -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-          -DCMAKE_PREFIX_PATH="/opt/x86_64-ssl;/opt/x86_64-curl" \
-          -DCMAKE_INSTALL_PREFIX="/opt/x86_64-aws" \
-          -DFORCE_SHARED_CRT=OFF \
-          -DBUILD_SHARED_LIBS=OFF \
-          -DENABLE_TESTING=OFF \
-          -DAUTORUN_UNIT_TESTS=OFF \
-          -DZLIB_LIBRARY="/opt/x86_64-zlib/lib/libz.a" \
-          -DZLIB_INCLUDE_DIR="/opt/x86_64-zlib/include" \
-          -Dcrypto_LIBRARY="/opt/x86_64-ssl/lib/libcrypto.a" \
-          -Dcrypto_INCLUDE_DIR="/opt/x86_64-ssl/include" \
-          -DCURL_LIBRARY="/opt/x86_64-curl/lib/libcurl.a" \
-          -DCURL_INCLUDE_DIR="/opt/x86_64-curl/include" \
-          -DOPENSSL_CRYPTO_LIBRARY="/opt/x86_64-ssl/lib/libssl.a" \
-          -DOPENSSL_INCLUDE_DIR="/opt/x86_64-ssl/include" && \
-    make -j4 && \
-    make install && \
 
-    make clean && \
-    rm -rf CMakeCache.txt && \
-    
-    cmake -DCMAKE_TOOLCHAIN_FILE=/opt/toolchains/aarch64-linux-gnu.cmake \
-          -DBUILD_ONLY="s3-crt" \
-          -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-          -DCMAKE_PREFIX_PATH="/opt/aarch64-ssl;/opt/aarch64-curl" \
-          -DCMAKE_INSTALL_PREFIX="/opt/aarch64-aws" \
-          -DFORCE_SHARED_CRT=OFF \
-          -DBUILD_SHARED_LIBS=OFF \
-          -DENABLE_TESTING=OFF \
-          -DAUTORUN_UNIT_TESTS=OFF \
-          -DZLIB_LIBRARY="/opt/aarch64-zlib/lib/libz.a" \
-          -DZLIB_INCLUDE_DIR="/opt/aarch64-zlib/include" \
-          -Dcrypto_LIBRARY="/opt/aarch64-ssl/lib/libcrypto.a" \
-          -Dcrypto_INCLUDE_DIR="/opt/aarch64-ssl/include" \
-          -DCURL_LIBRARY="/opt/aarch64-curl/lib/libcurl.a" \
-          -DCURL_INCLUDE_DIR="/opt/aarch64-curl/include" \
-          -DOPENSSL_CRYPTO_LIBRARY="/opt/aarch64-ssl/lib/libssl.a" \
-          -DOPENSSL_INCLUDE_DIR="/opt/aarch64-ssl/include" && \
-    make -j4 && \
-    make install && \
-    rm -rf /opt/aws-sdk-cpp
+# Keep AWS in the final image's layer chain so CI can reuse its build layer
+# through the published image cache when later dependencies change.
+COPY scripts/build-aws-sdk.sh /tmp/build-aws-sdk.sh
+RUN bash /tmp/build-aws-sdk.sh
 
 RUN curl -fsSL -o libxml2-2.13.5.tar.xz https://download.gnome.org/sources/libxml2/2.13/libxml2-2.13.5.tar.xz && \
     tar xf libxml2-2.13.5.tar.xz && \
@@ -323,7 +282,7 @@ RUN NATIVE_ARCH=$(uname -m | sed 's/x86_64/x86_64/;s/aarch64/aarch64/') && \
         ln -sf /opt/${NATIVE_ARCH}-azure/lib/* /usr/local/lib/; \
     fi
 
-# liburing and libaio come LAST on purpose, after the three cloud SDKs.
+# Build liburing and libaio after the AWS and Azure SDKs.
 #
 # Docker invalidates every layer below the one that changed. These two are small, build in seconds,
 # and move faster than anything above them - liburing alone had eight releases while we sat on one
