@@ -4,11 +4,22 @@
 
 set -euo pipefail
 
-# Accept Docker architecture names; paths and toolchains use GNU names.
-if (( $# == 0 )); then
-    echo "Usage: $0 <amd64|arm64> [amd64|arm64 ...]" >&2
+# The image architecture selects the SDK exposed through /usr/local.
+if (( $# < 3 )) || [[ "$1" != --native-arch ]]; then
+    echo "Usage: $0 --native-arch <amd64|arm64> <amd64|arm64> [amd64|arm64 ...]" >&2
     exit 2
 fi
+case "$2" in
+    amd64) native_arch=x86_64 ;;
+    arm64) native_arch=aarch64 ;;
+    *)
+        echo "Unsupported native architecture: $2" >&2
+        exit 2
+        ;;
+esac
+shift 2
+
+# Accept Docker architecture names; paths and toolchains use GNU names.
 build_arches=()
 for target_arch in "$@"; do
     case "$target_arch" in
@@ -65,3 +76,9 @@ for arch in "${build_arches[@]}"; do
 done
 
 rm -rf /opt/azure-sdk-cpp
+
+# Expose the native SDK to tools using the standard include and library paths.
+if [ -d /opt/${native_arch}-azure ]; then
+    ln -sf /opt/${native_arch}-azure/include/azure /usr/local/include/azure
+    ln -sf /opt/${native_arch}-azure/lib/* /usr/local/lib/
+fi
