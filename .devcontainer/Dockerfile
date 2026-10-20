@@ -1,8 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-FROM nvidia/cuda:12.8.0-devel-ubuntu20.04@sha256:cd0f8e1c41628ff2513e9f7c42dd9bd8740fe87fd6615b9c4a6f392995a589c0 AS cuda-headers
-
 FROM ubuntu:20.04
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
@@ -60,6 +58,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     cmake \
     git \
     curl \
+    xz-utils \
     libssl-dev \
     libcurl4-openssl-dev \
     libxml2-dev \
@@ -80,7 +79,23 @@ RUN WEED_ARCH=$([ "$(uname -m)" = "aarch64" ] && echo "arm64" || echo "amd64") \
 # CUDA headers only, for compile-time type checking of the driver API. No runtime and no
 # libraries: libcuda.so.1 is loaded with dlopen, so the build has no link-time CUDA dependency
 # and the image needs no driver.
-COPY --from=cuda-headers /usr/local/cuda/include/ /usr/local/cuda/include/
+# Official CUDA 12.8 component archives and SHA-256 pins:
+# https://developer.download.nvidia.com/compute/cuda/redist/redistrib_12.8.0.json
+RUN case "$(uname -m)" in \
+        x86_64) CUDA_PLATFORM=linux-x86_64; \
+            CUDA_SHA256=5bd3ac35ea8e8ab880e595d5054ee373abf6d9e53dcb8cef0a5c75358dbc0ae2 ;; \
+        aarch64) CUDA_PLATFORM=linux-sbsa; \
+            CUDA_SHA256=b94814dacc8e4e69c8909ac08ae9f8d6831c1a141358a6e9f60583481a49ae2b ;; \
+        *) echo "Unsupported CUDA headers architecture: $(uname -m)" >&2; exit 1 ;; \
+    esac \
+    && CUDA_ARCHIVE="cuda_cudart-${CUDA_PLATFORM}-12.8.57-archive" \
+    && curl -fsSL -o /tmp/cuda-cudart.tar.xz \
+        "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/${CUDA_PLATFORM}/${CUDA_ARCHIVE}.tar.xz" \
+    && echo "${CUDA_SHA256}  /tmp/cuda-cudart.tar.xz" | sha256sum -c - \
+    && mkdir -p /usr/local/cuda \
+    && tar -xJf /tmp/cuda-cudart.tar.xz -C /usr/local/cuda --strip-components=1 \
+        "${CUDA_ARCHIVE}/include" "${CUDA_ARCHIVE}/LICENSE" \
+    && rm /tmp/cuda-cudart.tar.xz
 
 RUN curl -fsSL -o fake-gcs-server_1.52.2.tar.gz https://github.com/fsouza/fake-gcs-server/releases/download/v1.52.2/fake-gcs-server_1.52.2_Linux_$([ "$(uname -m)" = "aarch64" ] && echo "arm64" || echo "amd64").tar.gz \
     && mkdir -p fake-gcs-server \
