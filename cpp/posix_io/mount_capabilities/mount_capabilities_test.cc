@@ -552,6 +552,17 @@ TEST(MountCapabilities, A_Short_File_Cannot_Reach_A_Rung)
         return;   // this kernel refuses the open, so no probe ran for either file
     }
 
+    // An override replaces the measurement, so neither value came from the ladder and the contrast
+    // below would be asserting nothing. Assert what an override promises instead: that the file's
+    // size cannot change it. RUNAI_STREAMER_DIRECT_BLOCK=4096 is a documented workaround, so a
+    // developer may well have it set.
+    if (const size_t forced = direct_block_override(); forced != 0)
+    {
+        EXPECT_EQ(large_block, forced);
+        EXPECT_EQ(short_block, forced) << "an override must stand whatever the file size";
+        return;
+    }
+
     const auto page = static_cast<size_t>(::sysconf(_SC_PAGESIZE));
 
     EXPECT_EQ(large_block, 512u) << "tmpfs accepts every read, so the first rung should answer";
