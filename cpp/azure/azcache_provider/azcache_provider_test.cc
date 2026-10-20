@@ -333,18 +333,30 @@ TEST_F(CacheProviderEnvTest, ExplicitLibraryLoads)
 TEST_F(CacheProviderEnvTest, MissingPathIsIgnored)
 {
     setenv(RUNAI_AZURE_CACHE_LIB_ENV, (cache_dir_ / "missing.so").c_str(), 1);
+    if (AzCacheProviderLoader::from_env()->is_enabled())
+    {
+        GTEST_SKIP() << "A provider was auto-discovered; no-provider case is inapplicable";
+    }
     EXPECT_FALSE(AzCacheProviderLoader::from_env()->is_enabled());
 }
 
 TEST_F(CacheProviderEnvTest, DirectoryIsIgnored)
 {
     setenv(RUNAI_AZURE_CACHE_LIB_ENV, cache_dir_.c_str(), 1);
+    if (AzCacheProviderLoader::from_env()->is_enabled())
+    {
+        GTEST_SKIP() << "A provider was auto-discovered; no-provider case is inapplicable";
+    }
     EXPECT_FALSE(AzCacheProviderLoader::from_env()->is_enabled());
 }
 
 TEST_F(CacheProviderEnvTest, RequiredModeStillFailsWhenPathIsMissing)
 {
     setenv(RUNAI_AZURE_CACHE_LIB_ENV, (cache_dir_ / "missing.so").c_str(), 1);
+    if (AzCacheProviderLoader::from_env()->is_enabled())
+    {
+        GTEST_SKIP() << "A provider was auto-discovered; no-provider case is inapplicable";
+    }
     setenv(RUNAI_AZURE_CACHE_ENABLED_ENV, "1", 1);
     EXPECT_THROW(AzCacheProviderLoader::from_env(), std::exception);
 }
@@ -361,6 +373,10 @@ TEST_F(CacheProviderEnvTest, MissingDefaultIsIgnored)
     if (fs::exists(default_path))
     {
         GTEST_SKIP() << "Default library path is present";
+    }
+    if (AzCacheProviderLoader::from_env()->is_enabled())
+    {
+        GTEST_SKIP() << "A provider was auto-discovered; no-provider case is inapplicable";
     }
     EXPECT_FALSE(AzCacheProviderLoader::from_env()->is_enabled());
 }

@@ -354,6 +354,8 @@ Unset — cache is auto-enabled when a compatible cache provider package is inst
 
 Path to the Azure Blob cache-provider shared library. A nonempty value overrides the default ImageVolume path. An unset or empty value uses the default. Missing paths and non-regular files are ignored, and the streamer tries package auto-discovery instead. This path is not checked when caching is disabled.
 
+Specify the full filesystem path; bare library names are not supported.
+
 In auto mode, if no usable library is found, reads use the Azure SDK. Required mode (`RUNAI_STREAMER_EXPERIMENTAL_AZURE_CACHE_ENABLED=1`) still reports an error if no usable cache library is found.
 
 #### Values accepted
