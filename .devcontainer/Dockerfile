@@ -80,7 +80,8 @@ RUN WEED_ARCH=$([ "$(uname -m)" = "aarch64" ] && echo "arm64" || echo "amd64") \
 # libraries: libcuda.so.1 is loaded with dlopen, so the build has no link-time CUDA dependency
 # and the image needs no driver.
 COPY scripts/install-cuda-headers.sh /tmp/install-cuda-headers.sh
-RUN bash /tmp/install-cuda-headers.sh
+ARG TARGETARCH
+RUN bash /tmp/install-cuda-headers.sh "$TARGETARCH"
 
 RUN curl -fsSL -o fake-gcs-server_1.52.2.tar.gz https://github.com/fsouza/fake-gcs-server/releases/download/v1.52.2/fake-gcs-server_1.52.2_Linux_$([ "$(uname -m)" = "aarch64" ] && echo "arm64" || echo "amd64").tar.gz \
     && mkdir -p fake-gcs-server \
