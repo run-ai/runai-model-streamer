@@ -96,8 +96,8 @@
   {
    "id": "nvidia-cuda-headers",
    "name": "NVIDIA CUDA driver API header (cuda.h)",
-   "version": "12.8",
-   "url": "https://developer.download.nvidia.com/compute/cuda/redist/redistrib_12.8.0.json",
+   "version": "12.8.57",
+   "url": "https://developer.nvidia.com/cuda-toolkit",
    "spdx": "NVIDIA CUDA header notice",
    "copyright": "Copyright 1993-2023 NVIDIA Corporation. All rights reserved.",
    "linkage": "compile-time headers only",
