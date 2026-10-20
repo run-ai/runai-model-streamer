@@ -3,7 +3,7 @@
 
 FROM nvidia/cuda:12.8.0-devel-ubuntu20.04@sha256:cd0f8e1c41628ff2513e9f7c42dd9bd8740fe87fd6615b9c4a6f392995a589c0 AS cuda-headers
 
-FROM ubuntu:20.04
+FROM ubuntu:20.04 AS base
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     python3 \
@@ -177,6 +177,9 @@ RUN curl -fsSL -o zlib-1.3.1.tar.gz https://github.com/madler/zlib/releases/down
 
 ADD aarch64-linux-gnu.cmake /opt/toolchains/aarch64-linux-gnu.cmake
 ADD x86_64-linux-gnu.cmake /opt/toolchains/x86_64-linux-gnu.cmake
+
+# Keep AWS compilation independent of the remaining devcontainer dependencies.
+FROM base AS aws-builder
 RUN git clone --recurse-submodules --depth 1 --branch "1.11.584" https://github.com/aws/aws-sdk-cpp /opt/aws-sdk-cpp && \
     cd /opt/aws-sdk-cpp && \
     
@@ -223,6 +226,8 @@ RUN git clone --recurse-submodules --depth 1 --branch "1.11.584" https://github.
     make -j4 && \
     make install && \
     rm -rf /opt/aws-sdk-cpp
+
+FROM base AS devcontainer
 
 RUN curl -fsSL -o libxml2-2.13.5.tar.xz https://download.gnome.org/sources/libxml2/2.13/libxml2-2.13.5.tar.xz && \
     tar xf libxml2-2.13.5.tar.xz && \
@@ -323,12 +328,11 @@ RUN NATIVE_ARCH=$(uname -m | sed 's/x86_64/x86_64/;s/aarch64/aarch64/') && \
         ln -sf /opt/${NATIVE_ARCH}-azure/lib/* /usr/local/lib/; \
     fi
 
-# liburing and libaio come LAST on purpose, after the three cloud SDKs.
+# Build liburing and libaio after Azure; AWS builds in its independent stage.
 #
 # Docker invalidates every layer below the one that changed. These two are small, build in seconds,
 # and move faster than anything above them - liburing alone had eight releases while we sat on one
-# version. Placed higher, each bump would rebuild the AWS and Azure SDKs, which are the slowest steps
-# in this file and have no dependency on either library.
+# version. Placed higher, each bump would rebuild Azure, which has no dependency on either library.
 #
 # liburing, for the io_uring engine. Static only: it is linked into libstreamer.so, which exports an
 # explicit allowlist via streamer.ldscript, so these symbols stay hidden.
@@ -408,4 +412,8 @@ RUN curl -fsSL -o libaio-0.3.113.tar.gz https://deb.debian.org/debian/pool/main/
 
     cd - && \
     rm -rf libaio-0.3.113 libaio-0.3.113.tar.gz
+
+# Only installed SDK files enter the final image, at the existing paths.
+COPY --from=aws-builder /opt/x86_64-aws /opt/x86_64-aws
+COPY --from=aws-builder /opt/aarch64-aws /opt/aarch64-aws
 
