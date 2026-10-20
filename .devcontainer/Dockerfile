@@ -181,7 +181,7 @@ ADD x86_64-linux-gnu.cmake /opt/toolchains/x86_64-linux-gnu.cmake
 # Keep AWS in the final image's layer chain so CI can reuse its build layer
 # through the published image cache when later dependencies change.
 COPY scripts/build-aws-sdk.sh /tmp/build-aws-sdk.sh
-RUN bash /tmp/build-aws-sdk.sh
+RUN bash /tmp/build-aws-sdk.sh amd64 arm64
 
 RUN curl -fsSL -o libxml2-2.13.5.tar.xz https://download.gnome.org/sources/libxml2/2.13/libxml2-2.13.5.tar.xz && \
     tar xf libxml2-2.13.5.tar.xz && \
@@ -226,7 +226,7 @@ RUN curl -fsSL -o libxml2-2.13.5.tar.xz https://download.gnome.org/sources/libxm
 # Build Azure SDK for C++ (optimized with shared CMake options)
 SHELL ["/bin/bash", "-c"]
 COPY scripts/build-azure-sdk.sh /tmp/build-azure-sdk.sh
-RUN bash /tmp/build-azure-sdk.sh
+RUN bash /tmp/build-azure-sdk.sh amd64 arm64
 
 # Create symlinks for native architecture Azure SDK
 RUN NATIVE_ARCH=$(uname -m | sed 's/x86_64/x86_64/;s/aarch64/aarch64/') && \

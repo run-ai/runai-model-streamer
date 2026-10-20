@@ -4,6 +4,23 @@
 
 set -euo pipefail
 
+# Accept Docker architecture names; paths and toolchains use GNU names.
+if (( $# == 0 )); then
+    echo "Usage: $0 <amd64|arm64> [amd64|arm64 ...]" >&2
+    exit 2
+fi
+build_arches=()
+for target_arch in "$@"; do
+    case "$target_arch" in
+        amd64) build_arches+=(x86_64) ;;
+        arm64) build_arches+=(aarch64) ;;
+        *)
+            echo "Unsupported SDK architecture: $target_arch" >&2
+            exit 2
+            ;;
+    esac
+done
+
 git clone --recurse-submodules https://github.com/Azure/azure-sdk-for-cpp /opt/azure-sdk-cpp
 cd /opt/azure-sdk-cpp
 git checkout azure-storage-blobs_12.15.0
@@ -40,16 +57,11 @@ build_azure_sdk_components() {
     cmake --install build-${arch}-${source##*/}
 }
 
-# x86_64 builds
-build_azure_sdk_components x86_64 /opt/x86_64-azure sdk/core/azure-core "" -DBUILD_TRANSPORT_CURL=ON -DDISABLE_AZURE_CORE_OPENTELEMETRY=ON
-build_azure_sdk_components x86_64 /opt/x86_64-azure sdk/storage/azure-storage-common /opt/x86_64-azure
-build_azure_sdk_components x86_64 /opt/x86_64-azure sdk/storage/azure-storage-blobs /opt/x86_64-azure
-build_azure_sdk_components x86_64 /opt/x86_64-azure sdk/identity/azure-identity /opt/x86_64-azure
-
-# aarch64 builds
-build_azure_sdk_components aarch64 /opt/aarch64-azure sdk/core/azure-core "" -DBUILD_TRANSPORT_CURL=ON -DDISABLE_AZURE_CORE_OPENTELEMETRY=ON
-build_azure_sdk_components aarch64 /opt/aarch64-azure sdk/storage/azure-storage-common /opt/aarch64-azure
-build_azure_sdk_components aarch64 /opt/aarch64-azure sdk/storage/azure-storage-blobs /opt/aarch64-azure
-build_azure_sdk_components aarch64 /opt/aarch64-azure sdk/identity/azure-identity /opt/aarch64-azure
+for arch in "${build_arches[@]}"; do
+    build_azure_sdk_components "$arch" "/opt/${arch}-azure" sdk/core/azure-core "" -DBUILD_TRANSPORT_CURL=ON -DDISABLE_AZURE_CORE_OPENTELEMETRY=ON
+    build_azure_sdk_components "$arch" "/opt/${arch}-azure" sdk/storage/azure-storage-common "/opt/${arch}-azure"
+    build_azure_sdk_components "$arch" "/opt/${arch}-azure" sdk/storage/azure-storage-blobs "/opt/${arch}-azure"
+    build_azure_sdk_components "$arch" "/opt/${arch}-azure" sdk/identity/azure-identity "/opt/${arch}-azure"
+done
 
 rm -rf /opt/azure-sdk-cpp
