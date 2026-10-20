@@ -95,85 +95,9 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && npm install -g azurite \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL -o openssl-3.5.0.tar.gz https://www.openssl.org/source/openssl-3.5.0.tar.gz && \
-    tar zxf openssl-3.5.0.tar.gz && \
-    cd openssl-3.5.0 && \
-
-    ./Configure no-ssl2 no-zlib no-shared no-comp no-dynamic-engine enable-ec_nistp_64_gcc_128 --cross-compile-prefix=/usr/bin/x86_64-linux-gnu- --prefix=/opt/x86_64-ssl --openssldir=/opt/x86_64-ssl --libdir=lib linux-x86_64 && \
-        make -j4 > /dev/null && \
-        make install_sw > /dev/null && \
-        make clean > /dev/null && \
-        make distclean > /dev/null && \
-
-    ./Configure no-ssl2 no-zlib no-shared no-comp no-dynamic-engine enable-ec_nistp_64_gcc_128 --libdir=lib --cross-compile-prefix=/usr/bin/aarch64-linux-gnu- --prefix=/opt/aarch64-ssl --openssldir=/opt/aarch64-ssl linux-aarch64 && \
-        make -j4 > /dev/null && \
-        make install_sw > /dev/null && \
-        make clean > /dev/null && \
-        make distclean > /dev/null && \
-
-    cd - && \
-    rm -rf openssl-3.5.0 openssl-3.5.0.tar.gz
-
-RUN curl -fsSL -o curl-8.13.0.tar.gz https://github.com/curl/curl/releases/download/curl-8_13_0/curl-8.13.0.tar.gz && \
-    tar zxf curl-8.13.0.tar.gz && \
-    cd curl-8.13.0 && \
-
-    AR=/usr/bin/x86_64-linux-gnu-ar \
-    AS=/usr/bin/x86_64-linux-gnu-as \
-    LD=/usr/bin/x86_64-linux-gnu-ld \
-    RANLIB=/usr/bin/x86_64-linux-gnu-ranlib \
-    CC=/usr/bin/x86_64-linux-gnu-gcc \
-    NM=/usr/bin/x86_64-linux-gnu-nm \
-    CPPFLAGS=-I/opt/x86_64-ssl/include \
-    LDFLAGS=-L/opt/x86_64-ssl/lib \
-    CFLAGS="-fPIC" \
-    ./configure --host=$(gcc -print-multiarch) --build=x86_64-linux-gnu --disable-shared --without-libpsl --with-openssl=/opt/x86_64-ssl --prefix=/opt/x86_64-curl && \
-    make VERBOSE=1 -j4 > /dev/null && \
-        make install > /dev/null && \
-        make clean > /dev/null  && \
-
-    AR=/usr/bin/aarch64-linux-gnu-ar \
-    AS=/usr/bin/aarch64-linux-gnu-as \
-    LD=/usr/bin/aarch64-linux-gnu-ld \
-    RANLIB=/usr/bin/aarch64-linux-gnu-ranlib \
-    CC=/usr/bin/aarch64-linux-gnu-gcc \
-    NM=/usr/bin/aarch64-linux-gnu-nm \
-    CFLAGS="-fPIC" \
-    ./configure --host=$(gcc -print-multiarch) --build=aarch64-linux-gnu --disable-shared --without-libpsl --with-openssl=/opt/aarch64-ssl --prefix=/opt/aarch64-curl && \
-        make -j4 > /dev/null && \
-        make install > /dev/null && \
-        make clean > /dev/null && \
-
-    cd - && \
-    rm -rf curl-7.83.1 curl-7.83.1.tar.gz
-
-RUN curl -fsSL -o zlib-1.3.1.tar.gz https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz && \
-    tar zxf zlib-1.3.1.tar.gz && \
-    cd zlib-1.3.1 && \
-
-    AR=/usr/bin/x86_64-linux-gnu-ar \
-    AS=/usr/bin/x86_64-linux-gnu-as \
-    LD=/usr/bin/x86_64-linux-gnu-ld \
-    RANLIB=/usr/bin/x86_64-linux-gnu-ranlib \
-    CC=/usr/bin/x86_64-linux-gnu-gcc \
-    NM=/usr/bin/x86_64-linux-gnu-nm \
-    ./configure --static --shared --prefix=/opt/x86_64-zlib && \
-        make -j4 > /dev/null && \
-        make install > /dev/null && \
-        make clean > /dev/null && \
-
-    AR=/usr/bin/aarch64-linux-gnu-ar \
-    AS=/usr/bin/aarch64-linux-gnu-as \
-    LD=/usr/bin/aarch64-linux-gnu-ld \
-    RANLIB=/usr/bin/aarch64-linux-gnu-ranlib \
-    CC=/usr/bin/aarch64-linux-gnu-gcc \
-    NM=/usr/bin/aarch64-linux-gnu-nm \
-    ./configure --static --shared --prefix=/opt/aarch64-zlib && \
-        make -j4 > /dev/null && \
-        make install > /dev/null && \
-        make clean > /dev/null && \
-    cd - && \
-    rm -rf zlib-1.3.1 zlib-1.3.1.tar.gz
+# Build all shared SDK prerequisites before the cloud SDKs.
+COPY scripts/build-basic-libs.sh /tmp/build-basic-libs.sh
+RUN bash /tmp/build-basic-libs.sh amd64 arm64
 
 ADD aarch64-linux-gnu.cmake /opt/toolchains/aarch64-linux-gnu.cmake
 ADD x86_64-linux-gnu.cmake /opt/toolchains/x86_64-linux-gnu.cmake
@@ -182,46 +106,6 @@ ADD x86_64-linux-gnu.cmake /opt/toolchains/x86_64-linux-gnu.cmake
 # through the published image cache when later dependencies change.
 COPY scripts/build-aws-sdk.sh /tmp/build-aws-sdk.sh
 RUN bash /tmp/build-aws-sdk.sh
-
-RUN curl -fsSL -o libxml2-2.13.5.tar.xz https://download.gnome.org/sources/libxml2/2.13/libxml2-2.13.5.tar.xz && \
-    tar xf libxml2-2.13.5.tar.xz && \
-    cd libxml2-2.13.5 && \
-
-    AR=/usr/bin/x86_64-linux-gnu-ar \
-    AS=/usr/bin/x86_64-linux-gnu-as \
-    LD=/usr/bin/x86_64-linux-gnu-ld \
-    RANLIB=/usr/bin/x86_64-linux-gnu-ranlib \
-    CC=/usr/bin/x86_64-linux-gnu-gcc \
-    NM=/usr/bin/x86_64-linux-gnu-nm \
-    # -O2 is explicit because setting CFLAGS at all REPLACES autoconf's own default of "-g -O2".
-    # Passing only -fPIC therefore silently removed the optimisation. curl survives the same treatment
-    # a few blocks up only because its configure applies --enable-optimize itself; libxml2 does not.
-    CFLAGS="-fPIC -O2" \
-    ./configure --host=x86_64-linux-gnu \
-        --disable-shared --enable-static \
-        --without-python --without-lzma --without-zlib \
-        --prefix=/opt/x86_64-xml2 && \
-        make -j4 > /dev/null && \
-        make install > /dev/null && \
-        make distclean > /dev/null && \
-
-    AR=/usr/bin/aarch64-linux-gnu-ar \
-    AS=/usr/bin/aarch64-linux-gnu-as \
-    LD=/usr/bin/aarch64-linux-gnu-ld \
-    RANLIB=/usr/bin/aarch64-linux-gnu-ranlib \
-    CC=/usr/bin/aarch64-linux-gnu-gcc \
-    NM=/usr/bin/aarch64-linux-gnu-nm \
-    CFLAGS="-fPIC -O2" \
-    ./configure --host=aarch64-linux-gnu \
-        --disable-shared --enable-static \
-        --without-python --without-lzma --without-zlib \
-        --prefix=/opt/aarch64-xml2 && \
-        make -j4 > /dev/null && \
-        make install > /dev/null && \
-        make distclean > /dev/null && \
-
-    cd - && \
-    rm -rf libxml2-2.13.5 libxml2-2.13.5.tar.xz
 
 # Build Azure SDK for C++ (optimized with shared CMake options)
 SHELL ["/bin/bash", "-c"]
@@ -282,89 +166,6 @@ RUN NATIVE_ARCH=$(uname -m | sed 's/x86_64/x86_64/;s/aarch64/aarch64/') && \
         ln -sf /opt/${NATIVE_ARCH}-azure/lib/* /usr/local/lib/; \
     fi
 
-# Build liburing and libaio after the AWS and Azure SDKs.
-#
-# Docker invalidates every layer below the one that changed. These two are small, build in seconds,
-# and move faster than anything above them - liburing alone had eight releases while we sat on one
-# version. Placed higher, each bump would rebuild the AWS and Azure SDKs, which are the slowest steps
-# in this file and have no dependency on either library.
-#
-# liburing, for the io_uring engine. Static only: it is linked into libstreamer.so, which exports an
-# explicit allowlist via streamer.ldscript, so these symbols stay hidden.
-#   --use-libc    route syscalls through libc wrappers instead of raw syscall instructions, so
-#                 sanitizers and interposition can see them
-#   ENABLE_SHARED=0  liburing has no ./configure --disable-shared; the switch is a make variable
-#
-# CHECKSUMMED, like libaio below and like googletest in cpp/rules.bzl.
-#
-# An earlier version of this block skipped the check, reasoning that GitHub's generated /archive/
-# tarballs are rebuilt on demand and have changed bytes for an unchanged tag before. That reasoning
-# does not survive contact with what this repository already does: rules.bzl pins the sha256 of a
-# GitHub-generated archive for googletest and has been fine.
-#
-# The trade is the right way round. Without a pin, altered bytes are linked statically into
-# libstreamer.so and shipped, silently. With one, a regenerated archive fails the image build loudly -
-# and a loud failure that needs a one-line update beats an unverified dependency in a release
-# artifact.
-RUN curl -fsSL -o liburing-2.14.tar.gz https://github.com/axboe/liburing/archive/refs/tags/liburing-2.14.tar.gz && \
-    echo "5f80964108981c6ad979c735f0b4877d5f49914c2a062f8e88282f26bf61de0c  liburing-2.14.tar.gz" | sha256sum -c - && \
-    tar zxf liburing-2.14.tar.gz && \
-    cd liburing-liburing-2.14 && \
-
-    CC=/usr/bin/x86_64-linux-gnu-gcc \
-    ./configure --use-libc --prefix=/opt/x86_64-uring --libdir=/opt/x86_64-uring/lib && \
-        AR=/usr/bin/x86_64-linux-gnu-ar \
-        RANLIB=/usr/bin/x86_64-linux-gnu-ranlib \
-        CC=/usr/bin/x86_64-linux-gnu-gcc \
-        make -C src -j4 ENABLE_SHARED=0 CFLAGS="-fPIC -O2" > /dev/null && \
-        make install ENABLE_SHARED=0 > /dev/null && \
-        make clean > /dev/null && \
-
-    CC=/usr/bin/aarch64-linux-gnu-gcc \
-    ./configure --use-libc --prefix=/opt/aarch64-uring --libdir=/opt/aarch64-uring/lib && \
-        AR=/usr/bin/aarch64-linux-gnu-ar \
-        RANLIB=/usr/bin/aarch64-linux-gnu-ranlib \
-        CC=/usr/bin/aarch64-linux-gnu-gcc \
-        make -C src -j4 ENABLE_SHARED=0 CFLAGS="-fPIC -O2" > /dev/null && \
-        make install ENABLE_SHARED=0 > /dev/null && \
-        make clean > /dev/null && \
-
-    cd - && \
-    rm -rf liburing-liburing-2.14 liburing-2.14.tar.gz
-
-# libaio, for the fallback engine where io_uring is unavailable. Static only, same reasoning as
-# liburing. Its symbols carry .symver directives, which need no version nodes here because
-# streamer.ldscript ends "local: *" and localizes them.
-#   CFLAGS -I.       libaio has no ./configure, and its sources include <libaio.h> from src/
-#   copy, not make install   its install target also lays down libaio.so and its sonames; we want
-#                            only the archive
-#   the URL     Debian's orig tarball, byte-identical to the upstream release. releases.pagure.org
-#               (pagure.io was sunset in 2026) now returns 404.
-#   the sha256  so the host is not load-bearing. If this host disappears, point the URL at any
-#               mirror - a wrong tarball fails here instead of shipping.
-RUN curl -fsSL -o libaio-0.3.113.tar.gz https://deb.debian.org/debian/pool/main/liba/libaio/libaio_0.3.113.orig.tar.gz && \
-    echo "2c44d1c5fd0d43752287c9ae1eb9c023f04ef848ea8d4aafa46e9aedb678200b  libaio-0.3.113.tar.gz" | sha256sum -c - && \
-    tar zxf libaio-0.3.113.tar.gz && \
-    cd libaio-0.3.113 && \
-
-    AR=/usr/bin/x86_64-linux-gnu-ar \
-    RANLIB=/usr/bin/x86_64-linux-gnu-ranlib \
-    CC=/usr/bin/x86_64-linux-gnu-gcc \
-    make -C src CFLAGS="-fPIC -O2 -I." > /dev/null && \
-        mkdir -p /opt/x86_64-aio/lib /opt/x86_64-aio/include && \
-        cp src/libaio.a /opt/x86_64-aio/lib/ && \
-        cp src/libaio.h /opt/x86_64-aio/include/ && \
-        make -C src clean > /dev/null && \
-
-    AR=/usr/bin/aarch64-linux-gnu-ar \
-    RANLIB=/usr/bin/aarch64-linux-gnu-ranlib \
-    CC=/usr/bin/aarch64-linux-gnu-gcc \
-    make -C src CFLAGS="-fPIC -O2 -I." > /dev/null && \
-        mkdir -p /opt/aarch64-aio/lib /opt/aarch64-aio/include && \
-        cp src/libaio.a /opt/aarch64-aio/lib/ && \
-        cp src/libaio.h /opt/aarch64-aio/include/ && \
-        make -C src clean > /dev/null && \
-
-    cd - && \
-    rm -rf libaio-0.3.113 libaio-0.3.113.tar.gz
-
+# Keep I/O libraries last so their changes can reuse the cloud SDK build layers.
+COPY scripts/build-io-libs.sh /tmp/build-io-libs.sh
+RUN bash /tmp/build-io-libs.sh amd64 arm64
