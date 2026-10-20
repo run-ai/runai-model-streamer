@@ -65,35 +65,15 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     libxml2-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# weed (SeaweedFS), the S3-compatible object store used for local S3 tests. Checksummed like
-# liburing/libaio below.
-RUN WEED_ARCH=$([ "$(uname -m)" = "aarch64" ] && echo "arm64" || echo "amd64") \
-    && if [ "$WEED_ARCH" = "amd64" ]; then WEED_SHA256=31fb804858885f9e7f18b6d3b1da09e824baac3e6a55b5a62c3c4c77e6ed6d7d; \
-       else WEED_SHA256=ba5c9def9ff98f78becdf309a50a9f906922f6383a7c4c772d01ede3cc012e16; fi \
-    && curl -fsSL -o weed.tar.gz https://github.com/seaweedfs/seaweedfs/releases/download/4.47/linux_${WEED_ARCH}.tar.gz \
-    && echo "${WEED_SHA256}  weed.tar.gz" | sha256sum -c - \
-    && tar zxf weed.tar.gz \
-    && chmod +x weed \
-    && mv weed /usr/local/bin/weed \
-    && rm -f weed.tar.gz
+# Local storage services used by the integration tests.
+COPY scripts/install-test-services.sh /tmp/install-test-services.sh
+ARG TARGETARCH
+RUN bash /tmp/install-test-services.sh "$TARGETARCH"
 
 # CUDA headers only, for compile-time type checking of the driver API. No runtime and no
 # libraries: libcuda.so.1 is loaded with dlopen, so the build has no link-time CUDA dependency
 # and the image needs no driver.
 COPY --from=cuda-headers /usr/local/cuda/include/ /usr/local/cuda/include/
-
-RUN curl -fsSL -o fake-gcs-server_1.52.2.tar.gz https://github.com/fsouza/fake-gcs-server/releases/download/v1.52.2/fake-gcs-server_1.52.2_Linux_$([ "$(uname -m)" = "aarch64" ] && echo "arm64" || echo "amd64").tar.gz \
-    && mkdir -p fake-gcs-server \
-    && tar zxf fake-gcs-server_1.52.2.tar.gz -C fake-gcs-server \
-    && chmod +x fake-gcs-server/fake-gcs-server \
-    && mv fake-gcs-server/fake-gcs-server /usr/local/bin/fake-gcs-server \
-    && rm -rf fake-gcs-server
-
-# Install Node.js and Azurite
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs \
-    && npm install -g azurite \
-    && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL -o openssl-3.5.0.tar.gz https://www.openssl.org/source/openssl-3.5.0.tar.gz && \
     tar zxf openssl-3.5.0.tar.gz && \
