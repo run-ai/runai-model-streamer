@@ -112,11 +112,30 @@ Open an issue with a clear description, steps to reproduce, and relevant environ
 Help us keep the docs clear and useful by fixing typos, updating outdated information, or adding examples.
 
 ### Contributing Changes
+- Open or Find an Issue – Non-trivial pull requests should be associated with a GitHub issue. Search existing issues first; if none fits, open one before you start work. See [Linking Pull Requests to Issues](#linking-pull-requests-to-issues).
 - Fork and Clone – Begin by forking the repository and cloning it to your local machine.
 - Create a Branch – Use a descriptive branch name, such as `feature/add-cool-feature` or `bugfix/fix-issue123`.
 - Make Changes – Keep your commits small, focused, and well-documented. For build and test instructions, refer to the [Development section](README.md#development) of the README.
-- Submit a PR – Open a pull request and reference any relevant issues or discussions.
+- Submit a PR – For non-trivial changes, link the pull request to its issue (for example `Fixes #123` or `Relates to #123` in the description).
 - Coverage - Please look at the coverage change details and create unit tests, integration tests or end-to-end tests to cover new functionality or changes.
+
+### Linking Pull Requests to Issues
+
+We ask that non-trivial pull requests reference an issue. The issue is the single place where
+the problem, the scope, and the design discussion live. A non-trivial pull request without
+an issue is hard to track, especially when:
+
+- Changes are unified or split across several pull requests.
+- The scope of a change shifts during review.
+- Maintainers need to see why a change was made, or what else is related to it.
+
+Use `Fixes #<issue>` or `Closes #<issue>` when the pull request completes the
+issue, and `Relates to #<issue>` when it is only a part of it. If review changes
+the scope, update the issue, or open follow-up issues for the work that moves out.
+
+Trivial changes, such as typo fixes or small documentation updates, don't need
+an issue. Maintainers may ask for one if a change turns out to be larger than it
+first appeared.
 
 ### PR Title Guidelines
 
@@ -179,6 +198,7 @@ Each pull request should meet the following requirements:
 - Test coverage – Add or update tests for any affected code.
 - Documentation – Update relevant documentation to reflect your changes.
 - PR description – Clearly describe what changed and why.
+- Linked issue – For non-trivial changes, the description references the associated issue (`Fixes #123`).
 - DCO – Every commit has the contributor's `Signed-off-by` line.
 
 ## Pull Request CI Environment
