@@ -22,7 +22,8 @@ cmake -DCMAKE_TOOLCHAIN_FILE=/opt/toolchains/x86_64-linux-gnu.cmake \
       -Dcrypto_INCLUDE_DIR="/opt/x86_64-ssl/include" \
       -DCURL_LIBRARY="/opt/x86_64-curl/lib/libcurl.a" \
       -DCURL_INCLUDE_DIR="/opt/x86_64-curl/include" \
-      -DOPENSSL_CRYPTO_LIBRARY="/opt/x86_64-ssl/lib/libssl.a" \
+      -DOPENSSL_CRYPTO_LIBRARY="/opt/x86_64-ssl/lib/libcrypto.a" \
+      -DOPENSSL_SSL_LIBRARY="/opt/x86_64-ssl/lib/libssl.a" \
       -DOPENSSL_INCLUDE_DIR="/opt/x86_64-ssl/include"
 make -j4
 make install
@@ -45,7 +46,8 @@ cmake -DCMAKE_TOOLCHAIN_FILE=/opt/toolchains/aarch64-linux-gnu.cmake \
       -Dcrypto_INCLUDE_DIR="/opt/aarch64-ssl/include" \
       -DCURL_LIBRARY="/opt/aarch64-curl/lib/libcurl.a" \
       -DCURL_INCLUDE_DIR="/opt/aarch64-curl/include" \
-      -DOPENSSL_CRYPTO_LIBRARY="/opt/aarch64-ssl/lib/libssl.a" \
+      -DOPENSSL_CRYPTO_LIBRARY="/opt/aarch64-ssl/lib/libcrypto.a" \
+      -DOPENSSL_SSL_LIBRARY="/opt/aarch64-ssl/lib/libssl.a" \
       -DOPENSSL_INCLUDE_DIR="/opt/aarch64-ssl/include"
 make -j4
 make install
