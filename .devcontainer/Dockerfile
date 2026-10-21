@@ -1,8 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-FROM nvidia/cuda:12.8.0-devel-ubuntu20.04@sha256:cd0f8e1c41628ff2513e9f7c42dd9bd8740fe87fd6615b9c4a6f392995a589c0 AS cuda-headers
-
 FROM ubuntu:20.04
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
@@ -60,6 +58,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     cmake \
     git \
     curl \
+    xz-utils \
     libssl-dev \
     libcurl4-openssl-dev \
     libxml2-dev \
@@ -73,7 +72,9 @@ RUN bash /tmp/install-test-services.sh "$TARGETARCH"
 # CUDA headers only, for compile-time type checking of the driver API. No runtime and no
 # libraries: libcuda.so.1 is loaded with dlopen, so the build has no link-time CUDA dependency
 # and the image needs no driver.
-COPY --from=cuda-headers /usr/local/cuda/include/ /usr/local/cuda/include/
+COPY scripts/install-cuda-headers.sh /tmp/install-cuda-headers.sh
+ARG TARGETARCH
+RUN bash /tmp/install-cuda-headers.sh "$TARGETARCH"
 
 # Build all shared SDK prerequisites before the cloud SDKs.
 COPY scripts/build-basic-libs.sh /tmp/build-basic-libs.sh
@@ -85,66 +86,13 @@ ADD x86_64-linux-gnu.cmake /opt/toolchains/x86_64-linux-gnu.cmake
 # Keep AWS in the final image's layer chain so CI can reuse its build layer
 # through the published image cache when later dependencies change.
 COPY scripts/build-aws-sdk.sh /tmp/build-aws-sdk.sh
-RUN bash /tmp/build-aws-sdk.sh
+RUN bash /tmp/build-aws-sdk.sh amd64 arm64
 
 # Build Azure SDK for C++ (optimized with shared CMake options)
 SHELL ["/bin/bash", "-c"]
-RUN git clone --recurse-submodules https://github.com/Azure/azure-sdk-for-cpp /opt/azure-sdk-cpp && \
-    cd /opt/azure-sdk-cpp && \
-    git checkout azure-storage-blobs_12.15.0 && \
-    \
-    # Helper function to build Azure SDK components
-    build_azure_sdk_components() { \
-        local arch=$1 prefix=$2 source=$3 extra_opts=$4; \
-        # CMAKE_BUILD_TYPE is REQUIRED, not a nicety. With it unset cmake adds no optimisation flag at
-        # all and gcc falls back to its own default of -O0. Measured before this line: every function
-        # in libazure-core.a and libazure-storage-blobs.a opened with a frame-pointer prologue and
-        # spilled its arguments to the stack, which is what -O0 does and -O1 upwards does not.
-        #
-        # aws-sdk-cpp gets away with the same omission because it sets a default build type in its own
-        # CMakeLists. azure-sdk-for-cpp does not, so it has to be stated here.
-        local common_opts="-DCMAKE_TOOLCHAIN_FILE=/opt/toolchains/${arch}-linux-gnu.cmake \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-            -DCMAKE_INSTALL_PREFIX=${prefix} \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DBUILD_TESTING=OFF \
-            -DCURL_LIBRARY=${prefix%azure}curl/lib/libcurl.a \
-            -DCURL_INCLUDE_DIR=${prefix%azure}curl/include \
-            -DOPENSSL_ROOT_DIR=${prefix%azure}ssl \
-            -DOPENSSL_INCLUDE_DIR=${prefix%azure}ssl/include \
-            -DOPENSSL_CRYPTO_LIBRARY=${prefix%azure}ssl/lib/libcrypto.a \
-            -DOPENSSL_SSL_LIBRARY=${prefix%azure}ssl/lib/libssl.a \
-            -DLIBXML2_LIBRARY=${prefix%azure}xml2/lib/libxml2.a \
-            -DLIBXML2_INCLUDE_DIR=${prefix%azure}xml2/include/libxml2"; \
-        cmake -B build-${arch}-${source##*/} -S ${source} \
-            ${common_opts} \
-            -DCMAKE_PREFIX_PATH="${prefix%azure}ssl;${prefix%azure}curl;${prefix%azure}xml2${extra_opts:+;}${extra_opts}" \
-            ${@:5} && \
-        cmake --build build-${arch}-${source##*/} -j4 && \
-        cmake --install build-${arch}-${source##*/}; \
-    } && \
-    \
-    # x86_64 builds
-    build_azure_sdk_components x86_64 /opt/x86_64-azure sdk/core/azure-core "" -DBUILD_TRANSPORT_CURL=ON -DDISABLE_AZURE_CORE_OPENTELEMETRY=ON && \
-    build_azure_sdk_components x86_64 /opt/x86_64-azure sdk/storage/azure-storage-common /opt/x86_64-azure && \
-    build_azure_sdk_components x86_64 /opt/x86_64-azure sdk/storage/azure-storage-blobs /opt/x86_64-azure && \
-    build_azure_sdk_components x86_64 /opt/x86_64-azure sdk/identity/azure-identity /opt/x86_64-azure && \
-    \
-    # aarch64 builds
-    build_azure_sdk_components aarch64 /opt/aarch64-azure sdk/core/azure-core "" -DBUILD_TRANSPORT_CURL=ON -DDISABLE_AZURE_CORE_OPENTELEMETRY=ON && \
-    build_azure_sdk_components aarch64 /opt/aarch64-azure sdk/storage/azure-storage-common /opt/aarch64-azure && \
-    build_azure_sdk_components aarch64 /opt/aarch64-azure sdk/storage/azure-storage-blobs /opt/aarch64-azure && \
-    build_azure_sdk_components aarch64 /opt/aarch64-azure sdk/identity/azure-identity /opt/aarch64-azure && \
-    \
-    rm -rf /opt/azure-sdk-cpp
-
-# Create symlinks for native architecture Azure SDK
-RUN NATIVE_ARCH=$(uname -m | sed 's/x86_64/x86_64/;s/aarch64/aarch64/') && \
-    if [ -d /opt/${NATIVE_ARCH}-azure ]; then \
-        ln -sf /opt/${NATIVE_ARCH}-azure/include/azure /usr/local/include/azure && \
-        ln -sf /opt/${NATIVE_ARCH}-azure/lib/* /usr/local/lib/; \
-    fi
+COPY scripts/build-azure-sdk.sh /tmp/build-azure-sdk.sh
+ARG TARGETARCH
+RUN bash /tmp/build-azure-sdk.sh --native-arch "$TARGETARCH" amd64 arm64
 
 # Keep I/O libraries last so their changes can reuse the cloud SDK build layers.
 COPY scripts/build-io-libs.sh /tmp/build-io-libs.sh
