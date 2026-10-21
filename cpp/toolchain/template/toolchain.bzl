@@ -6,7 +6,7 @@
 load("@rules_cc//cc:cc_toolchain_config_lib.bzl", "tool_path")  # buildifier: disable=deprecated-function
 load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load("@rules_cc//cc/toolchains:cc_toolchain.bzl", "cc_toolchain")
-load(":rules.bzl", "get_target_triplet", "runai_crosstool_tools")
+load(":rules.bzl", "get_target_triplet", "native_tools")
 load("@bazel_tools//tools/build_defs/cc:action_names.bzl", "ACTION_NAMES")
 load(
     "@bazel_tools//tools/cpp:cc_toolchain_config_lib.bzl",
@@ -23,18 +23,6 @@ def _builtin_include_directories(target_triplet, gcc_version):
         "/usr/lib/gcc/%s/%s/include" % (target_triplet, gcc_version),
         "/usr/local/include",
         "/usr/lib/gcc/%s/%s/include-fixed" % (target_triplet, gcc_version),
-    ]
-
-
-def _cross_include_directories(target_triplet, gcc_version):
-    return [
-        "/usr/lib/gcc-cross/%s/%s/include" % (target_triplet, gcc_version),
-        "/usr/%s/include" % target_triplet,
-    ]
-
-
-def _get_include_directories(target_triplet, gcc_version, use_cross):
-    return (_cross_include_directories(target_triplet, gcc_version) if use_cross else _builtin_include_directories(target_triplet, gcc_version)) + [
         "/usr/include/%s" % target_triplet,
         "/usr/include",
     ]
@@ -143,7 +131,7 @@ features = [
 
 def _impl(ctx):
     target_triplet = get_target_triplet(ctx.attr.os, ctx.attr.arch)
-    tool_paths = [tool_path(name = k, path = v) for k, v in runai_crosstool_tools(target_triplet).items()]
+    tool_paths = [tool_path(name = k, path = v) for k, v in native_tools().items()]
 
     # Documented at
     # https://docs.bazel.build/versions/main/skylark/lib/cc_common.html#create_cc_toolchain_config_info.
@@ -161,7 +149,7 @@ def _impl(ctx):
         abi_version = "unknown",
         abi_libc_version = "unknown",
         tool_paths = tool_paths,
-        cxx_builtin_include_directories = _get_include_directories(target_triplet, ctx.attr.gcc_version, ctx.attr.use_cross),
+        cxx_builtin_include_directories = _builtin_include_directories(target_triplet, ctx.attr.gcc_version),
         features = features
     )
 
@@ -183,28 +171,22 @@ _toolchain_config = rule(
             mandatory = True,
             doc = "GCC major version to use (eg: 9)",
         ),
-        "use_cross": attr.bool(
-            mandatory = False,
-            default = False,
-            doc = "Uses crosstool include paths if True",
-        ),
     },
     provides = [CcToolchainConfigInfo],
 )
 
 
-def define_toolchain(name, os, host_arch, arch, gcc_version):
+def define_toolchain(name, os, arch, gcc_version):
     """"define_toolchain creates rules for a cc_toolchain.
 
     This expects toolchain tools to exist at a canonical path.
-     * Tools are expected to in /usr/bin/<target_triplet>-<tool-name>
+     * Tools are expected to in /usr/bin/<tool-name>
      * Include paths are expected to be at canonical locations
 
     Args:
       name: The name of the toolchain
       os: The operating system target for this toolchain
-      host_arch: The host architecture for this toolchain
-      arch: The target architecture for this toochain
+      arch: The native architecture for this toolchain
       gcc_version: The GCC version of this toolchain
     """
 
@@ -217,7 +199,7 @@ def define_toolchain(name, os, host_arch, arch, gcc_version):
     )
 
     toolchain_config_name = "%s_toolchain_config" % name
-    _toolchain_config(name = toolchain_config_name, os = os, arch = arch, gcc_version = gcc_version, use_cross = host_arch != arch)
+    _toolchain_config(name = toolchain_config_name, os = os, arch = arch, gcc_version = gcc_version)
 
     empty_target_name = "%s_empty" % name
     empty_target_label = ":%s" % empty_target_name
@@ -240,7 +222,7 @@ def define_toolchain(name, os, host_arch, arch, gcc_version):
         name = "%s_linux_toolchain" % name,
         exec_compatible_with = [
             "@platforms//os:linux",
-            "@platforms//cpu:%s" % host_arch,
+            "@platforms//cpu:%s" % arch,
         ],
         target_compatible_with = [
             "@platforms//os:linux",

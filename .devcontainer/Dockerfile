@@ -19,14 +19,10 @@ RUN python3 -m pip install --upgrade "pip==25.0.1" \
     && python3 -m pip install "setuptools==75.3.4" "wheel==0.45.1"
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    gcc-x86-64-linux-gnu g++-x86-64-linux-gnu binutils-x86-64-linux-gnu \
-    gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu \
-    && rm -rf /var/lib/apt/lists/* \
-    && ln -sf /usr/bin/aarch64-linux-gnu-ld.gold /usr/bin/ld.gold
+    build-essential binutils \
+    && rm -rf /var/lib/apt/lists/*
 
 ARG TARGETARCH
-# Preserve the dual-architecture image by default; native candidates pass one architecture.
-ARG DEPENDENCY_ARCHES="amd64 arm64"
 
 # ThreadSanitizer (`bazel test --config=tsan`).
 #
@@ -34,25 +30,22 @@ ARG DEPENDENCY_ARCHES="amd64 arm64"
 # link. This is that file, which is all of GCC's own libsanitizer/tsan/tsan_preinit.c: it registers
 # __tsan_init in .preinit_array so the runtime starts before any constructor runs.
 #
-# Built with the CROSS compiler that will consume it, so the object matches its target whatever the
-# host architecture is. x86_64 only - there is no libtsan for the aarch64 cross toolchain.
-#
 # The `test -f libtsan.so` is not a formality: -print-file-name echoes its argument back when the
 # file is not there, so without it the object would land in the build directory and --config=tsan
 # would keep failing with the same confusing error. The second test never shadows a real
-# libtsan_preinit.o, in case a later base image ships one. The ARM64-only candidate does not
-# consume this x86_64 object; retain it for the legacy and AMD64 images.
-RUN if [ "$DEPENDENCY_ARCHES" != arm64 ]; then \
+# libtsan_preinit.o, in case a later base image ships one. Retain the AMD64 workaround
+# in the native AMD64 image.
+RUN if [ "$TARGETARCH" = amd64 ]; then \
     printf '%s\n' \
         'extern void __tsan_init(void);' \
         'static void __local_tsan_preinit(void) { __tsan_init(); }' \
         '__attribute__((section(".preinit_array"), used))' \
         'static void (*tsan_preinit)(void) = __local_tsan_preinit;' \
         > /tmp/tsan_preinit.c \
-    && TSAN_DIR="$(dirname "$(x86_64-linux-gnu-gcc -print-file-name=libtsan.so)")" \
+    && TSAN_DIR="$(dirname "$(gcc -print-file-name=libtsan.so)")" \
     && test -f "$TSAN_DIR/libtsan.so" \
     && { test -f "$TSAN_DIR/libtsan_preinit.o" \
-         || x86_64-linux-gnu-gcc -c -fPIC /tmp/tsan_preinit.c -o "$TSAN_DIR/libtsan_preinit.o"; } \
+         || gcc -c -fPIC /tmp/tsan_preinit.c -o "$TSAN_DIR/libtsan_preinit.o"; } \
     && rm /tmp/tsan_preinit.c; \
     fi
 
@@ -82,22 +75,18 @@ COPY .devcontainer/scripts/install-cuda-headers.sh /tmp/install-cuda-headers.sh
 RUN bash /tmp/install-cuda-headers.sh "$TARGETARCH"
 
 # Build all shared SDK prerequisites before the cloud SDKs.
-# DEPENDENCY_ARCHES is deliberately split into the scripts' architecture arguments.
 COPY .devcontainer/scripts/build-basic-libs.sh /tmp/build-basic-libs.sh
-RUN bash /tmp/build-basic-libs.sh $DEPENDENCY_ARCHES
-
-COPY .devcontainer/aarch64-linux-gnu.cmake /opt/toolchains/aarch64-linux-gnu.cmake
-COPY .devcontainer/x86_64-linux-gnu.cmake /opt/toolchains/x86_64-linux-gnu.cmake
+RUN bash /tmp/build-basic-libs.sh "$TARGETARCH"
 
 # Keep AWS in the final image's layer chain so CI can reuse its build layer
 # through the published image cache when later dependencies change.
 COPY .devcontainer/scripts/build-aws-sdk.sh /tmp/build-aws-sdk.sh
-RUN bash /tmp/build-aws-sdk.sh $DEPENDENCY_ARCHES
+RUN bash /tmp/build-aws-sdk.sh "$TARGETARCH"
 
 # Build Azure SDK for C++ (optimized with shared CMake options)
 SHELL ["/bin/bash", "-c"]
 COPY .devcontainer/scripts/build-azure-sdk.sh /tmp/build-azure-sdk.sh
-RUN bash /tmp/build-azure-sdk.sh --native-arch "$TARGETARCH" $DEPENDENCY_ARCHES
+RUN bash /tmp/build-azure-sdk.sh "$TARGETARCH"
 
 # Compile the pinned Google SDK once per image architecture. Only the installed
 # archives and headers enter the final image, not sources or the Bazel cache.
@@ -121,11 +110,11 @@ COPY .devcontainer/gcs/WORKSPACE .devcontainer/gcs/BUILD.bazel \
 # Cache the SDK as a Docker layer. Bazel caches contain host-specific repository
 # configuration and must not be shared between native image builds.
 RUN python3 -B -m unittest discover -s /build/gcs -p test_install.py && \
-    bash /build/gcs/build.sh $DEPENDENCY_ARCHES
+    bash /build/gcs/build.sh "$TARGETARCH"
 
 FROM base AS devcontainer
 COPY --from=gcs-builder /opt/gcs-sdk /opt/gcs-sdk
 
 # Keep I/O libraries last so their changes can reuse the cloud SDK build layers.
 COPY .devcontainer/scripts/build-io-libs.sh /tmp/build-io-libs.sh
-RUN bash /tmp/build-io-libs.sh $DEPENDENCY_ARCHES
+RUN bash /tmp/build-io-libs.sh "$TARGETARCH"

@@ -4,22 +4,19 @@
 
 set -euo pipefail
 
-# Build the complete library group for each requested Docker architecture.
-if (( $# == 0 )); then
-    echo "Usage: $0 <amd64|arm64> [amd64|arm64 ...]" >&2
+# Build for the image architecture supplied by Docker's TARGETARCH.
+if (( $# != 1 )); then
+    echo "Usage: $0 <amd64|arm64>" >&2
     exit 2
 fi
-build_arches=()
-for target_arch in "$@"; do
-    case "$target_arch" in
-        amd64) build_arches+=(x86_64) ;;
-        arm64) build_arches+=(aarch64) ;;
-        *)
-            echo "Unsupported library architecture: $target_arch" >&2
-            exit 2
-            ;;
-    esac
-done
+case "$1" in
+    amd64) arch=x86_64 ;;
+    arm64) arch=aarch64 ;;
+    *)
+        echo "Unsupported architecture: $1" >&2
+        exit 2
+        ;;
+esac
 
 # liburing, for the io_uring engine. Static only: it is linked into libstreamer.so, which exports an
 # explicit allowlist via streamer.ldscript, so these symbols stay hidden.
@@ -39,37 +36,15 @@ done
 # and a loud failure that needs a one-line update beats an unverified dependency in a release
 # artifact.
 build_liburing() {
-    local arch
-
     curl -fsSL -o liburing-2.14.tar.gz https://github.com/axboe/liburing/archive/refs/tags/liburing-2.14.tar.gz
     echo "5f80964108981c6ad979c735f0b4877d5f49914c2a062f8e88282f26bf61de0c  liburing-2.14.tar.gz" | sha256sum -c -
     tar zxf liburing-2.14.tar.gz
     cd liburing-liburing-2.14
 
-    for arch in "${build_arches[@]}"; do
-        case "$arch" in
-            x86_64)
-                CC=/usr/bin/x86_64-linux-gnu-gcc \
-                ./configure --use-libc --prefix=/opt/x86_64-uring --libdir=/opt/x86_64-uring/lib
-                AR=/usr/bin/x86_64-linux-gnu-ar \
-                RANLIB=/usr/bin/x86_64-linux-gnu-ranlib \
-                CC=/usr/bin/x86_64-linux-gnu-gcc \
-                make -C src -j4 ENABLE_SHARED=0 CFLAGS="-fPIC -O2" > /dev/null
-                make install ENABLE_SHARED=0 > /dev/null
-                make clean > /dev/null
-                ;;
-            aarch64)
-                CC=/usr/bin/aarch64-linux-gnu-gcc \
-                ./configure --use-libc --prefix=/opt/aarch64-uring --libdir=/opt/aarch64-uring/lib
-                AR=/usr/bin/aarch64-linux-gnu-ar \
-                RANLIB=/usr/bin/aarch64-linux-gnu-ranlib \
-                CC=/usr/bin/aarch64-linux-gnu-gcc \
-                make -C src -j4 ENABLE_SHARED=0 CFLAGS="-fPIC -O2" > /dev/null
-                make install ENABLE_SHARED=0 > /dev/null
-                make clean > /dev/null
-                ;;
-        esac
-    done
+    ./configure --use-libc --prefix=/opt/${arch}-uring --libdir=/opt/${arch}-uring/lib
+    make -C src -j4 ENABLE_SHARED=0 CFLAGS="-fPIC -O2" > /dev/null
+    make install ENABLE_SHARED=0 > /dev/null
+    make clean > /dev/null
 
     cd -
     rm -rf liburing-liburing-2.14 liburing-2.14.tar.gz
@@ -86,37 +61,16 @@ build_liburing() {
 #   the sha256  so the host is not load-bearing. If this host disappears, point the URL at any
 #               mirror - a wrong tarball fails here instead of shipping.
 build_libaio() {
-    local arch
-
     curl -fsSL -o libaio-0.3.113.tar.gz https://deb.debian.org/debian/pool/main/liba/libaio/libaio_0.3.113.orig.tar.gz
     echo "2c44d1c5fd0d43752287c9ae1eb9c023f04ef848ea8d4aafa46e9aedb678200b  libaio-0.3.113.tar.gz" | sha256sum -c -
     tar zxf libaio-0.3.113.tar.gz
     cd libaio-0.3.113
 
-    for arch in "${build_arches[@]}"; do
-        case "$arch" in
-            x86_64)
-                AR=/usr/bin/x86_64-linux-gnu-ar \
-                RANLIB=/usr/bin/x86_64-linux-gnu-ranlib \
-                CC=/usr/bin/x86_64-linux-gnu-gcc \
-                make -C src CFLAGS="-fPIC -O2 -I." > /dev/null
-                mkdir -p /opt/x86_64-aio/lib /opt/x86_64-aio/include
-                cp src/libaio.a /opt/x86_64-aio/lib/
-                cp src/libaio.h /opt/x86_64-aio/include/
-                make -C src clean > /dev/null
-                ;;
-            aarch64)
-                AR=/usr/bin/aarch64-linux-gnu-ar \
-                RANLIB=/usr/bin/aarch64-linux-gnu-ranlib \
-                CC=/usr/bin/aarch64-linux-gnu-gcc \
-                make -C src CFLAGS="-fPIC -O2 -I." > /dev/null
-                mkdir -p /opt/aarch64-aio/lib /opt/aarch64-aio/include
-                cp src/libaio.a /opt/aarch64-aio/lib/
-                cp src/libaio.h /opt/aarch64-aio/include/
-                make -C src clean > /dev/null
-                ;;
-        esac
-    done
+    make -C src CFLAGS="-fPIC -O2 -I." > /dev/null
+    mkdir -p /opt/${arch}-aio/lib /opt/${arch}-aio/include
+    cp src/libaio.a /opt/${arch}-aio/lib/
+    cp src/libaio.h /opt/${arch}-aio/include/
+    make -C src clean > /dev/null
 
     cd -
     rm -rf libaio-0.3.113 libaio-0.3.113.tar.gz

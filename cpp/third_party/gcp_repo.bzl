@@ -49,7 +49,7 @@ def _prebuilt_gcp_impl(ctx):
             path = source.get_child(name)
             if not path.exists or ctx.read(path) != content:
                 fail("Prebuilt GCS SDK build input %s changed. Rebuild the devcontainer." % name)
-        compiler = arch + "-linux-gnu-g++"
+        compiler = "/usr/bin/g++"
         result = ctx.execute([compiler, "--version"])
         if result.return_code or result.stdout != metadata.get("compiler_version") or metadata.get("compiler") != compiler:
             fail("Prebuilt GCS SDK compiler for %s changed. Rebuild the devcontainer." % arch)

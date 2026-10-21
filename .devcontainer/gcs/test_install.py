@@ -84,11 +84,11 @@ class InstallTest(unittest.TestCase):
             # Application edits must not become part of the SDK identity.
             (root / "application.cc").write_text("application code")
             with patch("install.subprocess.check_output", return_value="GCC version\n") as run:
-                metadata = build_metadata(root, "aarch64-linux-gnu-g++")
+                metadata = build_metadata(root, "/usr/bin/g++")
             self.assertEqual(metadata["build_inputs"], contents)
-            self.assertEqual(metadata["compiler"], "aarch64-linux-gnu-g++")
+            self.assertEqual(metadata["compiler"], "/usr/bin/g++")
             self.assertEqual(metadata["compiler_version"], "GCC version\n")
-            run.assert_called_once_with(["aarch64-linux-gnu-g++", "--version"], text=True)
+            run.assert_called_once_with(["/usr/bin/g++", "--version"], text=True)
 
     def test_missing_archive_fails_installation(self):
         with tempfile.TemporaryDirectory() as directory:

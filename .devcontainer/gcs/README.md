@@ -5,9 +5,10 @@ including their transitive dependencies, and installs static archives and header
 under `/opt/gcs-sdk/<architecture>`. Normal builds compile our GCS adapter and
 tests against that installation. REST and gRPC remain enabled.
 
-`DEPENDENCY_ARCHES` controls the installed SDKs: native CI images use `amd64` or
-`arm64`; the local default remains `amd64 arm64`. The Bazel repository exposes
-only installed architectures and reports an unsupported target clearly.
+Docker's `TARGETARCH` selects the installed SDK (`amd64` or `arm64`). Both CI
+and local images build only their native architecture using the native toolchain.
+The Bazel repository exposes only installed architectures and reports an
+unsupported target clearly.
 
 The SDK uses the application's Bazel version, toolchains, compiler settings and
 pinned source definitions. `export.bzl` preserves the transitive `CcInfo` headers,

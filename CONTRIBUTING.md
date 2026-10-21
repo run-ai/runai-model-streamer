@@ -204,8 +204,8 @@ Each pull request should meet the following requirements:
 ## Pull Request CI Environment
 
 The devcontainer prebuilds the Google Cloud C++ SDK, including REST/gRPC and their
-transitive dependencies, alongside AWS and Azure. Native images install only
-their matching SDK architecture; the local dual-architecture default is retained.
+transitive dependencies, alongside AWS and Azure. CI and local images install only
+their native SDK architecture.
 Ordinary PRs compile our GCS implementation against these installed libraries.
 SDK versions, Bazel configuration and toolchain changes trigger image preparation
 and publication just like changes under `.devcontainer/`. Rebuild local images
@@ -217,8 +217,8 @@ changed. If they did, two preparation jobs build
 AMD64 and ARM64 images in parallel using the reusable `devcontainer.yml` workflow.
 Each builds only its matching architecture's dependencies, on `ubuntu-24.04` or
 `ubuntu-24.04-arm`, using the matching published architecture tag as a cache.
-Missing caches allow a clean build. Both compiler toolchains remain installed;
-removing cross-compilation configuration is a separate change.
+Missing caches allow a clean build. Each image installs only its native GCC/G++
+and binutils; dependencies use native compilation without CMake cross toolchains.
 
 With `publish: false`, each preparation job exports its image as a one-day Actions
 artifact named `ci-devcontainer-<run>-<attempt>-<amd64|arm64>`. Image tags also include
@@ -250,11 +250,13 @@ references those same two images; it does not require another image build. If ei
 unchanged, even if the other architecture-specific tag was already updated.
 
 The native build workflow `devcontainer.yml` requires an `architecture` input
-(`amd64` or `arm64`). It
-sets `DEVCONTAINER_DEPENDENCY_ARCHES`, passed through the devcontainer configuration
-as the `DEPENDENCY_ARCHES` build argument. Local source builds still default to
-both dependency architectures; toolchain and local-build cleanup remain separate.
-Published images contain dependencies for their own architecture only.
+(`amd64` or `arm64`) to select the native runner and image tag. Docker's
+`TARGETARCH` selects the libraries and services installed in both CI and local
+source builds. Bazel registers only
+the native toolchain, and `make build` (including `make install` and `make test`)
+builds only the current architecture. Build the other architecture on its native
+runner. Dependency versions, installation prefixes, and release artifact names
+are unchanged.
 
 ### Parallel PR checks
 
