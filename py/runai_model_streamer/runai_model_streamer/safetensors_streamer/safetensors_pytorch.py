@@ -167,8 +167,7 @@ class SafetensorsMetadata:
 
     @staticmethod
     def from_files(fs: DistributedStreamer, filenames: List[str], s3_credentials: Optional[S3Credentials], discover_ranks: bool = True) -> List[SafetensorsMetadata]:
-        # The metadata is never streamed distributed, but discover_ranks follows the load: the first read fixes the queue depth
-        # of the CPP layer by RUNAI_STREAMER_PROCESS_GROUP_SIZE, so a distributed load discovers the local ranks here
+        # a distributed load discovers in its first read, because that read fixes the queue depth of the CPP layer
         # 1. Read the first 8 bytes (The Header Size)
         fs.stream_files([FileChunks.contiguous(i, filenames[i], 0, [SAFETENSORS_HEADER_BUFFER_SIZE]) for i in range(len(filenames))], s3_credentials, "cpu", False, discover_ranks=discover_ranks)
         

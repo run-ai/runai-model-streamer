@@ -307,8 +307,7 @@ class SafetensorsStreamer:
         # metadata reads (the first submissions), so the measurement spans first submission -> last response.
         self.start_time = timer()
 
-        # metadata is created on cpu and each process reads it individually. Only a distributed load, which all the ranks
-        # join, discovers the local ranks: a non distributed load may run on a single rank
+        # metadata is created on cpu and each process reads it individually
         safetensors_metadatas = safetensors_pytorch.prepare_request(
             self.file_streamer, paths, s3_credentials, discover_ranks=is_distributed
         )

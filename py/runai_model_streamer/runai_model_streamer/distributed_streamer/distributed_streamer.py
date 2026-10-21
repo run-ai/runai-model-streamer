@@ -312,9 +312,7 @@ class _distributedStreamerParams:
             os.environ["RUNAI_STREAMER_PROCESS_GROUP_SIZE"] = str(self.num_processes_on_node)
 
     def set_rank_without_discovery(self) -> None:
-        # find_local_ranks() is a collective over all the ranks of the process group, which a rank reading without its peers
-        # skips. RUNAI_STREAMER_PROCESS_GROUP_SIZE is not guessed then, so the CPP layer defaults to 1: a count larger than
-        # the processes reading on the node lowers their throughput, more than a smaller one does
+        # RUNAI_STREAMER_PROCESS_GROUP_SIZE is not guessed, so the CPP layer defaults to 1: a count larger than the readers lowers their throughput
         if self.num_processes_on_node is None and dist.is_initialized():
             self.my_global_rank = dist.get_rank()
 
