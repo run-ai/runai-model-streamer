@@ -242,9 +242,10 @@ It sets `DEVCONTAINER_DEPENDENCY_ARCHES`, which the devcontainer configuration
 passes as the `DEPENDENCY_ARCHES` Docker build argument. Local builds default to
 `amd64 arm64` when that environment variable is unset.
 
-Candidate PR tags and artifact names append `-amd64` or `-arm64` to the existing
-run/attempt names, with the same one-day artifact retention. No application job
-consumes these artifacts yet. Application builds wait only for the existing
+Candidate PR image tags append `-amd64` or `-arm64` to the existing run/attempt
+names. Candidates skip image export and artifact upload because no application
+job consumes them yet. Only the existing image is uploaded for downstream jobs,
+with one-day artifact retention. Application builds wait only for the existing
 image; the final **Test, Build & Push** check additionally requires both candidate
 jobs to succeed when image-related files changed, and accepts their skips otherwise.
 
