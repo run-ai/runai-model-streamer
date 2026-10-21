@@ -178,8 +178,9 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     // zero-size batch has no chunks so is never opened - and the descriptor is closed when the last
     // chunk of its batch is accounted. Holding it until the workload ends would cost one descriptor
     // per batch, and a workload of many small files runs out of them (EMFILE) while only a window's
-    // worth is ever being read. finalize() still closes whatever is left, for a workload that ends
-    // before its chunks do.
+    // worth of reads is ever in use - plus, for a device workload, the chunks whose copy has not yet
+    // landed, which leave the window when the read does but are accounted only when the copy lands.
+    // finalize() still closes whatever is left, for a workload that ends before its chunks do.
     //
     // `error` remembers a failed open so the next chunk of the same batch fails immediately instead of
     // retrying the open, and logging, once per chunk.

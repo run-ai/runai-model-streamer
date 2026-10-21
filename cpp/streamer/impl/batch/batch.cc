@@ -65,15 +65,15 @@ void Batch::execute(std::atomic<bool> & stopped, const DeviceStaging * staging)
         // A local, not a member: batches stay alive until their workload is destroyed, so a reader
         // kept in the batch would hold its descriptor for the whole submission. Here it closes on
         // every way out of this scope, and a file per batch no longer adds up to EMFILE.
-        auto reader = std::make_unique<File>(path, *config);
+        File reader(path, *config);
 
         if (device.is_host())
         {
-            read(*reader, *config, stopped);
+            read(reader, *config, stopped);
         }
         else if (staging != nullptr && staging->valid())
         {
-            read_to_device(*reader, *staging, stopped);
+            read_to_device(reader, *staging, stopped);
         }
         else
         {

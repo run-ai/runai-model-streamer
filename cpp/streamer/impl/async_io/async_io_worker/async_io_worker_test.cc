@@ -1098,7 +1098,7 @@ TEST(AsyncIoWorker, Stop_Waits_For_Reads_In_Flight)
 }
 
 // One descriptor per batch however many chunks it has, released with the batch's last chunk.
-TEST(AsyncIoWorker, Fd_Opened_Once_And_Closed_At_Finalize)
+TEST(AsyncIoWorker, Fd_Opened_Once_And_Closed_With_The_Last_Chunk)
 {
     Fixture fixture({ ChunkSize, ChunkSize, ChunkSize });   // three chunks, one file
     Driver driver;
@@ -1200,10 +1200,12 @@ TEST(AsyncIoWorker, Fd_Is_Closed_When_Its_Batch_Is_Done)
     }
 }
 
-// A batch whose open failed has no descriptor to close, but its chunks are still accounted. The count
-// must come down for each of them, or the assertion that guards it fires - and the first chunk records
-// the failure so the second never retries the open.
-TEST(AsyncIoWorker, Failed_Open_Accounts_Every_Chunk_Without_A_Descriptor)
+// A batch whose open failed has no descriptor to close, but its chunks are still accounted. This checks
+// that the worker recovers: every chunk is answered with the failure and the next workload is served.
+// It does not show that the batch's count reaches zero - only the assertion on going below zero guards
+// that, and the count is not observable from here. The first chunk records the failure so the second
+// never retries the open.
+TEST(AsyncIoWorker, Failed_Open_Is_Answered_And_The_Worker_Recovers)
 {
     Fixture fixture({ ChunkSize, ChunkSize });   // two chunks, one batch
     Driver driver;

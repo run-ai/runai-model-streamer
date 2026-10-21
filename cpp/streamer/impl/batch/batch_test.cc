@@ -675,22 +675,56 @@ TEST(Batch, Handle_Error_After_Completion_Is_Silent)
     EXPECT_EQ(responder->valid(), common::ResponseCode::Success);
 }
 
+namespace
+{
+
+// Lowers the soft open files limit for as long as it lives, then puts it back. Check lowered() before
+// relying on it: the limit cannot be raised above the hard one, so a low hard limit leaves it alone.
+class LowerFdLimit
+{
+ public:
+    explicit LowerFdLimit(rlim_t limit)
+    {
+        if (::getrlimit(RLIMIT_NOFILE, &_saved) != 0 || _saved.rlim_max <= limit)
+        {
+            return;
+        }
+
+        struct rlimit lowered = _saved;
+        lowered.rlim_cur = limit;
+        _lowered = (::setrlimit(RLIMIT_NOFILE, &lowered) == 0);
+    }
+
+    ~LowerFdLimit()
+    {
+        if (_lowered)
+        {
+            ::setrlimit(RLIMIT_NOFILE, &_saved);
+        }
+    }
+
+    LowerFdLimit(const LowerFdLimit &) = delete;
+    LowerFdLimit & operator=(const LowerFdLimit &) = delete;
+
+    bool lowered() const { return _lowered; }
+
+ private:
+    struct rlimit _saved = {};
+    bool _lowered = false;
+};
+
+}   // namespace
+
 // Batches outlive their execution: a workload keeps all of them until it is destroyed. A batch that kept its
 // file open would hold one descriptor per batch for the whole submission, and a model of many small files
 // would hit the open files limit part way through - the load failed with FileAccessError (#261).
 TEST(Batch, Execute_Does_Not_Hold_The_File_Open)
 {
     constexpr unsigned num_batches = 300;
-    constexpr rlim_t limit = 128;   // well below num_batches, above what the test process itself holds
 
-    struct rlimit saved;
-    ASSERT_EQ(::getrlimit(RLIMIT_NOFILE, &saved), 0);
-    ASSERT_GT(saved.rlim_max, limit);
-
-    struct rlimit lowered = saved;
-    lowered.rlim_cur = limit;
-    ASSERT_EQ(::setrlimit(RLIMIT_NOFILE, &lowered), 0);
-    utils::ScopeGuard restore([&]() { ::setrlimit(RLIMIT_NOFILE, &saved); });
+    // well below num_batches, above what the test process itself holds
+    LowerFdLimit limit(128);
+    ASSERT_TRUE(limit.lowered());
 
     const size_t size = 64;
     const auto data = utils::random::buffer(size);
@@ -738,12 +772,7 @@ TEST(Batch, Execute_Does_Not_Hold_The_File_Open)
 TEST(Batch, Execute_Does_Not_Hold_The_File_Open_For_A_Device)
 {
     constexpr unsigned num_batches = 300;
-    constexpr rlim_t limit = 128;   // well below num_batches, above what the test process itself holds
     constexpr size_t Block = 4096;
-
-    struct rlimit saved;
-    ASSERT_EQ(::getrlimit(RLIMIT_NOFILE, &saved), 0);
-    ASSERT_GT(saved.rlim_max, limit);
 
     // The mock backend and the pool are built first: the limit is lowered only around the reads, so
     // nothing here competes with them for descriptors.
@@ -786,11 +815,9 @@ TEST(Batch, Execute_Does_Not_Hold_The_File_Open_For_A_Device)
                              Block, common::Device::cuda(0));
     }
 
-    ASSERT_EQ(::getrlimit(RLIMIT_NOFILE, &saved), 0);
-    struct rlimit lowered = saved;
-    lowered.rlim_cur = limit;
-    ASSERT_EQ(::setrlimit(RLIMIT_NOFILE, &lowered), 0);
-    utils::ScopeGuard restore([&]() { ::setrlimit(RLIMIT_NOFILE, &saved); });
+    // well below num_batches, above what the test process itself holds
+    LowerFdLimit limit(128);
+    ASSERT_TRUE(limit.lowered());
 
     // all batches stay alive across the loop, as they do in a workload
     std::atomic<bool> stopped(false);
