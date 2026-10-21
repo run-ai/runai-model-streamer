@@ -314,7 +314,11 @@ def create_torch_tensor(
     buffer: Any, tensor_metadata: SafetensorMetadata
 ) -> torch.Tensor:
     if tensor_metadata.get_item_count() == 0:
-        return torch.empty(tensor_metadata.shape, dtype=tensor_metadata.get_torch_dtype())
+        # No data to view, but the buffer is on the requested device. Allocate there too, so an empty
+        # tensor is yielded where every other tensor of the load is.
+        return torch.empty(
+            tensor_metadata.shape, dtype=tensor_metadata.get_torch_dtype(), device=buffer.device
+        )
 
     tensor = buffer.view(tensor_metadata.get_torch_dtype())
     

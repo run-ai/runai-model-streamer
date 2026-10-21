@@ -22,6 +22,9 @@ on:
       artifact:
         description: Image artifact name for PR builds; empty for published builds.
         value: ${{ jobs.build.outputs.artifact }}
+      published_image:
+        description: Immutable image reference after publication, for manifest assembly.
+        value: ${{ jobs.build.outputs.published_image }}
 
 jobs:
   build:
@@ -30,6 +33,7 @@ jobs:
     outputs:
       image: ${{ steps.image.outputs.image }}
       artifact: ${{ steps.image.outputs.artifact }}
+      published_image: ${{ steps.publish.outputs.image }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v5
@@ -88,12 +92,30 @@ jobs:
 
     - name: Build devcontainer
       uses: devcontainers/ci@v0.3
-      # Build for the runner's native platform.
+      # Use the runner's native platform; publish explicitly below to capture its digest.
       with:
         imageName: ${{ steps.image.outputs.name }}
         imageTag: ${{ steps.image.outputs.tag }}
         cacheFrom: ${{ steps.cache.outputs.image }}
-        push: ${{ inputs.publish && 'always' || 'never' }}
+        push: never
+
+    - name: Publish native image
+      id: publish
+      if: inputs.publish
+      shell: bash
+      env:
+        IMAGE: ${{ steps.image.outputs.image }}
+        IMAGE_NAME: ${{ steps.image.outputs.name }}
+      run: |
+        set -euo pipefail
+        docker push "$IMAGE"
+        resolved=$(docker image inspect "$IMAGE" --format '{{json .RepoDigests}}' \
+          | jq -r --arg prefix "$IMAGE_NAME@" '[.[]? | select(startswith($prefix))][0] // empty')
+        if [[ ! "$resolved" =~ @sha256:[0-9a-f]{64}$ ]]; then
+          echo '::error::Could not resolve the published native image digest.' >&2
+          exit 1
+        fi
+        printf 'image=%s\n' "$resolved" >> "$GITHUB_OUTPUT"
 
     - name: Export devcontainer image
       if: steps.image.outputs.artifact != ''

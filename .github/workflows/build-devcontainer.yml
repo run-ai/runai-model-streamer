@@ -10,6 +10,7 @@ on:
       - '.devcontainer/**'
       - '.github/workflows/devcontainer.yml'
       - '.github/workflows/build-devcontainer.yml'
+      - '.github/workflows/publish-devcontainer.yml'
       - '.github/workflows/on-pr.yaml'
   workflow_dispatch:
 
@@ -84,26 +85,11 @@ jobs:
     name: Publish multi-architecture devcontainer tag
     needs: [select-branch, build-devcontainer-amd64, build-devcontainer-arm64]
     if: needs.select-branch.outputs.publish == 'true'
-    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
-    steps:
-    - name: Log in to GitHub Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ghcr.io
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Publish generic tag for both architectures
-      env:
-        BASELINE_TAG: ${{ needs.select-branch.outputs.baseline_tag }}
-        AMD64_IMAGE: ${{ needs.build-devcontainer-amd64.outputs.image }}
-        ARM64_IMAGE: ${{ needs.build-devcontainer-arm64.outputs.image }}
-      run: |
-        set -euo pipefail
-        repository="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
-        image="ghcr.io/$repository/devcontainer:$BASELINE_TAG"
-        docker buildx imagetools create --tag "$image" "$AMD64_IMAGE" "$ARM64_IMAGE"
-        docker buildx imagetools inspect "$image"
+    uses: ./.github/workflows/publish-devcontainer.yml
+    with:
+      baseline_tag: ${{ needs.select-branch.outputs.baseline_tag }}
+      amd64_image: ${{ needs.build-devcontainer-amd64.outputs.published_image }}
+      arm64_image: ${{ needs.build-devcontainer-arm64.outputs.published_image }}

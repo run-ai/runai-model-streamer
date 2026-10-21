@@ -44,7 +44,7 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Select release devcontainer
+    - name: Resolve release devcontainer digest
       id: image
       env:
         VERSION: ${{ steps.release.outputs.version }}
@@ -52,12 +52,20 @@ jobs:
         set -euo pipefail
         repository="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
         image="ghcr.io/$repository/devcontainer:release-${VERSION%.*}"
-        if ! docker manifest inspect "$image" > /dev/null; then
-          echo "::error::Publish the release branch devcontainer before running release CI: $image"
+        if ! manifest=$(docker buildx imagetools inspect "$image" --format '{{json .Manifest}}') ||
+           ! digest=$(jq -er '
+             select(.mediaType == "application/vnd.oci.image.index.v1+json" or
+                    .mediaType == "application/vnd.docker.distribution.manifest.list.v2+json")
+             | select([.manifests[] | select(.platform.os == "linux") | .platform.architecture]
+                      | index("amd64") != null and index("arm64") != null)
+             | .digest | strings | select(length == 71 and test("^sha256:[0-9a-f]{64}$"))
+           ' <<< "$manifest"); then
+          echo "::error::Cannot use devcontainer $image. Require both linux/amd64 and linux/arm64 and a valid index digest. Run Build and Push DevContainer on the matching branch before retrying." >&2
           exit 1
         fi
-        printf 'image=%s\n' "$image" >> "$GITHUB_OUTPUT"
-        printf 'Version: `%s`\n\nCommit: `%s`\n\nImage: `%s`\n' "$VERSION" "$(git rev-parse HEAD)" "$image" >> "$GITHUB_STEP_SUMMARY"
+        resolved="${image%:*}@$digest"
+        printf 'image=%s\n' "$resolved" >> "$GITHUB_OUTPUT"
+        printf 'Version: `%s`\n\nCommit: `%s`\n\nImage: `%s`\n' "$VERSION" "$(git rev-parse HEAD)" "$resolved" >> "$GITHUB_STEP_SUMMARY"
 
   build:
     name: Build (${{ matrix.component }}, ${{ matrix.arch }})
