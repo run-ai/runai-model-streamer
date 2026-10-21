@@ -39,7 +39,7 @@ defaults:
 jobs:
   build:
     name: Build component
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     env:
       PACKAGE_VERSION: ${{ inputs.package_version }}
       CI_IMAGE: ${{ inputs.devcontainer_image }}
@@ -93,11 +93,10 @@ jobs:
       run: docker exec ci-build make ci-build-python
 
     - name: Test C++
-      if: inputs.arch == 'x86_64'
       run: docker exec ci-build make ci-test-cpp BAZEL_TEST_FLAGS=--test_env=RUNAI_STREAMER_REQUIRE_IO_URING=1
 
     - name: Test Python
-      if: inputs.arch == 'x86_64' && inputs.component == 'streamer'
+      if: inputs.component == 'streamer'
       run: docker exec ci-build make ci-test-python
 
     - name: Collect C++ library
