@@ -40,6 +40,28 @@ def write_f4_file(path, entries):
         f.write(data)
 
 
+def reference_reader(directory):
+    """The safetensors reference loader, or None with the reason when this install cannot read F4.
+
+    Asks with a known-good file instead of catching whatever the real comparison raises: a version
+    without F4 rejects even a valid header (0.5.x: InvalidHeaderDeserialization, which does not say
+    "F4"), so the error cannot tell "unsupported" from "the reader disagrees with us". Probed once, with
+    input that is right by construction, any failure here means unsupported - and every failure after it
+    is a real one."""
+    try:
+        from safetensors.torch import load_file
+    except ImportError as error:
+        return None, f"safetensors is not installed: {error}"
+
+    probe = os.path.join(directory, "probe.safetensors")
+    write_f4_file(probe, [("probe", [2, 2], b"\x21\x43")])
+    try:
+        load_file(probe)
+    except Exception as error:  # noqa: BLE001 - the probe input is valid, so any failure is "no F4"
+        return None, f"the installed safetensors cannot read F4: {error}"
+    return load_file, None
+
+
 @unittest.skipUnless(HAS_F4, "this torch has no float4_e2m1fn_x2")
 class TestPackedF4(unittest.TestCase):
     """Safetensors records LOGICAL dimensions; float4_e2m1fn_x2 holds two values per byte along the last
@@ -112,11 +134,12 @@ class TestPackedF4(unittest.TestCase):
         self.assertEqual(tensors["a"].view(torch.uint8).reshape(-1).tolist(), list(payload))
         self.assertEqual(tuple(tensors["empty"].shape), (0, 2))
 
-        try:
-            from safetensors.torch import load_file
-            reference = load_file(path)
-        except Exception as error:  # the installed safetensors may predate F4
-            self.skipTest(f"the installed safetensors cannot read F4: {error}")
+        load_file, unsupported = reference_reader(self.temp_dir)
+        if load_file is None:
+            self.skipTest(unsupported)
+
+        # No guard: past the probe, a reader error is a finding, not a reason to skip.
+        reference = load_file(path)
 
         for name, tensor in tensors.items():
             self.assertEqual(tensor.shape, reference[name].shape)
