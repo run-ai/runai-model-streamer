@@ -218,10 +218,12 @@ image, and each integration job downloads that image and its matching wheels.
 PRs never push images to GHCR. These artifacts provide a per-run image handoff,
 not a cache restored across PR runs.
 
-When image-related files are unchanged, preparation is skipped. Jobs pull
+When image-related files are unchanged, preparation is skipped. Setup resolves
 `ghcr.io/dsx-ai-factory/model-streamer/devcontainer:latest` (or `release-X.Y` for a
-release-branch PR). The generic tag is a multi-architecture manifest; Docker
-selects the matching image on each native runner.
+release-branch PR) to one immutable multi-architecture index digest. Setup
+requires both Linux AMD64 and ARM64 entries. Docker selects the matching entry
+on each native runner; all consumers in the run use the same published image pair.
+A missing or incomplete index fails setup with publication guidance.
 
 Each component job starts one container and uses `docker exec` for separate C++
 build, Python package build, C++ test, and Python test steps. Integration uses
@@ -231,7 +233,8 @@ seccomp setting required by io_uring tests and reuse the image's installed Featu
 The **Build and Push DevContainer** workflow builds only the two native images.
 On master it publishes `latest-amd64` and `latest-arm64`; release branches publish
 `release-X.Y-amd64` and `release-X.Y-arm64`. After both succeed, a final job creates
-the generic `latest` or `release-X.Y` manifest from the two architecture tags. The generic tag references those same two images; it does
+the generic `latest` or `release-X.Y` manifest from the immutable image digests
+produced by that run. The generic tag references those same two images; it does
 not require another image build. If either image job fails, the generic tag stays
 unchanged, even if the other architecture-specific tag was already updated.
 
@@ -293,8 +296,8 @@ Intermediate wheel and C++ artifacts are retained for seven days in both PR and
 release builds to support retries. Final PR bundles are retained for seven days;
 tested `release-bundle-<version>-<run>-<attempt>` bundles are retained for 30 days
 for approval and recovery.
-Release CI uses the release branch's generic multi-architecture tag for both
-native build and integration matrices; Docker selects each runner's image. It
+Release CI resolves the release branch's generic multi-architecture tag once,
+then uses that index digest for both native build and integration matrices. It
 calls the same assembly workflow after both integration jobs succeed,
 then passes its bundle artifact ID to the approval-gated publication job.
 The shared workflow downloads components, tests the packaging code, assembles

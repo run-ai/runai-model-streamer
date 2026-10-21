@@ -96,11 +96,11 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Publish generic tag for both architectures
+    - name: Publish generic tag from this run's image digests
       env:
         BASELINE_TAG: ${{ needs.select-branch.outputs.baseline_tag }}
-        AMD64_IMAGE: ${{ needs.build-devcontainer-amd64.outputs.image }}
-        ARM64_IMAGE: ${{ needs.build-devcontainer-arm64.outputs.image }}
+        AMD64_IMAGE: ${{ needs.build-devcontainer-amd64.outputs.published_image }}
+        ARM64_IMAGE: ${{ needs.build-devcontainer-arm64.outputs.published_image }}
       run: |
         set -euo pipefail
         repository="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
