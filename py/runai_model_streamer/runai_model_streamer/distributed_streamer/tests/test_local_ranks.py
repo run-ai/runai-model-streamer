@@ -23,16 +23,17 @@ class TestDiscoverRanks(unittest.TestCase):
     discover_ranks=False must not enter."""
 
     def setUp(self):
-        dist = MagicMock()
+        self.dist = dist = MagicMock()
         dist.is_initialized.return_value = True
         dist.get_world_size.return_value = 8
         dist.get_rank.return_value = 3
         patches = [
             patch.object(distributed_streamer, "dist", dist),
+            patch.object(distributed_streamer, "_estimated_group_size", None),
             patch.object(_distributedStreamerParams, "find_local_ranks", return_value=(8, 3, [list(range(8))])),
             patch.dict(os.environ, {}, clear=True),
         ]
-        self.find_local_ranks = [p.start() for p in patches][1]
+        self.find_local_ranks = [p.start() for p in patches][2]
         for p in patches:
             self.addCleanup(p.stop)
 
@@ -44,6 +45,20 @@ class TestDiscoverRanks(unittest.TestCase):
         self.find_local_ranks.assert_not_called()
         self.assertEqual(streamer.params.my_global_rank, 3)
         self.assertEqual(os.environ[PROCESS_GROUP_SIZE], "8")
+
+    def test_a_discovery_replaces_an_estimate(self):
+        # on 2 nodes without LOCAL_WORLD_SIZE the estimate is the world size, twice the processes on each node
+        self.dist.get_world_size.return_value = 16
+        _distributedStreamerParams().set_params([], discover_ranks=False)
+        self.assertEqual(os.environ[PROCESS_GROUP_SIZE], "16")
+
+        _distributedStreamerParams().set_params([], discover_ranks=True)
+        self.assertEqual(os.environ[PROCESS_GROUP_SIZE], "8")
+
+    @patch.dict(os.environ, {PROCESS_GROUP_SIZE: "4"})
+    def test_a_discovery_keeps_a_value_set_by_the_user(self):
+        _distributedStreamerParams().set_params([], discover_ranks=True)
+        self.assertEqual(os.environ[PROCESS_GROUP_SIZE], "4")
 
     def test_safetensors_streamer_discovers_only_for_a_distributed_load(self):
         # a non distributed load may run on a single rank. A distributed load discovers in its first metadata read,
