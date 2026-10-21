@@ -111,11 +111,22 @@ class TestPackedF4(unittest.TestCase):
             metadata([], 1)
 
     def test_an_empty_tensor_has_the_packed_shape(self):
+        buffer = torch.empty((1, 0), dtype=torch.uint8)
+
         meta = metadata([3, 0], 0)
-        self.assertEqual(tuple(create_torch_tensor(None, meta).shape), (3, 0))
+        self.assertEqual(tuple(create_torch_tensor(buffer, meta).shape), (3, 0))
 
         meta = metadata([0, 4], 0)
-        self.assertEqual(tuple(create_torch_tensor(None, meta).shape), (0, 2))
+        self.assertEqual(tuple(create_torch_tensor(buffer, meta).shape), (0, 2))
+
+    def test_an_empty_tensor_keeps_the_device_of_the_buffer(self):
+        # The meta device stands in for CUDA, as in test_empty_tensor_device.
+        buffer = torch.empty((1, 0), dtype=torch.uint8, device="meta")
+
+        tensor = create_torch_tensor(buffer, metadata([0, 4], 0))
+
+        self.assertEqual(tensor.device.type, "meta")
+        self.assertEqual(tuple(tensor.shape), (0, 2))
 
     def test_an_empty_tensor_with_an_odd_last_axis_is_rejected(self):
         with self.assertRaises(ValueError):
