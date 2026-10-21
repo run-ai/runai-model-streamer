@@ -10,20 +10,34 @@ and local images build only their native architecture using the native toolchain
 The Bazel repository exposes only installed architectures and reports an
 unsupported target clearly.
 
-The SDK uses the application's Bazel version, toolchains, compiler settings and
-pinned source definitions. `export.bzl` preserves the transitive `CcInfo` headers,
-include paths, defines, static libraries, always-link requirements and linker
-flags. `install.py` dereferences generated and virtual headers into a standalone
-Bazel package. The final image contains no SDK builder sources or Bazel cache.
-Application builds still fetch protobuf's Bazel rule definitions, which
-`rules_cc` imports; they do not compile protobuf or its dependencies.
+The SDK has its own `.bazelversion`, `.bazelrc` and standalone Bazel workspace
+here. Bazel detects the native compiler; the application keeps its existing custom
+toolchain. `config/sources.bzl` and `config/deps.bzl` are the single source of SDK
+and shared Bazel dependency pins, loaded by both workspaces. The image does not
+copy or watch any `cpp/` files.
 
-Rebuild the devcontainer after changing SDK versions, toolchains or compiler
-settings. The consumer rejects missing SDKs, mismatched SDK/protobuf checksums,
-changed Bazel/toolchain inputs and a different compiler version. Both PR image
-selection and publication watch the SDK source inputs copied into the image.
-Changing `.bazelversion` also requires updating the matching Linux AMD64 and
-ARM64 Bazel binary checksums in the Dockerfile.
+`export.bzl` preserves the transitive `CcInfo` headers, include paths, defines,
+static libraries, always-link requirements and linker flags. `install.py`
+dereferences generated and virtual headers into a standalone Bazel package. The
+final image contains no SDK builder sources or Bazel cache. Application builds
+still fetch protobuf's Bazel rule definitions, which `rules_cc` imports; they do
+not compile protobuf or its dependencies.
+
+Rebuild the devcontainer after changing SDK sources, settings or pins under
+`.devcontainer/gcs/`. The consumer checks these SDK-owned inputs, source checksums
+and the installed compiler version. Changing this directory's `.bazelversion`
+also requires updating the matching Linux AMD64 and ARM64 Bazel binary checksums
+in the Dockerfile. The application's `cpp/.bazelversion` can change independently.
+
+Normal application changes to warnings, optimization or debug symbols do not
+invalidate the SDK. The shared `compatibility.h`, compiled by both workspaces,
+requires GCC 9, C++17 or newer, libstdc++'s C++11 ABI and no `_GLIBCXX_DEBUG`.
+An incompatible application configuration fails during compilation. Intentional
+compiler/ABI migrations must update the SDK contract and rebuild the image.
+These checks cover the supported contract, not every possible compiler flag;
+other ABI-changing toolchain edits still require compatibility review. Application
+sanitizer flags do not instrument the prebuilt SDK itself. Build from the full
+repository checkout so both workspaces can access the shared configuration.
 
 The first PR adding this SDK builds new candidate images. After merging, allow
 **Build and Push DevContainer** to publish the matching image before relying on

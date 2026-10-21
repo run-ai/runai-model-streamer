@@ -1,16 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-load("//toolchain:configure.bzl", "configure_toolchain")
+local_repository(name = "gcs_sdk_config", path = "config")
 
-configure_toolchain(name = "toolchain")
-
-load("//toolchain:deps.bzl", "load_toolchain_deps")
-
-load_toolchain_deps()
-
-load("//third_party:gcp_repo.bzl", "load_gcp_repo")
-
+load("@gcs_sdk_config//:deps.bzl", "load_bazel_deps")
+load_bazel_deps()
+load("@gcs_sdk_config//:sources.bzl", "load_gcp_repo")
 load_gcp_repo()
 
 # Keep the upstream dependency graph, including the pinned protobuf override,

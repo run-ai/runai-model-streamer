@@ -207,9 +207,10 @@ The devcontainer prebuilds the Google Cloud C++ SDK, including REST/gRPC and the
 transitive dependencies, alongside AWS and Azure. CI and local images install only
 their native SDK architecture.
 Ordinary PRs compile our GCS implementation against these installed libraries.
-SDK versions, Bazel configuration and toolchain changes trigger image preparation
-and publication just like changes under `.devcontainer/`. Rebuild local images
-after changing these inputs; stale SDKs produce an explicit error. See
+SDK versions and SDK build settings live under `.devcontainer/gcs/`; changes there
+trigger image preparation and publication. Application settings under `cpp/` do
+not trigger an image rebuild. Rebuild local images after changing SDK inputs;
+stale SDKs and unsupported compiler/ABI settings produce an explicit error. See
 [the GCS SDK build notes](.devcontainer/gcs/README.md) for validation and rollout.
 
 The setup job checks whether `.devcontainer/**` or the PR/devcontainer workflows

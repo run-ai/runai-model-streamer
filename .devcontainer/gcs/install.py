@@ -18,8 +18,11 @@ def relative_path(value):
 
 
 def build_metadata(source, compiler):
-    inputs = [source / ".bazelrc", source / ".bazelversion"]
-    inputs.extend(path for path in (source / "toolchain").rglob("*") if path.is_file())
+    inputs = [source / name for name in [
+        ".bazelrc", ".bazelversion", "WORKSPACE", "BUILD.bazel",
+        "abi_check.cc", "build.sh", "export.bzl", "install.py",
+    ]]
+    inputs.extend(path for path in (source / "config").rglob("*") if path.is_file())
     return {
         "build_inputs": {str(path.relative_to(source)): path.read_text() for path in sorted(inputs)},
         "compiler": compiler,

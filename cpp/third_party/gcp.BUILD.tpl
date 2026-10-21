@@ -17,7 +17,7 @@ alias(
     name = "storage",
     actual = select({
 %{SDK_TARGETS}
-    }, no_match_error = "GCS SDK is not installed for this architecture. Rebuild the devcontainer with matching DEPENDENCY_ARCHES."),
+    }, no_match_error = "GCS SDK is not installed for this architecture. Use the devcontainer matching the target architecture."),
 )
 
 alias(

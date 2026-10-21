@@ -68,27 +68,42 @@ class InstallTest(unittest.TestCase):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 relative_path(path)
 
-    def test_records_bazel_toolchain_and_compiler_inputs(self):
+    def test_records_sdk_inputs_without_application_settings(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             contents = {
                 ".bazelrc": "build --compilation_mode=opt\n",
                 ".bazelversion": "7.6.1\n",
-                "toolchain/template/toolchain.bzl": "compiler flags\n",
-                "toolchain/deps.bzl": "dependency pins\n",
+                "WORKSPACE": "SDK workspace\n",
+                "BUILD.bazel": "SDK targets\n",
+                "abi_check.cc": "ABI check\n",
+                "build.sh": "SDK build command\n",
+                "export.bzl": "SDK exporter\n",
+                "install.py": "SDK installer\n",
+                "config/sources.bzl": "SDK dependency pins\n",
+                "config/deps.bzl": "Bazel dependency pins\n",
+                "config/model_streamer_gcs_sdk/compatibility.h": "ABI contract\n",
             }
             for name, content in contents.items():
                 path = root / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(content)
             # Application edits must not become part of the SDK identity.
-            (root / "application.cc").write_text("application code")
+            application = root / "cpp"
+            application.mkdir()
+            (application / ".bazelrc").write_text("build --copt=-g\n")
+            (application / ".bazelversion").write_text("different application Bazel\n")
             with patch("install.subprocess.check_output", return_value="GCC version\n") as run:
                 metadata = build_metadata(root, "/usr/bin/g++")
             self.assertEqual(metadata["build_inputs"], contents)
             self.assertEqual(metadata["compiler"], "/usr/bin/g++")
             self.assertEqual(metadata["compiler_version"], "GCC version\n")
             run.assert_called_once_with(["/usr/bin/g++", "--version"], text=True)
+            with patch("install.subprocess.check_output", return_value="GCC version\n"):
+                (application / ".bazelrc").write_text("build --copt=-O1\n")
+                self.assertEqual(build_metadata(root, "/usr/bin/g++"), metadata)
+                (root / "config/sources.bzl").write_text("updated SDK pin\n")
+                self.assertNotEqual(build_metadata(root, "/usr/bin/g++"), metadata)
 
     def test_missing_archive_fails_installation(self):
         with tempfile.TemporaryDirectory() as directory:

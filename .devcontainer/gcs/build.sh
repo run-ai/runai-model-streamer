@@ -19,7 +19,7 @@ case "$1" in
 esac
 
 cd /build/gcs
-bazel build //:sdk --config="$arch" --jobs=4
+CC=/usr/bin/gcc CXX=/usr/bin/g++ bazel build //:sdk --config="$arch" --jobs=4
 python3 install.py bazel-bin/sdk.json "$(bazel info execution_root)" "/opt/gcs-sdk/$arch" \
     --build-inputs /build/gcs --compiler /usr/bin/g++
 bazel shutdown

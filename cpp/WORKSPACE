@@ -1,6 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+# Shared SDK pins are owned by the devcontainer, not application build settings.
+local_repository(name = "gcs_sdk_config", path = "../.devcontainer/gcs/config")
+
 load("//toolchain:configure.bzl", "configure_toolchain")
 configure_toolchain(name = "toolchain")
 load("//toolchain:deps.bzl", "load_toolchain_deps")

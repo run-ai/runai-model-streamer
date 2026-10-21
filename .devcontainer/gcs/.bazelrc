@@ -1,0 +1,12 @@
+# SDK-only settings. Application flags in cpp/.bazelrc do not invalidate this build.
+build --noenable_bzlmod
+build --cxxopt=-std=c++17
+build --force_pic
+build --compilation_mode=opt
+build --copt=-O2
+build --copt=-DNDEBUG
+build --linkopt=-static-libstdc++
+build --linkopt=-l:libstdc++.a
+build:x86_64 --platform_suffix=x86_64
+build:aarch64 --platform_suffix=aarch64
+build:aarch64 --copt=-march=armv8-a+crc+crypto

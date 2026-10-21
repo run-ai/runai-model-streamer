@@ -91,7 +91,7 @@ RUN bash /tmp/build-azure-sdk.sh "$TARGETARCH"
 # Compile the pinned Google SDK once per image architecture. Only the installed
 # archives and headers enter the final image, not sources or the Bazel cache.
 FROM base AS gcs-builder
-COPY cpp/.bazelversion cpp/.bazelrc /build/gcs/
+COPY .devcontainer/gcs/.bazelversion /build/gcs/
 RUN BAZEL_VERSION=$(cat /build/gcs/.bazelversion) && \
     case "$(uname -m)" in \
         x86_64) BAZEL_SHA256=ac6249d1192aea9feaf49dfee2ab50c38cee2454b00cf29bbec985a11795c025 ;; \
@@ -102,11 +102,10 @@ RUN BAZEL_VERSION=$(cat /build/gcs/.bazelversion) && \
         "https://github.com/bazelbuild/bazel/releases/download/${BAZEL_VERSION}/bazel-${BAZEL_VERSION}-linux-$(uname -m | sed 's/aarch64/arm64/')" && \
     echo "${BAZEL_SHA256}  /usr/local/bin/bazel" | sha256sum -c - && \
     chmod +x /usr/local/bin/bazel
-COPY cpp/toolchain /build/gcs/toolchain/
-COPY cpp/third_party/gcp_repo.bzl cpp/third_party/BUILD /build/gcs/third_party/
-COPY .devcontainer/gcs/WORKSPACE .devcontainer/gcs/BUILD.bazel \
-    .devcontainer/gcs/export.bzl .devcontainer/gcs/install.py \
-    .devcontainer/gcs/build.sh .devcontainer/gcs/test_install.py /build/gcs/
+COPY .devcontainer/gcs/.bazelrc .devcontainer/gcs/WORKSPACE .devcontainer/gcs/BUILD.bazel \
+    .devcontainer/gcs/abi_check.cc .devcontainer/gcs/export.bzl .devcontainer/gcs/install.py \
+    .devcontainer/gcs/test_install.py .devcontainer/gcs/build.sh /build/gcs/
+COPY .devcontainer/gcs/config/ /build/gcs/config/
 # Cache the SDK as a Docker layer. Bazel caches contain host-specific repository
 # configuration and must not be shared between native image builds.
 RUN python3 -B -m unittest discover -s /build/gcs -p test_install.py && \
