@@ -118,8 +118,9 @@ COPY cpp/third_party/gcp_repo.bzl cpp/third_party/BUILD /build/gcs/third_party/
 COPY .devcontainer/gcs/WORKSPACE .devcontainer/gcs/BUILD.bazel \
     .devcontainer/gcs/export.bzl .devcontainer/gcs/install.py \
     .devcontainer/gcs/build.sh .devcontainer/gcs/test_install.py /build/gcs/
-RUN --mount=type=cache,target=/root/.cache/bazel,sharing=locked \
-    python3 -B -m unittest discover -s /build/gcs -p test_install.py && \
+# Cache the SDK as a Docker layer. Bazel caches contain host-specific repository
+# configuration and must not be shared between native image builds.
+RUN python3 -B -m unittest discover -s /build/gcs -p test_install.py && \
     bash /build/gcs/build.sh $DEPENDENCY_ARCHES
 
 FROM base AS devcontainer
