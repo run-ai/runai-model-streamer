@@ -1,7 +1,10 @@
 {
     "name": "RunAI Model Streamer",
     "build": {
-        "dockerfile": "Dockerfile"
+        "dockerfile": "Dockerfile",
+        "args": {
+            "DEPENDENCY_ARCHES": "${localEnv:DEVCONTAINER_DEPENDENCY_ARCHES:amd64 arm64}"
+        }
     },
     // Docker's default seccomp profile blocks io_uring_setup, io_uring_enter and io_uring_register
     // (moby/moby#46762), so io_uring returns EPERM in a container even where the kernel permits it -

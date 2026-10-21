@@ -10,6 +10,7 @@ on:
       - '.devcontainer/**'
       - '.github/workflows/devcontainer.yml'
       - '.github/workflows/build-devcontainer.yml'
+      - '.github/workflows/on-pr.yaml'
   workflow_dispatch:
 
 concurrency:
@@ -62,5 +63,31 @@ jobs:
       packages: write
     uses: ./.github/workflows/devcontainer.yml
     with:
+      publish: true
+      baseline_tag: ${{ needs.select-branch.outputs.baseline_tag }}
+
+  build-devcontainer-amd64:
+    name: Build & Push AMD64 DevContainer Candidate
+    needs: select-branch
+    if: needs.select-branch.outputs.publish == 'true'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/devcontainer.yml
+    with:
+      architecture: amd64
+      publish: true
+      baseline_tag: ${{ needs.select-branch.outputs.baseline_tag }}
+
+  build-devcontainer-arm64:
+    name: Build & Push ARM64 DevContainer Candidate
+    needs: select-branch
+    if: needs.select-branch.outputs.publish == 'true'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/devcontainer.yml
+    with:
+      architecture: arm64
       publish: true
       baseline_tag: ${{ needs.select-branch.outputs.baseline_tag }}
