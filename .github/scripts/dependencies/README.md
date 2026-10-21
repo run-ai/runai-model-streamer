@@ -71,16 +71,16 @@ so one run of the image covers the build and the tests for both.
    the `release-<major>.<minor>` tag the release workflow uses). The list records the image digest.
 3. **Collect:**
    ```
-   python3 dependencies/collect.py collect --image ghcr.io/dsx-ai-factory/model-streamer/devcontainer:latest
+   python3 .github/scripts/dependencies/collect.py collect --image ghcr.io/dsx-ai-factory/model-streamer/devcontainer:latest
    ```
-   It writes `dependencies/dependencies.json` and takes tens of minutes; the Bazel fetch, which
+   It writes `.github/scripts/dependencies/dependencies.json` and takes tens of minutes; the Bazel fetch, which
    downloads the external repositories for both architectures into a temporary cache inside the
    container, is the longest part and needs several GB of disk. `--no-hash` skips the downloads
    that only compute a hash. `--out` writes elsewhere.
 4. **Validate and test:**
    ```
-   python3 dependencies/collect.py check
-   python3 dependencies/test_collect.py
+   python3 .github/scripts/dependencies/collect.py check
+   python3 .github/scripts/dependencies/test_collect.py
    ```
    `check` fails on an unknown category, an entry with nothing to download, or a component of
    `third_party_notices/components.json` that `categories.json` does not map to a `ship` dependency.

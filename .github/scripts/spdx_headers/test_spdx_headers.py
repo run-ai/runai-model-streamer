@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for spdx_headers.py. Run with: python3 scripts/test_spdx_headers.py"""
+"""Tests for spdx_headers.py. Run with: python3 .github/scripts/spdx_headers/test_spdx_headers.py"""
 # unittest is in the Python standard library, so the tests need no install and no pytest.
 
 import os

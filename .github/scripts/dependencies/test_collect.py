@@ -3,7 +3,7 @@
 
 """Tests for the parts of the dependency collector that need no network and no container.
 
-    python3 dependencies/test_collect.py
+    python3 .github/scripts/dependencies/test_collect.py
 """
 
 import os

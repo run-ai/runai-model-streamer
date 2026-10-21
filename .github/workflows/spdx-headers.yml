@@ -22,7 +22,7 @@ jobs:
 
     # The script uses only the Python standard library, so nothing needs to be installed.
     - name: Test the header script
-      run: python3 scripts/test_spdx_headers.py
+      run: python3 .github/scripts/spdx_headers/test_spdx_headers.py
 
     - name: Check that every source file has the NVIDIA SPDX header
-      run: python3 scripts/spdx_headers.py
+      run: python3 .github/scripts/spdx_headers/spdx_headers.py

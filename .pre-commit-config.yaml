@@ -4,5 +4,5 @@ repos:
   - id: spdx-headers
     name: Add the NVIDIA SPDX header to source files
     # --fix adds a missing header and fails the commit once, so you can review the change and add it.
-    entry: python3 scripts/spdx_headers.py --fix
+    entry: python3 .github/scripts/spdx_headers/spdx_headers.py --fix
     language: system

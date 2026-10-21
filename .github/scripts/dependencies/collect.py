@@ -3,9 +3,9 @@
 
 """List everything this repository depends on to build, test and run, with where to download it.
 
-    python3 dependencies/collect.py collect --image IMAGE    write dependencies.json (needs Docker and network)
-    python3 dependencies/collect.py check                    validate dependencies.json
-    python3 dependencies/collect.py resolve ...              (runs inside the devcontainer, started by collect)
+    python3 .github/scripts/dependencies/collect.py collect --image IMAGE    write dependencies.json (needs Docker and network)
+    python3 .github/scripts/dependencies/collect.py check                    validate dependencies.json
+    python3 .github/scripts/dependencies/collect.py resolve ...              (runs inside the devcontainer, started by collect)
 
 No dependency is kept or stored. Collecting does download: Bazel fetches the external repositories
 into a temporary cache, and an archive that no file pins is downloaded once to compute its hash.
@@ -57,7 +57,7 @@ def in_container(image, base_image, no_hash):
                      "bases. For another package manager, extend container_sources.py." % (base_image, error))
         with open(os.path.join(work, "base.txt"), "w") as f:
             f.write(names)
-        script = ("set -e; cp -r /src /work; cd /work; python3 dependencies/collect.py resolve --repo /src "
+        script = ("set -e; cp -r /src /work; cd /work; python3 .github/scripts/dependencies/collect.py resolve --repo /src "
                   "--workspace /work --base-packages /out/base.txt --out /out/resolved.json" + (" --no-hash" if no_hash else ""))
         log("container: " + image)
         subprocess.run(["docker", "run", "--rm", "--platform", "linux/amd64", "-v", "%s:/src:ro" % REPO,

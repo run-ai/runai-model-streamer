@@ -15,7 +15,7 @@ import urllib.error
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(HERE)
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))  # HERE is <repo>/.github/scripts/dependencies
 CATEGORIES = ("ship", "run", "build", "test", "base-image", "ci")
 
 
