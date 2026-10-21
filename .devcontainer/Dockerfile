@@ -1,8 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-FROM nvidia/cuda:12.8.0-devel-ubuntu20.04@sha256:cd0f8e1c41628ff2513e9f7c42dd9bd8740fe87fd6615b9c4a6f392995a589c0 AS cuda-headers
-
 FROM ubuntu:20.04
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
@@ -60,6 +58,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     cmake \
     git \
     curl \
+    xz-utils \
     libssl-dev \
     libcurl4-openssl-dev \
     libxml2-dev \
@@ -80,7 +79,9 @@ RUN WEED_ARCH=$([ "$(uname -m)" = "aarch64" ] && echo "arm64" || echo "amd64") \
 # CUDA headers only, for compile-time type checking of the driver API. No runtime and no
 # libraries: libcuda.so.1 is loaded with dlopen, so the build has no link-time CUDA dependency
 # and the image needs no driver.
-COPY --from=cuda-headers /usr/local/cuda/include/ /usr/local/cuda/include/
+COPY scripts/install-cuda-headers.sh /tmp/install-cuda-headers.sh
+ARG TARGETARCH
+RUN bash /tmp/install-cuda-headers.sh "$TARGETARCH"
 
 RUN curl -fsSL -o fake-gcs-server_1.52.2.tar.gz https://github.com/fsouza/fake-gcs-server/releases/download/v1.52.2/fake-gcs-server_1.52.2_Linux_$([ "$(uname -m)" = "aarch64" ] && echo "arm64" || echo "amd64").tar.gz \
     && mkdir -p fake-gcs-server \

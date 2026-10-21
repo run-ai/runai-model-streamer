@@ -96,7 +96,7 @@
   {
    "id": "nvidia-cuda-headers",
    "name": "NVIDIA CUDA driver API header (cuda.h)",
-   "version": "12.8",
+   "version": "12.8.57",
    "url": "https://developer.nvidia.com/cuda-toolkit",
    "spdx": "NVIDIA CUDA header notice",
    "copyright": "Copyright 1993-2023 NVIDIA Corporation. All rights reserved.",
@@ -110,7 +110,7 @@
      "local": "licenses/nvidia-cuda-headers/cuda.h-header-notice.txt"
     }
    ],
-   "note": "Compiled against only; libcuda.so is loaded with dlopen at run time and no CUDA library is distributed. The header requires its notice to be reproduced."
+   "note": "Headers from NVIDIA's cuda_cudart 12.8.57 redistributable archive. Compiled against only; libcuda.so is loaded with dlopen at run time and no CUDA library is distributed. The header requires its notice to be reproduced."
   },
   {
    "id": "aws-sdk-cpp",
