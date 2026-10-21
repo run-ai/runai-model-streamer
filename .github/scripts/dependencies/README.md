@@ -33,8 +33,8 @@ and linked into a native library (`ship`).
 | `apt` | packages the devcontainer has on top of its base image | the `.deb` and its SHA-256 from the package index |
 | `pip` | the `run`, `test` and `build` requirement groups, resolved by pip | the wheel and its SHA-256 |
 | `npm` | `npm install -g` lines (azurite) and their dependencies | the tarball and its SHA-512 |
-| `url` | archives the Dockerfile downloads, the Bazel release, bazelisk, buildifier | the file and its SHA-256 |
-| `git` | repositories the Dockerfile clones, with every submodule | the repository and the commit |
+| `url` | archives the Dockerfile and its scripts download, the Bazel release, bazelisk, buildifier | the file and its SHA-256 |
+| `git` | repositories the Dockerfile and its scripts clone, with every submodule | the repository and the commit |
 | `bazel` | the repositories `bazel fetch //...` leaves in the output base | the archive and its SHA-256, or the git remote and commit |
 | `github-action` | the `uses:` lines of the workflows | the repository and the commit |
 
@@ -45,6 +45,7 @@ The collector reads these files, so a new dependency is picked up when it is add
 | File | Gives |
 |---|---|
 | `.devcontainer/Dockerfile` | base images, `apt-get install`, `pip install`, `npm install`, `curl` downloads (with the hash the file pins), `git clone` |
+| `.devcontainer/scripts/*.sh` | the same commands, in the shell scripts the Dockerfile runs. A script is not run: the architecture argument (`amd64`, `arm64`), `NAME=value` lines and `case amd64)` branches are expanded to give one URL and hash per architecture, and the hash is the `echo "<hash>  <file>" \| sha256sum -c -` line for the file. A URL with a variable that cannot be expanded stops the collector with the script and line. |
 | `.devcontainer/devcontainer.json` | devcontainer features and the packages of the apt-packages feature |
 | `py/*/setup.py` | `install_requires` of the four wheels (`run`) |
 | `py/*/pyproject.toml` | build requirements (`build`) |
@@ -56,6 +57,22 @@ The collector reads these files, so a new dependency is picked up when it is add
 `categories.json` holds the judgment calls the files cannot tell: which packages are only for tests,
 and which dependencies are linked into a native library (`ship`, mapped to the ids of
 `third_party_notices/components.json`). Edit it when a dependency is added.
+
+### Finding what the collector does not read
+
+Reading files cannot tell that a file is missing from the reading. `collect.py completeness` needs no
+network, Docker or list, and fails when:
+
+- a tracked file contains a command that downloads or installs something (`curl` or `wget` with a URL,
+  `git clone`, `pip`, `npm` or `apt-get install`, `FROM`, `http_archive`, `uses:`) and the collector does not
+  read the file. The files the collector reads are listed in `completeness.py`; Bazel's own `.bzl` files
+  and files that are not an input (this directory, Markdown) are listed under `coverage` in `categories.json`;
+- a file the collector reads has more `curl` URLs, `git clone`, `npm`, `pip` or `apt-get install` commands
+  than the collector turned into dependencies, which means a command is written in a shape the readers
+  do not know.
+
+`check` runs it too. When it fails, teach the collector about the new file or shape, or list the file
+under `coverage` with a reason.
 
 ## Reproducing the list
 
@@ -82,8 +99,9 @@ so one run of the image covers the build and the tests for both.
    python3 .github/scripts/dependencies/collect.py check
    python3 .github/scripts/dependencies/test_collect.py
    ```
-   `check` fails on an unknown category, an entry with nothing to download, or a component of
-   `third_party_notices/components.json` that `categories.json` does not map to a `ship` dependency.
+   `check` fails on an unknown category, an entry with nothing to download, a component of
+   `third_party_notices/components.json` that `categories.json` does not map to a `ship` dependency,
+   or a file or command the collector does not read (see above).
 5. **Review the list.** Compare it with the previous one you generated. New entries mean a new dependency; if one is linked
    into a native library, add it to `ship` in `categories.json`, and to
    `third_party_notices/components.json`. A package that is only for tests belongs in `categories.json`

@@ -7,16 +7,20 @@
 """
 
 import os
+import subprocess
 import sys
+import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import collect  # noqa: E402
+import completeness  # noqa: E402
 import container_sources  # noqa: E402
 import dockerfile  # noqa: E402
 import inputs  # noqa: E402
+import static_sources  # noqa: E402
 import util  # noqa: E402
 
 SAMPLE = r"""
@@ -103,6 +107,136 @@ class DockerfileTest(unittest.TestCase):
     def test_clone_without_a_url_is_an_error(self):
         with self.assertRaisesRegex(ValueError, "no repository URL"):
             dockerfile.git_clones("RUN git clone --depth 1 somewhere\n")
+
+
+SCRIPT = r"""#!/usr/bin/env bash
+set -euo pipefail
+
+target_arch=$1
+case "$target_arch" in
+    amd64) tool_sha256=%s ;;
+    arm64) tool_sha256=%s ;;
+    *)
+        echo "Unsupported: $target_arch" >&2
+        exit 2
+        ;;
+esac
+
+case "$1" in
+    amd64)
+        PLATFORM=linux-x86_64
+        SUM=%s
+        ;;
+    arm64)
+        PLATFORM=linux-sbsa
+        SUM=%s
+        ;;
+esac
+ARCHIVE="cuda_cudart-${PLATFORM}-12.8.57-archive"
+
+curl -fsSL -o tool.tar.gz "https://example.org/tool/1.0/linux_${target_arch}.tar.gz"
+echo "${tool_sha256}  tool.tar.gz" | sha256sum -c -
+curl -fsSL -o /tmp/cuda.tar.xz \
+    "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/${PLATFORM}/${ARCHIVE}.tar.xz"
+echo "${SUM}  /tmp/cuda.tar.xz" | sha256sum -c -
+build_zlib() {
+    curl -fsSL -o zlib-1.3.1.tar.gz https://example.org/zlib-1.3.1.tar.gz
+    echo "%s  zlib-1.3.1.tar.gz" | sha256sum -c -
+}
+git clone --recurse-submodules https://example.org/org/sdk /opt/sdk
+cd /opt/sdk
+git checkout sdk_1.2
+apt-get install -y nodejs
+npm install -g azurite
+""" % ("1" * 64, "2" * 64, "3" * 64, "4" * 64, "5" * 64)
+
+
+class ScriptTest(unittest.TestCase):
+    """The shell scripts the Dockerfile runs are read like its RUN lines."""
+    PATH = ".devcontainer/scripts/x.sh"
+
+    def downloads(self):
+        return dockerfile.downloads(SCRIPT, self.PATH)
+
+    def test_architecture_argument_and_case_branches_give_a_url_and_a_hash_per_architecture(self):
+        tool = self.downloads()[0]
+        self.assertEqual(tool["urls"], {"x86_64": "https://example.org/tool/1.0/linux_amd64.tar.gz",
+                                        "aarch64": "https://example.org/tool/1.0/linux_arm64.tar.gz"})
+        self.assertEqual(tool["sha256"], {"x86_64": "1" * 64, "aarch64": "2" * 64})
+
+    def test_variables_that_name_each_other_are_expanded(self):
+        cuda = self.downloads()[1]
+        self.assertEqual(cuda["filename"], "/tmp/cuda.tar.xz")  # the hash is pinned under this name
+        self.assertEqual(cuda["urls"]["aarch64"], "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/"
+                                                  "linux-sbsa/cuda_cudart-linux-sbsa-12.8.57-archive.tar.xz")
+        self.assertEqual(cuda["sha256"], {"x86_64": "3" * 64, "aarch64": "4" * 64})
+
+    def test_a_url_without_variables_is_the_same_for_both_architectures(self):
+        zlib = self.downloads()[2]
+        self.assertEqual(zlib["urls"], {"any": "https://example.org/zlib-1.3.1.tar.gz"})
+        self.assertEqual(zlib["sha256"], {"any": "5" * 64})  # the pin is a line below the curl, inside a function
+
+    def test_an_unknown_variable_in_a_url_is_an_error(self):
+        with self.assertRaisesRegex(ValueError, r"x\.sh line 1: cannot work out the URL"):
+            dockerfile.downloads('curl -fsSL -o a.tar.gz "https://h/${UNKNOWN}/a.tar.gz"\n', self.PATH)
+
+    def test_the_redistributable_archive_is_named_after_its_component(self):
+        self.assertEqual(static_sources._download_name(self.downloads()[1]), ("cuda_cudart", "12.8.57"))
+
+    def test_a_checkout_on_a_later_line_applies_to_the_clone(self):
+        (clone,) = dockerfile.git_clones(SCRIPT, self.PATH)
+        self.assertEqual((clone["url"], clone["ref"], clone["line"], clone["recursive"]), ("https://example.org/org/sdk", "sdk_1.2", 35, True))
+
+    def test_apt_and_npm_packages_of_a_script(self):
+        self.assertEqual(dockerfile.apt_packages(SCRIPT, self.PATH), [(38, ["nodejs"])])
+        self.assertEqual(dockerfile.npm_packages(SCRIPT, self.PATH), [(39, ["azurite"])])
+
+    def test_the_scripts_of_this_repository_are_read(self):
+        files = inputs.build_files(util.REPO)
+        self.assertEqual(files[0], ".devcontainer/Dockerfile")
+        self.assertIn(".devcontainer/scripts/install-cuda-headers.sh", files)
+        found = {(e["name"], e["version"]) for e in static_sources.downloads(util.REPO, compute_hashes=False)}
+        self.assertIn(("cuda_cudart", "12.8.57"), found)
+        self.assertIn(("libaio", "0.3.113"), found)
+        self.assertIn("azurite", inputs.npm_roots(util.REPO))
+
+    def test_every_url_ship_key_names_a_download_of_this_repository(self):
+        names = {"url:" + e["name"] for e in static_sources.downloads(util.REPO, compute_hashes=False)}
+        keys = {key for key in inputs.config()["ship"] if key.startswith("url:")}
+        self.assertEqual(keys - names, set())
+
+
+class CompletenessTest(unittest.TestCase):
+    def repo_with(self, files):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        for path, text in files.items():
+            full = os.path.join(folder.name, path)
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, "w") as f:
+                f.write(text)
+        subprocess.check_call(["git", "init", "-q", folder.name])
+        subprocess.check_call(["git", "-C", folder.name, "add", "."])
+        return folder.name
+
+    def test_this_repository_is_covered(self):
+        self.assertEqual(completeness.problems(util.REPO), [])
+
+    def test_a_new_file_that_downloads_something_is_reported(self):
+        repo = self.repo_with({"tools/get.sh": "curl -fsSL -o x.tgz https://example.org/x.tgz\n",
+                               ".devcontainer/Dockerfile": "FROM ubuntu:20.04\n",
+                               "docs/notes.md": "run `pip install x`\n"})
+        problems = completeness.unread_files(repo)
+        self.assertEqual(len(problems), 1)
+        self.assertTrue(problems[0].startswith("tools/get.sh "))
+
+    def test_a_command_in_a_shape_the_parser_does_not_know_is_reported(self):
+        repo = self.repo_with({".devcontainer/Dockerfile": "FROM ubuntu:20.04\n",
+                               ".devcontainer/scripts/a.sh": 'x=$(curl -fsSL https://example.org/a.tgz -o a.tgz)\n'
+                                                              "curl -fsSL -o b.tgz https://example.org/b.tgz\n"})
+        problems = completeness.unparsed_commands(repo)
+        self.assertEqual(problems, ["%s has 2 `curl with a URL` commands and the collector read 1. Teach dockerfile.py the new shape"
+                                    % ".devcontainer/scripts/a.sh"])
 
 
 class InputsTest(unittest.TestCase):

@@ -13,7 +13,8 @@ import re
 import dockerfile
 from util import HERE, read_json
 
-DOCKERFILE = ".devcontainer/Dockerfile"
+DOCKERFILE = dockerfile.DOCKERFILE
+SCRIPTS = ".devcontainer/scripts"
 DEVCONTAINER = ".devcontainer/devcontainer.json"
 
 
@@ -32,14 +33,22 @@ def read(repo, path):
         return f.read()
 
 
+def build_files(repo):
+    """The files that hold the commands which build the devcontainer image, as paths relative to the
+    repository: the Dockerfile and the shell scripts it runs."""
+    scripts = sorted(os.path.relpath(path, repo) for path in glob.glob(os.path.join(repo, SCRIPTS, "*.sh")))
+    return [DOCKERFILE] + scripts
+
+
 def apt_roots(repo):
     """{package: {"categories": [...], "declared_by": [...]}} for the apt packages we name: the
-    Dockerfile `apt-get install` lines and the apt-packages devcontainer feature."""
+    `apt-get install` lines of the Dockerfile and its scripts, and the apt-packages devcontainer feature."""
     roots = {}
-    for line, packages in dockerfile.apt_packages(read(repo, DOCKERFILE)):
-        for package in packages:
-            roots.setdefault(package, {"categories": categories_for("apt", package), "declared_by": []})
-            roots[package]["declared_by"].append("%s:%d" % (DOCKERFILE, line))
+    for path in build_files(repo):
+        for line, packages in dockerfile.apt_packages(read(repo, path), path):
+            for package in packages:
+                roots.setdefault(package, {"categories": categories_for("apt", package), "declared_by": []})
+                roots[package]["declared_by"].append("%s:%d" % (path, line))
     for name, options in devcontainer_features(repo).items():
         if name.startswith("ghcr.io/rocker-org/devcontainer-features/apt-packages"):
             for package in options.get("packages", "").split(","):
@@ -89,11 +98,12 @@ def pip_groups(repo):
     for setup in sorted(glob.glob(os.path.join(repo, "py", "*", "setup.py"))):
         for spec in setup_requirements(setup):
             add("run", spec, os.path.relpath(setup, repo))
-    for line, requirements in dockerfile.pip_packages(read(repo, DOCKERFILE)):
-        for spec in requirements:
-            name = re.split(r"[<>=!~\[; ]", spec, 1)[0]
-            for category in categories_for("pip", name):
-                add(category, spec, "%s:%d" % (DOCKERFILE, line))
+    for path in build_files(repo):
+        for line, requirements in dockerfile.pip_packages(read(repo, path), path):
+            for spec in requirements:
+                name = re.split(r"[<>=!~\[; ]", spec, 1)[0]
+                for category in categories_for("pip", name):
+                    add(category, spec, "%s:%d" % (path, line))
     for requirements in sorted(glob.glob(os.path.join(repo, "py", "*", "requirements*"))):
         for line in read(repo, requirements).splitlines():
             spec = line.split("#")[0].strip()
@@ -120,9 +130,10 @@ def pip_groups(repo):
 
 def npm_roots(repo):
     roots = {}
-    for line, packages in dockerfile.npm_packages(read(repo, DOCKERFILE)):
-        for package in packages:
-            roots[package] = {"categories": categories_for("npm", package), "declared_by": ["%s:%d" % (DOCKERFILE, line)]}
+    for path in build_files(repo):
+        for line, packages in dockerfile.npm_packages(read(repo, path), path):
+            for package in packages:
+                roots[package] = {"categories": categories_for("npm", package), "declared_by": ["%s:%d" % (path, line)]}
     return roots
 
 

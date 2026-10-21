@@ -5,6 +5,7 @@
 
     python3 .github/scripts/dependencies/collect.py collect --image IMAGE    write dependencies.json (needs Docker and network)
     python3 .github/scripts/dependencies/collect.py check                    validate dependencies.json
+    python3 .github/scripts/dependencies/collect.py completeness             offline: does the collector read every file that downloads something
     python3 .github/scripts/dependencies/collect.py resolve ...              (runs inside the devcontainer, started by collect)
 
 No dependency is kept or stored. Collecting does download: Bazel fetches the external repositories
@@ -22,6 +23,7 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
+import completeness as completeness_checks  # noqa: E402
 import dockerfile  # noqa: E402
 import inputs  # noqa: E402
 import static_sources  # noqa: E402
@@ -138,12 +140,22 @@ def collect(args):
     log("wrote %d dependencies to %s" % (len(merged), args.out))
 
 
+def completeness(args):
+    """Fail if a file or a command that downloads something is not read by the collector. Needs no
+    network and no list."""
+    problems = completeness_checks.problems(REPO)
+    if problems:
+        sys.exit("\n".join(problems))
+    print("every file and command that downloads something is read by the collector")
+
+
 def check(args):
-    """Fail if the list is malformed or out of step with the third-party notices."""
+    """Fail if the list is malformed, out of step with the third-party notices, or the collector
+    misses a file or a command."""
     if not os.path.exists(args.out):
         sys.exit("%s does not exist: run `collect` first, or pass --out" % args.out)
     data = read_json(args.out)
-    problems = []
+    problems = completeness_checks.problems(REPO)
     for item in data["dependencies"]:
         label = "%s %s %s" % (item["ecosystem"], item["name"], item["version"])
         if not item["categories"] or any(c not in CATEGORIES for c in item["categories"]):
@@ -182,6 +194,8 @@ def main():
     verify = commands.add_parser("check", help="validate dependencies.json")
     verify.add_argument("--out", default=OUTPUT)
     verify.set_defaults(run=check)
+    commands.add_parser("completeness", help="check that the collector reads every file and command that downloads something "
+                                              "(offline, needs no list)").set_defaults(run=completeness)
     args = parser.parse_args()
     args.run(args)
 

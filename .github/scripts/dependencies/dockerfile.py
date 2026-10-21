@@ -1,12 +1,19 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Read the external inputs of .devcontainer/Dockerfile: base images, apt and pip packages, npm
-packages, downloaded archives and git clones. Python 3.8 compatible (it also runs in the image)."""
+"""Read the external inputs of .devcontainer/Dockerfile and of the shell scripts it runs: base images,
+apt and pip packages, npm packages, downloaded archives and git clones. Python 3.8 compatible (it
+also runs in the image).
+
+Every reader takes the text of the file and its path. A path that ends in `.sh` is read as a script
+(every line is a command); any other path is read as a Dockerfile (the `RUN` instructions)."""
 
 import re
 
+DOCKERFILE = ".devcontainer/Dockerfile"
 ARCHES = ("x86_64", "aarch64")
+# The architecture argument of the scripts (`install-test-services.sh amd64`) and the name the list uses.
+SCRIPT_ARCHES = {"amd64": "x86_64", "arm64": "aarch64"}
 # `$([ "$(uname -m)" = "aarch64" ] && echo "arm64" || echo "amd64")` -> one value per architecture.
 UNAME_CHOICE = re.compile(r'\$\(\s*\[ "\$\(uname -m\)" = "aarch64" \] && echo "(\w+)" \|\| echo "(\w+)"\s*\)')
 URL_START = re.compile(r"https?://")
@@ -62,6 +69,21 @@ def instructions(text):
         yield number, word.upper(), rest.strip()
 
 
+def is_script(path):
+    return path.endswith(".sh")
+
+
+def runs(text, path):
+    """The shell commands of a file as (line, command): the `RUN` instructions of a Dockerfile, or
+    every logical line of a script."""
+    if is_script(path):
+        yield from logical_lines(text)
+    else:
+        for number, word, rest in instructions(text):
+            if word == "RUN":
+                yield number, rest
+
+
 def base_images(text):
     """FROM lines as (line, image, tag, digest, stage name)."""
     found = []
@@ -101,12 +123,10 @@ def _segments(run):
     return [part.strip() for part in parts if part.strip()]
 
 
-def apt_packages(text):
+def apt_packages(text, path=DOCKERFILE):
     """Packages named on `apt-get install` lines, as (line, [package])."""
     found = []
-    for number, word, rest in instructions(text):
-        if word != "RUN":
-            continue
+    for number, rest in runs(text, path):
         for segment in _segments(rest):
             match = re.search(r"apt-get install\s+(.*)", segment)
             if match:
@@ -121,12 +141,10 @@ def apt_packages(text):
     return found
 
 
-def pip_packages(text):
+def pip_packages(text, path=DOCKERFILE):
     """Requirements named on `pip install` lines, as (line, [requirement])."""
     found = []
-    for number, word, rest in instructions(text):
-        if word != "RUN":
-            continue
+    for number, rest in runs(text, path):
         for segment in _segments(rest):
             match = re.search(r"pip3? install\s+(.*)", segment)
             if match:
@@ -136,11 +154,9 @@ def pip_packages(text):
     return found
 
 
-def npm_packages(text):
+def npm_packages(text, path=DOCKERFILE):
     found = []
-    for number, word, rest in instructions(text):
-        if word != "RUN":
-            continue
+    for number, rest in runs(text, path):
         for segment in _segments(rest):
             match = re.search(r"npm install\s+(.*)", segment)
             if match:
@@ -163,9 +179,92 @@ def _arch_urls(url, run):
     return {"any": url}
 
 
-def downloads(text):
+def script_variables(text):
+    """What a script sets, as ({name: value} for every architecture, {architecture: {name: value}}).
+
+    A script is not run, so only the shapes the devcontainer scripts use are read: `NAME=value`
+    lines, and `NAME=value` lines inside a `case` branch named `amd64)` or `arm64)`. The name
+    assigned from `$1` is the architecture argument. Values that run a command are skipped."""
+    common, specific, branch = {}, {arch: {} for arch in SCRIPT_ARCHES}, None
+    for _, line in logical_lines(text):
+        label = re.match(r"(amd64|arm64|\*)\)\s*(.*)$", line)
+        if label:
+            branch, line = label.group(1), label.group(2)
+        closes = line.endswith(";;")  # the end of the branch
+        line = re.sub(r"\s*;;$", "", line)
+        assignment = re.match(r"([A-Za-z_]\w*)=(.*)$", line)
+        if assignment and "$(" not in assignment.group(2) and "`" not in assignment.group(2):
+            name, value = assignment.group(1), assignment.group(2).strip().strip("\"'")
+            if branch in SCRIPT_ARCHES:
+                specific[branch][name] = value
+            elif branch is None:
+                common[name] = value
+        if closes:
+            branch = None
+    return common, specific
+
+
+def _expand(text, variables):
+    """Replace `${NAME}` by the value of NAME, also inside the values."""
+    for _ in range(5):
+        replaced = re.sub(r"\$\{(\w+)\}", lambda m: variables.get(m.group(1), m.group(0)), text)
+        if replaced == text:
+            break
+        text = replaced
+    return text
+
+
+def _script_environment(text, arch):
+    """The variables of a script when it runs for `arch` (a key of SCRIPT_ARCHES)."""
+    common, specific = script_variables(text)
+    variables = dict(common)
+    variables.update(specific[arch])
+    for name, value in common.items():
+        if value == "$1":  # `target_arch=$1`: the architecture argument
+            variables[name] = arch
+    return variables
+
+
+def _script_downloads(text, path):
+    found = []
+    environments = {arch: _script_environment(text, arch) for arch in SCRIPT_ARCHES}
+    for number, line in logical_lines(text):
+        for segment in _segments(line):
+            if not re.match(r"curl\b", segment):
+                continue
+            urls = read_urls(segment)
+            if not urls:
+                continue
+            output = re.search(r"-o\s+(\S+)", segment)
+            filename = output.group(1) if output else None
+            per_arch = {SCRIPT_ARCHES[arch]: _expand(urls[0], environments[arch]) for arch in SCRIPT_ARCHES}
+            for url in per_arch.values():
+                if "$" in url:
+                    raise ValueError("%s line %d: cannot work out the URL %s; add the variable it uses to a `case amd64)` "
+                                     "branch or an assignment, or teach script_variables about the new shape" % (path, number, url))
+            pins = {}
+            if filename:
+                pinned = re.search(r'echo\s+"(\S+)\s+%s"\s*\|\s*sha256sum' % re.escape(filename), text)
+                if pinned:
+                    for arch, name in SCRIPT_ARCHES.items():
+                        value = _expand(pinned.group(1), environments[arch])
+                        if re.fullmatch(r"[0-9a-f]{64}", value):
+                            pins[name] = value
+            if len(set(per_arch.values())) == 1:
+                urls_by_arch = {"any": next(iter(per_arch.values()))}
+                hashes = {"any": next(iter(pins.values()))} if pins and len(set(pins.values())) == 1 else {}
+            else:
+                urls_by_arch, hashes = per_arch, pins
+            found.append({"line": number, "filename": filename, "urls": urls_by_arch, "sha256": hashes})
+    return found
+
+
+def downloads(text, path=DOCKERFILE):
     """Archives and scripts fetched with curl or wget, as dicts with line, filename, urls ({arch: url})
-    and sha256 ({arch: hash}) where the Dockerfile pins one."""
+    and sha256 ({arch: hash}) where the file pins one. In a script the pin is an `echo "<hash>  <file>" |
+    sha256sum -c -` line anywhere in the script; the architecture comes from `case amd64)` branches."""
+    if is_script(path):
+        return _script_downloads(text, path)
     found = []
     for number, word, rest in instructions(text):
         if word != "RUN" or "curl" not in rest:
@@ -193,13 +292,15 @@ def downloads(text):
     return found
 
 
-def git_clones(text):
+def git_clones(text, path=DOCKERFILE):
     """`git clone` lines as (line, url, ref) where ref is --branch or a later `git checkout`."""
     found = []
-    for number, word, rest in instructions(text):
-        if word != "RUN" or "git clone" not in rest:
+    current = None  # the clone that a later `git checkout` applies to
+    for number, rest in runs(text, path):
+        if "git clone" not in rest and "git checkout" not in rest:
             continue
-        current = None  # the clone that a later `git checkout` in the same RUN applies to
+        if not is_script(path):
+            current = None  # in a Dockerfile a checkout applies to a clone of the same RUN only
         for segment in _segments(rest):
             tokens = _tokens(segment)
             if tokens[:2] == ["git", "clone"]:
@@ -209,7 +310,7 @@ def git_clones(text):
                         branch = tokens[index + 1]
                 urls = [t for t in tokens if re.match(r"(https?://|ssh://|git://|git@)", t)]
                 if not urls:
-                    raise ValueError("Dockerfile line %d: no repository URL in: %s" % (number, segment))
+                    raise ValueError("%s line %d: no repository URL in: %s" % (path, number, segment))
                 current = {"line": number, "url": urls[0], "ref": branch, "recursive": "--recurse-submodules" in tokens}
                 found.append(current)
             elif tokens[:2] == ["git", "checkout"] and current and not current["ref"] and len(tokens) > 2:

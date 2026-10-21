@@ -27,7 +27,7 @@
  },
  "ship": {
   "_comment": "Dependencies whose code is linked into a native library we distribute: '<ecosystem>:<name>' -> ids of the matching entries in third_party_notices/components.json. `collect.py check` fails when a key matches nothing or a component id is not covered.",
-  "docker-image:nvidia/cuda": ["nvidia-cuda-headers"],
+  "url:cuda_cudart": ["nvidia-cuda-headers"],
   "apt:libstdc++-9-dev": ["gcc-runtime"],
   "apt:libgcc-9-dev": ["gcc-runtime"],
   "apt:libc6-dev": ["glibc-nonshared"],
@@ -72,5 +72,19 @@
   "bazel:com_github_google_crc32c": ["crc32c"],
   "bazel:io_opentelemetry_cpp": ["opentelemetry-cpp"],
   "bazel:com_github_nlohmann_json": ["nlohmann-json"]
+ },
+ "coverage": {
+  "_comment": "`collect.py check` looks for tracked files that download or install something (curl or wget with a URL, git clone, pip or npm or apt-get install, FROM, http_archive) and fails on any file the collector does not read. List a file here only when it is covered another way or is not an input of the build. Patterns are shell globs on the path from the repository root; `*` also matches `/`.",
+  "covered_by_bazel": [
+   "cpp/WORKSPACE",
+   "cpp/rules.bzl",
+   "cpp/third_party/*.bzl",
+   "cpp/toolchain/*.bzl"
+  ],
+  "not_an_input": [
+   ".github/scripts/dependencies/*",
+   "*.md",
+   "*.ipynb"
+  ]
  }
 }

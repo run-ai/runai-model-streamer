@@ -5,6 +5,7 @@
 devcontainer: base images, the archives and git repositories the Dockerfile fetches, devcontainer
 features, the Bazel binary and the GitHub actions the workflows use."""
 
+import os
 import re
 import urllib.error
 import urllib.request
@@ -52,28 +53,33 @@ def _download_name(record):
     url = next(iter(record["urls"].values()))
     if "nodesource.com" in url:
         return "nodesource-setup", re.search(r"setup_(\S+)", url).group(1)
+    # NVIDIA redistributables: .../cuda/redist/cuda_cudart/linux-x86_64/cuda_cudart-linux-x86_64-12.8.57-archive.tar.xz
+    redistributable = re.search(r"/redist/(\w+)/[^/]+/.*-(\d[\d.]*)-archive\.tar", url)
+    if redistributable:
+        return redistributable.group(1), redistributable.group(2)
     return archive_name_version(record["filename"], url)
 
 
 def downloads(repo, compute_hashes):
-    """Archives the Dockerfile downloads. A hash the Dockerfile pins is used as it is; otherwise it
-    is computed from the file the URL serves now."""
+    """Archives the Dockerfile and its scripts download. A hash the file pins is used as it is;
+    otherwise it is computed from the file the URL serves now."""
     found = []
-    for record in dockerfile.downloads(inputs.read(repo, inputs.DOCKERFILE)):
-        name, version = _download_name(record)
-        categories = inputs.categories_for("download", name)
-        files = []
-        for platform, url in record["urls"].items():
-            pinned = record["sha256"].get(platform) or record["sha256"].get("any")
-            if pinned:
-                digest = ("sha256", pinned, "pinned in Dockerfile")
-            elif compute_hashes:
-                log("hashing " + url)
-                digest = ("sha256", http_sha256(url), "computed from the download")
-            else:
-                digest = None
-            files.append(file_record(url, platform=platform, digest=digest))
-        found.append(entry(name, version, "url", categories, files, ["%s:%d" % (inputs.DOCKERFILE, record["line"])]))
+    for path in inputs.build_files(repo):
+        for record in dockerfile.downloads(inputs.read(repo, path), path):
+            name, version = _download_name(record)
+            categories = inputs.categories_for("download", name)
+            files = []
+            for platform, url in record["urls"].items():
+                pinned = record["sha256"].get(platform) or record["sha256"].get("any")
+                if pinned:
+                    digest = ("sha256", pinned, "pinned in " + os.path.basename(path))
+                elif compute_hashes:
+                    log("hashing " + url)
+                    digest = ("sha256", http_sha256(url), "computed from the download")
+                else:
+                    digest = None
+                files.append(file_record(url, platform=platform, digest=digest))
+            found.append(entry(name, version, "url", categories, files, ["%s:%d" % (path, record["line"])]))
     return found
 
 
@@ -101,21 +107,22 @@ def _repo_name(url):
 def git_repositories(repo):
     """The git repositories the Dockerfile clones, with the commit and every submodule."""
     found = []
-    for clone in dockerfile.git_clones(inputs.read(repo, inputs.DOCKERFILE)):
-        commit = ls_remote(clone["url"], clone["ref"])
-        if not commit:
-            raise RuntimeError("cannot resolve %s at %s" % (clone["url"], clone["ref"]))
-        categories = ["build"]
-        declared = ["%s:%d" % (inputs.DOCKERFILE, clone["line"])]
-        found.append(entry(_repo_name(clone["url"]), clone["ref"], "git", categories,
-                           [file_record(clone["url"], commit=commit)], declared,
-                           "Cloned with its submodules; they are listed as separate entries." if clone["recursive"] else None))
-        if clone["recursive"]:
-            log("submodules of %s" % clone["url"])
-            for path, url, sha in submodules(clone["url"], commit):
-                found.append(entry(_repo_name(url), _tag_for(url, sha), "git", categories,
-                                   [file_record(url, commit=sha)], declared,
-                                   "Submodule %s of %s %s." % (path, _repo_name(clone["url"]), clone["ref"])))
+    for source in inputs.build_files(repo):
+        for clone in dockerfile.git_clones(inputs.read(repo, source), source):
+            commit = ls_remote(clone["url"], clone["ref"])
+            if not commit:
+                raise RuntimeError("cannot resolve %s at %s" % (clone["url"], clone["ref"]))
+            categories = ["build"]
+            declared = ["%s:%d" % (source, clone["line"])]
+            found.append(entry(_repo_name(clone["url"]), clone["ref"], "git", categories,
+                               [file_record(clone["url"], commit=commit)], declared,
+                               "Cloned with its submodules; they are listed as separate entries." if clone["recursive"] else None))
+            if clone["recursive"]:
+                log("submodules of %s" % clone["url"])
+                for path, url, sha in submodules(clone["url"], commit):
+                    found.append(entry(_repo_name(url), _tag_for(url, sha), "git", categories,
+                                       [file_record(url, commit=sha)], declared,
+                                       "Submodule %s of %s %s." % (path, _repo_name(clone["url"]), clone["ref"])))
     return found
 
 
