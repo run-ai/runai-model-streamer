@@ -1116,6 +1116,41 @@ TEST(AsyncIoWorker, Fd_Opened_Once_And_Closed_At_Finalize)
     EXPECT_EQ(open_fds_on(fixture.file.path), before) << "descriptor leaked past the last response";
 }
 
+// The other side of closing early: a batch that still has chunks outstanding must keep its descriptor.
+// Closing on the first chunk instead of the last would leave the rest reading a closed descriptor, or
+// one the next open has been handed back.
+TEST(AsyncIoWorker, Fd_Stays_Open_Until_The_Last_Chunk_Of_Its_Batch)
+{
+    Fixture fixture({ ChunkSize, ChunkSize, ChunkSize });   // three chunks, one batch
+    Driver driver;
+
+    const auto before = open_fds_on(fixture.file.path);
+
+    driver.execute(fixture.workload());
+    driver.issue();
+
+    const auto in_flight = driver.in_flight();
+    ASSERT_EQ(in_flight.size(), 3u);
+
+    driver.engine->complete(in_flight[0]);
+    driver.route();
+    EXPECT_EQ(open_fds_on(fixture.file.path), before + 1) << "closed with two chunks still outstanding";
+
+    driver.engine->complete(in_flight[1]);
+    driver.route();
+    EXPECT_EQ(open_fds_on(fixture.file.path), before + 1) << "closed with one chunk still outstanding";
+
+    driver.engine->complete(in_flight[2]);
+    driver.route();
+    EXPECT_EQ(open_fds_on(fixture.file.path), before) << "kept past its last chunk";
+
+    for (const auto & r : drain_responses(*fixture.responder, 3))
+    {
+        EXPECT_EQ(r.ret, common::ResponseCode::Success);
+    }
+    EXPECT_EQ(fixture.got_at(0, 3 * ChunkSize), fixture.expected_at(0, 3 * ChunkSize));
+}
+
 // A batch's descriptor goes when its own last chunk is done, not when the whole workload is. Otherwise
 // a workload of many small files holds one descriptor per file until the end and runs out of them
 // (EMFILE) at the default limit, though only a window's worth is ever being read (#261).
