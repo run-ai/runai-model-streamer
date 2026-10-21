@@ -203,9 +203,9 @@ Each pull request should meet the following requirements:
 
 ## Pull Request CI Environment
 
-The setup job checks whether `.devcontainer/**` changed. If it did, a single
-preparation job builds the checked-out devcontainer using the reusable
-`devcontainer.yml` workflow and the published image as a build cache. With
+The setup job checks whether `.devcontainer/**` or the PR/devcontainer workflows
+changed. If they did, the preparation job builds the checked-out devcontainer
+using the reusable `devcontainer.yml` workflow and the published image as a build cache. With
 `publish: false`, it saves the image as a temporary Actions artifact, retained for
 one day. The artifact is named `ci-devcontainer-<run>-<attempt>`. The artifact
 and image tags include the run ID and attempt to isolate
@@ -217,15 +217,44 @@ C++ build, Python package build, C++ test, and Python test steps. The container
 shares build outputs and installed dependencies across steps and is stopped even
 if a build or test fails. The integration job runs through `devcontainers/ci`
 with an image-only configuration. Neither path rebuilds the Dockerfile or
-reinstalls Features. When `.devcontainer/**` is
-unchanged, the preparation job is skipped and jobs use the published
+reinstalls Features. When those files are unchanged, the preparation jobs are
+skipped and jobs use the published
 `ghcr.io/dsx-ai-factory/model-streamer/devcontainer:latest` image directly. Both
 paths preserve the seccomp setting required by the io_uring tests.
 
 The **Build and Push DevContainer** workflow calls the same reusable workflow
 with `publish: true` on master. It pushes the image to GHCR instead of uploading
 an image artifact. PRs never push images to GHCR. The final required check fails
-if preparation of a changed image fails; unchanged-image PRs still run all jobs.
+if preparation of a changed image fails; unchanged-image PRs still run all
+application jobs.
+
+Two additional preparation jobs build candidate devcontainers in parallel with
+the existing image: AMD64 on `ubuntu-24.04` and ARM64 on `ubuntu-24.04-arm`.
+Each uses the same Dockerfile and Features, but builds only its matching
+architecture's basic libraries, IO libraries, AWS SDK, and Azure SDK. Both compiler
+toolchains remain installed during this transition. The ARM64 candidate skips the
+x86-specific TSAN workaround. Candidate images are built only; runtime validation
+is deferred to the integration phase when CI switches to these images.
+
+The reusable image workflow accepts an optional `architecture` input (`amd64` or
+`arm64`); omitting it preserves the existing dual-architecture dependency build.
+It sets `DEVCONTAINER_DEPENDENCY_ARCHES`, which the devcontainer configuration
+passes as the `DEPENDENCY_ARCHES` Docker build argument. Local builds default to
+`amd64 arm64` when that environment variable is unset.
+
+Candidate PR image tags append `-amd64` or `-arm64` to the existing run/attempt
+names. Candidates skip image export and artifact upload because no application
+job consumes them yet. Only the existing image is uploaded for downstream jobs,
+with one-day artifact retention. Application builds wait only for the existing
+image; the final **Test, Build & Push** check additionally requires both candidate
+jobs to succeed when image-related files changed, and accepts their skips otherwise.
+
+On master and supported release branches, the publication workflow builds all
+three images independently. Candidates use `latest-amd64` / `latest-arm64` or
+`release-X.Y-amd64` / `release-X.Y-arm64` in the same GHCR image repository. Each
+candidate imports only its matching branch-and-architecture image as a cache;
+missing caches allow a clean build. Existing tags and CI consumers remain unchanged.
+This temporarily increases CI compute while preparing the later consumer switch.
 
 ### Parallel PR checks
 
@@ -292,8 +321,10 @@ alongside the core library for the same architecture. Libraries are copied out
 of the container before it stops so the downloads contain real files rather
 than Bazel symlinks. The `Test, Build & Push` required check succeeds
 only when all eight builds (including their C++ and Python tests), integration
-tests, and package assembly succeed. Changed devcontainers are built once before
-the matrix starts; peak matrix concurrency remains eight runners.
+tests, package assembly, and any triggered candidate image builds succeed. The
+existing devcontainer is built once before the matrix starts when its inputs
+change; the eight component runners can overlap with the two candidate image
+builders during this transition.
 
 To verify an extracted PR bundle locally, substitute its development version:
 
