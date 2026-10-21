@@ -24,6 +24,10 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/aarch64-linux-gnu-ld.gold /usr/bin/ld.gold
 
+ARG TARGETARCH
+# Preserve the dual-architecture image by default; native candidates pass one architecture.
+ARG DEPENDENCY_ARCHES="amd64 arm64"
+
 # ThreadSanitizer (`bazel test --config=tsan`).
 #
 # Ubuntu 20.04 ships libtsan.so for gcc-9 but NOT libtsan_preinit.o, so -fsanitize=thread fails to
@@ -36,8 +40,10 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
 # The `test -f libtsan.so` is not a formality: -print-file-name echoes its argument back when the
 # file is not there, so without it the object would land in the build directory and --config=tsan
 # would keep failing with the same confusing error. The second test never shadows a real
-# libtsan_preinit.o, in case a later base image ships one.
-RUN printf '%s\n' \
+# libtsan_preinit.o, in case a later base image ships one. The ARM64-only candidate does not
+# consume this x86_64 object; retain it for the legacy and AMD64 images.
+RUN if [ "$DEPENDENCY_ARCHES" != arm64 ]; then \
+    printf '%s\n' \
         'extern void __tsan_init(void);' \
         'static void __local_tsan_preinit(void) { __tsan_init(); }' \
         '__attribute__((section(".preinit_array"), used))' \
@@ -47,7 +53,8 @@ RUN printf '%s\n' \
     && test -f "$TSAN_DIR/libtsan.so" \
     && { test -f "$TSAN_DIR/libtsan_preinit.o" \
          || x86_64-linux-gnu-gcc -c -fPIC /tmp/tsan_preinit.c -o "$TSAN_DIR/libtsan_preinit.o"; } \
-    && rm /tmp/tsan_preinit.c
+    && rm /tmp/tsan_preinit.c; \
+    fi
 
 RUN pip install \
     boto3 \
@@ -66,19 +73,18 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
 
 # Local storage services used by the integration tests.
 COPY scripts/install-test-services.sh /tmp/install-test-services.sh
-ARG TARGETARCH
 RUN bash /tmp/install-test-services.sh "$TARGETARCH"
 
 # CUDA headers only, for compile-time type checking of the driver API. No runtime and no
 # libraries: libcuda.so.1 is loaded with dlopen, so the build has no link-time CUDA dependency
 # and the image needs no driver.
 COPY scripts/install-cuda-headers.sh /tmp/install-cuda-headers.sh
-ARG TARGETARCH
 RUN bash /tmp/install-cuda-headers.sh "$TARGETARCH"
 
 # Build all shared SDK prerequisites before the cloud SDKs.
+# DEPENDENCY_ARCHES is deliberately split into the scripts' architecture arguments.
 COPY scripts/build-basic-libs.sh /tmp/build-basic-libs.sh
-RUN bash /tmp/build-basic-libs.sh amd64 arm64
+RUN bash /tmp/build-basic-libs.sh $DEPENDENCY_ARCHES
 
 ADD aarch64-linux-gnu.cmake /opt/toolchains/aarch64-linux-gnu.cmake
 ADD x86_64-linux-gnu.cmake /opt/toolchains/x86_64-linux-gnu.cmake
@@ -86,14 +92,13 @@ ADD x86_64-linux-gnu.cmake /opt/toolchains/x86_64-linux-gnu.cmake
 # Keep AWS in the final image's layer chain so CI can reuse its build layer
 # through the published image cache when later dependencies change.
 COPY scripts/build-aws-sdk.sh /tmp/build-aws-sdk.sh
-RUN bash /tmp/build-aws-sdk.sh amd64 arm64
+RUN bash /tmp/build-aws-sdk.sh $DEPENDENCY_ARCHES
 
 # Build Azure SDK for C++ (optimized with shared CMake options)
 SHELL ["/bin/bash", "-c"]
 COPY scripts/build-azure-sdk.sh /tmp/build-azure-sdk.sh
-ARG TARGETARCH
-RUN bash /tmp/build-azure-sdk.sh --native-arch "$TARGETARCH" amd64 arm64
+RUN bash /tmp/build-azure-sdk.sh --native-arch "$TARGETARCH" $DEPENDENCY_ARCHES
 
 # Keep I/O libraries last so their changes can reuse the cloud SDK build layers.
 COPY scripts/build-io-libs.sh /tmp/build-io-libs.sh
-RUN bash /tmp/build-io-libs.sh amd64 arm64
+RUN bash /tmp/build-io-libs.sh $DEPENDENCY_ARCHES
