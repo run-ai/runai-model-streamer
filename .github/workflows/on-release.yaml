@@ -21,7 +21,7 @@ jobs:
   setup:
     name: Validate release
     if: github.event.deleted == false
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.release.outputs.version }}
       image: ${{ steps.image.outputs.image }}
@@ -52,17 +52,18 @@ jobs:
         set -euo pipefail
         repository="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
         image="ghcr.io/$repository/devcontainer:release-${VERSION%.*}"
-        if ! docker pull "$image"; then
-          echo "::error::Publish the release branch devcontainer before running release CI: $image"
+        if ! manifest=$(docker buildx imagetools inspect "$image" --format '{{json .Manifest}}') ||
+           ! digest=$(jq -er '
+             select(.mediaType == "application/vnd.oci.image.index.v1+json" or
+                    .mediaType == "application/vnd.docker.distribution.manifest.list.v2+json")
+             | select([.manifests[] | select(.platform.os == "linux") | .platform.architecture]
+                      | index("amd64") != null and index("arm64") != null)
+             | .digest | strings | select(length == 71 and test("^sha256:[0-9a-f]{64}$"))
+           ' <<< "$manifest"); then
+          echo "::error::Cannot use devcontainer $image. Require both linux/amd64 and linux/arm64 and a valid index digest. Run Build and Push DevContainer on the matching branch before retrying." >&2
           exit 1
         fi
-        resolved=$(docker image inspect "$image" --format '{{json .RepoDigests}}' \
-          | jq -r --arg prefix "ghcr.io/$repository/devcontainer@" \
-            '[.[]? | select(startswith($prefix))][0] // empty')
-        if [[ ! "$resolved" =~ @sha256:[0-9a-f]{64}$ ]]; then
-          echo '::error::Could not resolve the release devcontainer to a digest.'
-          exit 1
-        fi
+        resolved="${image%:*}@$digest"
         printf 'image=%s\n' "$resolved" >> "$GITHUB_OUTPUT"
         printf 'Version: `%s`\n\nCommit: `%s`\n\nImage: `%s`\n' "$VERSION" "$(git rev-parse HEAD)" "$resolved" >> "$GITHUB_STEP_SUMMARY"
 
@@ -82,9 +83,13 @@ jobs:
       devcontainer_image: ${{ needs.setup.outputs.image }}
 
   tests:
-    name: Integration tests and filesystem strategies
+    name: Integration tests and filesystem strategies (${{ matrix.arch }})
     needs: [setup, build]
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64]
+    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     env:
       PACKAGE_VERSION: ${{ needs.setup.outputs.version }}
       CI_IMAGE: ${{ needs.setup.outputs.image }}
@@ -102,10 +107,10 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Download x86_64 wheels for integration tests
+    - name: Download matching wheels for integration tests
       uses: actions/download-artifact@v7
       with:
-        pattern: ci-packages-*-x86_64
+        pattern: ci-packages-*-${{ matrix.arch }}
         path: py
         merge-multiple: true
 
@@ -130,7 +135,7 @@ jobs:
   publish:
     name: Approve and publish release
     needs: [setup, bundle]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: pypi
     permissions:
       contents: write

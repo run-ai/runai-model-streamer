@@ -10,6 +10,7 @@ on:
       - '.devcontainer/**'
       - '.github/workflows/devcontainer.yml'
       - '.github/workflows/build-devcontainer.yml'
+      - '.github/workflows/publish-devcontainer.yml'
       - '.github/workflows/on-pr.yaml'
   workflow_dispatch:
 
@@ -23,7 +24,7 @@ permissions:
 jobs:
   select-branch:
     name: Select devcontainer branch
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       publish: ${{ steps.branch.outputs.publish }}
       baseline_tag: ${{ steps.branch.outputs.baseline_tag }}
@@ -54,20 +55,8 @@ jobs:
         fi
         printf 'publish=true\nbaseline_tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
 
-  build-devcontainer:
-    name: Build & Push DevContainer Image
-    needs: select-branch
-    if: needs.select-branch.outputs.publish == 'true'
-    permissions:
-      contents: read
-      packages: write
-    uses: ./.github/workflows/devcontainer.yml
-    with:
-      publish: true
-      baseline_tag: ${{ needs.select-branch.outputs.baseline_tag }}
-
   build-devcontainer-amd64:
-    name: Build & Push AMD64 DevContainer Candidate
+    name: Build & Push AMD64 DevContainer Image
     needs: select-branch
     if: needs.select-branch.outputs.publish == 'true'
     permissions:
@@ -80,7 +69,7 @@ jobs:
       baseline_tag: ${{ needs.select-branch.outputs.baseline_tag }}
 
   build-devcontainer-arm64:
-    name: Build & Push ARM64 DevContainer Candidate
+    name: Build & Push ARM64 DevContainer Image
     needs: select-branch
     if: needs.select-branch.outputs.publish == 'true'
     permissions:
@@ -91,3 +80,16 @@ jobs:
       architecture: arm64
       publish: true
       baseline_tag: ${{ needs.select-branch.outputs.baseline_tag }}
+
+  publish-manifest:
+    name: Publish multi-architecture devcontainer tag
+    needs: [select-branch, build-devcontainer-amd64, build-devcontainer-arm64]
+    if: needs.select-branch.outputs.publish == 'true'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/publish-devcontainer.yml
+    with:
+      baseline_tag: ${{ needs.select-branch.outputs.baseline_tag }}
+      amd64_image: ${{ needs.build-devcontainer-amd64.outputs.published_image }}
+      arm64_image: ${{ needs.build-devcontainer-arm64.outputs.published_image }}
