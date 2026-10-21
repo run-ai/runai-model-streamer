@@ -16,6 +16,10 @@ defaults:
     shell: bash
 
 jobs:
+  spdx:
+    name: SPDX headers
+    uses: ./.github/workflows/spdx-headers.yml
+
   setup:
     name: Setup
     runs-on: ubuntu-24.04
@@ -237,11 +241,12 @@ jobs:
   lifecycle-install-tests:
     name: Test, Build & Push
     if: always()
-    needs: [setup, devcontainer_amd64, devcontainer_arm64, build_x86, build_arm, tests, packages]
+    needs: [spdx, setup, devcontainer_amd64, devcontainer_arm64, build_x86, build_arm, tests, packages]
     runs-on: ubuntu-24.04
     steps:
     - name: Require all builds, tests, and package uploads to succeed
       env:
+        SPDX_RESULT: ${{ needs.spdx.result }}
         X86_RESULT: ${{ needs.build_x86.result }}
         ARM_RESULT: ${{ needs.build_arm.result }}
         TEST_RESULT: ${{ needs.tests.result }}
@@ -250,6 +255,7 @@ jobs:
         AMD64_IMAGE_RESULT: ${{ needs.devcontainer_amd64.result }}
         ARM64_IMAGE_RESULT: ${{ needs.devcontainer_arm64.result }}
       run: |
+        test "$SPDX_RESULT" = success
         test "$X86_RESULT" = success
         test "$ARM_RESULT" = success
         test "$TEST_RESULT" = success
