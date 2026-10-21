@@ -1097,7 +1097,7 @@ TEST(AsyncIoWorker, Stop_Waits_For_Reads_In_Flight)
     }
 }
 
-// One descriptor per batch however many chunks it has, released when the workload ends.
+// One descriptor per batch however many chunks it has, released with the batch's last chunk.
 TEST(AsyncIoWorker, Fd_Opened_Once_And_Closed_At_Finalize)
 {
     Fixture fixture({ ChunkSize, ChunkSize, ChunkSize });   // three chunks, one file
@@ -1114,6 +1114,86 @@ TEST(AsyncIoWorker, Fd_Opened_Once_And_Closed_At_Finalize)
 
     drain_responses(*fixture.responder, 3);
     EXPECT_EQ(open_fds_on(fixture.file.path), before) << "descriptor leaked past the last response";
+}
+
+// A batch's descriptor goes when its own last chunk is done, not when the whole workload is. Otherwise
+// a workload of many small files holds one descriptor per file until the end and runs out of them
+// (EMFILE) at the default limit, though only a window's worth is ever being read (#261).
+TEST(AsyncIoWorker, Fd_Is_Closed_When_Its_Batch_Is_Done)
+{
+    Fixture fixture({ ChunkSize, ChunkSize, ChunkSize });
+
+    // Three files, so three batches of one chunk each, all in one workload. They share a path, which
+    // is what lets one count see all three descriptors.
+    const auto path = fixture.file.path;
+    fixture.request.clear();
+    for (unsigned i = 0; i < 3; ++i)
+    {
+        FileRanges ranges;
+        ranges.path = path;
+        ranges.ranges.push_back(ReadRange{ 0, ChunkSize, fixture.buffer.data() + i * ChunkSize });
+        fixture.request.push_back(ranges);
+    }
+
+    Driver driver;
+
+    const auto before = open_fds_on(path);
+
+    driver.execute(fixture.workload());
+    EXPECT_EQ(open_fds_on(path), before + 3) << "one descriptor per batch";
+
+    driver.issue();
+    const auto in_flight = driver.in_flight();
+    ASSERT_EQ(in_flight.size(), 3u);
+
+    // One batch done, the workload not: its descriptor is gone and the others are still held.
+    driver.engine->complete(in_flight[0]);
+    driver.route();
+    EXPECT_EQ(open_fds_on(path), before + 2) << "a finished batch kept its descriptor";
+
+    driver.engine->complete(in_flight[1]);
+    driver.route();
+    EXPECT_EQ(open_fds_on(path), before + 1);
+
+    driver.engine->complete(in_flight[2]);
+    driver.route();
+    EXPECT_EQ(open_fds_on(path), before);
+
+    for (const auto & r : drain_responses(*fixture.responder, 3))
+    {
+        EXPECT_EQ(r.ret, common::ResponseCode::Success);
+    }
+}
+
+// A batch whose open failed has no descriptor to close, but its chunks are still accounted. The count
+// must come down for each of them, or the assertion that guards it fires - and the first chunk records
+// the failure so the second never retries the open.
+TEST(AsyncIoWorker, Failed_Open_Accounts_Every_Chunk_Without_A_Descriptor)
+{
+    Fixture fixture({ ChunkSize, ChunkSize });   // two chunks, one batch
+    Driver driver;
+
+    EXPECT_NO_THROW(driver.execute(fixture.workload("/nonexistent-directory/definitely-missing.bin")));
+
+    const auto responses = drain_responses(*fixture.responder, 2);
+    for (const auto & r : responses)
+    {
+        EXPECT_EQ(r.ret, common::ResponseCode::FileAccessError);
+    }
+
+    // Nothing was ever issued, and the workload is gone: the worker is clean for the next one.
+    EXPECT_EQ(driver.engine->in_flight_count(), 0u);
+
+    Fixture next({ ChunkSize });
+    driver.execute(next.workload());
+    driver.issue();
+    driver.engine->complete_all();
+    driver.route();
+
+    for (const auto & r : drain_responses(*next.responder, 1))
+    {
+        EXPECT_EQ(r.ret, common::ResponseCode::Success);
+    }
 }
 
 // Waiting with nothing issued waits on an empty ring for a completion that will never arrive. Staged
