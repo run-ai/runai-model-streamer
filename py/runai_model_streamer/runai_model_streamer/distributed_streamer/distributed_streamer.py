@@ -93,6 +93,12 @@ class DistributedStreamer:
             return 1
         return dist.get_world_size()
 
+    def set_local_ranks(self) -> None:
+        """Discovers the local ranks, a collective over all the ranks of the process group.
+        A distributed load calls it before its non distributed reads (the safetensors metadata), because the first read
+        fixes the queue depth of the CPP layer by RUNAI_STREAMER_PROCESS_GROUP_SIZE"""
+        self.params.set_local_ranks()
+
     def get_cuda_free_memory(self) -> int:
         if not torch.cuda.is_available():
             return 0
@@ -165,6 +171,13 @@ class DistributedStreamer:
         self._ring_info = None
 
         self.params.set_params(file_stream_requests)
+
+        # discover the local ranks only for distributed streaming, which all the ranks join. A non distributed read
+        # may run on a single rank, and its idle peers would never join the discovery
+        if is_distributed:
+            self.set_local_ranks()
+        else:
+            self.params.set_group_size_without_discovery()
 
         # check if distributed streaming can be used
         self.set_is_distributed(is_distributed, device)
@@ -294,6 +307,17 @@ class _distributedStreamerParams:
         max_chunks_per_file = (fc.max_chunk_size() for fc in file_stream_requests if fc.sizes)
         self.max_chunk = max(max_chunks_per_file, default=0)
 
+        # the rank is set by the discovery, which a non distributed read skips
+        if self.num_processes_on_node is None and dist.is_initialized():
+            self.my_global_rank = dist.get_rank()
+
+    def set_group_size_without_discovery(self) -> None:
+        # set RUNAI_STREAMER_PROCESS_GROUP_SIZE without a collective: LOCAL_WORLD_SIZE is set by torchrun, otherwise the world size,
+        # which is exact on a single node and more than the processes on each node otherwise
+        if self.get_group_size() > 1 and os.environ.get("RUNAI_STREAMER_PROCESS_GROUP_SIZE") is None:
+            os.environ["RUNAI_STREAMER_PROCESS_GROUP_SIZE"] = os.environ.get("LOCAL_WORLD_SIZE", str(self.get_group_size()))
+
+    def set_local_ranks(self) -> None:
         # set the value of RUNAI_STREAMER_PROCESS_GROUP_SIZE to be the number of processes in the distribution group (or 1 if process group is not initialized)
         # This is useful for auto adjustments in the CPP layer, which depends on the number of processes of this workload
         if self.num_processes_on_node is None:
