@@ -18,18 +18,21 @@ defaults:
 jobs:
   setup:
     name: Setup
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       package_version: ${{ steps.version.outputs.PACKAGE_VERSION }}
       devcontainer_changed: ${{ steps.devcontainer_changes.outputs.any_modified }}
       baseline_tag: ${{ steps.image.outputs.baseline_tag }}
-      baseline_image: ${{ steps.image.outputs.baseline_image }}
+      baseline_image: ${{ steps.published_image.outputs.image }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v5
       with:
         fetch-depth: 0
         persist-credentials: false
+
+    - name: Test devcontainer image resolution
+      run: python3 -B -m unittest discover -s .github/scripts -p 'test_devcontainer_image.py'
 
     - name: Detect devcontainer changes
       id: devcontainer_changes
@@ -40,6 +43,7 @@ jobs:
           .github/workflows/devcontainer.yml
           .github/workflows/build-devcontainer.yml
           .github/workflows/on-pr.yaml
+          .github/scripts/resolve-devcontainer-image.sh
         skip_initial_fetch: true
         output_renamed_files_as_deleted_and_added: true
 
@@ -58,26 +62,21 @@ jobs:
           "$tag" "$repository" "$tag" >> "$GITHUB_OUTPUT"
 
     - name: Log in to GitHub Container Registry
-      if: steps.devcontainer_changes.outputs.any_modified != 'true' && steps.image.outputs.baseline_tag != 'latest'
+      if: steps.devcontainer_changes.outputs.any_modified != 'true'
       uses: docker/login-action@v3
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Require published release devcontainer
-      if: steps.devcontainer_changes.outputs.any_modified != 'true' && steps.image.outputs.baseline_tag != 'latest'
+    - name: Resolve published multi-architecture devcontainer
+      id: published_image
+      if: steps.devcontainer_changes.outputs.any_modified != 'true'
       env:
         BASELINE_IMAGE: ${{ steps.image.outputs.baseline_image }}
-        BASE_BRANCH: ${{ github.base_ref }}
       run: |
-        set -euo pipefail
-        if ! docker manifest inspect "$BASELINE_IMAGE" > /dev/null; then
-          echo "::error::Cannot access release devcontainer $BASELINE_IMAGE. Check registry access and the branch's Build and Push DevContainer run. If the image is missing, initialize it with the command below, wait for publication, then rerun this PR workflow."
-          printf 'gh workflow run build-devcontainer.yml --repo %q --ref %q\n' \
-            "$GITHUB_REPOSITORY" "$BASE_BRANCH"
-          exit 1
-        fi
+        resolved=$(bash .github/scripts/resolve-devcontainer-image.sh "$BASELINE_IMAGE")
+        printf 'image=%s\n' "$resolved" >> "$GITHUB_OUTPUT"
 
     - name: Set PACKAGE_VERSION
       id: version
@@ -89,17 +88,8 @@ jobs:
         fi
         printf 'PACKAGE_VERSION=0.0.0+dev.%s\n' "${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
 
-  devcontainer:
-    name: Prepare devcontainer
-    needs: setup
-    if: needs.setup.outputs.devcontainer_changed == 'true'
-    uses: ./.github/workflows/devcontainer.yml
-    with:
-      publish: false
-      baseline_tag: ${{ needs.setup.outputs.baseline_tag }}
-
   devcontainer_amd64:
-    name: Prepare AMD64 devcontainer candidate
+    name: Prepare AMD64 devcontainer
     needs: setup
     if: needs.setup.outputs.devcontainer_changed == 'true'
     uses: ./.github/workflows/devcontainer.yml
@@ -109,7 +99,7 @@ jobs:
       baseline_tag: ${{ needs.setup.outputs.baseline_tag }}
 
   devcontainer_arm64:
-    name: Prepare ARM64 devcontainer candidate
+    name: Prepare ARM64 devcontainer
     needs: setup
     if: needs.setup.outputs.devcontainer_changed == 'true'
     uses: ./.github/workflows/devcontainer.yml
@@ -120,11 +110,11 @@ jobs:
 
   build_x86:
     name: Build & tests (${{ matrix.component }}, x86_64)
-    needs: [setup, devcontainer]
+    needs: [setup, devcontainer_amd64]
     # The optional image job is skipped when the published image can be reused.
     if: >-
       ${{ !cancelled() && needs.setup.result == 'success' &&
-          (needs.setup.outputs.devcontainer_changed != 'true' || needs.devcontainer.result == 'success') }}
+          (needs.setup.outputs.devcontainer_changed != 'true' || needs.devcontainer_amd64.result == 'success') }}
     strategy:
       fail-fast: false
       matrix:
@@ -135,16 +125,16 @@ jobs:
       artifact_retention_days: 7
       component: ${{ matrix.component }}
       package_version: ${{ needs.setup.outputs.package_version }}
-      devcontainer_image: ${{ needs.devcontainer.outputs.image || needs.setup.outputs.baseline_image }}
-      devcontainer_artifact: ${{ needs.devcontainer.outputs.artifact }}
+      devcontainer_image: ${{ needs.devcontainer_amd64.outputs.image || needs.setup.outputs.baseline_image }}
+      devcontainer_artifact: ${{ needs.devcontainer_amd64.outputs.artifact }}
 
   build_arm:
-    name: Build (${{ matrix.component }}, aarch64)
-    needs: [setup, devcontainer]
+    name: Build & tests (${{ matrix.component }}, aarch64)
+    needs: [setup, devcontainer_arm64]
     # The optional image job is skipped when the published image can be reused.
     if: >-
       ${{ !cancelled() && needs.setup.result == 'success' &&
-          (needs.setup.outputs.devcontainer_changed != 'true' || needs.devcontainer.result == 'success') }}
+          (needs.setup.outputs.devcontainer_changed != 'true' || needs.devcontainer_arm64.result == 'success') }}
     strategy:
       fail-fast: false
       matrix:
@@ -155,17 +145,21 @@ jobs:
       artifact_retention_days: 7
       component: ${{ matrix.component }}
       package_version: ${{ needs.setup.outputs.package_version }}
-      devcontainer_image: ${{ needs.devcontainer.outputs.image || needs.setup.outputs.baseline_image }}
-      devcontainer_artifact: ${{ needs.devcontainer.outputs.artifact }}
+      devcontainer_image: ${{ needs.devcontainer_arm64.outputs.image || needs.setup.outputs.baseline_image }}
+      devcontainer_artifact: ${{ needs.devcontainer_arm64.outputs.artifact }}
 
   tests:
-    name: Integration & strategies
-    needs: [setup, devcontainer, build_x86]
-    if: ${{ !cancelled() && needs.build_x86.result == 'success' }}
-    runs-on: ubuntu-latest
+    name: Integration & strategies (${{ matrix.arch }})
+    needs: [setup, devcontainer_amd64, devcontainer_arm64, build_x86, build_arm]
+    if: ${{ !cancelled() && needs.build_x86.result == 'success' && needs.build_arm.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64]
+    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     env:
       PACKAGE_VERSION: ${{ needs.setup.outputs.package_version }}
-      CI_IMAGE: ${{ needs.devcontainer.outputs.image || needs.setup.outputs.baseline_image }}
+      CI_IMAGE: ${{ (matrix.arch == 'aarch64' && needs.devcontainer_arm64.outputs.image || needs.devcontainer_amd64.outputs.image) || needs.setup.outputs.baseline_image }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v5
@@ -184,7 +178,7 @@ jobs:
       if: needs.setup.outputs.devcontainer_changed == 'true'
       uses: actions/download-artifact@v7
       with:
-        name: ${{ needs.devcontainer.outputs.artifact }}
+        name: ${{ matrix.arch == 'aarch64' && needs.devcontainer_arm64.outputs.artifact || needs.devcontainer_amd64.outputs.artifact }}
         path: ${{ runner.temp }}/devcontainer
 
     - name: Load PR devcontainer
@@ -200,7 +194,7 @@ jobs:
     - name: Download native packages
       uses: actions/download-artifact@v7
       with:
-        pattern: ci-packages-*-x86_64
+        pattern: ci-packages-*-${{ matrix.arch }}
         path: py
         merge-multiple: true
 
@@ -231,7 +225,7 @@ jobs:
     name: Test, Build & Push
     if: always()
     needs: [setup, devcontainer_amd64, devcontainer_arm64, build_x86, build_arm, tests, packages]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
     - name: Require all builds, tests, and package uploads to succeed
       env:
