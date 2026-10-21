@@ -141,15 +141,15 @@
  },
  "gcc-runtime/COPYING.RUNTIME": {
   "sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
-  "url": "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-9.4.0/COPYING.RUNTIME"
+  "url": "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-13.3.0/COPYING.RUNTIME"
  },
  "gcc-runtime/COPYING3": {
   "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
-  "url": "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-9.4.0/COPYING3"
+  "url": "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-13.3.0/COPYING3"
  },
  "glibc-nonshared/COPYING.LIB": {
   "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
-  "url": "https://raw.githubusercontent.com/bminor/glibc/glibc-2.31/COPYING.LIB"
+  "url": "https://raw.githubusercontent.com/bminor/glibc/glibc-2.39/COPYING.LIB"
  },
  "google-cloud-cpp/LICENSE": {
   "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",

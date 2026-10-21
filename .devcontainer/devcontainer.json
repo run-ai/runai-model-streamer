@@ -1,5 +1,6 @@
 {
     "name": "RunAI Model Streamer",
+    "remoteUser": "root",
     "build": {
         "dockerfile": "Dockerfile"
     },

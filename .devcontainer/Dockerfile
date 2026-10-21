@@ -1,68 +1,38 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-FROM ubuntu:20.04
+# Multi-architecture index: linux/amd64 and linux/arm64.
+FROM mcr.microsoft.com/devcontainers/cpp:3.0.7-ubuntu24.04@sha256:cfd2d7c3f18ab12a760dc8241554c91379ebc2b7dcbaf6bcb46a882fca23722e
 
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    python3 \
-    python3-pip \
-    wget \
-    && rm -rf /var/lib/apt/lists/*
+USER root
 
-# `make build` runs `setup.py bdist_wheel` directly, with no PEP 517 isolation, so it never
-# reads py/*/pyproject.toml's setuptools pin. Keep this in sync with that pin by hand. Exact
-# pin, not a floor, to match this file's other dependencies. Newest versions still compatible
-# with this image's Python 3.8 - setuptools 76.0.0 needs >=3.9, wheel 0.46.0 needs >=3.9.
-# Upgrade Ubuntu's pip before setuptools to avoid legacy version-parsing failures.
-# pip 25.1 drops Python 3.8 support.
+# The base supplies GCC/G++, binutils, CMake, Git, curl, wget, xz and the system
+# SSL/curl/XML development packages. Ubuntu's Python is externally managed;
+# install project packages in a virtual environment instead of modifying it.
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    python3.12-venv=3.12.3-1ubuntu0.17 \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3.12 -m venv /opt/model-streamer-venv
+
+ENV VIRTUAL_ENV=/opt/model-streamer-venv
+ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
+
+# Keep the existing packaging tool versions during the base-image migration.
+# make build invokes setup.py directly, so these are used without PEP 517 isolation.
 RUN python3 -m pip install --upgrade "pip==25.0.1" \
     && python3 -m pip install "setuptools==75.3.4" "wheel==0.45.1"
 
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    build-essential binutils \
-    && rm -rf /var/lib/apt/lists/*
-
 ARG TARGETARCH
 
-# ThreadSanitizer (`bazel test --config=tsan`).
-#
-# Ubuntu 20.04 ships libtsan.so for gcc-9 but NOT libtsan_preinit.o, so -fsanitize=thread fails to
-# link. This is that file, which is all of GCC's own libsanitizer/tsan/tsan_preinit.c: it registers
-# __tsan_init in .preinit_array so the runtime starts before any constructor runs.
-#
-# The `test -f libtsan.so` is not a formality: -print-file-name echoes its argument back when the
-# file is not there, so without it the object would land in the build directory and --config=tsan
-# would keep failing with the same confusing error. The second test never shadows a real
-# libtsan_preinit.o, in case a later base image ships one. Retain the AMD64 workaround
-# in the native AMD64 image.
-RUN if [ "$TARGETARCH" = amd64 ]; then \
-    printf '%s\n' \
-        'extern void __tsan_init(void);' \
-        'static void __local_tsan_preinit(void) { __tsan_init(); }' \
-        '__attribute__((section(".preinit_array"), used))' \
-        'static void (*tsan_preinit)(void) = __local_tsan_preinit;' \
-        > /tmp/tsan_preinit.c \
-    && TSAN_DIR="$(dirname "$(gcc -print-file-name=libtsan.so)")" \
-    && test -f "$TSAN_DIR/libtsan.so" \
-    && { test -f "$TSAN_DIR/libtsan_preinit.o" \
-         || gcc -c -fPIC /tmp/tsan_preinit.c -o "$TSAN_DIR/libtsan_preinit.o"; } \
-    && rm /tmp/tsan_preinit.c; \
-    fi
+# GCC 13 supplies the ThreadSanitizer preinit object on both architectures;
+# fail early if a future base changes that instead of synthesizing a replacement.
+RUN test -f "$(gcc -print-file-name=libtsan_preinit.o)" \
+    && test -f "$(gcc -print-file-name=libtsan.so)"
 
 RUN pip install \
     boto3 \
     cpplint==1.5.4 \
     pytest
-
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    cmake \
-    git \
-    curl \
-    xz-utils \
-    libssl-dev \
-    libcurl4-openssl-dev \
-    libxml2-dev \
-    && rm -rf /var/lib/apt/lists/*
 
 # Local storage services used by the integration tests.
 COPY scripts/install-test-services.sh /tmp/install-test-services.sh
