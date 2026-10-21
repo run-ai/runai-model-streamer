@@ -15,8 +15,8 @@ build --compilation_mode=opt
 # dependency management. See https://bazel.build/external/migration
 build --noenable_bzlmod
 
-# Setting platform_suffix allows the build-cache to be maintained
-# when toggling between platforms (as is done in the Makefile)
+# Keep architecture-specific output paths used by Python packaging.
+# Select the config matching the native devcontainer architecture.
 build:aarch64 --platform_suffix=aarch64
 build:aarch64 --platforms=@toolchain//:aarch64
 # Target architecture needs CRC and crypto extensions

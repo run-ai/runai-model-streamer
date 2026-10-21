@@ -14,10 +14,9 @@ build_aarch64:
 	make -C cpp build ARCH=${AARCH64_ARCH} && \
 	make -C py build ARCH=${AARCH64_ARCH}
 
-build: 
+build:
 	make -C py clean && \
-	make build_x86_64 && \
-	make build_aarch64
+	make build_$(ARCH)
 
 install: build
 	make -C py install

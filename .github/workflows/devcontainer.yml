@@ -50,7 +50,7 @@ jobs:
           exit 1
         fi
         case "$ARCHITECTURE" in
-          amd64|arm64) suffix="-$ARCHITECTURE"; dependency_arches="$ARCHITECTURE" ;;
+          amd64|arm64) suffix="-$ARCHITECTURE" ;;
           *) echo "::error::Unsupported devcontainer architecture: $ARCHITECTURE" >&2; exit 1 ;;
         esac
         repository="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
@@ -63,8 +63,8 @@ jobs:
         fi
         printf 'name=%s\ntag=%s\nimage=%s:%s\nartifact=%s\n' \
           "$image_name" "$tag" "$image_name" "$tag" "$artifact" >> "$GITHUB_OUTPUT"
-        printf 'baseline_image=%s:%s%s\ndependency_arches=%s\n' \
-          "$image_name" "$BASELINE_TAG" "$suffix" "$dependency_arches" >> "$GITHUB_OUTPUT"
+        printf 'baseline_image=%s:%s%s\n' \
+          "$image_name" "$BASELINE_TAG" "$suffix" >> "$GITHUB_OUTPUT"
 
     - name: Log in to GitHub Container Registry
       uses: docker/login-action@v3
@@ -88,8 +88,6 @@ jobs:
 
     - name: Build devcontainer
       uses: devcontainers/ci@v0.3
-      env:
-        DEVCONTAINER_DEPENDENCY_ARCHES: ${{ steps.image.outputs.dependency_arches }}
       # Build for the runner's native platform.
       with:
         imageName: ${{ steps.image.outputs.name }}

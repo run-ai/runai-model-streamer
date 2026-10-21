@@ -208,8 +208,8 @@ changed. If they did, two preparation jobs build
 AMD64 and ARM64 images in parallel using the reusable `devcontainer.yml` workflow.
 Each builds only its matching architecture's dependencies, on `ubuntu-24.04` or
 `ubuntu-24.04-arm`, using the matching published architecture tag as a cache.
-Missing caches allow a clean build. Both compiler toolchains remain installed;
-removing cross-compilation configuration is a separate change.
+Missing caches allow a clean build. Each image installs only its native GCC/G++
+and binutils; dependencies use native compilation without CMake cross toolchains.
 
 With `publish: false`, each preparation job exports its image as a one-day Actions
 artifact named `ci-devcontainer-<run>-<attempt>-<amd64|arm64>`. Image tags also include
@@ -235,11 +235,13 @@ the generic `latest` or `release-X.Y` manifest from the two architecture tags. T
 not require another image build. If either image job fails, the generic tag stays
 unchanged, even if the other architecture-specific tag was already updated.
 
-The reusable workflow requires an `architecture` input (`amd64` or `arm64`). It
-sets `DEVCONTAINER_DEPENDENCY_ARCHES`, passed through the devcontainer configuration
-as the `DEPENDENCY_ARCHES` build argument. Local source builds still default to
-both dependency architectures; toolchain and local-build cleanup remain separate.
-Published images contain dependencies for their own architecture only.
+The reusable workflow requires an `architecture` input (`amd64` or `arm64`) to
+select the native runner and image tag. Docker's `TARGETARCH` selects the libraries
+and services installed in both CI and local source builds. Bazel registers only
+the native toolchain, and `make build` (including `make install` and `make test`)
+builds only the current architecture. Build the other architecture on its native
+runner. Dependency versions, installation prefixes, and release artifact names
+are unchanged.
 
 ### Parallel PR checks
 
