@@ -11,7 +11,7 @@ CONTENTS
    2. GNU C Library (libc_nonshared.a) 2.31 (Ubuntu 20.04 libc6-dev 2.31-0ubuntu9.18) - LGPL-2.1-or-later
    3. liburing 2.14 - MIT (dual-licensed LGPL-2.1 OR MIT; the MIT option is used)
    4. libaio 0.3.113 - LGPL-2.1-or-later
-   5. NVIDIA CUDA driver API header (cuda.h) 12.8 - NVIDIA CUDA header notice
+   5. NVIDIA CUDA driver API header (cuda.h) 12.8.57 - NVIDIA CUDA header notice
 
 ==============================================================================
 [1] GCC runtime libraries (libstdc++, libgcc)
@@ -1847,12 +1847,12 @@ That's all there is to it!
 ==============================================================================
 [5] NVIDIA CUDA driver API header (cuda.h)
 ==============================================================================
-Version:   12.8
+Version:   12.8.57
 Project:   https://developer.nvidia.com/cuda-toolkit
 License:   NVIDIA CUDA header notice
 Copyright: Copyright 1993-2023 NVIDIA Corporation. All rights reserved.
 Linkage:   compile-time headers only
-Note:      Compiled against only; libcuda.so is loaded with dlopen at run time and no CUDA library is distributed. The header requires its notice to be reproduced.
+Note:      Headers from NVIDIA's cuda_cudart 12.8.57 redistributable archive. Compiled against only; libcuda.so is loaded with dlopen at run time and no CUDA library is distributed. The header requires its notice to be reproduced.
 
 --- cuda.h-header-notice.txt ---
 /*

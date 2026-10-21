@@ -39,6 +39,7 @@ jobs:
           .devcontainer/**
           .github/workflows/devcontainer.yml
           .github/workflows/build-devcontainer.yml
+          .github/workflows/on-pr.yaml
         skip_initial_fetch: true
         output_renamed_files_as_deleted_and_added: true
 
@@ -97,6 +98,26 @@ jobs:
       publish: false
       baseline_tag: ${{ needs.setup.outputs.baseline_tag }}
 
+  devcontainer_amd64:
+    name: Prepare AMD64 devcontainer candidate
+    needs: setup
+    if: needs.setup.outputs.devcontainer_changed == 'true'
+    uses: ./.github/workflows/devcontainer.yml
+    with:
+      architecture: amd64
+      publish: false
+      baseline_tag: ${{ needs.setup.outputs.baseline_tag }}
+
+  devcontainer_arm64:
+    name: Prepare ARM64 devcontainer candidate
+    needs: setup
+    if: needs.setup.outputs.devcontainer_changed == 'true'
+    uses: ./.github/workflows/devcontainer.yml
+    with:
+      architecture: arm64
+      publish: false
+      baseline_tag: ${{ needs.setup.outputs.baseline_tag }}
+
   build_x86:
     name: Build & tests (${{ matrix.component }}, x86_64)
     needs: [setup, devcontainer]
@@ -111,6 +132,7 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       arch: x86_64
+      artifact_retention_days: 7
       component: ${{ matrix.component }}
       package_version: ${{ needs.setup.outputs.package_version }}
       devcontainer_image: ${{ needs.devcontainer.outputs.image || needs.setup.outputs.baseline_image }}
@@ -130,6 +152,7 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       arch: aarch64
+      artifact_retention_days: 7
       component: ${{ matrix.component }}
       package_version: ${{ needs.setup.outputs.package_version }}
       devcontainer_image: ${{ needs.devcontainer.outputs.image || needs.setup.outputs.baseline_image }}
@@ -177,7 +200,7 @@ jobs:
     - name: Download native packages
       uses: actions/download-artifact@v7
       with:
-        pattern: packages-*-x86_64
+        pattern: ci-packages-*-x86_64
         path: py
         merge-multiple: true
 
@@ -193,18 +216,41 @@ jobs:
           PACKAGE_VERSION
         runCmd: make ci-test-integration BAZEL_TEST_FLAGS=--test_env=RUNAI_STREAMER_REQUIRE_IO_URING=1
 
+  packages:
+    name: Assemble packages
+    needs: [setup, build_x86, build_arm]
+    if: ${{ !cancelled() && needs.build_x86.result == 'success' && needs.build_arm.result == 'success' }}
+    uses: ./.github/workflows/assemble-bundle.yml
+    with:
+      package_version: ${{ needs.setup.outputs.package_version }}
+      artifact_name: release-bundle-pr-${{ github.run_id }}-${{ github.run_attempt }}
+      retention_days: 7
+      allow_development_version: true
+
   lifecycle-install-tests:
     name: Test, Build & Push
     if: always()
-    needs: [build_x86, build_arm, tests]
+    needs: [setup, devcontainer_amd64, devcontainer_arm64, build_x86, build_arm, tests, packages]
     runs-on: ubuntu-latest
     steps:
-    - name: Require all builds and tests to succeed
+    - name: Require all builds, tests, and package uploads to succeed
       env:
         X86_RESULT: ${{ needs.build_x86.result }}
         ARM_RESULT: ${{ needs.build_arm.result }}
         TEST_RESULT: ${{ needs.tests.result }}
+        PACKAGES_RESULT: ${{ needs.packages.result }}
+        DEVCONTAINER_CHANGED: ${{ needs.setup.outputs.devcontainer_changed }}
+        AMD64_IMAGE_RESULT: ${{ needs.devcontainer_amd64.result }}
+        ARM64_IMAGE_RESULT: ${{ needs.devcontainer_arm64.result }}
       run: |
         test "$X86_RESULT" = success
         test "$ARM_RESULT" = success
         test "$TEST_RESULT" = success
+        test "$PACKAGES_RESULT" = success
+        if [[ "$DEVCONTAINER_CHANGED" == true ]]; then
+          test "$AMD64_IMAGE_RESULT" = success
+          test "$ARM64_IMAGE_RESULT" = success
+        else
+          test "$AMD64_IMAGE_RESULT" = skipped
+          test "$ARM64_IMAGE_RESULT" = skipped
+        fi
