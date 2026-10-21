@@ -204,57 +204,48 @@ Each pull request should meet the following requirements:
 ## Pull Request CI Environment
 
 The setup job checks whether `.devcontainer/**` or the PR/devcontainer workflows
-changed. If they did, the preparation job builds the checked-out devcontainer
-using the reusable `devcontainer.yml` workflow and the published image as a build cache. With
-`publish: false`, it saves the image as a temporary Actions artifact, retained for
-one day. The artifact is named `ci-devcontainer-<run>-<attempt>`. The artifact
-and image tags include the run ID and attempt to isolate
-retries. This is a per-run image handoff, not a cache restored across PR runs.
+changed. If they did, two preparation jobs build
+AMD64 and ARM64 images in parallel using the reusable `devcontainer.yml` workflow.
+Each builds only its matching architecture's dependencies, on `ubuntu-24.04` or
+`ubuntu-24.04-arm`, using the matching published architecture tag as a cache.
+Missing caches allow a clean build. Both compiler toolchains remain installed;
+removing cross-compilation configuration is a separate change.
 
-All eight build jobs and the integration job download and load that same image.
-Each build job starts one Docker container and uses `docker exec` for separate
-C++ build, Python package build, C++ test, and Python test steps. The container
-shares build outputs and installed dependencies across steps and is stopped even
-if a build or test fails. The integration job runs through `devcontainers/ci`
-with an image-only configuration. Neither path rebuilds the Dockerfile or
-reinstalls Features. When those files are unchanged, the preparation jobs are
-skipped and jobs use the published
-`ghcr.io/dsx-ai-factory/model-streamer/devcontainer:latest` image directly. Both
-paths preserve the seccomp setting required by the io_uring tests.
+With `publish: false`, each preparation job exports its image as a one-day Actions
+artifact named `ci-devcontainer-<run>-<attempt>-<amd64|arm64>`. Image tags also include
+the run, attempt, and architecture. Each component job downloads only its matching
+image, and each integration job downloads that image and its matching wheels.
+PRs never push images to GHCR. These artifacts provide a per-run image handoff,
+not a cache restored across PR runs.
 
-The **Build and Push DevContainer** workflow calls the same reusable workflow
-with `publish: true` on master. It pushes the image to GHCR instead of uploading
-an image artifact. PRs never push images to GHCR. The final required check fails
-if preparation of a changed image fails; unchanged-image PRs still run all
-application jobs.
+When image-related files are unchanged, preparation is skipped. Setup resolves
+`ghcr.io/dsx-ai-factory/model-streamer/devcontainer:latest` (or `release-X.Y` for a
+release-branch PR) to one immutable multi-architecture index digest. Setup
+requires both Linux AMD64 and ARM64 entries. Docker selects the matching entry
+on each native runner; all consumers in the run use the same published image pair.
+A missing or incomplete index fails setup with publication guidance.
 
-Two additional preparation jobs build candidate devcontainers in parallel with
-the existing image: AMD64 on `ubuntu-24.04` and ARM64 on `ubuntu-24.04-arm`.
-Each uses the same Dockerfile and Features, but builds only its matching
-architecture's basic libraries, IO libraries, AWS SDK, and Azure SDK. Both compiler
-toolchains remain installed during this transition. The ARM64 candidate skips the
-x86-specific TSAN workaround. Candidate images are built only; runtime validation
-is deferred to the integration phase when CI switches to these images.
+Each component job starts one container and uses `docker exec` for separate C++
+build, Python package build, C++ test, and Python test steps. Integration uses
+`devcontainers/ci` with an image-only configuration. Both paths preserve the
+seccomp setting required by io_uring tests and reuse the image's installed Features.
 
-The reusable image workflow accepts an optional `architecture` input (`amd64` or
-`arm64`); omitting it preserves the existing dual-architecture dependency build.
-It sets `DEVCONTAINER_DEPENDENCY_ARCHES`, which the devcontainer configuration
-passes as the `DEPENDENCY_ARCHES` Docker build argument. Local builds default to
-`amd64 arm64` when that environment variable is unset.
+The **Build and Push DevContainer** workflow builds only the two native images.
+On master it publishes `latest-amd64` and `latest-arm64`; release branches publish
+`release-X.Y-amd64` and `release-X.Y-arm64`. After both succeed, the reusable
+`publish-devcontainer.yml` workflow creates the generic `latest` or `release-X.Y`
+manifest from the immutable image digests produced by that run. It verifies both
+Linux platforms and returns the index digest and immutable image reference.
+Native image builds and pushes remain in `devcontainer.yml`. The generic tag
+references those same two images; it does not require another image build. If either image job fails, the generic tag stays
+unchanged, even if the other architecture-specific tag was already updated.
 
-Candidate PR image tags append `-amd64` or `-arm64` to the existing run/attempt
-names. Candidates skip image export and artifact upload because no application
-job consumes them yet. Only the existing image is uploaded for downstream jobs,
-with one-day artifact retention. Application builds wait only for the existing
-image; the final **Test, Build & Push** check additionally requires both candidate
-jobs to succeed when image-related files changed, and accepts their skips otherwise.
-
-On master and supported release branches, the publication workflow builds all
-three images independently. Candidates use `latest-amd64` / `latest-arm64` or
-`release-X.Y-amd64` / `release-X.Y-arm64` in the same GHCR image repository. Each
-candidate imports only its matching branch-and-architecture image as a cache;
-missing caches allow a clean build. Existing tags and CI consumers remain unchanged.
-This temporarily increases CI compute while preparing the later consumer switch.
+The native build workflow `devcontainer.yml` requires an `architecture` input
+(`amd64` or `arm64`). It
+sets `DEVCONTAINER_DEPENDENCY_ARCHES`, passed through the devcontainer configuration
+as the `DEPENDENCY_ARCHES` build argument. Local source builds still default to
+both dependency architectures; toolchain and local-build cleanup remain separate.
+Published images contain dependencies for their own architecture only.
 
 ### Parallel PR checks
 
@@ -268,26 +259,26 @@ own matrix. Each invocation runs
 `make ci-build-cpp` and `make ci-build-python` inside the selected devcontainer, using the same
 native build command and packaging target as the existing full build. Both
 commands take `COMPONENT` and `ARCH`; `make ci-build` runs them in order locally.
-Each x86_64 job then runs
-`make ci-test-cpp COMPONENT=... ARCH=x86_64` before uploading its wheel. The test
+Each native job then runs
+`make ci-test-cpp COMPONENT=... ARCH=<architecture>` before uploading its wheel. The test
 command uses the same architecture and backend defines as the preceding build,
 allowing Bazel to reuse compatible compiled outputs on that runner.
 
 S3, GCS, and Azure run their respective C++ test trees; core runs everything
 outside those three trees, including common, POSIX I/O, and utility tests.
-The core x86_64 job also runs `make ci-test-python`, installing only its core wheel
-and Python test dependencies before running unit and distributed tests. Python
-feedback therefore does not wait for the cloud backend builds. ARM64 jobs build
-packages only.
+The core job on each architecture also runs `make ci-test-python`, installing only
+its core wheel and Python test dependencies before running unit and distributed
+tests. Python feedback therefore does not wait for the cloud backend builds.
 
-After all four x86_64 builds succeed, the integration job downloads their wheels
-and runs `make ci-test-integration`: integration suites followed by the filesystem
-strategy sweep, without waiting for ARM64 builds. It uses `make ci-install` to install all four wheels via the
-existing Python package Makefiles. Python distributed tests load the installed
-real library; the mock unit tests retain their existing override. The integration
-job also reuses the installed core library for the Python filesystem strategy
+After both component build matrices succeed, two integration jobs download their
+matching wheels and run `make ci-test-integration` on native AMD64 and ARM64
+runners: integration suites followed by the filesystem strategy sweep. Each uses
+`make ci-install` to install all four wheels via the existing Python package
+Makefiles. Python distributed tests load the installed real library; the mock
+unit tests retain their existing override. Each integration job also reuses the
+installed core library for the Python filesystem strategy
 tests through `test-unit-real-installed`, avoiding another full native build.
-The same tests still run for all four strategies. The integration job still builds
+The same tests still run for all four strategies. Each integration job still builds
 the two C++ strategy test targets and the Azure testing variant. `make test` remains
 the full sequential local entry point and builds from source as before.
 
@@ -308,7 +299,9 @@ Intermediate wheel and C++ artifacts are retained for seven days in both PR and
 release builds to support retries. Final PR bundles are retained for seven days;
 tested `release-bundle-<version>-<run>-<attempt>` bundles are retained for 30 days
 for approval and recovery.
-Release CI calls the same assembly workflow after integration tests succeed,
+Release CI resolves the release branch's generic multi-architecture tag once,
+then uses that index digest for both native build and integration matrices. It
+calls the same assembly workflow after both integration jobs succeed,
 then passes its bundle artifact ID to the approval-gated publication job.
 The shared workflow downloads components, tests the packaging code, assembles
 and verifies the bundle, and uploads it. Callers select the version, artifact
@@ -321,10 +314,9 @@ alongside the core library for the same architecture. Libraries are copied out
 of the container before it stops so the downloads contain real files rather
 than Bazel symlinks. The `Test, Build & Push` required check succeeds
 only when all eight builds (including their C++ and Python tests), integration
-tests, package assembly, and any triggered candidate image builds succeed. The
-existing devcontainer is built once before the matrix starts when its inputs
-change; the eight component runners can overlap with the two candidate image
-builders during this transition.
+tests on both architectures, package assembly, and any triggered image builds
+succeed. Each architecture's component jobs can start as soon as its own image is
+ready, without waiting for the other image builder.
 
 To verify an extracted PR bundle locally, substitute its development version:
 
