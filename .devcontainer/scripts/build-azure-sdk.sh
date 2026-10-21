@@ -18,6 +18,9 @@ case "$1" in
         ;;
 esac
 
+# Use the prebuilt libraries in /opt instead of Azure's automatic vcpkg toolchain.
+export AZURE_SDK_DISABLE_AUTO_VCPKG=1
+
 git clone --recurse-submodules https://github.com/Azure/azure-sdk-for-cpp /opt/azure-sdk-cpp
 cd /opt/azure-sdk-cpp
 git checkout azure-storage-blobs_12.15.0
