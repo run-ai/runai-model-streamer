@@ -63,6 +63,9 @@ def get_safetensors_dtype_map() -> dict:
 
 safetensors_to_torch_dtype = get_safetensors_dtype_map()
 
+# Safetensors dtypes whose torch element holds several logical values, packed along the last axis.
+PACKED_VALUES_PER_ELEMENT = {"F4": 2}
+
 # torch.dtype.itemsize arrived in torch 2.1, and the package declares torch>=2.0 - so ask once whether
 # this torch has it, rather than assume or parse a version string. A capability check answers the
 # question we actually have.
@@ -230,10 +233,33 @@ class SafetensorMetadata:
 
         self._validate_shape_consistency()
 
+    def _values_per_element(self) -> int:
+        """Logical values one torch element holds. Safetensors records the logical shape, so for a packed
+        dtype this is what separates the header's dimensions from the torch storage."""
+        return PACKED_VALUES_PER_ELEMENT.get(self.dtype, 1)
+
+    def get_storage_shape(self) -> List[int]:
+        """Shape of the torch tensor. Equal to the header's shape except for a packed dtype, which stores
+        its values along the last axis: F4 is float4_e2m1fn_x2, two values per element.
+
+        Stricter than the safetensors reference, which only requires the total bit count to be a multiple
+        of 8: shape [2, 3] passes there, but torch has no shape for 1.5 elements along the last axis."""
+        values = self._values_per_element()
+        if values == 1:
+            return list(self.shape)
+
+        if not self.shape or self.shape[-1] % values != 0:
+            raise ValueError(
+                f"Corrupted Tensor '{self.name}': {self.dtype} packs {values} values per element along "
+                f"the last axis, so shape {self.shape} cannot be represented as a torch tensor "
+                f"(the last dimension must be a multiple of {values})."
+            )
+        return list(self.shape[:-1]) + [self.shape[-1] // values]
+
     def _validate_shape_consistency(self):
-        # 1. Calculate total number of elements
+        # 1. Calculate total number of torch elements - the packed shape, not the logical one
         num_elements = 1
-        for dim in self.shape:
+        for dim in self.get_storage_shape():
             num_elements *= dim
         
         # 2. Identify the actual bytes reserved in the file
@@ -254,7 +280,7 @@ class SafetensorMetadata:
 
     def get_item_count(self) -> int:
         count = 1
-        for dim in self.shape:
+        for dim in self.get_storage_shape():
             count *= dim
         return count
 
@@ -313,10 +339,12 @@ def requires_alignment_copy(buffer: Any, tensor_metadata: SafetensorMetadata) ->
 def create_torch_tensor(
     buffer: Any, tensor_metadata: SafetensorMetadata
 ) -> torch.Tensor:
+    storage_shape = tensor_metadata.get_storage_shape()
+
     if tensor_metadata.get_item_count() == 0:
-        return torch.empty(tensor_metadata.shape, dtype=tensor_metadata.get_torch_dtype())
+        return torch.empty(storage_shape, dtype=tensor_metadata.get_torch_dtype())
 
     tensor = buffer.view(tensor_metadata.get_torch_dtype())
     
     # Reshape the tensor to its final, correct shape.
-    return tensor.view(tensor_metadata.shape)
+    return tensor.view(storage_shape)
