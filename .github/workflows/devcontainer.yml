@@ -3,12 +3,16 @@ name: Build devcontainer
 on:
   workflow_call:
     inputs:
+      architecture:
+        description: Native candidate architecture (amd64 or arm64); empty preserves the existing dual-architecture image.
+        type: string
+        default: ''
       baseline_tag:
         description: Published branch image tag to update or use as a build cache.
         type: string
         default: latest
       publish:
-        description: Push to GHCR; otherwise export the image as a workflow artifact.
+        description: Push to GHCR; otherwise only the existing dual-architecture image is exported as a workflow artifact.
         type: boolean
         default: false
     outputs:
@@ -16,13 +20,13 @@ on:
         description: Fully qualified image tag to run.
         value: ${{ jobs.build.outputs.image }}
       artifact:
-        description: Image artifact name when publish is false.
+        description: Image artifact name for unpublished dual-architecture builds; empty for native candidates or published builds.
         value: ${{ jobs.build.outputs.artifact }}
 
 jobs:
   build:
     name: Build devcontainer image
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     outputs:
       image: ${{ steps.image.outputs.image }}
       artifact: ${{ steps.image.outputs.artifact }}
@@ -38,22 +42,32 @@ jobs:
       env:
         PUBLISH: ${{ inputs.publish }}
         BASELINE_TAG: ${{ inputs.baseline_tag }}
+        ARCHITECTURE: ${{ inputs.architecture }}
       run: |
         set -euo pipefail
         if [[ "$BASELINE_TAG" != latest && ! "$BASELINE_TAG" =~ ^release-[0-9]+\.[0-9]+$ ]]; then
           echo "::error::Unsupported devcontainer baseline tag" >&2
           exit 1
         fi
+        case "$ARCHITECTURE" in
+          '') suffix=; dependency_arches='amd64 arm64' ;;
+          amd64|arm64) suffix="-$ARCHITECTURE"; dependency_arches="$ARCHITECTURE" ;;
+          *) echo "::error::Unsupported devcontainer architecture: $ARCHITECTURE" >&2; exit 1 ;;
+        esac
         repository="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
         image_name="ghcr.io/${repository}/devcontainer"
-        tag="$BASELINE_TAG"
+        tag="$BASELINE_TAG$suffix"
         artifact=
         if [[ "$PUBLISH" != true ]]; then
-          tag="pr-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          artifact="ci-devcontainer-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          tag="pr-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}${suffix}"
+          if [[ -z "$ARCHITECTURE" ]]; then
+            artifact="ci-devcontainer-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          fi
         fi
         printf 'name=%s\ntag=%s\nimage=%s:%s\nartifact=%s\n' \
           "$image_name" "$tag" "$image_name" "$tag" "$artifact" >> "$GITHUB_OUTPUT"
+        printf 'baseline_image=%s:%s%s\ndependency_arches=%s\n' \
+          "$image_name" "$BASELINE_TAG" "$suffix" "$dependency_arches" >> "$GITHUB_OUTPUT"
 
     - name: Log in to GitHub Container Registry
       uses: docker/login-action@v3
@@ -66,7 +80,7 @@ jobs:
       id: cache
       shell: bash
       env:
-        BASELINE_IMAGE: ${{ steps.image.outputs.name }}:${{ inputs.baseline_tag }}
+        BASELINE_IMAGE: ${{ steps.image.outputs.baseline_image }}
       run: |
         set -euo pipefail
         if docker manifest inspect "$BASELINE_IMAGE" > /dev/null 2>&1; then
@@ -77,6 +91,9 @@ jobs:
 
     - name: Build devcontainer
       uses: devcontainers/ci@v0.3
+      env:
+        DEVCONTAINER_DEPENDENCY_ARCHES: ${{ steps.image.outputs.dependency_arches }}
+      # Build for the runner's native platform; the existing image remains available for export.
       with:
         imageName: ${{ steps.image.outputs.name }}
         imageTag: ${{ steps.image.outputs.tag }}
@@ -84,13 +101,13 @@ jobs:
         push: ${{ inputs.publish && 'always' || 'never' }}
 
     - name: Export devcontainer image
-      if: ${{ !inputs.publish }}
+      if: steps.image.outputs.artifact != ''
       env:
         CI_IMAGE: ${{ steps.image.outputs.image }}
       run: docker save --output "$RUNNER_TEMP/devcontainer.tar" "$CI_IMAGE"
 
     - name: Upload devcontainer image
-      if: ${{ !inputs.publish }}
+      if: steps.image.outputs.artifact != ''
       uses: actions/upload-artifact@v6
       with:
         name: ${{ steps.image.outputs.artifact }}
