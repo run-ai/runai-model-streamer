@@ -11,7 +11,6 @@ on:
       - '.github/workflows/devcontainer.yml'
       - '.github/workflows/build-devcontainer.yml'
       - '.github/workflows/on-pr.yaml'
-      - '.github/scripts/resolve-devcontainer-image.sh'
   workflow_dispatch:
 
 concurrency:
@@ -97,11 +96,11 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Publish generic tag from this run's image digests
+    - name: Publish generic tag for both architectures
       env:
         BASELINE_TAG: ${{ needs.select-branch.outputs.baseline_tag }}
-        AMD64_IMAGE: ${{ needs.build-devcontainer-amd64.outputs.published_image }}
-        ARM64_IMAGE: ${{ needs.build-devcontainer-arm64.outputs.published_image }}
+        AMD64_IMAGE: ${{ needs.build-devcontainer-amd64.outputs.image }}
+        ARM64_IMAGE: ${{ needs.build-devcontainer-arm64.outputs.image }}
       run: |
         set -euo pipefail
         repository="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"

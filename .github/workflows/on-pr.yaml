@@ -23,16 +23,13 @@ jobs:
       package_version: ${{ steps.version.outputs.PACKAGE_VERSION }}
       devcontainer_changed: ${{ steps.devcontainer_changes.outputs.any_modified }}
       baseline_tag: ${{ steps.image.outputs.baseline_tag }}
-      baseline_image: ${{ steps.published_image.outputs.image }}
+      baseline_image: ${{ steps.image.outputs.baseline_image }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v5
       with:
         fetch-depth: 0
         persist-credentials: false
-
-    - name: Test devcontainer image resolution
-      run: python3 -B -m unittest discover -s .github/scripts -p 'test_devcontainer_image.py'
 
     - name: Detect devcontainer changes
       id: devcontainer_changes
@@ -43,7 +40,6 @@ jobs:
           .github/workflows/devcontainer.yml
           .github/workflows/build-devcontainer.yml
           .github/workflows/on-pr.yaml
-          .github/scripts/resolve-devcontainer-image.sh
         skip_initial_fetch: true
         output_renamed_files_as_deleted_and_added: true
 
@@ -62,21 +58,26 @@ jobs:
           "$tag" "$repository" "$tag" >> "$GITHUB_OUTPUT"
 
     - name: Log in to GitHub Container Registry
-      if: steps.devcontainer_changes.outputs.any_modified != 'true'
+      if: steps.devcontainer_changes.outputs.any_modified != 'true' && steps.image.outputs.baseline_tag != 'latest'
       uses: docker/login-action@v3
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Resolve published multi-architecture devcontainer
-      id: published_image
-      if: steps.devcontainer_changes.outputs.any_modified != 'true'
+    - name: Require published release devcontainer
+      if: steps.devcontainer_changes.outputs.any_modified != 'true' && steps.image.outputs.baseline_tag != 'latest'
       env:
         BASELINE_IMAGE: ${{ steps.image.outputs.baseline_image }}
+        BASE_BRANCH: ${{ github.base_ref }}
       run: |
-        resolved=$(bash .github/scripts/resolve-devcontainer-image.sh "$BASELINE_IMAGE")
-        printf 'image=%s\n' "$resolved" >> "$GITHUB_OUTPUT"
+        set -euo pipefail
+        if ! docker manifest inspect "$BASELINE_IMAGE" > /dev/null; then
+          echo "::error::Cannot access release devcontainer $BASELINE_IMAGE. Check registry access and the branch's Build and Push DevContainer run. If the image is missing, initialize it with the command below, wait for publication, then rerun this PR workflow."
+          printf 'gh workflow run build-devcontainer.yml --repo %q --ref %q\n' \
+            "$GITHUB_REPOSITORY" "$BASE_BRANCH"
+          exit 1
+        fi
 
     - name: Set PACKAGE_VERSION
       id: version

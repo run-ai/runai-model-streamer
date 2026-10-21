@@ -44,7 +44,7 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Resolve release devcontainer digest
+    - name: Select release devcontainer
       id: image
       env:
         VERSION: ${{ steps.release.outputs.version }}
@@ -52,9 +52,12 @@ jobs:
         set -euo pipefail
         repository="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
         image="ghcr.io/$repository/devcontainer:release-${VERSION%.*}"
-        resolved=$(bash .github/scripts/resolve-devcontainer-image.sh "$image")
-        printf 'image=%s\n' "$resolved" >> "$GITHUB_OUTPUT"
-        printf 'Version: `%s`\n\nCommit: `%s`\n\nImage: `%s`\n' "$VERSION" "$(git rev-parse HEAD)" "$resolved" >> "$GITHUB_STEP_SUMMARY"
+        if ! docker manifest inspect "$image" > /dev/null; then
+          echo "::error::Publish the release branch devcontainer before running release CI: $image"
+          exit 1
+        fi
+        printf 'image=%s\n' "$image" >> "$GITHUB_OUTPUT"
+        printf 'Version: `%s`\n\nCommit: `%s`\n\nImage: `%s`\n' "$VERSION" "$(git rev-parse HEAD)" "$image" >> "$GITHUB_STEP_SUMMARY"
 
   build:
     name: Build (${{ matrix.component }}, ${{ matrix.arch }})
