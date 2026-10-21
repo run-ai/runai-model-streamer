@@ -232,13 +232,16 @@ seccomp setting required by io_uring tests and reuse the image's installed Featu
 
 The **Build and Push DevContainer** workflow builds only the two native images.
 On master it publishes `latest-amd64` and `latest-arm64`; release branches publish
-`release-X.Y-amd64` and `release-X.Y-arm64`. After both succeed, a final job creates
-the generic `latest` or `release-X.Y` manifest from the immutable image digests
-produced by that run. The generic tag references those same two images; it does
-not require another image build. If either image job fails, the generic tag stays
+`release-X.Y-amd64` and `release-X.Y-arm64`. After both succeed, the reusable
+`publish-devcontainer.yml` workflow creates the generic `latest` or `release-X.Y`
+manifest from the immutable image digests produced by that run. It verifies both
+Linux platforms and returns the index digest and immutable image reference.
+Native image builds and pushes remain in `devcontainer.yml`. The generic tag
+references those same two images; it does not require another image build. If either image job fails, the generic tag stays
 unchanged, even if the other architecture-specific tag was already updated.
 
-The reusable workflow requires an `architecture` input (`amd64` or `arm64`). It
+The native build workflow `devcontainer.yml` requires an `architecture` input
+(`amd64` or `arm64`). It
 sets `DEVCONTAINER_DEPENDENCY_ARCHES`, passed through the devcontainer configuration
 as the `DEPENDENCY_ARCHES` build argument. Local source builds still default to
 both dependency architectures; toolchain and local-build cleanup remain separate.
