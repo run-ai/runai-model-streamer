@@ -208,6 +208,7 @@ def npm_dependencies(repo):
 
 # --- Bazel -----------------------------------------------------------------------------------------
 
+RULE = re.compile(r"^(\w+)\(\n((?:  .*\n)*?)\)$", re.M)  # a rule as `bazel query --output=build` prints it
 REPOSITORY_RULES = ("http_archive", "http_file", "http_jar", "git_repository", "new_git_repository", "go_repository")
 
 
@@ -228,13 +229,13 @@ def bazel_dependencies(repo, workspace):
     fetched = {name for name in os.listdir(os.path.join(output_base, "external")) if not name.endswith(".marker")}
     definitions = _bazel(cpp, "query", "--output=build", "//external:*")
     found = []
-    for match in re.finditer(r"^(\w+)\(\n((?:  .*\n)*?)\)$", definitions, re.M):
+    for match in RULE.finditer(definitions):
         rule, attrs = match.group(1), _attributes(match.group(2))
         name = attrs.get("name")
         if rule not in REPOSITORY_RULES or name not in fetched:
             continue
         note = "Bazel repository %s." % name
-        declared = ["cpp/WORKSPACE"]
+        declared = [defined_at(definitions, match, workspace)]
         if rule == "go_repository":
             module, version = attrs.get("importpath", name), attrs.get("version") or attrs.get("commit", "unversioned")
             found.append(entry(module, version, "go", ["build"],
@@ -253,6 +254,34 @@ def bazel_dependencies(repo, workspace):
                                                 digest=("sha256", attrs["sha256"], "WORKSPACE rule") if attrs.get("sha256") else None)],
                                    declared, note))
     return found
+
+
+FRAME = re.compile(r"#\s+(/\S+?):(\d+)(?::\d+)?(?:\s|$)")
+
+
+def defined_at(definitions, rule, workspace):
+    """The file and line of the workspace that declares a repository rule, as `cpp/toolchain/deps.bzl:11`.
+
+    `bazel query --output=build` prints, for each rule, a `# <file>:<line>:<column>` comment above it (the line of
+    the WORKSPACE that started it) and, below it, the call chain: `# Rule x instantiated at (most recent call
+    last):` and one `#   <file>:<line>:<column> in <function>` per frame, outermost first. The last frame inside
+    the workspace is the line that wrote the rule, in a `.bzl` file when a macro did. A macro of a fetched
+    repository (boringssl, from google-cloud-cpp) has no frame in the workspace after the WORKSPACE call, so the
+    WORKSPACE line that called it is the answer. `rule` is the match of the rule in `definitions`."""
+    root = workspace.rstrip("/") + "/"
+    found = None
+    for line in definitions[rule.end():].splitlines()[1:]:  # the rest of the line of the closing parenthesis is empty
+        if not line.startswith("#") or "defined at" in line:
+            break  # the frames after `defined at` belong to the rule kind (http_archive), not to this use
+        frame = FRAME.match(line)
+        if frame and frame.group(1).startswith(root):
+            found = "%s:%s" % (os.path.relpath(frame.group(1), workspace), frame.group(2))
+    if not found:
+        above = definitions[:rule.start()].rstrip("\n").splitlines()
+        frame = FRAME.match(above[-1]) if above else None
+        if frame and frame.group(1).startswith(root):
+            found = "%s:%s" % (os.path.relpath(frame.group(1), workspace), frame.group(2))
+    return found or "cpp/WORKSPACE"
 
 
 def _attributes(block):

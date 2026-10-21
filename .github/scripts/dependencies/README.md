@@ -67,12 +67,16 @@ network, Docker or list, and fails when:
   `git clone`, `pip`, `npm` or `apt-get install`, `FROM`, `http_archive`, `uses:`) and the collector does not
   read the file. The files the collector reads are listed in `completeness.py`; Bazel's own `.bzl` files
   and files that are not an input (this directory, Markdown) are listed under `coverage` in `categories.json`;
-- a file the collector reads has more `curl` URLs, `git clone`, `npm`, `pip` or `apt-get install` commands
-  than the collector turned into dependencies, which means a command is written in a shape the readers
-  do not know.
+- the Dockerfile or one of its scripts has more `curl` URLs, `git clone`, `npm`, `pip` or `apt-get install`
+  commands than the collector turned into dependencies, which means a command is written in a shape the
+  readers do not know, or it uses `wget`, which the readers do not support;
+- a file the collector reads for something other than commands has a command in it: a Makefile is read for
+  `pip install` and `pip download`, a workflow for `uses:`, so a `curl` in a Makefile or an `apt-get install`
+  in a workflow step is not in the list.
 
 `check` runs it too. When it fails, teach the collector about the new file or shape, or list the file
-under `coverage` with a reason.
+under `coverage` with a reason: a command that is not an input of the build (a CI tool, say) goes under
+`allowed_commands` with the kinds it may hold and why.
 
 ## Reproducing the list
 

@@ -85,6 +85,9 @@
    ".github/scripts/dependencies/*",
    "*.md",
    "*.ipynb"
-  ]
+  ],
+  "allowed_commands": {
+   "_comment": "A file the collector reads can hold a command of a kind it does not read (for example a workflow step that runs `pip install`). List it here as '<path glob>': {\"kinds\": [\"<kind>\"], \"reason\": \"<why it is not an input of the build>\"}. The kinds are the keys of COMMANDS in completeness.py."
+  }
  }
 }

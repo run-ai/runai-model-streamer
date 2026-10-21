@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -235,8 +236,32 @@ class CompletenessTest(unittest.TestCase):
                                ".devcontainer/scripts/a.sh": 'x=$(curl -fsSL https://example.org/a.tgz -o a.tgz)\n'
                                                               "curl -fsSL -o b.tgz https://example.org/b.tgz\n"})
         problems = completeness.unparsed_commands(repo)
-        self.assertEqual(problems, ["%s has 2 `curl with a URL` commands and the collector read 1. Teach dockerfile.py the new shape"
+        self.assertEqual(problems, ["%s has 2 `curl` commands and the collector read 1. Teach dockerfile.py the new shape"
                                     % ".devcontainer/scripts/a.sh"])
+
+    def test_wget_in_a_build_file_is_reported(self):
+        repo = self.repo_with({".devcontainer/Dockerfile": "FROM ubuntu:20.04\n",
+                               ".devcontainer/scripts/a.sh": "wget -O a.tgz https://example.org/a.tgz\n"})
+        problems = completeness.unparsed_commands(repo)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("a.sh downloads with `wget`", problems[0])
+
+    def test_a_command_in_a_file_that_is_read_for_something_else_is_reported(self):
+        repo = self.repo_with({".devcontainer/Dockerfile": "FROM ubuntu:20.04\n",
+                               "py/x/Makefile": "install:\n\tpip3 install a\n\tcurl -fsSL -o b.tgz https://example.org/b.tgz\n",
+                               ".github/workflows/w.yml": "steps:\n- run: sudo apt-get install -y jq\n- uses: actions/checkout@v5\n"})
+        problems = completeness.unread_commands(repo)
+        self.assertEqual(len(problems), 2)
+        self.assertTrue(problems[0].startswith(".github/workflows/w.yml has a `apt-get install` command"))
+        self.assertTrue(problems[1].startswith("py/x/Makefile has a `curl` command"))  # its `pip3 install` is read
+
+    def test_a_listed_command_is_allowed(self):
+        repo = self.repo_with({".devcontainer/Dockerfile": "FROM ubuntu:20.04\n",
+                               ".github/workflows/w.yml": "steps:\n- run: sudo apt-get install -y jq\n"})
+        config = {"coverage": dict(inputs.config()["coverage"],
+                                   allowed_commands={".github/workflows/w.yml": {"kinds": ["apt-get install"], "reason": "a CI tool"}})}
+        with unittest.mock.patch.object(inputs, "config", return_value=config):
+            self.assertEqual(completeness.unread_commands(repo), [])
 
 
 class InputsTest(unittest.TestCase):
@@ -266,6 +291,62 @@ class InputsTest(unittest.TestCase):
         for (action, ref), workflows in inputs.workflow_actions(util.REPO).items():
             self.assertTrue(ref, action)
             self.assertTrue(workflows)
+
+
+BAZEL_QUERY = """\
+# /work/cpp/WORKSPACE:7:20
+http_archive(
+  name = "com_google_protobuf",
+  url = "https://example.org/protobuf-27.0.tar.gz",
+)
+# Rule com_google_protobuf instantiated at (most recent call last):
+#   /work/cpp/WORKSPACE:7:20           in <toplevel>
+#   /work/cpp/toolchain/deps.bzl:11:17 in load_toolchain_deps
+# Rule http_archive defined at (most recent call last):
+#   /root/.cache/bazel/external/bazel_tools/tools/build_defs/repo/http.bzl:387:31 in <toplevel>
+
+# /work/cpp/WORKSPACE:51:18
+http_archive(
+  name = "com_googlesource_code_re2",
+  url = "https://example.org/re2.tar.gz",
+)
+# Rule com_googlesource_code_re2 instantiated at (most recent call last):
+#   /work/cpp/WORKSPACE:51:18 in <toplevel>
+# Rule http_archive defined at (most recent call last):
+#   /root/.cache/bazel/external/bazel_tools/tools/build_defs/repo/http.bzl:387:31 in <toplevel>
+
+# /work/cpp/WORKSPACE:47:18
+http_archive(
+  name = "boringssl",
+  url = "https://example.org/boringssl.tar.gz",
+)
+# Rule boringssl instantiated at (most recent call last):
+#   /work/cpp/WORKSPACE:47:18                                       in <toplevel>
+#   /root/.cache/bazel/external/google_cloud_cpp/bazel/workspace0.bzl:157:10 in gl_cpp_workspace0
+#   /root/.cache/bazel/external/bazel_tools/tools/build_defs/repo/utils.bzl:268:18 in maybe
+# Rule http_archive defined at (most recent call last):
+#   /root/.cache/bazel/external/bazel_tools/tools/build_defs/repo/http.bzl:387:31 in <toplevel>
+"""
+
+
+class BazelTest(unittest.TestCase):
+    def declared(self):
+        return {container_sources._attributes(m.group(2))["name"]: container_sources.defined_at(BAZEL_QUERY, m, "/work")
+                for m in container_sources.RULE.finditer(BAZEL_QUERY)}
+
+    def test_a_macro_in_a_bzl_file_is_the_declaring_file(self):
+        self.assertEqual(self.declared()["com_google_protobuf"], "cpp/toolchain/deps.bzl:11")
+
+    def test_a_rule_written_in_the_workspace_is_declared_there(self):
+        self.assertEqual(self.declared()["com_googlesource_code_re2"], "cpp/WORKSPACE:51")
+
+    def test_a_macro_of_a_fetched_repository_is_declared_by_the_workspace_line_that_calls_it(self):
+        self.assertEqual(self.declared()["boringssl"], "cpp/WORKSPACE:47")
+
+    def test_no_comment_falls_back_to_the_workspace(self):
+        text = 'http_archive(\n  name = "x",\n  url = "https://example.org/x.tar.gz",\n)\n'
+        match = container_sources.RULE.search(text)
+        self.assertEqual(container_sources.defined_at(text, match, "/work"), "cpp/WORKSPACE")
 
 
 class NamesTest(unittest.TestCase):
