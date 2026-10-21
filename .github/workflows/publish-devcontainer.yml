@@ -1,0 +1,81 @@
+name: Publish multi-architecture devcontainer
+
+on:
+  workflow_call:
+    inputs:
+      baseline_tag:
+        description: Generic tag to publish (latest or release-X.Y).
+        type: string
+        required: true
+      amd64_image:
+        description: Immutable AMD64 image reference from the native build.
+        type: string
+        required: true
+      arm64_image:
+        description: Immutable ARM64 image reference from the native build.
+        type: string
+        required: true
+    outputs:
+      image:
+        description: Immutable reference to the published multi-architecture index.
+        value: ${{ jobs.publish.outputs.image }}
+      digest:
+        description: Published multi-architecture index digest.
+        value: ${{ jobs.publish.outputs.digest }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Publish and verify devcontainer index
+    runs-on: ubuntu-24.04
+    outputs:
+      image: ${{ steps.publish.outputs.image }}
+      digest: ${{ steps.publish.outputs.digest }}
+    steps:
+    - name: Log in to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Publish generic tag from native image digests
+      id: publish
+      shell: bash
+      env:
+        BASELINE_TAG: ${{ inputs.baseline_tag }}
+        AMD64_IMAGE: ${{ inputs.amd64_image }}
+        ARM64_IMAGE: ${{ inputs.arm64_image }}
+      run: |
+        set -euo pipefail
+        if [[ "$BASELINE_TAG" != latest && ! "$BASELINE_TAG" =~ ^release-[0-9]+\.[0-9]+$ ]]; then
+          echo '::error::Unsupported devcontainer baseline tag.' >&2
+          exit 1
+        fi
+        repository="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+        image_name="ghcr.io/$repository/devcontainer"
+        prefix="$image_name@"
+        for ref in "$AMD64_IMAGE" "$ARM64_IMAGE"; do
+          digest="${ref#"$prefix"}"
+          if [[ "$ref" != "$prefix"* || ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo '::error::Native images must be immutable digests in this devcontainer repository.' >&2
+            exit 1
+          fi
+        done
+        image="$image_name:$BASELINE_TAG"
+        docker buildx imagetools create --tag "$image" "$AMD64_IMAGE" "$ARM64_IMAGE"
+        if ! manifest=$(docker buildx imagetools inspect "$image" --format '{{json .Manifest}}') ||
+           ! digest=$(jq -er '
+             select(.mediaType == "application/vnd.oci.image.index.v1+json" or
+                    .mediaType == "application/vnd.docker.distribution.manifest.list.v2+json")
+             | select([.manifests[] | select(.platform.os == "linux") | .platform.architecture]
+                      | index("amd64") != null and index("arm64") != null)
+             | .digest | strings | select(length == 71 and test("^sha256:[0-9a-f]{64}$"))
+           ' <<< "$manifest"); then
+          echo '::error::Published devcontainer must contain both linux/amd64 and linux/arm64 and a valid index digest.' >&2
+          exit 1
+        fi
+        printf 'image=%s@%s\ndigest=%s\n' "$image_name" "$digest" "$digest" >> "$GITHUB_OUTPUT"
