@@ -4,15 +4,15 @@ on:
   workflow_call:
     inputs:
       architecture:
-        description: Native candidate architecture (amd64 or arm64); empty preserves the existing dual-architecture image.
+        description: Native image architecture (amd64 or arm64).
         type: string
-        default: ''
+        required: true
       baseline_tag:
         description: Published branch image tag to update or use as a build cache.
         type: string
         default: latest
       publish:
-        description: Push to GHCR; otherwise only the existing dual-architecture image is exported as a workflow artifact.
+        description: Push to GHCR; otherwise export the image for PR build and test jobs.
         type: boolean
         default: false
     outputs:
@@ -20,8 +20,11 @@ on:
         description: Fully qualified image tag to run.
         value: ${{ jobs.build.outputs.image }}
       artifact:
-        description: Image artifact name for unpublished dual-architecture builds; empty for native candidates or published builds.
+        description: Image artifact name for PR builds; empty for published builds.
         value: ${{ jobs.build.outputs.artifact }}
+      published_image:
+        description: Immutable image reference after publication, for manifest assembly.
+        value: ${{ jobs.build.outputs.published_image }}
 
 jobs:
   build:
@@ -30,6 +33,7 @@ jobs:
     outputs:
       image: ${{ steps.image.outputs.image }}
       artifact: ${{ steps.image.outputs.artifact }}
+      published_image: ${{ steps.publish.outputs.image }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v5
@@ -50,7 +54,6 @@ jobs:
           exit 1
         fi
         case "$ARCHITECTURE" in
-          '') suffix=; dependency_arches='amd64 arm64' ;;
           amd64|arm64) suffix="-$ARCHITECTURE"; dependency_arches="$ARCHITECTURE" ;;
           *) echo "::error::Unsupported devcontainer architecture: $ARCHITECTURE" >&2; exit 1 ;;
         esac
@@ -60,9 +63,7 @@ jobs:
         artifact=
         if [[ "$PUBLISH" != true ]]; then
           tag="pr-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}${suffix}"
-          if [[ -z "$ARCHITECTURE" ]]; then
-            artifact="ci-devcontainer-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          fi
+          artifact="ci-devcontainer-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}${suffix}"
         fi
         printf 'name=%s\ntag=%s\nimage=%s:%s\nartifact=%s\n' \
           "$image_name" "$tag" "$image_name" "$tag" "$artifact" >> "$GITHUB_OUTPUT"
@@ -93,12 +94,30 @@ jobs:
       uses: devcontainers/ci@v0.3
       env:
         DEVCONTAINER_DEPENDENCY_ARCHES: ${{ steps.image.outputs.dependency_arches }}
-      # Build for the runner's native platform; the existing image remains available for export.
+      # Use the runner's native platform; publish explicitly below to capture its digest.
       with:
         imageName: ${{ steps.image.outputs.name }}
         imageTag: ${{ steps.image.outputs.tag }}
         cacheFrom: ${{ steps.cache.outputs.image }}
-        push: ${{ inputs.publish && 'always' || 'never' }}
+        push: never
+
+    - name: Publish native image
+      id: publish
+      if: inputs.publish
+      shell: bash
+      env:
+        IMAGE: ${{ steps.image.outputs.image }}
+        IMAGE_NAME: ${{ steps.image.outputs.name }}
+      run: |
+        set -euo pipefail
+        docker push "$IMAGE"
+        resolved=$(docker image inspect "$IMAGE" --format '{{json .RepoDigests}}' \
+          | jq -r --arg prefix "$IMAGE_NAME@" '[.[]? | select(startswith($prefix))][0] // empty')
+        if [[ ! "$resolved" =~ @sha256:[0-9a-f]{64}$ ]]; then
+          echo '::error::Could not resolve the published native image digest.' >&2
+          exit 1
+        fi
+        printf 'image=%s\n' "$resolved" >> "$GITHUB_OUTPUT"
 
     - name: Export devcontainer image
       if: steps.image.outputs.artifact != ''
