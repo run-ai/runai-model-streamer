@@ -140,6 +140,8 @@ def collect(args):
 
 def check(args):
     """Fail if the list is malformed or out of step with the third-party notices."""
+    if not os.path.exists(args.out):
+        sys.exit("%s does not exist: run `collect` first, or pass --out" % args.out)
     data = read_json(args.out)
     problems = []
     for item in data["dependencies"]:

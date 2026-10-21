@@ -1,8 +1,10 @@
 # Dependency list
 
-`dependencies.json` lists everything this repository depends on to **build, test and run**, with
-the exact version and where to download it (URL, hash, and the commit for git repositories).
-The tooling keeps and stores no dependency, but collecting does download: Bazel fetches the
+The scripts in this directory create `dependencies.json`, a list of everything this repository
+depends on to **build, test and run**, with the exact version and where to download it (URL, hash,
+and the commit for git repositories). The list itself is not stored in the repository: it is a
+snapshot of what registries serve on the day it is made, so generate it when you need it (see
+[Reproducing the list](#reproducing-the-list)). The tooling keeps and stores no dependency, but collecting does download: Bazel fetches the
 external repositories into a temporary cache, and an archive that no file pins is downloaded once
 to compute its hash.
 
@@ -82,7 +84,7 @@ so one run of the image covers the build and the tests for both.
    ```
    `check` fails on an unknown category, an entry with nothing to download, or a component of
    `third_party_notices/components.json` that `categories.json` does not map to a `ship` dependency.
-5. **Review the diff of `dependencies.json`.** New entries mean a new dependency; if one is linked
+5. **Review the list.** Compare it with the previous one you generated. New entries mean a new dependency; if one is linked
    into a native library, add it to `ship` in `categories.json`, and to
    `third_party_notices/components.json`. A package that is only for tests belongs in `categories.json`
    under its ecosystem. `collect` stops if a `ship` key matches nothing.
