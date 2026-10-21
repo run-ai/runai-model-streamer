@@ -116,9 +116,9 @@ DioAlign statx_dio_align(const std::string & path)
 // back a page-aligned address. base is aligned to MaxProbeBlock and block divides it, so base + block
 // is aligned to `block` alone.
 //
-// `offset` is the caller's to choose the same way, and it must have at least `block` bytes of file
-// after it. Past the end the read returns 0 without the kernel reaching the alignment check, and
-// every rung would pass.
+// `offset` must be chosen the same way, and it must have at least `block` bytes of file after it.
+// Past the end the read returns 0 without the kernel reaching the alignment check, and every rung
+// would pass. ladder_direct_block picks it, and is where both of those rules live.
 bool direct_read_at(int fd, size_t block, off_t offset)
 {
     void * raw = nullptr;
@@ -367,7 +367,8 @@ namespace
 
 } // namespace
 
-LadderBlock ladder_direct_block(off_t size, size_t page, const std::function<bool(size_t)> & accepts)
+LadderBlock ladder_direct_block(off_t size, size_t page,
+                                const std::function<bool(size_t, off_t)> & accepts)
 {
     // ASCENDING, and the first success wins. The smallest workable block is the one we want: a larger
     // one pads more between ranges and bounces more of every chunk's head and tail. 512 is the
@@ -394,13 +395,21 @@ LadderBlock ladder_direct_block(off_t size, size_t page, const std::function<boo
 
     for (const size_t candidate : ladder)
     {
-        if (size < static_cast<off_t>(2 * candidate))
+        // AT THE RUNG'S OWN OFFSET. Zero is a multiple of every block, so a probe there asks nothing
+        // of a mount that checks the offset, and such a mount accepts the first rung whatever it
+        // really needs. The buffer and the length are made strict inside the probe; this is the third.
+        const off_t offset = static_cast<off_t>(candidate);
+
+        // The read starts at `offset` and is `candidate` long, so the file must hold both. Past the
+        // end pread returns 0 without the kernel reaching the alignment check, and the rung would
+        // pass for a reason that says nothing about the mount.
+        if (size < offset + static_cast<off_t>(candidate))
         {
             untested = candidate;   // rungs ascend, so every rung above this one is too big as well
             break;
         }
 
-        if (accepts(candidate))
+        if (accepts(candidate, offset))
         {
             return { candidate, true };
         }
@@ -446,15 +455,13 @@ size_t MountCapabilities::measure_direct_block(const std::string & file_path)
         return 0;   // the caller already distinguishes "mount refuses" from "cannot tell"
     }
 
-    // Each rung is tested at its own offset, so the file needs a block of it there. A rung with less
-    // than that reads at EOF, returns 0 and would pass without the kernel reaching the alignment
-    // check - so ladder_direct_block skips it instead.
+    // How much file there is to place a probe read in. The ladder decides which rungs that allows.
     struct stat info;
     const off_t size = ::fstat(fd, &info) == 0 ? info.st_size : 0;
 
     const auto decided = ladder_direct_block(
         size, static_cast<size_t>(::sysconf(_SC_PAGESIZE)),
-        [&fd](size_t candidate) { return direct_read_at(fd, candidate, static_cast<off_t>(candidate)); });
+        [&fd](size_t block, off_t offset) { return direct_read_at(fd, block, offset); });
 
     if (!decided.measured)
     {

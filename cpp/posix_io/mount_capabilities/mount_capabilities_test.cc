@@ -593,9 +593,12 @@ namespace
 {
 
 // A mount that serves direct reads at `needs` and refuses anything smaller.
-std::function<bool(size_t)> accepts_from(size_t needs)
+//
+// It ignores the offset, so these tests say nothing about it - that is what the offset test below is
+// for.
+std::function<bool(size_t, off_t)> accepts_from(size_t needs)
 {
-    return [needs](size_t candidate) { return candidate >= needs; };
+    return [needs](size_t candidate, off_t) { return candidate >= needs; };
 }
 
 constexpr off_t Plenty = 1024 * 1024;   // long enough to place every rung
@@ -639,6 +642,64 @@ TEST(LadderDirectBlock, A_File_Too_Short_For_Any_Rung_Is_Never_Measured)
     EXPECT_EQ(decided.block, 4096u) << "the page size is the floor under the smallest rung";
     EXPECT_FALSE(decided.measured);
     EXPECT_NE(decided.block, 512u) << "the first rung passed on a file too short to test it";
+}
+
+// A MOUNT THAT CHECKS ONLY THE FILE OFFSET, which is the mount that produced this bug.
+//
+// Offset 0 is a multiple of every block, so a probe there asks such a mount nothing: it accepts the
+// 512 rung although it needs 4096, and every real read afterwards fails. Probing each rung at its own
+// offset is what makes it answer, because 512 is not a multiple of 4096.
+//
+// Only a fake can say this. tmpfs is the one mount these tests can reach, and it accepts every direct
+// read - buffer, length and offset alike - so it cannot refuse a rung for any reason.
+TEST(LadderDirectBlock, A_Rung_Is_Probed_At_Its_Own_Offset)
+{
+    std::vector<off_t> probed;
+
+    const auto decided = ladder_direct_block(Plenty, 4096,
+                                             [&probed](size_t, off_t offset)
+                                             {
+                                                 probed.push_back(offset);
+                                                 return offset % 4096 == 0;
+                                             });
+
+    EXPECT_EQ(decided.block, 4096u) << "the 512 rung was probed at an offset this mount accepts";
+    EXPECT_TRUE(decided.measured);
+
+    // EVERY rung, not just the first. A probe that corrected only the smallest one would still
+    // report 4096 for a mount that needs 16384 - the same bug, one rung up.
+    EXPECT_EQ(probed, (std::vector<off_t>{ 512, 4096 }))
+        << "a rung was probed somewhere other than its own offset";
+}
+
+// The offset above is also what the file must be long enough to hold, so the two rules are one.
+//
+// 768 bytes places a 512-byte read at offset 0, and does NOT place one at offset 512. If the ladder
+// ever probed at 0 again, this file would be long enough and the rung would be tried.
+TEST(LadderDirectBlock, A_File_Long_Enough_Only_At_Offset_Zero_Leaves_The_Rung_Untested)
+{
+    bool asked = false;
+
+    const auto decided = ladder_direct_block(768, 4096,
+                                             [&asked](size_t, off_t)
+                                             {
+                                                 asked = true;
+                                                 return true;
+                                             });
+
+    EXPECT_FALSE(asked) << "a rung was probed in a file too short to place it at its own offset";
+    EXPECT_FALSE(decided.measured);
+    EXPECT_EQ(decided.block, 4096u) << "the page size is the floor under the smallest rung";
+}
+
+// THE EXACT FIT, which is the edge of the rule above. 1024 bytes holds a 512-byte read at offset 512
+// with nothing to spare, so the rung must be tried rather than skipped.
+TEST(LadderDirectBlock, A_File_That_Fits_A_Rung_Exactly_Is_Probed)
+{
+    const auto decided = ladder_direct_block(1024, 4096, accepts_from(512));
+
+    EXPECT_EQ(decided.block, 512u);
+    EXPECT_TRUE(decided.measured) << "a file long enough for the rung was treated as too short";
 }
 
 // Zero is an ANSWER, not a failure: the mount accepts an O_DIRECT open and serves no block we use.
