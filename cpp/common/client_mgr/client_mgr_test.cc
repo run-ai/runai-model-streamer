@@ -8,8 +8,11 @@
 
 #include <gtest/gtest.h>
 
+#include <optional>
 #include <set>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "common/backend_api/object_storage/object_storage.h"
 #include "common/storage_uri/storage_uri.h"
@@ -32,32 +35,53 @@ bool strequals(const char *a, const char *b) {
 
 struct Helper : IClient
 {
+    // owned copies: the config's strings belong to the caller and are gone once it returns
+    using OptionalString = std::optional<std::string>;
+    using Param = std::pair<OptionalString, OptionalString>;
+
+    static OptionalString to_optional(const char * value)
+    {
+        return value == nullptr ? OptionalString() : OptionalString(value);
+    }
+
+    static std::vector<Param> copy_params(const common::backend_api::ObjectClientConfig_t & config)
+    {
+        std::vector<Param> params;
+        for (size_t i = 0; i < config.num_initial_params; ++i)
+        {
+            params.emplace_back(to_optional(config.initial_params[i].key), to_optional(config.initial_params[i].value));
+        }
+        return params;
+    }
+
     Helper(const common::backend_api::ObjectClientConfig_t & config) :
-        config(config),
+        endpoint_url(to_optional(config.endpoint_url)),
+        initial_params(copy_params(config)),
         counter(++global_counter),
         id(utils::random::number<size_t>())
     {
     }
 
     bool verify_credentials(const common::backend_api::ObjectClientConfig_t& other) const {
-        if (!strequals(config.endpoint_url, other.endpoint_url)) {
+        if (endpoint_url != to_optional(other.endpoint_url)) {
             return false;
         }
-        if (config.num_initial_params != other.num_initial_params) {
+        if (initial_params.size() != other.num_initial_params) {
             return false;
         }
-        for (size_t i = 0; i < config.num_initial_params; ++i) {
-            if (!strequals(config.initial_params[i].key, other.initial_params[i].key)) {
+        for (size_t i = 0; i < initial_params.size(); ++i) {
+            if (initial_params[i].first != to_optional(other.initial_params[i].key)) {
                 return false;
             }
-            if (!strequals(config.initial_params[i].value, other.initial_params[i].value)) {
+            if (initial_params[i].second != to_optional(other.initial_params[i].value)) {
                 return false;
             }
         }
         return true;
     }
 
-    const common::backend_api::ObjectClientConfig_t & config;
+    const OptionalString endpoint_url;
+    const std::vector<Param> initial_params;
     static size_t global_counter;
     const size_t counter;
 
@@ -192,7 +216,8 @@ TEST_F(ClientMgrTest, Credentials_Changed)
         std::vector<common::backend_api::ObjectConfigParam_t> initial_params;
         const auto new_config = new_params.to_config(initial_params);
         bool changed = !helper->verify_credentials(new_config);
-        Helper * helper = ClientMgrHelper::pop(new_config);
+        // assign, do not shadow: a changed config destroys the previous client, so the outer pointer must follow
+        helper = ClientMgrHelper::pop(new_config);
 
         EXPECT_TRUE(helper->verify_credentials(new_config));
 
