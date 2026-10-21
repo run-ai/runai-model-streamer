@@ -2,6 +2,7 @@
     "name": "RunAI Model Streamer",
     "build": {
         "dockerfile": "Dockerfile",
+        "context": "..",
         "args": {
             "DEPENDENCY_ARCHES": "${localEnv:DEVCONTAINER_DEPENDENCY_ARCHES:amd64 arm64}"
         }
