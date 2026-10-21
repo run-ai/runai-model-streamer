@@ -92,7 +92,7 @@ build_curl() {
     done
 
     cd -
-    rm -rf curl-7.83.1 curl-7.83.1.tar.gz
+    rm -rf curl-8.13.0 curl-8.13.0.tar.gz
 }
 
 build_zlib() {
