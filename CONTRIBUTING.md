@@ -252,8 +252,10 @@ are unchanged.
 ### Parallel PR checks
 
 The PR workflow calls `spdx-headers.yml` to test the header checker and verify
-source file headers in parallel with setup and builds. The SPDX workflow runs
-only when called, and its result is required by the final **Test, Build & Push** check.
+source file headers in parallel with setup. Image preparation and builds require
+both checks to succeed, so an SPDX failure prevents those jobs and the downstream
+integration tests and package assembly from starting. The SPDX workflow runs only
+when called, and its result is required by the final **Test, Build & Push** check.
 
 A setup job computes `PACKAGE_VERSION` once. Separate `build_x86` and `build_arm`
 jobs in `on-pr.yaml` each call `build.yml` for four components: core (`streamer`),
