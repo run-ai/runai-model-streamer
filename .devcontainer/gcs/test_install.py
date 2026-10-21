@@ -70,14 +70,14 @@ class InstallTest(unittest.TestCase):
 
     def test_records_sdk_inputs_without_application_settings(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory) / "gcs"
             contents = {
                 ".bazelrc": "build --compilation_mode=opt\n",
                 ".bazelversion": "7.6.1\n",
                 "WORKSPACE": "SDK workspace\n",
                 "BUILD.bazel": "SDK targets\n",
                 "abi_check.cc": "ABI check\n",
-                "build.sh": "SDK build command\n",
+                "../scripts/build-gcs-sdk.sh": "SDK build command\n",
                 "export.bzl": "SDK exporter\n",
                 "install.py": "SDK installer\n",
                 "config/sources.bzl": "SDK dependency pins\n",
@@ -89,7 +89,7 @@ class InstallTest(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(content)
             # Application edits must not become part of the SDK identity.
-            application = root / "cpp"
+            application = root.parent / "cpp"
             application.mkdir()
             (application / ".bazelrc").write_text("build --copt=-g\n")
             (application / ".bazelversion").write_text("different application Bazel\n")
@@ -102,6 +102,10 @@ class InstallTest(unittest.TestCase):
             with patch("install.subprocess.check_output", return_value="GCC version\n"):
                 (application / ".bazelrc").write_text("build --copt=-O1\n")
                 self.assertEqual(build_metadata(root, "/usr/bin/g++"), metadata)
+                script = root.parent / "scripts/build-gcs-sdk.sh"
+                script.write_text("updated SDK build command\n")
+                self.assertNotEqual(build_metadata(root, "/usr/bin/g++"), metadata)
+                script.write_text(contents["../scripts/build-gcs-sdk.sh"])
                 (root / "config/sources.bzl").write_text("updated SDK pin\n")
                 self.assertNotEqual(build_metadata(root, "/usr/bin/g++"), metadata)
 

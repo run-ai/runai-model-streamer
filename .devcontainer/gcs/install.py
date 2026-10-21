@@ -20,7 +20,7 @@ def relative_path(value):
 def build_metadata(source, compiler):
     inputs = [source / name for name in [
         ".bazelrc", ".bazelversion", "WORKSPACE", "BUILD.bazel",
-        "abi_check.cc", "build.sh", "export.bzl", "install.py",
+        "abi_check.cc", "../scripts/build-gcs-sdk.sh", "export.bzl", "install.py",
     ]]
     inputs.extend(path for path in (source / "config").rglob("*") if path.is_file())
     return {

@@ -10,6 +10,10 @@ and local images build only their native architecture using the native toolchain
 The Bazel repository exposes only installed architectures and reports an
 unsupported target clearly.
 
+The build entry point is `.devcontainer/scripts/build-gcs-sdk.sh`. It downloads
+and verifies Bazel, runs the installer tests, builds the native SDK, and exports
+the installation and metadata. The Dockerfile copies its inputs and invokes it.
+
 The SDK has its own `.bazelversion`, `.bazelrc` and standalone Bazel workspace
 here. Bazel detects the native compiler; the application keeps its existing custom
 toolchain. `config/sources.bzl` and `config/deps.bzl` are the single source of SDK
@@ -24,10 +28,11 @@ still fetch protobuf's Bazel rule definitions, which `rules_cc` imports; they do
 not compile protobuf or its dependencies.
 
 Rebuild the devcontainer after changing SDK sources, settings or pins under
-`.devcontainer/gcs/`. The consumer checks these SDK-owned inputs, source checksums
+`.devcontainer/gcs/`, or the `build-gcs-sdk.sh` script. The consumer checks these
+SDK-owned inputs, source checksums
 and the installed compiler version. Changing this directory's `.bazelversion`
 also requires updating the matching Linux AMD64 and ARM64 Bazel binary checksums
-in the Dockerfile. The application's `cpp/.bazelversion` can change independently.
+in `build-gcs-sdk.sh`. The application's `cpp/.bazelversion` can change independently.
 
 Normal application changes to warnings, optimization or debug symbols do not
 invalidate the SDK. The shared `compatibility.h`, compiled by both workspaces,
