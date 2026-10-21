@@ -3,33 +3,29 @@
 
 """Configures the C++ toolchain."""
 
-load("//toolchain:rules.bzl", "get_target_triplet", "runai_crosstool_tools")
+load("//toolchain:rules.bzl", "native_tools")
 
-# This should map to the devcontainer Dockerfile
-# We install gcc-x86-64-linux-gnu and gcc-aarch64-linux-gnu toolchains
-ARCHITECTURES = ["x86_64", "aarch64"]
 OS = "linux-gnu"
 
-def _get_gcc_version(repository_ctx, arch):
-    gcc_tool = runai_crosstool_tools(get_target_triplet(OS, arch))["gcc"]
-    return repository_ctx.execute([gcc_tool, "-dumpversion"]).stdout.strip()
-
-def _get_host_arch(repository_ctx):
-    return repository_ctx.execute(["/usr/bin/uname", "-m"]).stdout.strip()
+def _get_gcc_version(repository_ctx):
+    result = repository_ctx.execute([native_tools()["gcc"], "-dumpversion"])
+    if result.return_code != 0 or not result.stdout.strip():
+        fail("Cannot determine the native GCC version: " + result.stderr)
+    return result.stdout.strip()
 
 def _cc_autoconf_toolchain_impl(repository_ctx):
-    define_statements = []
-    for arch in ARCHITECTURES:
-        gcc_version = _get_gcc_version(repository_ctx, arch)
-        host_arch = _get_host_arch(repository_ctx)
-        toolchain_name = arch
-        define_statements.append('define_toolchain(name = "%s", os = "%s", host_arch = "%s", arch = "%s", gcc_version = "%s")' % (toolchain_name, OS, host_arch, arch, gcc_version))
+    result = repository_ctx.execute(["/usr/bin/uname", "-m"])
+    arch = result.stdout.strip()
+    if result.return_code != 0 or arch not in ["x86_64", "aarch64"]:
+        fail("Unsupported native architecture: " + arch)
+    gcc_version = _get_gcc_version(repository_ctx)
+    define_statement = 'define_toolchain(name = "%s", os = "%s", arch = "%s", gcc_version = "%s")' % (arch, OS, arch, gcc_version)
 
     repository_ctx.template(
         "BUILD",
         repository_ctx.path(Label("//toolchain/template:BUILD.tpl")),
         {
-            "%{DEFINE_STATEMENTS}": "\n".join(define_statements),
+            "%{DEFINE_STATEMENTS}": define_statement,
         },
     )
     repository_ctx.file("toolchain.bzl", repository_ctx.read(Label("//toolchain/template:toolchain.bzl")))
@@ -42,9 +38,9 @@ _cc_autoconf_toolchain = repository_rule(
 )
 
 def configure_toolchain(name):
-    """configure_toolchain creates and registers toolchain targets for ARCHITECTURES in a repository.
+    """configure_toolchain creates and registers the native toolchain in a repository.
 
-    Toolchains can be referenced by "@<name>//:<arch>"
+    The native platform can be referenced by "@<name>//:<arch>".
 
     Args:
       name: The name of the toolchain repository.

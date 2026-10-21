@@ -4,33 +4,22 @@
 
 set -euo pipefail
 
-# The image architecture selects the SDK exposed through /usr/local.
-if (( $# < 3 )) || [[ "$1" != --native-arch ]]; then
-    echo "Usage: $0 --native-arch <amd64|arm64> <amd64|arm64> [amd64|arm64 ...]" >&2
+# Build for the image architecture supplied by Docker's TARGETARCH.
+if (( $# != 1 )); then
+    echo "Usage: $0 <amd64|arm64>" >&2
     exit 2
 fi
-case "$2" in
-    amd64) native_arch=x86_64 ;;
-    arm64) native_arch=aarch64 ;;
+case "$1" in
+    amd64) arch=x86_64 ;;
+    arm64) arch=aarch64 ;;
     *)
-        echo "Unsupported native architecture: $2" >&2
+        echo "Unsupported architecture: $1" >&2
         exit 2
         ;;
 esac
-shift 2
 
-# Accept Docker architecture names; paths and toolchains use GNU names.
-build_arches=()
-for target_arch in "$@"; do
-    case "$target_arch" in
-        amd64) build_arches+=(x86_64) ;;
-        arm64) build_arches+=(aarch64) ;;
-        *)
-            echo "Unsupported SDK architecture: $target_arch" >&2
-            exit 2
-            ;;
-    esac
-done
+# Use the prebuilt libraries in /opt instead of Azure's automatic vcpkg toolchain.
+export AZURE_SDK_DISABLE_AUTO_VCPKG=1
 
 git clone --recurse-submodules https://github.com/Azure/azure-sdk-for-cpp /opt/azure-sdk-cpp
 cd /opt/azure-sdk-cpp
@@ -46,8 +35,7 @@ build_azure_sdk_components() {
     #
     # aws-sdk-cpp gets away with the same omission because it sets a default build type in its own
     # CMakeLists. azure-sdk-for-cpp does not, so it has to be stated here.
-    local common_opts="-DCMAKE_TOOLCHAIN_FILE=/opt/toolchains/${arch}-linux-gnu.cmake \
-        -DCMAKE_BUILD_TYPE=Release \
+    local common_opts="-DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DCMAKE_INSTALL_PREFIX=${prefix} \
         -DBUILD_SHARED_LIBS=OFF \
@@ -68,17 +56,15 @@ build_azure_sdk_components() {
     cmake --install build-${arch}-${source##*/}
 }
 
-for arch in "${build_arches[@]}"; do
-    build_azure_sdk_components "$arch" "/opt/${arch}-azure" sdk/core/azure-core "" -DBUILD_TRANSPORT_CURL=ON -DDISABLE_AZURE_CORE_OPENTELEMETRY=ON
-    build_azure_sdk_components "$arch" "/opt/${arch}-azure" sdk/storage/azure-storage-common "/opt/${arch}-azure"
-    build_azure_sdk_components "$arch" "/opt/${arch}-azure" sdk/storage/azure-storage-blobs "/opt/${arch}-azure"
-    build_azure_sdk_components "$arch" "/opt/${arch}-azure" sdk/identity/azure-identity "/opt/${arch}-azure"
-done
+build_azure_sdk_components "$arch" "/opt/${arch}-azure" sdk/core/azure-core "" -DBUILD_TRANSPORT_CURL=ON -DDISABLE_AZURE_CORE_OPENTELEMETRY=ON
+build_azure_sdk_components "$arch" "/opt/${arch}-azure" sdk/storage/azure-storage-common "/opt/${arch}-azure"
+build_azure_sdk_components "$arch" "/opt/${arch}-azure" sdk/storage/azure-storage-blobs "/opt/${arch}-azure"
+build_azure_sdk_components "$arch" "/opt/${arch}-azure" sdk/identity/azure-identity "/opt/${arch}-azure"
 
 rm -rf /opt/azure-sdk-cpp
 
 # Expose the native SDK to tools using the standard include and library paths.
-if [ -d /opt/${native_arch}-azure ]; then
-    ln -sf /opt/${native_arch}-azure/include/azure /usr/local/include/azure
-    ln -sf /opt/${native_arch}-azure/lib/* /usr/local/lib/
+if [ -d /opt/${arch}-azure ]; then
+    ln -sf /opt/${arch}-azure/include/azure /usr/local/include/azure
+    ln -sf /opt/${arch}-azure/lib/* /usr/local/lib/
 fi
