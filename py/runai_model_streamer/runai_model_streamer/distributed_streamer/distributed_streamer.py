@@ -67,9 +67,6 @@ def aligned_offset(base_ptr: int, current_offset: int, alignment: int) -> int:
 
 DEFAULT_BROADCAST_TIMEOUT = timedelta(seconds=600)
 
-# RUNAI_STREAMER_PROCESS_GROUP_SIZE as estimated without discovery, which a later discovery replaces
-_estimated_group_size: Optional[str] = None
-
 class DistributedStreamer:
     def __init__(self) -> None:
         self.file_streamer = FileStreamer()
@@ -304,29 +301,22 @@ class _distributedStreamerParams:
         if discover_ranks:
             self.discover_local_ranks()
         else:
-            self.estimate_local_ranks()
+            self.set_rank_without_discovery()
 
     def discover_local_ranks(self) -> None:
-        global _estimated_group_size
         # set the value of RUNAI_STREAMER_PROCESS_GROUP_SIZE to be the number of processes in the distribution group (or 1 if process group is not initialized)
         # This is useful for auto adjustments in the CPP layer, which depends on the number of processes of this workload
         if self.num_processes_on_node is None:
             self.num_processes_on_node, self.my_global_rank, self.groups_by_ranks = self.find_local_ranks()
-        # an estimate of a previous read is replaced, a value set by the user is not
-        if os.environ.get("RUNAI_STREAMER_PROCESS_GROUP_SIZE") in (None, _estimated_group_size):
+        if os.environ.get("RUNAI_STREAMER_PROCESS_GROUP_SIZE") is None:
             os.environ["RUNAI_STREAMER_PROCESS_GROUP_SIZE"] = str(self.num_processes_on_node)
-            _estimated_group_size = None
 
-    def estimate_local_ranks(self) -> None:
-        global _estimated_group_size
+    def set_rank_without_discovery(self) -> None:
         # find_local_ranks() is a collective over all the ranks of the process group, which a rank reading without its peers
-        # skips. The rank and RUNAI_STREAMER_PROCESS_GROUP_SIZE are taken without one: LOCAL_WORLD_SIZE is set by torchrun,
-        # otherwise the world size, which is exact on a single node and more than the processes on each node otherwise
+        # skips. RUNAI_STREAMER_PROCESS_GROUP_SIZE is not guessed then, so the CPP layer defaults to 1: a count larger than
+        # the processes reading on the node lowers their throughput, more than a smaller one does
         if self.num_processes_on_node is None and dist.is_initialized():
             self.my_global_rank = dist.get_rank()
-        if self.get_group_size() > 1 and os.environ.get("RUNAI_STREAMER_PROCESS_GROUP_SIZE") is None:
-            _estimated_group_size = os.environ.get("LOCAL_WORLD_SIZE", str(self.get_group_size()))
-            os.environ["RUNAI_STREAMER_PROCESS_GROUP_SIZE"] = _estimated_group_size
 
 class _distributedStreamer:
     def __init__(self, file_streamer : FileStreamer) -> None:
