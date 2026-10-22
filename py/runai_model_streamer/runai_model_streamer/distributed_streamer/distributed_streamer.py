@@ -289,7 +289,7 @@ class _distributedStreamerParams:
     def set_params(
             self,
             file_stream_requests: List[FileChunks], 
-            discover_ranks: bool = True,
+            discover_ranks: bool,
     ) -> None:
 
         self.broadcast_timeout = self.get_broadcast_timeout()
@@ -313,7 +313,7 @@ class _distributedStreamerParams:
 
     def set_rank_without_discovery(self) -> None:
         # RUNAI_STREAMER_PROCESS_GROUP_SIZE is not guessed, so the CPP layer defaults to 1: a count larger than the readers lowers their throughput
-        if self.num_processes_on_node is None and dist.is_initialized():
+        if dist.is_initialized():
             self.my_global_rank = dist.get_rank()
 
 class _distributedStreamer:
