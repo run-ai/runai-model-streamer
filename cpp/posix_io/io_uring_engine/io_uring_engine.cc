@@ -13,6 +13,7 @@
 
 #include "common/exception/exception.h"
 #include "posix_io/alignment/alignment.h"
+#include "posix_io/completion_mapper/completion_mapper.h"
 #include "posix_io/io_uring_probe/io_uring_probe.h"
 #include "utils/logging/logging.h"
 
@@ -306,9 +307,10 @@ common::ResponseCode IoUringEngine::stage(RequestId id, FileRef file, size_t off
     return common::ResponseCode::Success;
 }
 
-common::ResponseCode IoUringEngine::flush(unsigned & out_issued)
+common::ResponseCode IoUringEngine::flush(unsigned & out_issued, bool & out_deferred)
 {
     out_issued = 0;
+    out_deferred = false;
 
     if (_staged == 0)
     {
@@ -327,16 +329,22 @@ common::ResponseCode IoUringEngine::flush(unsigned & out_issued)
     {
         const int error = error_of(ret);
 
-        // Backpressure, not failure. The staged entries keep their place at the head of the ring and
+        // The kernel took nothing, so the staged entries keep their place at the head of the ring and
         // go out on the next flush, in order - both APIs issue a prefix, so the unissued set is
         // always the tail and nothing has to be tracked.
         //
         // Zero progress is the hazard, so it is REPORTED rather than retried here: only reaping frees
         // capacity, and reaping runs on this same thread, so a loop would spin against itself (5.9).
-        if (error == EAGAIN || error == EBUSY)
+        //
+        // An INTERRUPTED submit belongs here too, and used to fall through: a direct read is
+        // performed inline by io_uring_submit, so a signal reaches it. Failing instead ends this
+        // engine, and a dead engine sends its whole mount to the synchronous reader for the life of
+        // the streamer - the cost of one signal.
+        if (submit_can_defer(error))
         {
             LOG(DEBUG) << "io_uring_submit deferred " << _staged << " staged reads: "
                        << std::strerror(error);
+            out_deferred = true;
             return common::ResponseCode::Success;
         }
 
@@ -350,9 +358,24 @@ common::ResponseCode IoUringEngine::flush(unsigned & out_issued)
     out_issued = static_cast<unsigned>(ret);
     _submit_stats.requests += out_issued;
 
-    ASSERT(out_issued <= _staged) << "io_uring_submit issued " << out_issued << " of " << _staged
-                                  << " staged";
+    // REPORTED, not asserted. ASSERT is fatal in every build here (no NDEBUG gate, see logging.h),
+    // and a library inside a serving stack must not end its host - the same reasoning completion
+    // mapping already follows. Issuing more than was staged means this engine's own accounting is
+    // wrong, so the engine ends rather than carrying on with a count it cannot trust.
+    if (out_issued > _staged)
+    {
+        LOG(ERROR) << "io_uring_submit issued " << out_issued << " of " << _staged
+                   << " staged - this engine's accounting is wrong";
+        _staged = 0;
+        return common::ResponseCode::FsAsyncEngineError;
+    }
+
     _staged -= out_issued;
+
+    // Accepted nothing while entries are still staged: the same state as a refusal, and the caller
+    // bounds it the same way. Reached only with _staged > 0, because flush returns early when
+    // nothing is staged - so the test is on out_issued alone.
+    out_deferred = (out_issued == 0);
 
     return common::ResponseCode::Success;
 }
