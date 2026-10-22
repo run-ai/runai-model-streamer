@@ -1,6 +1,9 @@
 # use C++17
 build --cxxopt=-std=c++17
 
+# Keep prebuilt SDK header paths inside Bazel's external repository for dependency checks.
+build --copt=-fno-canonical-system-headers
+
 # compile with '-fPIC'; this is needed for building in optimized mode (i.e. '-c opt').
 build --force_pic
 

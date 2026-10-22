@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-FROM ubuntu:20.04
+FROM ubuntu:20.04 AS base
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     python3 \
@@ -65,29 +65,45 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Local storage services used by the integration tests.
-COPY scripts/install-test-services.sh /tmp/install-test-services.sh
+COPY .devcontainer/scripts/install-test-services.sh /tmp/install-test-services.sh
 RUN bash /tmp/install-test-services.sh "$TARGETARCH"
 
 # CUDA headers only, for compile-time type checking of the driver API. No runtime and no
 # libraries: libcuda.so.1 is loaded with dlopen, so the build has no link-time CUDA dependency
 # and the image needs no driver.
-COPY scripts/install-cuda-headers.sh /tmp/install-cuda-headers.sh
+COPY .devcontainer/scripts/install-cuda-headers.sh /tmp/install-cuda-headers.sh
 RUN bash /tmp/install-cuda-headers.sh "$TARGETARCH"
 
 # Build all shared SDK prerequisites before the cloud SDKs.
-COPY scripts/build-basic-libs.sh /tmp/build-basic-libs.sh
+COPY .devcontainer/scripts/build-basic-libs.sh /tmp/build-basic-libs.sh
 RUN bash /tmp/build-basic-libs.sh "$TARGETARCH"
 
 # Keep AWS in the final image's layer chain so CI can reuse its build layer
 # through the published image cache when later dependencies change.
-COPY scripts/build-aws-sdk.sh /tmp/build-aws-sdk.sh
+COPY .devcontainer/scripts/build-aws-sdk.sh /tmp/build-aws-sdk.sh
 RUN bash /tmp/build-aws-sdk.sh "$TARGETARCH"
 
 # Build Azure SDK for C++ (optimized with shared CMake options)
 SHELL ["/bin/bash", "-c"]
-COPY scripts/build-azure-sdk.sh /tmp/build-azure-sdk.sh
+COPY .devcontainer/scripts/build-azure-sdk.sh /tmp/build-azure-sdk.sh
 RUN bash /tmp/build-azure-sdk.sh "$TARGETARCH"
 
+# Compile the pinned Google SDK once per image architecture. Only the installed
+# archives and headers enter the final image, not sources or the Bazel cache.
+FROM base AS gcs-builder
+COPY .devcontainer/gcs/.bazelversion /build/gcs/
+COPY .devcontainer/gcs/.bazelrc .devcontainer/gcs/WORKSPACE .devcontainer/gcs/BUILD.bazel \
+    .devcontainer/gcs/abi_check.cc .devcontainer/gcs/export.bzl .devcontainer/gcs/install.py \
+    .devcontainer/gcs/test_install.py /build/gcs/
+COPY .devcontainer/gcs/config/ /build/gcs/config/
+COPY .devcontainer/scripts/build-gcs-sdk.sh /build/scripts/build-gcs-sdk.sh
+# Cache the SDK as a Docker layer. Bazel caches contain host-specific repository
+# configuration and must not be shared between native image builds.
+RUN bash /build/scripts/build-gcs-sdk.sh "$TARGETARCH"
+
+FROM base AS devcontainer
+COPY --from=gcs-builder /opt/gcs-sdk /opt/gcs-sdk
+
 # Keep I/O libraries last so their changes can reuse the cloud SDK build layers.
-COPY scripts/build-io-libs.sh /tmp/build-io-libs.sh
+COPY .devcontainer/scripts/build-io-libs.sh /tmp/build-io-libs.sh
 RUN bash /tmp/build-io-libs.sh "$TARGETARCH"

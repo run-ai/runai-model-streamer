@@ -203,6 +203,16 @@ Each pull request should meet the following requirements:
 
 ## Pull Request CI Environment
 
+The devcontainer prebuilds the Google Cloud C++ SDK, including REST/gRPC and their
+transitive dependencies, alongside AWS and Azure. CI and local images install only
+their native SDK architecture.
+Ordinary PRs compile our GCS implementation against these installed libraries.
+SDK versions and SDK build settings live under `.devcontainer/gcs/`; changes there
+trigger image preparation and publication. Application settings under `cpp/` do
+not trigger an image rebuild. Rebuild local images after changing SDK inputs;
+stale SDKs and unsupported compiler/ABI settings produce an explicit error. See
+[the GCS SDK build notes](.devcontainer/gcs/README.md) for validation and rollout.
+
 The setup job checks whether `.devcontainer/**` or the PR/devcontainer workflows
 changed. If they did, two preparation jobs build
 AMD64 and ARM64 images in parallel using the reusable `devcontainer.yml` workflow.

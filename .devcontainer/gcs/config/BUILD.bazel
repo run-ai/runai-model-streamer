@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+exports_files(["sources.bzl", "deps.bzl"])
+
+cc_library(
+    name = "compatibility",
+    hdrs = ["model_streamer_gcs_sdk/compatibility.h"],
+    includes = ["."],
+    visibility = ["//visibility:public"],
+)

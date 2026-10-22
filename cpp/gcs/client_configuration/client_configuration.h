@@ -6,6 +6,7 @@
 #pragma once
 
 #include "google/cloud/common_options.h"
+#include "model_streamer_gcs_sdk/compatibility.h"
 
 #include "common/storage_uri/storage_uri.h"
 

@@ -11,6 +11,7 @@
 
 #include "google/cloud/future.h"
 #include "google/cloud/storage/client.h"
+#include "model_streamer_gcs_sdk/compatibility.h"
 
 #include "utils/threadpool/threadpool.h"
 
