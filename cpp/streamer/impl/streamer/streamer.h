@@ -150,9 +150,8 @@ struct Streamer
     // client creation, from credentials()); the batch params carry the URI, which is all the per-read path uses.
     common::s3::S3ClientWrapper::Params handle_s3(unsigned file_index, const std::string & path);
 
-    // Raises the soft open files limit to at least `limit`, capped at the hard limit; never lowers it.
-    // Best effort: a failure to raise is logged, not thrown. Returns whether the limit reaches `limit`.
-    // Thread-safe.
+    // Raises the soft open files limit to at least `limit`, never lowers it. Best effort: returns
+    // whether it reaches `limit`.
     bool raise_fd_limit(rlim_t limit);
 
     // The streamer's credentials (empty Credentials if none set), read via _credentials_state (which locks
@@ -220,9 +219,7 @@ struct Streamer
     // to, so object-storage workers still join between _s3_stop (S3Stop) and _s3 (S3Cleanup) on teardown.
     BackendPools _pools;
     std::unique_ptr<S3Stop> _s3_stop;
-    // The one setter for the process's soft open files limit, shared by the object-storage init and the
-    // filesystem submissions. Raised in place under _fd_limit_mutex, never replaced: replacing it would
-    // restore the older, lower limit when the old setter is destroyed.
+    // Shared by object storage and filesystem, raised in place: replacing it would restore a lower limit
     std::unique_ptr<utils::FdLimitSetter> _fd_limit;
     std::mutex _fd_limit_mutex;
     std::shared_ptr<common::Responder> _responder;

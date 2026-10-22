@@ -69,7 +69,7 @@ TEST(RaiseFdLimit, Raises_And_Restores_The_Original)
         EXPECT_TRUE(setter.raise_to(current + 1));
         EXPECT_EQ(get_cur_file_descriptors(), current + 1);
 
-        // raised again, and never lowered
+        // raised again, never lowered
         EXPECT_TRUE(setter.raise_to(current + 2));
         EXPECT_EQ(get_cur_file_descriptors(), current + 2);
         EXPECT_TRUE(setter.raise_to(current));

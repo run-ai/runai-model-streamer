@@ -332,32 +332,6 @@ common::ResponseCode Streamer::async_request(
         return common::ResponseCode::Success;
     }
 
-    // A batch keeps its file open until its workload is destroyed, so a filesystem submission holds at least
-    // one descriptor per file until it completes (#261), and submissions overlap in time: the Python ring
-    // keeps many in flight. Estimate the demand as this submission's files times the live submissions,
-    // this one included, which assumes the live ones are about the same size. When that does not fit under
-    // the soft limit, raise the limit, never lower it, by this submission's files: to the current limit plus
-    // its need, not to the need alone, because the descriptors the process already holds are part of the
-    // current limit and stay needed. The raise is best effort: when the limit stays too low, warn, and let
-    // the opens fail as they would have.
-    if (!object_storage)
-    {
-        const rlim_t files = request.size();
-        const rlim_t current = utils::get_cur_file_descriptors();
-        if (current < files * (_submissions.size() + 1))
-        {
-            raise_fd_limit(current + files);
-
-            if (utils::get_cur_file_descriptors() < current + files)
-            {
-                LOG(WARNING) << "Submission " << submission_id << " needs about " << files
-                             << " more file descriptors, one per file, but the soft limit is "
-                             << utils::get_cur_file_descriptors() << " (hard limit "
-                             << utils::get_max_file_descriptors() << "); reading may fail with a file access error";
-            }
-        }
-    }
-
     // Object storage has no mount to probe and no strategy to consult, so it is not asked.
     const auto groups = object_storage ? FsAsyncRouter::Groups{}
                                        : _router.groups(request, _config->fs_async_queue_depth,
@@ -374,6 +348,7 @@ common::ResponseCode Streamer::async_request(
     unsigned params_file_index = 0;
     bool has_params = false;
     common::s3::S3ClientWrapper::Params params;
+    size_t live_batches = 0;
 
     for (const auto & transfer : assigner.transfers())
     {
@@ -409,12 +384,35 @@ common::ResponseCode Streamer::async_request(
 
             LOG(DEBUG) << "Submission " << submission_id << " Batch: file index " << batch.file_index << " with " << batch.tasks.size() << " tasks for workload " << workload_index << " total bytes " << batch.total_bytes();
 
+            ++live_batches;
+
             const auto & result = workloads[workload_index].add_batch(std::move(batch));
             LOG(DEBUG) << "Submission " << submission_id << " added batch to workload " << workload_index << " with result " << result;
             if (result != common::ResponseCode::Success)
             {
                 LOG(ERROR) << "Submission " << submission_id << " failed to add batch to workload " << workload_index << " error: " << result;
                 return result; // nothing committed yet
+            }
+        }
+    }
+
+    // Each batch holds a descriptor until its workload is destroyed (#261), and submissions overlap.
+    // Estimate the demand as batches times live submissions, assuming similar sizes. If it exceeds the
+    // soft limit, raise it by this submission's batches, on top of the descriptors already in use.
+    // Best effort: warn if the limit stays too low.
+    if (!object_storage)
+    {
+        const rlim_t current = utils::get_cur_file_descriptors();
+        if (current < live_batches * (_submissions.size() + 1))
+        {
+            raise_fd_limit(current + live_batches);
+
+            if (utils::get_cur_file_descriptors() < current + live_batches)
+            {
+                LOG(WARNING) << "Submission " << submission_id << " needs about " << live_batches
+                             << " more file descriptors, one per batch, but the soft limit is "
+                             << utils::get_cur_file_descriptors() << " (hard limit "
+                             << utils::get_max_file_descriptors() << "); reading may fail with a file access error";
             }
         }
     }
@@ -731,8 +729,7 @@ bool Streamer::raise_fd_limit(rlim_t limit)
 
     if (_fd_limit == nullptr)
     {
-        // Created at the current limit, which records it for restoring on destruction; the raise itself is
-        // best effort and is done by raise_to.
+        // created at the current limit, which is what it restores on destruction
         _fd_limit = std::make_unique<utils::FdLimitSetter>(utils::get_cur_file_descriptors());
     }
 

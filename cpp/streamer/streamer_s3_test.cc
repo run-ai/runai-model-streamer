@@ -891,8 +891,7 @@ TEST_F(StreamerTest, Object_Storage_Then_Filesystem_Submission)
 namespace
 {
 
-// One submission of `count` small filesystem files, one range each. The submission stays live, and its
-// files count against the descriptor limit, until drain() has consumed every response.
+// A submission of `count` small files, live until drain() consumes every response.
 struct SmallFiles
 {
     SmallFiles(void * streamer, unsigned count) :
@@ -937,19 +936,17 @@ struct SmallFiles
     std::vector<unsigned char> _dst;
 };
 
-// Reads `count` small filesystem files in one submission and drains every response.
 void read_small_files(void * streamer, unsigned count)
 {
     SmallFiles(streamer, count).drain(streamer);
 }
 
-// below any object-storage need (concurrency * 64, at least 64), and above what the test process holds
+// below any object-storage need (at least 64)
 constexpr rlim_t LOW_FD_LIMIT = 50;
 
 }   // namespace
 
-// A filesystem submission that does not fit under the soft limit raises it, and the streamer restores it
-// when it ends.
+// Raised when the submission does not fit, restored when the streamer ends.
 TEST_F(StreamerTest, Filesystem_Submission_Raises_And_Restores_The_Fd_Limit)
 {
     const unsigned count = LOW_FD_LIMIT + 50;
@@ -970,7 +967,6 @@ TEST_F(StreamerTest, Filesystem_Submission_Raises_And_Restores_The_Fd_Limit)
     EXPECT_EQ(utils::get_cur_file_descriptors(), LOW_FD_LIMIT);
 }
 
-// A submission that fits under the soft limit leaves it alone.
 TEST_F(StreamerTest, Filesystem_Submission_That_Fits_Does_Not_Raise_The_Fd_Limit)
 {
     utils::FdLimitSetter fd_limit(LOW_FD_LIMIT);
@@ -985,8 +981,7 @@ TEST_F(StreamerTest, Filesystem_Submission_That_Fits_Does_Not_Raise_The_Fd_Limit
     EXPECT_EQ(utils::get_cur_file_descriptors(), LOW_FD_LIMIT);
 }
 
-// Submissions overlap in time, so each one fitting under the limit is not enough: the live submissions
-// count together. Each of these two fits alone, together they do not.
+// Each submission fits alone, the two live together do not.
 TEST_F(StreamerTest, Overlapping_Filesystem_Submissions_Raise_The_Fd_Limit)
 {
     const unsigned count = LOW_FD_LIMIT - 10;
@@ -1000,7 +995,7 @@ TEST_F(StreamerTest, Overlapping_Filesystem_Submissions_Raise_The_Fd_Limit)
     void * streamer;
     ASSERT_EQ(runai_file_streamer_start(&streamer), static_cast<int>(common::ResponseCode::Success));
 
-    // the first is not drained, so it is still live when the second arrives
+    // the first stays live when the second arrives
     SmallFiles first(streamer, count);
     EXPECT_EQ(utils::get_cur_file_descriptors(), LOW_FD_LIMIT);
 
@@ -1014,8 +1009,7 @@ TEST_F(StreamerTest, Overlapping_Filesystem_Submissions_Raise_The_Fd_Limit)
     EXPECT_EQ(utils::get_cur_file_descriptors(), LOW_FD_LIMIT);
 }
 
-// Object storage and filesystem submissions share one setter, whichever comes first: the second finds the
-// raise already made or raises in place, and the original limit is restored once, at the end.
+// Both kinds share one setter, in either order; the original limit is restored once.
 TEST_F(StreamerTest, Filesystem_Then_Object_Storage_Raises_And_Restores_The_Fd_Limit)
 {
     utils::Dylib dylib("libstreamers3.so");
@@ -1046,7 +1040,7 @@ TEST_F(StreamerTest, Filesystem_Then_Object_Storage_Raises_And_Restores_The_Fd_L
         ASSERT_EQ(next_response(streamer, &file_index, &range_index), static_cast<int>(common::ResponseCode::Success));
     }
 
-    // the object-storage need was already covered, so it did not move the limit
+    // already covered, so object storage did not move it
     EXPECT_EQ(utils::get_cur_file_descriptors(), after_filesystem);
 
     runai_file_streamer_end(streamer);
@@ -1082,14 +1076,14 @@ TEST_F(StreamerTest, Object_Storage_Then_Filesystem_Raises_And_Restores_The_Fd_L
     }
     EXPECT_EQ(utils::get_cur_file_descriptors(), object_storage_need);
 
-    // the filesystem submission raises the same setter further, in place
+    // raised further, in place
     read_small_files(streamer, count);
     EXPECT_GE(utils::get_cur_file_descriptors(), count);
 
     runai_file_streamer_end(streamer);
     EXPECT_EQ(verify_mock(), 0);
 
-    // restored to what it was before the streamer, not to the object-storage level it passed through
+    // restored to the original, not to the object-storage level
     EXPECT_EQ(utils::get_cur_file_descriptors(), LOW_FD_LIMIT);
 }
 
