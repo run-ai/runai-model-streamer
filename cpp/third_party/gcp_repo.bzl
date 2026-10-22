@@ -5,6 +5,10 @@
 
 load("@gcs_sdk_config//:sources.bzl", "GCP_SOURCE_CHECKSUMS")
 
+def sdk_build_input_matches(actual, recorded):
+    """Compare checkout text with install.py's universal-newline metadata."""
+    return actual.replace("\r\n", "\n").replace("\r", "\n") == recorded
+
 def _prebuilt_gcp_impl(ctx):
     root = ctx.path(ctx.attr.sdk_root)
     source = ctx.path(Label("@gcs_sdk_config//:sources.bzl")).realpath.dirname.dirname
@@ -23,7 +27,7 @@ def _prebuilt_gcp_impl(ctx):
             fail("Prebuilt GCS SDK at %s lacks SDK build metadata. Rebuild the devcontainer." % package)
         for name, content in inputs.items():
             path = source.get_child(name)
-            if not path.exists or ctx.read(path) != content:
+            if not path.exists or not sdk_build_input_matches(ctx.read(path), content):
                 fail("Prebuilt GCS SDK build input %s changed. Rebuild the devcontainer." % name)
         compiler = "/usr/bin/g++"
         result = ctx.execute([compiler, "--version"])

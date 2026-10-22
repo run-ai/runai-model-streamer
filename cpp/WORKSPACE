@@ -9,6 +9,9 @@ configure_toolchain(name = "toolchain")
 load("//toolchain:deps.bzl", "load_toolchain_deps")
 load_toolchain_deps()
 
+# Starlark regression tests for prebuilt SDK validation.
+register_toolchains("@bazel_skylib//toolchains/unittest:bash_toolchain")
+
 load("//:rules.bzl", "runai_cc_test_dependencies")
 runai_cc_test_dependencies()
 
