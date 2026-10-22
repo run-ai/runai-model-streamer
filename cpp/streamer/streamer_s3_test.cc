@@ -891,39 +891,56 @@ TEST_F(StreamerTest, Object_Storage_Then_Filesystem_Submission)
 namespace
 {
 
-// Reads `count` small filesystem files in one submission, one range each, and drains every response. Every
-// file becomes at least one batch, so the submission holds `count` descriptors at once.
+// One submission of `count` small filesystem files, one range each. The submission stays live, and its
+// files count against the descriptor limit, until drain() has consumed every response.
+struct SmallFiles
+{
+    SmallFiles(void * streamer, unsigned count) :
+        _count(count),
+        _dst(count * FILE_SIZE)
+    {
+        _files.reserve(count);
+        std::vector<const char *> paths(count);
+        std::vector<unsigned> ranges(count, 1);
+        std::vector<size_t> offsets(count, 0);
+        std::vector<size_t> bytesizes(count, FILE_SIZE);
+        std::vector<void *> dsts(count);
+
+        for (unsigned i = 0; i < count; ++i)
+        {
+            _files.emplace_back(utils::random::buffer(FILE_SIZE));
+            paths[i] = _files.back().path.c_str();
+            dsts[i] = _dst.data() + i * FILE_SIZE;
+        }
+
+        SubmissionId submission_id = 0;
+        EXPECT_EQ(runai_file_streamer_request(streamer, &submission_id, count, paths.data(), ranges.data(),
+                                              offsets.data(), bytesizes.data(), dsts.data(), RunaiFileStreamerDevice{}),
+                  static_cast<int>(common::ResponseCode::Success));
+    }
+
+    void drain(void * streamer)
+    {
+        for (unsigned i = 0; i < _count; ++i)
+        {
+            unsigned file_index = 0;
+            unsigned range_index = 0;
+            ASSERT_EQ(next_response(streamer, &file_index, &range_index), static_cast<int>(common::ResponseCode::Success));
+        }
+    }
+
+ private:
+    static constexpr size_t FILE_SIZE = 100;
+
+    unsigned _count;
+    std::vector<utils::temp::File> _files;
+    std::vector<unsigned char> _dst;
+};
+
+// Reads `count` small filesystem files in one submission and drains every response.
 void read_small_files(void * streamer, unsigned count)
 {
-    constexpr size_t file_size = 100;
-
-    std::vector<utils::temp::File> files;
-    files.reserve(count);
-    std::vector<const char *> paths(count);
-    std::vector<unsigned> ranges(count, 1);
-    std::vector<size_t> offsets(count, 0);
-    std::vector<size_t> bytesizes(count, file_size);
-    std::vector<void *> dsts(count);
-    std::vector<unsigned char> dst(count * file_size);
-
-    for (unsigned i = 0; i < count; ++i)
-    {
-        files.emplace_back(utils::random::buffer(file_size));
-        paths[i] = files.back().path.c_str();
-        dsts[i] = dst.data() + i * file_size;
-    }
-
-    SubmissionId submission_id = 0;
-    ASSERT_EQ(runai_file_streamer_request(streamer, &submission_id, count, paths.data(), ranges.data(),
-                                          offsets.data(), bytesizes.data(), dsts.data(), RunaiFileStreamerDevice{}),
-              static_cast<int>(common::ResponseCode::Success));
-
-    for (unsigned i = 0; i < count; ++i)
-    {
-        unsigned file_index = 0;
-        unsigned range_index = 0;
-        ASSERT_EQ(next_response(streamer, &file_index, &range_index), static_cast<int>(common::ResponseCode::Success));
-    }
+    SmallFiles(streamer, count).drain(streamer);
 }
 
 // below any object-storage need (concurrency * 64, at least 64), and above what the test process holds
@@ -963,6 +980,35 @@ TEST_F(StreamerTest, Filesystem_Submission_That_Fits_Does_Not_Raise_The_Fd_Limit
 
     read_small_files(streamer, 5);
     EXPECT_EQ(utils::get_cur_file_descriptors(), LOW_FD_LIMIT);
+
+    runai_file_streamer_end(streamer);
+    EXPECT_EQ(utils::get_cur_file_descriptors(), LOW_FD_LIMIT);
+}
+
+// Submissions overlap in time, so each one fitting under the limit is not enough: the live submissions
+// count together. Each of these two fits alone, together they do not.
+TEST_F(StreamerTest, Overlapping_Filesystem_Submissions_Raise_The_Fd_Limit)
+{
+    const unsigned count = LOW_FD_LIMIT - 10;
+    if (utils::get_max_file_descriptors() < 2 * count)
+    {
+        GTEST_SKIP() << "hard fd limit " << utils::get_max_file_descriptors() << " is below " << 2 * count;
+    }
+
+    utils::FdLimitSetter fd_limit(LOW_FD_LIMIT);
+
+    void * streamer;
+    ASSERT_EQ(runai_file_streamer_start(&streamer), static_cast<int>(common::ResponseCode::Success));
+
+    // the first is not drained, so it is still live when the second arrives
+    SmallFiles first(streamer, count);
+    EXPECT_EQ(utils::get_cur_file_descriptors(), LOW_FD_LIMIT);
+
+    SmallFiles second(streamer, count);
+    EXPECT_GE(utils::get_cur_file_descriptors(), 2 * count);
+
+    first.drain(streamer);
+    second.drain(streamer);
 
     runai_file_streamer_end(streamer);
     EXPECT_EQ(utils::get_cur_file_descriptors(), LOW_FD_LIMIT);
