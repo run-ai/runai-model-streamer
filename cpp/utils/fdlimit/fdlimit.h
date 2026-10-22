@@ -27,6 +27,10 @@ struct FdLimitSetter
     FdLimitSetter(FdLimitSetter&& other) noexcept;
     FdLimitSetter& operator=(FdLimitSetter&& other) noexcept;
 
+    // Raises the soft limit to at least `limit`, capped at the hard limit; never lowers it. The limit
+    // restored on destruction is unchanged. Best effort: warns on failure. Returns whether it reaches `limit`.
+    bool raise_to(rlim_t limit);
+
  private:
     struct rlimit _previous;
     bool _valid = false;

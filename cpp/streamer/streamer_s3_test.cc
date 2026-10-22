@@ -888,6 +888,233 @@ TEST_F(StreamerTest, Object_Storage_Then_Filesystem_Submission)
     EXPECT_EQ(verify_mock(), 0);
 }
 
+namespace
+{
+
+// A submission of `count` small files, live until drain() consumes every response.
+struct SmallFiles
+{
+    SmallFiles(void * streamer, unsigned count) :
+        _count(count),
+        _dst(count * FILE_SIZE)
+    {
+        _files.reserve(count);
+        std::vector<const char *> paths(count);
+        std::vector<unsigned> ranges(count, 1);
+        std::vector<size_t> offsets(count, 0);
+        std::vector<size_t> bytesizes(count, FILE_SIZE);
+        std::vector<void *> dsts(count);
+
+        for (unsigned i = 0; i < count; ++i)
+        {
+            _files.emplace_back(utils::random::buffer(FILE_SIZE));
+            paths[i] = _files.back().path.c_str();
+            dsts[i] = _dst.data() + i * FILE_SIZE;
+        }
+
+        SubmissionId submission_id = 0;
+        EXPECT_EQ(runai_file_streamer_request(streamer, &submission_id, count, paths.data(), ranges.data(),
+                                              offsets.data(), bytesizes.data(), dsts.data(), RunaiFileStreamerDevice{}),
+                  static_cast<int>(common::ResponseCode::Success));
+    }
+
+    void drain(void * streamer)
+    {
+        for (unsigned i = 0; i < _count; ++i)
+        {
+            unsigned file_index = 0;
+            unsigned range_index = 0;
+            ASSERT_EQ(next_response(streamer, &file_index, &range_index), static_cast<int>(common::ResponseCode::Success));
+        }
+    }
+
+ private:
+    static constexpr size_t FILE_SIZE = 100;
+
+    unsigned _count;
+    std::vector<utils::temp::File> _files;
+    std::vector<unsigned char> _dst;
+};
+
+void read_small_files(void * streamer, unsigned count)
+{
+    SmallFiles(streamer, count).drain(streamer);
+}
+
+// below any object-storage need (at least 64)
+constexpr rlim_t LOW_FD_LIMIT = 50;
+
+}   // namespace
+
+// Raised when the submission does not fit, restored when the streamer ends.
+TEST_F(StreamerTest, Filesystem_Submission_Raises_And_Restores_The_Fd_Limit)
+{
+    const unsigned count = LOW_FD_LIMIT + 50;
+    if (utils::get_max_file_descriptors() < count)
+    {
+        GTEST_SKIP() << "hard fd limit " << utils::get_max_file_descriptors() << " is below " << count;
+    }
+
+    utils::FdLimitSetter fd_limit(LOW_FD_LIMIT);
+
+    void * streamer;
+    ASSERT_EQ(runai_file_streamer_start(&streamer), static_cast<int>(common::ResponseCode::Success));
+
+    read_small_files(streamer, count);
+
+    // five times the need, up to the hard limit
+    EXPECT_EQ(utils::get_cur_file_descriptors(), std::min<rlim_t>(5 * count, utils::get_max_file_descriptors()));
+
+    runai_file_streamer_end(streamer);
+    EXPECT_EQ(utils::get_cur_file_descriptors(), LOW_FD_LIMIT);
+}
+
+TEST_F(StreamerTest, Filesystem_Submission_That_Fits_Does_Not_Raise_The_Fd_Limit)
+{
+    utils::FdLimitSetter fd_limit(LOW_FD_LIMIT);
+
+    void * streamer;
+    ASSERT_EQ(runai_file_streamer_start(&streamer), static_cast<int>(common::ResponseCode::Success));
+
+    read_small_files(streamer, 5);
+    EXPECT_EQ(utils::get_cur_file_descriptors(), LOW_FD_LIMIT);
+
+    runai_file_streamer_end(streamer);
+    EXPECT_EQ(utils::get_cur_file_descriptors(), LOW_FD_LIMIT);
+}
+
+// The raise leaves room for a second submission in flight: it fits and does not move the limit.
+TEST_F(StreamerTest, Two_Submissions_In_Flight_Share_The_Raised_Fd_Limit)
+{
+    const unsigned count = LOW_FD_LIMIT + 50;
+    const rlim_t raised = 5 * count;
+    if (utils::get_max_file_descriptors() < raised)
+    {
+        GTEST_SKIP() << "hard fd limit " << utils::get_max_file_descriptors() << " is below " << raised;
+    }
+
+    utils::FdLimitSetter fd_limit(LOW_FD_LIMIT);
+
+    void * streamer;
+    ASSERT_EQ(runai_file_streamer_start(&streamer), static_cast<int>(common::ResponseCode::Success));
+
+    SmallFiles first(streamer, count);
+    EXPECT_EQ(utils::get_cur_file_descriptors(), raised);
+
+    // the first is still live
+    SmallFiles second(streamer, count);
+    EXPECT_EQ(utils::get_cur_file_descriptors(), raised);
+
+    first.drain(streamer);
+    second.drain(streamer);
+
+    runai_file_streamer_end(streamer);
+    EXPECT_EQ(utils::get_cur_file_descriptors(), LOW_FD_LIMIT);
+}
+
+// A larger submission raises the limit again, in place, and the original is still restored.
+TEST_F(StreamerTest, Fd_Limit_Grows_In_Two_Levels_And_Restores_The_Original)
+{
+    const unsigned small = LOW_FD_LIMIT + 50;
+    const unsigned large = 5 * small + 100;
+    if (utils::get_max_file_descriptors() < 5 * large)
+    {
+        GTEST_SKIP() << "hard fd limit " << utils::get_max_file_descriptors() << " is below " << 5 * large;
+    }
+
+    utils::FdLimitSetter fd_limit(LOW_FD_LIMIT);
+
+    void * streamer;
+    ASSERT_EQ(runai_file_streamer_start(&streamer), static_cast<int>(common::ResponseCode::Success));
+
+    read_small_files(streamer, small);
+    EXPECT_EQ(utils::get_cur_file_descriptors(), 5 * small);
+
+    read_small_files(streamer, large);
+    EXPECT_EQ(utils::get_cur_file_descriptors(), 5 * large);
+
+    runai_file_streamer_end(streamer);
+    EXPECT_EQ(utils::get_cur_file_descriptors(), LOW_FD_LIMIT);
+}
+
+// Both kinds share one setter, in either order; the original limit is restored once.
+TEST_F(StreamerTest, Filesystem_Then_Object_Storage_Raises_And_Restores_The_Fd_Limit)
+{
+    utils::Dylib dylib("libstreamers3.so");
+    auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
+
+    const unsigned count = _concurrency * 64 + 50;
+    if (utils::get_max_file_descriptors() < count)
+    {
+        GTEST_SKIP() << "hard fd limit " << utils::get_max_file_descriptors() << " is below " << count;
+    }
+
+    utils::FdLimitSetter fd_limit(LOW_FD_LIMIT);
+
+    void * streamer;
+    ASSERT_EQ(runai_file_streamer_start(&streamer), static_cast<int>(common::ResponseCode::Success));
+
+    read_small_files(streamer, count);
+    const auto after_filesystem = utils::get_cur_file_descriptors();
+    EXPECT_GE(after_filesystem, count);
+
+    EXPECT_EQ(submit(streamer, num_files, file_names.data(), file_offsets.data(), sizes.data(),
+                     dsts.data(), num_ranges.data(), internal_sizes.data()),
+              static_cast<int>(common::ResponseCode::Success));
+    for (unsigned i = 0; i < num_expected_responses; ++i)
+    {
+        unsigned file_index = 0;
+        unsigned range_index = 0;
+        ASSERT_EQ(next_response(streamer, &file_index, &range_index), static_cast<int>(common::ResponseCode::Success));
+    }
+
+    // already covered, so object storage did not move it
+    EXPECT_EQ(utils::get_cur_file_descriptors(), after_filesystem);
+
+    runai_file_streamer_end(streamer);
+    EXPECT_EQ(verify_mock(), 0);
+    EXPECT_EQ(utils::get_cur_file_descriptors(), LOW_FD_LIMIT);
+}
+
+TEST_F(StreamerTest, Object_Storage_Then_Filesystem_Raises_And_Restores_The_Fd_Limit)
+{
+    utils::Dylib dylib("libstreamers3.so");
+    auto verify_mock = dylib.dlsym<int(*)(void)>("runai_mock_s3_clients");
+
+    const rlim_t object_storage_need = _concurrency * 64;
+    const unsigned count = object_storage_need + 50;
+    if (utils::get_max_file_descriptors() < count)
+    {
+        GTEST_SKIP() << "hard fd limit " << utils::get_max_file_descriptors() << " is below " << count;
+    }
+
+    utils::FdLimitSetter fd_limit(LOW_FD_LIMIT);
+
+    void * streamer;
+    ASSERT_EQ(runai_file_streamer_start(&streamer), static_cast<int>(common::ResponseCode::Success));
+
+    EXPECT_EQ(submit(streamer, num_files, file_names.data(), file_offsets.data(), sizes.data(),
+                     dsts.data(), num_ranges.data(), internal_sizes.data()),
+              static_cast<int>(common::ResponseCode::Success));
+    for (unsigned i = 0; i < num_expected_responses; ++i)
+    {
+        unsigned file_index = 0;
+        unsigned range_index = 0;
+        ASSERT_EQ(next_response(streamer, &file_index, &range_index), static_cast<int>(common::ResponseCode::Success));
+    }
+    EXPECT_EQ(utils::get_cur_file_descriptors(), object_storage_need);
+
+    // raised further, in place
+    read_small_files(streamer, count);
+    EXPECT_GE(utils::get_cur_file_descriptors(), count);
+
+    runai_file_streamer_end(streamer);
+    EXPECT_EQ(verify_mock(), 0);
+
+    // restored to the original, not to the object-storage level
+    EXPECT_EQ(utils::get_cur_file_descriptors(), LOW_FD_LIMIT);
+}
+
 TEST_F(StreamerTest, Multiple_Files_Error)
 {
     utils::Dylib dylib("libstreamers3.so");

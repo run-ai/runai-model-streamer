@@ -5,6 +5,9 @@
 
 #include "utils/fdlimit/fdlimit.h"
 
+#include <algorithm>
+#include <cerrno>
+#include <cstring>
 #include <iostream>
 #include <sstream>
 #include <vector>
@@ -54,6 +57,36 @@ FdLimitSetter::FdLimitSetter(rlim_t new_limit)
 
     LOG(DEBUG) << "Temporary Fd limit set to: " << new_limit;
     _valid = true;
+}
+
+bool FdLimitSetter::raise_to(rlim_t limit)
+{
+    struct rlimit current;
+    if (getrlimit(RLIMIT_NOFILE, &current) != 0)
+    {
+        LOG(WARNING) << "Failed to get fd limit, not raising it to " << limit << " : " << std::strerror(errno);
+        return false;
+    }
+
+    if (current.rlim_cur >= limit)
+    {
+        return true;
+    }
+
+    const rlim_t target = std::min(limit, current.rlim_max);
+    if (target > current.rlim_cur)
+    {
+        struct rlimit raised = { target, current.rlim_max };
+        if (setrlimit(RLIMIT_NOFILE, &raised) != 0)
+        {
+            const int raise_errno = errno;
+            LOG(WARNING) << "Failed to raise fd limit from " << current.rlim_cur << " to " << target << " : " << std::strerror(raise_errno);
+            return false;
+        }
+        LOG(DEBUG) << "Fd limit raised to: " << target;
+    }
+
+    return target >= limit;
 }
 
 FdLimitSetter::~FdLimitSetter()
