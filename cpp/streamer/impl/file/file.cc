@@ -7,6 +7,8 @@
 
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <cerrno>
+#include <cstring>
 #include <utility>
 
 #include "common/exception/exception.h"
@@ -24,7 +26,11 @@ File::File(const std::string & path, const Config & config) :
 {
     if (_fd.fd() == -1)
     {
-        LOG(ERROR) << "Failed to access file " << path;
+        // errno is still the open's here: open_for_read keeps it across its own cleanup. It is what
+        // tells EMFILE (out of descriptors) from ENOENT or EACCES. Saved before the log call, because
+        // building the log line formats the time and may change it.
+        const int open_errno = errno;
+        LOG(ERROR) << "Failed to access file " << path << " : " << std::strerror(open_errno);
         throw common::Exception(common::ResponseCode::FileAccessError);
     }
 }

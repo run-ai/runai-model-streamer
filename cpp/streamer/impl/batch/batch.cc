@@ -62,15 +62,18 @@ void Batch::execute(std::atomic<bool> & stopped, const DeviceStaging * staging)
     {
         ASSERT(!is_object_storage()) << "Unsupported reader mode for object storage backends";
 
-        _reader = std::make_unique<File>(path, *config);
+        // A local, not a member: batches stay alive until their workload is destroyed, so a reader
+        // kept in the batch would hold its descriptor for the whole submission. Here it closes on
+        // every way out of this scope, and a file per batch no longer adds up to EMFILE.
+        File reader(path, *config);
 
         if (device.is_host())
         {
-            read(*config, stopped);
+            read(reader, *config, stopped);
         }
         else if (staging != nullptr && staging->valid())
         {
-            read_to_device(*staging, stopped);
+            read_to_device(reader, *staging, stopped);
         }
         else
         {
@@ -124,7 +127,7 @@ void Batch::handle_error(common::ResponseCode response_code)
 }
 
 // read the entire range and send notifications for each sub range
-void Batch::read(const Config & config, std::atomic<bool> & stopped)
+void Batch::read(Reader & reader, const Config & config, std::atomic<bool> & stopped)
 {
     if (tasks.empty())
     {
@@ -141,13 +144,13 @@ void Batch::read(const Config & config, std::atomic<bool> & stopped)
     size_t num_chunks = range.size / config.fs_sync_read_block_bytesize;
 
     // seek just once because tasks are consecutive within the range
-    _reader->seek(file_offset);
+    reader.seek(file_offset);
 
     // read task's range in chunks
     size_t i = 0;
     for (; i < num_chunks && !stopped; ++i)
     {
-        _reader->read(config.fs_sync_read_block_bytesize, buffer);
+        reader.read(config.fs_sync_read_block_bytesize, buffer);
 
         file_offset += config.fs_sync_read_block_bytesize;
         buffer += config.fs_sync_read_block_bytesize;
@@ -159,7 +162,7 @@ void Batch::read(const Config & config, std::atomic<bool> & stopped)
     {
         num_chunks++;
         i = 1;
-        _reader->read(range.end - file_offset, buffer);
+        reader.read(range.end - file_offset, buffer);
         finished_until(range.end, common::ResponseCode::Success);
     }
 
@@ -181,7 +184,7 @@ void Batch::read(const Config & config, std::atomic<bool> & stopped)
     }
 }
 
-void Batch::read_to_device(const DeviceStaging & staging, std::atomic<bool> & stopped)
+void Batch::read_to_device(Reader & reader, const DeviceStaging & staging, std::atomic<bool> & stopped)
 {
     if (tasks.empty())
     {
@@ -199,7 +202,7 @@ void Batch::read_to_device(const DeviceStaging & staging, std::atomic<bool> & st
     // below may write to it - only the copy does.
     char * const destination = tasks[0].destination();
 
-    _reader->seek(range.start);
+    reader.seek(range.start);
 
     // Written by the issuer's completions, read by this thread. `landed` counts copies that have
     // retired, IN ORDER: one stream per device is FIFO and this thread submits in file order, so the
@@ -250,7 +253,7 @@ void Batch::read_to_device(const DeviceStaging & staging, std::atomic<bool> & st
             // every path, so the guard is cancelled rather than released twice.
             utils::ScopeGuard give_back([&]() { staging.pool->release(buffer); });
 
-            _reader->read(bytesize, buffer.data);
+            reader.read(bytesize, buffer.data);
 
             staging.issuer->submit(device, staging.pool, buffer, bytesize,
                                    destination + (offset - range.start),
