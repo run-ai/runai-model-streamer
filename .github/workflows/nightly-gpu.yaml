@@ -1,0 +1,146 @@
+name: Nightly GPU tests
+
+on:
+  schedule:
+    - cron: '17 0 * * *'   # every night, if the code changed since the last scheduled run (see the changes job)
+  workflow_dispatch:
+    inputs:
+      matrix:
+        description: Which rows to run, see tests/gpu/matrix.py.
+        required: false
+        default: full
+        type: choice
+        options:
+          - core
+          - full
+      seed:
+        description: Seed of the synthetic models (default is the run id).
+        required: false
+        type: string
+      rows:
+        description: Only the rows whose id starts with one of these comma-separated prefixes (default all).
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+  actions: read
+
+concurrency:
+  group: nightly-gpu-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # A scheduled run is skipped when nothing that the tests exercise changed since the last scheduled run that
+  # passed, so a failed run is repeated the next night and every commit ends up with a passing run. Manual
+  # runs always run.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+      self_check: ${{ steps.decide.outputs.self_check }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Decide whether the code changed since the last scheduled run
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          # self_check: whether the run ends with the self-check of the test's own checks (faults injected on purpose, see
+          # tests/gpu/setup_and_run.sh). It runs on every manual run, and on a scheduled run when the test harness changed.
+          if [ "$EVENT" != schedule ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "self_check=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          last=$(gh run list --workflow nightly-gpu.yaml --event schedule --status success --limit 1 \
+                   --json headSha --jq '.[0].headSha // ""')
+          echo "last successful scheduled run: ${last:-none}; now: $GITHUB_SHA"
+          # No earlier run, or its commit is gone (a force push): run, with the self-check.
+          if [ -z "$last" ] || ! git cat-file -e "$last^{commit}" 2>/dev/null; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "self_check=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$last" "$GITHUB_SHA" -- cpp py tests/gpu .devcontainer \
+                      .github/workflows/nightly-gpu.yaml ':(exclude)*.md')
+          harness=$(git diff --name-only "$last" "$GITHUB_SHA" -- tests/gpu/test_synthetic_models.py \
+                      tests/gpu/matrix.py tests/gpu/phase_timer.py tests/gpu/setup_and_run.sh \
+                      .github/workflows/nightly-gpu.yaml)
+          if [ -n "$harness" ]; then
+            echo "the test harness changed since $last, so the self-check runs:"; echo "$harness"
+            echo "self_check=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "self_check=false" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -n "$changed" ]; then
+            echo "changed since $last:"; echo "$changed"
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "nothing changed since $last: skipping the GPU run"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  gpu-tests:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on:
+      group: nv-gpu-amd64-t4-2gpu
+      labels: linux-amd64-gpu-t4-latest-2
+    timeout-minutes: 120
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check runner GPUs
+        run: nvidia-smi
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node.js for Dev Containers CLI
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Generate synthetic models, stream them to two GPUs and compare
+        uses: devcontainers/ci@v0.3
+        with:
+          configFile: .devcontainer/gpu/devcontainer.json
+          imageName: ghcr.io/${{ github.repository }}/devcontainer
+          push: never
+          env: |
+            GPU_SEED=${{ inputs.seed || github.run_id }}
+            GPU_MATRIX=${{ inputs.matrix || 'full' }}
+            GPU_ROWS=${{ inputs.rows }}
+            GPU_SELF_CHECK=${{ needs.changes.outputs.self_check }}
+          runCmd: bash tests/gpu/setup_and_run.sh
+
+      - name: Show where the time went
+        if: always()
+        run: |
+          if [ -f test-results/gpu/timing-summary.txt ]; then
+            { echo '### Where the time went'; echo '```'; cat test-results/gpu/timing-summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload GPU test logs and timing
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpu-test-results
+          path: test-results/gpu/
+          if-no-files-found: warn
+          retention-days: 14
