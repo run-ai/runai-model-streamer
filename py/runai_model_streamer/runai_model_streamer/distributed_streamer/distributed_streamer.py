@@ -169,6 +169,10 @@ class DistributedStreamer:
         # check if distributed streaming can be used
         self.set_is_distributed(is_distributed, device)
 
+        # discover the local ranks only when the result is needed, so a rank reading alone does not
+        # enter a collective that its idle peers never join
+        self.params.set_local_ranks(self.is_distributed)
+
         if not self.is_distributed:
             # Passed on as asked. Whether a device destination lets the ring be handed over is the
             # FileStreamer's to decide, because that is where the tensor is copied to the device.
@@ -294,11 +298,21 @@ class _distributedStreamerParams:
         max_chunks_per_file = (fc.max_chunk_size() for fc in file_stream_requests if fc.sizes)
         self.max_chunk = max(max_chunks_per_file, default=0)
 
-        # set the value of RUNAI_STREAMER_PROCESS_GROUP_SIZE to be the number of processes in the distribution group (or 1 if process group is not initialized)
+    def set_local_ranks(self, is_distributed: bool) -> None:
+        # find_local_ranks() is a collective over all ranks. Non distributed streaming only needs it for
+        # RUNAI_STREAMER_PROCESS_GROUP_SIZE, so skip it when that is already set (by the user or by a previous call)
+        if not is_distributed and os.environ.get("RUNAI_STREAMER_PROCESS_GROUP_SIZE") is not None:
+            if dist.is_initialized():
+                self.my_global_rank = dist.get_rank()
+            return
+
+        # set the value of RUNAI_STREAMER_PROCESS_GROUP_SIZE to be the number of processes in the distribution group
         # This is useful for auto adjustments in the CPP layer, which depends on the number of processes of this workload
         if self.num_processes_on_node is None:
             self.num_processes_on_node, self.my_global_rank, self.groups_by_ranks = self.find_local_ranks()
-        if os.environ.get("RUNAI_STREAMER_PROCESS_GROUP_SIZE") is None:
+        # Set only from a collective that all the ranks joined, so the skip above is taken by all of them or by none.
+        # Without one (process group not initialized or of size 1) the CPP layer already defaults to 1
+        if self.get_group_size() > 1 and os.environ.get("RUNAI_STREAMER_PROCESS_GROUP_SIZE") is None:
             os.environ["RUNAI_STREAMER_PROCESS_GROUP_SIZE"] = str(self.num_processes_on_node)
 
 class _distributedStreamer:
