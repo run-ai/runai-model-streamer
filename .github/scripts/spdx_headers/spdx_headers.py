@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Check, or add, the NVIDIA SPDX header on source files.
 
-    scripts/spdx_headers.py               check all tracked files
-    scripts/spdx_headers.py FILE...       check only these files
-    scripts/spdx_headers.py --fix [FILE...]   add the header where it is missing
+    .github/scripts/spdx_headers/spdx_headers.py               check all tracked files
+    .github/scripts/spdx_headers/spdx_headers.py FILE...       check only these files
+    .github/scripts/spdx_headers/spdx_headers.py --fix [FILE...]   add the header where it is missing
 
 FILE can be an absolute path, or a path relative to the folder you run the script from.
 Run it inside the git repository. Exit code is 1 when a file is missing the header
@@ -144,11 +144,11 @@ def main():
             missing.append(rel)
 
     for rel in unknown:
-        print("unknown file type (edit scripts/spdx_headers.py): " + rel)
+        print("unknown file type (edit .github/scripts/spdx_headers/spdx_headers.py): " + rel)
     for rel in not_utf8:
         print("not UTF-8, add the header by hand: " + rel)
     for rel in missing:
-        print("missing SPDX header (run scripts/spdx_headers.py --fix): " + rel)
+        print("missing SPDX header (run .github/scripts/spdx_headers/spdx_headers.py --fix): " + rel)
     for rel in fixed:
         print("fixed   " + rel)
     if fixed:
