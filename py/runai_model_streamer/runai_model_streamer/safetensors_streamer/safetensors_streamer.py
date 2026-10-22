@@ -307,7 +307,10 @@ class SafetensorsStreamer:
         # metadata reads (the first submissions), so the measurement spans first submission -> last response.
         self.start_time = timer()
 
-        # metadata is created on cpu and each process reads it individually
+        # metadata is created on cpu and each process reads it individually. A distributed load discovers the local
+        # ranks before, so the metadata reads are already counted in RUNAI_STREAMER_PROCESS_GROUP_SIZE
+        if is_distributed:
+            self.file_streamer.set_local_ranks()
         safetensors_metadatas = safetensors_pytorch.prepare_request(self.file_streamer, paths, s3_credentials)
 
         # Every kept name, WITH duplicates - only tensor_names carries the expectation of one
