@@ -983,6 +983,60 @@ TEST_F(StreamerTest, Filesystem_Submission_That_Fits_Does_Not_Raise_The_Fd_Limit
     EXPECT_EQ(utils::get_cur_file_descriptors(), LOW_FD_LIMIT);
 }
 
+// The raise leaves room for a second submission in flight: it fits and does not move the limit.
+TEST_F(StreamerTest, Two_Submissions_In_Flight_Share_The_Raised_Fd_Limit)
+{
+    const unsigned count = LOW_FD_LIMIT + 50;
+    const rlim_t raised = 5 * count;
+    if (utils::get_max_file_descriptors() < raised)
+    {
+        GTEST_SKIP() << "hard fd limit " << utils::get_max_file_descriptors() << " is below " << raised;
+    }
+
+    utils::FdLimitSetter fd_limit(LOW_FD_LIMIT);
+
+    void * streamer;
+    ASSERT_EQ(runai_file_streamer_start(&streamer), static_cast<int>(common::ResponseCode::Success));
+
+    SmallFiles first(streamer, count);
+    EXPECT_EQ(utils::get_cur_file_descriptors(), raised);
+
+    // the first is still live
+    SmallFiles second(streamer, count);
+    EXPECT_EQ(utils::get_cur_file_descriptors(), raised);
+
+    first.drain(streamer);
+    second.drain(streamer);
+
+    runai_file_streamer_end(streamer);
+    EXPECT_EQ(utils::get_cur_file_descriptors(), LOW_FD_LIMIT);
+}
+
+// A larger submission raises the limit again, in place, and the original is still restored.
+TEST_F(StreamerTest, Fd_Limit_Grows_In_Two_Levels_And_Restores_The_Original)
+{
+    const unsigned small = LOW_FD_LIMIT + 50;
+    const unsigned large = 5 * small + 100;
+    if (utils::get_max_file_descriptors() < 5 * large)
+    {
+        GTEST_SKIP() << "hard fd limit " << utils::get_max_file_descriptors() << " is below " << 5 * large;
+    }
+
+    utils::FdLimitSetter fd_limit(LOW_FD_LIMIT);
+
+    void * streamer;
+    ASSERT_EQ(runai_file_streamer_start(&streamer), static_cast<int>(common::ResponseCode::Success));
+
+    read_small_files(streamer, small);
+    EXPECT_EQ(utils::get_cur_file_descriptors(), 5 * small);
+
+    read_small_files(streamer, large);
+    EXPECT_EQ(utils::get_cur_file_descriptors(), 5 * large);
+
+    runai_file_streamer_end(streamer);
+    EXPECT_EQ(utils::get_cur_file_descriptors(), LOW_FD_LIMIT);
+}
+
 // Both kinds share one setter, in either order; the original limit is restored once.
 TEST_F(StreamerTest, Filesystem_Then_Object_Storage_Raises_And_Restores_The_Fd_Limit)
 {
