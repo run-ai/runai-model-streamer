@@ -42,7 +42,7 @@ namespace runai::llm::streamer::impl
 namespace
 {
 
-// how far past one submission's need the soft limit is raised, to cover overlapping submissions
+// submissions assumed in flight together, each of a similar number of files
 constexpr size_t FD_LIMIT_FACTOR = 5;
 
 }   // namespace
@@ -340,6 +340,22 @@ common::ResponseCode Streamer::async_request(
         return common::ResponseCode::Success;
     }
 
+    // Each batch holds a descriptor until its workload is destroyed (#261). Heuristic: a submission with
+    // many files has small files, one batch each, and a few such submissions are in flight together. So
+    // when its files exceed the soft limit, raise it to FD_LIMIT_FACTOR times the files. Best effort.
+    if (!object_storage && utils::get_cur_file_descriptors() < request.size())
+    {
+        raise_fd_limit(request.size() * FD_LIMIT_FACTOR);
+
+        if (utils::get_cur_file_descriptors() < request.size())
+        {
+            LOG(WARNING) << "Submission " << submission_id << " has " << request.size()
+                         << " files but the soft limit is " << utils::get_cur_file_descriptors()
+                         << " (hard limit " << utils::get_max_file_descriptors()
+                         << "); reading may fail with a file access error";
+        }
+    }
+
     // Object storage has no mount to probe and no strategy to consult, so it is not asked.
     const auto groups = object_storage ? FsAsyncRouter::Groups{}
                                        : _router.groups(request, _config->fs_async_queue_depth,
@@ -356,7 +372,6 @@ common::ResponseCode Streamer::async_request(
     unsigned params_file_index = 0;
     bool has_params = false;
     common::s3::S3ClientWrapper::Params params;
-    size_t live_batches = 0;
 
     for (const auto & transfer : assigner.transfers())
     {
@@ -392,8 +407,6 @@ common::ResponseCode Streamer::async_request(
 
             LOG(DEBUG) << "Submission " << submission_id << " Batch: file index " << batch.file_index << " with " << batch.tasks.size() << " tasks for workload " << workload_index << " total bytes " << batch.total_bytes();
 
-            ++live_batches;
-
             const auto & result = workloads[workload_index].add_batch(std::move(batch));
             LOG(DEBUG) << "Submission " << submission_id << " added batch to workload " << workload_index << " with result " << result;
             if (result != common::ResponseCode::Success)
@@ -401,21 +414,6 @@ common::ResponseCode Streamer::async_request(
                 LOG(ERROR) << "Submission " << submission_id << " failed to add batch to workload " << workload_index << " error: " << result;
                 return result; // nothing committed yet
             }
-        }
-    }
-
-    // Each batch holds a descriptor until its workload is destroyed (#261). Submissions overlap, so when
-    // this one alone exceeds the soft limit, raise it to a multiple of the need. Best effort.
-    if (!object_storage && utils::get_cur_file_descriptors() < live_batches)
-    {
-        raise_fd_limit(live_batches * FD_LIMIT_FACTOR);
-
-        if (utils::get_cur_file_descriptors() < live_batches)
-        {
-            LOG(WARNING) << "Submission " << submission_id << " needs about " << live_batches
-                         << " file descriptors, one per batch, but the soft limit is "
-                         << utils::get_cur_file_descriptors() << " (hard limit "
-                         << utils::get_max_file_descriptors() << "); reading may fail with a file access error";
         }
     }
 
