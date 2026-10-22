@@ -39,6 +39,15 @@
 namespace runai::llm::streamer::impl
 {
 
+namespace
+{
+
+// Descriptors the rest of the process needs on top of one per batch: stdio, sockets, libraries, the
+// application's own files.
+constexpr rlim_t FD_LIMIT_HEADROOM = 256;
+
+}   // namespace
+
 Streamer::Streamer() : Streamer(Config())
 {}
 
@@ -348,6 +357,7 @@ common::ResponseCode Streamer::async_request(
     unsigned params_file_index = 0;
     bool has_params = false;
     common::s3::S3ClientWrapper::Params params;
+    size_t live_batches = 0;
 
     for (const auto & transfer : assigner.transfers())
     {
@@ -383,6 +393,8 @@ common::ResponseCode Streamer::async_request(
 
             LOG(DEBUG) << "Submission " << submission_id << " Batch: file index " << batch.file_index << " with " << batch.tasks.size() << " tasks for workload " << workload_index << " total bytes " << batch.total_bytes();
 
+            ++live_batches;
+
             const auto & result = workloads[workload_index].add_batch(std::move(batch));
             LOG(DEBUG) << "Submission " << submission_id << " added batch to workload " << workload_index << " with result " << result;
             if (result != common::ResponseCode::Success)
@@ -390,6 +402,21 @@ common::ResponseCode Streamer::async_request(
                 LOG(ERROR) << "Submission " << submission_id << " failed to add batch to workload " << workload_index << " error: " << result;
                 return result; // nothing committed yet
             }
+        }
+    }
+
+    // A batch keeps its file open until its workload is destroyed, and the workloads of a submission
+    // are all alive together, so a filesystem submission holds one descriptor per batch at once (#261).
+    // Raise the soft limit to cover them before anything is dispatched. Past the hard limit this cannot
+    // succeed: warn, and let the opens fail as they would have.
+    if (!object_storage)
+    {
+        const rlim_t needed = live_batches + FD_LIMIT_HEADROOM;
+        if (!raise_fd_limit(needed))
+        {
+            LOG(WARNING) << "Submission " << submission_id << " needs about " << needed
+                         << " file descriptors for " << live_batches << " batches, above the hard limit "
+                         << utils::get_max_file_descriptors() << "; reading may fail with a file access error";
         }
     }
 
@@ -685,7 +712,7 @@ common::s3::S3ClientWrapper::Params Streamer::handle_s3(unsigned file_index, con
                     throw common::Exception(common::ResponseCode::InsufficientFdLimit);
                 }
                 LOG(INFO) << "Increasing fd soft limit to " << desired_fd_limit << " for concurrency level " << _config->s3_concurrency;
-                _fd_limit = std::make_unique<utils::FdLimitSetter>(desired_fd_limit);
+                raise_fd_limit(desired_fd_limit);
             }
             _s3_stop = std::make_unique<S3Stop>();
         });
@@ -697,6 +724,24 @@ common::s3::S3ClientWrapper::Params Streamer::handle_s3(unsigned file_index, con
     // Batch params carry only the URI (used by the per-read path) - no credentials. Credentials are applied
     // once, at client creation, from the streamer's credentials() (see ObjectStorageWorker::capacity).
     return common::s3::S3ClientWrapper::Params(uri, _config->s3_block_bytesize, _config->s3_concurrency);
+}
+
+bool Streamer::raise_fd_limit(rlim_t limit)
+{
+    std::lock_guard<std::mutex> lock(_fd_limit_mutex);
+
+    if (_fd_limit == nullptr)
+    {
+        // records the limit to restore on destruction, so created only when a raise is first needed
+        if (utils::get_cur_file_descriptors() >= limit)
+        {
+            return true;
+        }
+        _fd_limit = std::make_unique<utils::FdLimitSetter>(limit);
+        return utils::get_cur_file_descriptors() >= limit;
+    }
+
+    return _fd_limit->raise_to(limit);
 }
 
 std::vector<std::pair<std::string, size_t>> Streamer::list_files(

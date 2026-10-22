@@ -55,4 +55,46 @@ TEST(SetFdLimit, Hard_Limit)
     EXPECT_EQ(get_max_file_descriptors(), hard_limit);
 }
 
+TEST(RaiseFdLimit, Raises_And_Restores_The_Original)
+{
+    const auto current = get_cur_file_descriptors();
+    const auto hard_limit = get_max_file_descriptors();
+    if (current + 2 > hard_limit)
+    {
+        GTEST_SKIP() << "no room to raise the soft limit";
+    }
+
+    {
+        FdLimitSetter setter(current);
+        EXPECT_TRUE(setter.raise_to(current + 1));
+        EXPECT_EQ(get_cur_file_descriptors(), current + 1);
+
+        // raised again, and never lowered
+        EXPECT_TRUE(setter.raise_to(current + 2));
+        EXPECT_EQ(get_cur_file_descriptors(), current + 2);
+        EXPECT_TRUE(setter.raise_to(current));
+        EXPECT_EQ(get_cur_file_descriptors(), current + 2);
+    }
+
+    EXPECT_EQ(get_cur_file_descriptors(), current);
+}
+
+TEST(RaiseFdLimit, Capped_At_The_Hard_Limit)
+{
+    const auto current = get_cur_file_descriptors();
+    const auto hard_limit = get_max_file_descriptors();
+    if (hard_limit == RLIM_INFINITY)
+    {
+        GTEST_SKIP() << "no hard limit to exceed";
+    }
+
+    {
+        FdLimitSetter setter(current);
+        EXPECT_FALSE(setter.raise_to(hard_limit + 1));
+        EXPECT_EQ(get_cur_file_descriptors(), hard_limit);
+    }
+
+    EXPECT_EQ(get_cur_file_descriptors(), current);
+}
+
 } // namespace runai::llm::streamer::utils
