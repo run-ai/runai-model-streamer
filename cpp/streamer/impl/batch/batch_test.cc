@@ -685,7 +685,7 @@ class LowerFdLimit
  public:
     explicit LowerFdLimit(rlim_t limit)
     {
-        if (::getrlimit(RLIMIT_NOFILE, &_saved) != 0 || _saved.rlim_max <= limit)
+        if (::getrlimit(RLIMIT_NOFILE, &_saved) != 0 || _saved.rlim_max < limit)
         {
             return;
         }
