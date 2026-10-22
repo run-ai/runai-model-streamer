@@ -63,6 +63,21 @@ class TestDiscoverRanks(unittest.TestCase):
 
                 self.assertEqual(self.find_local_ranks.call_count, discoveries)
 
+    def test_safetensors_streamer_sets_the_process_count_only_for_a_distributed_load(self):
+        # the count divides the queue depth of the CPP layer, which a read without its peers must keep whole
+        temp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, temp_dir, ignore_errors=True)
+        path = os.path.join(temp_dir, "model.safetensors")
+        write_safetensors(path, [("t", {"dtype": "U8", "shape": [4], "data_offsets": [0, 4]})], b"\x00\x01\x02\x03")
+
+        for is_distributed, count in ((False, None), (True, "8")):
+            with self.subTest(is_distributed=is_distributed), patch.dict(os.environ, {}, clear=True):
+                with SafetensorsStreamer() as streamer:
+                    streamer.stream_files([path], is_distributed=is_distributed)
+                    self.assertEqual(len(list(streamer.get_tensors())), 1)
+
+                self.assertEqual(os.environ.get(PROCESS_GROUP_SIZE), count)
+
 
 if __name__ == "__main__":
     unittest.main()
