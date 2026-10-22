@@ -154,11 +154,11 @@ struct Batch
   std::shared_ptr<const Config> config;
 
  private:
-  void read(Reader & reader, const Config & config, std::atomic<bool> & stopped);
+  void read(const Config & config, std::atomic<bool> & stopped);
 
   // The same range, but landing in pinned buffers and copied on from there. One block is one buffer
   // and one copy, and a range is answered only once its bytes are on the device.
-  void read_to_device(Reader & reader, const DeviceStaging & staging, std::atomic<bool> & stopped);
+  void read_to_device(const DeviceStaging & staging, std::atomic<bool> & stopped);
 
   // handle response from a single task
   void handle_task_response(const common::ResponseCode response_code, const Task * task_ptr);
@@ -166,6 +166,8 @@ struct Batch
  private:
   // index of first unfinished task
   unsigned _unfinished = 0;
+
+  std::unique_ptr<Reader> _reader;
 };
 
 std::ostream & operator<<(std::ostream & os, const Batch::Range & r);

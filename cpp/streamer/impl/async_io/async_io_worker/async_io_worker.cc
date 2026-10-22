@@ -351,7 +351,6 @@ void AsyncIoWorker::enqueue(Workload && workload)
             const auto id = _chunks.add(chunk, workload_id, batch_index);
             _queue->enqueue(QueuedChunk{ id, chunk.offset, chunk.bytesize, chunk.buffer }, 1);   // cost 1
             ++queued_chunks;
-            ++wl.fds[batch_index].remaining_chunks;
         }
     }
 
@@ -1212,16 +1211,6 @@ void AsyncIoWorker::account_chunk(posix_io::RequestId id, common::ResponseCode r
         {
             wl.error_by_file_index.emplace(batch.file_index, ret);   // first error per file
         }
-    }
-
-    // The batch's last chunk is done, so nothing is staged or in the kernel against its descriptor.
-    // Closed now rather than at finalize(): see BatchFd.
-    BatchFd & batch_fd = wl.fds[batch_index];
-    ASSERT(batch_fd.remaining_chunks > 0) << "completing a chunk of a batch with none outstanding";
-    if (--batch_fd.remaining_chunks == 0 && batch_fd.fd >= 0)
-    {
-        ::close(batch_fd.fd);
-        batch_fd.fd = -1;
     }
 
     // Once per chunk, after its tasks are answered. Counting chunks rather than tasks keeps this
