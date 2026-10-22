@@ -471,9 +471,6 @@ class TestDistributedStreamer(unittest.TestCase):
     def test_1_lone_reader_does_not_wait_for_idle_peers(self):
         # One rank streams alone while the others wait outside the streamer. A collective in the
         # streamer would wait for peers that never join it, until the timeout.
-        if self.world_size < 2:
-            self.skipTest("This test requires at least 2 processes.")
-
         requests = self._prepare_file_requests([{"size": 100, "chunks": [40, 60]}])
         with open(requests[0].path, "rb") as f:
             expected = f.read()
