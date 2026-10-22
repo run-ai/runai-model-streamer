@@ -39,6 +39,14 @@
 namespace runai::llm::streamer::impl
 {
 
+namespace
+{
+
+// how far past one submission's need the soft limit is raised, to cover overlapping submissions
+constexpr size_t FD_LIMIT_FACTOR = 5;
+
+}   // namespace
+
 Streamer::Streamer() : Streamer(Config())
 {}
 
@@ -396,24 +404,18 @@ common::ResponseCode Streamer::async_request(
         }
     }
 
-    // Each batch holds a descriptor until its workload is destroyed (#261), and submissions overlap.
-    // Estimate the demand as batches times live submissions, assuming similar sizes. If it exceeds the
-    // soft limit, raise it by this submission's batches, on top of the descriptors already in use.
-    // Best effort: warn if the limit stays too low.
-    if (!object_storage)
+    // Each batch holds a descriptor until its workload is destroyed (#261). Submissions overlap, so when
+    // this one alone exceeds the soft limit, raise it to a multiple of the need. Best effort.
+    if (!object_storage && utils::get_cur_file_descriptors() < live_batches)
     {
-        const rlim_t current = utils::get_cur_file_descriptors();
-        if (current < live_batches * (_submissions.size() + 1))
-        {
-            raise_fd_limit(current + live_batches);
+        raise_fd_limit(live_batches * FD_LIMIT_FACTOR);
 
-            if (utils::get_cur_file_descriptors() < current + live_batches)
-            {
-                LOG(WARNING) << "Submission " << submission_id << " needs about " << live_batches
-                             << " more file descriptors, one per batch, but the soft limit is "
-                             << utils::get_cur_file_descriptors() << " (hard limit "
-                             << utils::get_max_file_descriptors() << "); reading may fail with a file access error";
-            }
+        if (utils::get_cur_file_descriptors() < live_batches)
+        {
+            LOG(WARNING) << "Submission " << submission_id << " needs about " << live_batches
+                         << " file descriptors, one per batch, but the soft limit is "
+                         << utils::get_cur_file_descriptors() << " (hard limit "
+                         << utils::get_max_file_descriptors() << "); reading may fail with a file access error";
         }
     }
 

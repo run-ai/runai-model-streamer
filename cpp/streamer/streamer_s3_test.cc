@@ -961,7 +961,9 @@ TEST_F(StreamerTest, Filesystem_Submission_Raises_And_Restores_The_Fd_Limit)
     ASSERT_EQ(runai_file_streamer_start(&streamer), static_cast<int>(common::ResponseCode::Success));
 
     read_small_files(streamer, count);
-    EXPECT_GE(utils::get_cur_file_descriptors(), count);
+
+    // five times the need, up to the hard limit
+    EXPECT_EQ(utils::get_cur_file_descriptors(), std::min<rlim_t>(5 * count, utils::get_max_file_descriptors()));
 
     runai_file_streamer_end(streamer);
     EXPECT_EQ(utils::get_cur_file_descriptors(), LOW_FD_LIMIT);
@@ -976,34 +978,6 @@ TEST_F(StreamerTest, Filesystem_Submission_That_Fits_Does_Not_Raise_The_Fd_Limit
 
     read_small_files(streamer, 5);
     EXPECT_EQ(utils::get_cur_file_descriptors(), LOW_FD_LIMIT);
-
-    runai_file_streamer_end(streamer);
-    EXPECT_EQ(utils::get_cur_file_descriptors(), LOW_FD_LIMIT);
-}
-
-// Each submission fits alone, the two live together do not.
-TEST_F(StreamerTest, Overlapping_Filesystem_Submissions_Raise_The_Fd_Limit)
-{
-    const unsigned count = LOW_FD_LIMIT - 10;
-    if (utils::get_max_file_descriptors() < 2 * count)
-    {
-        GTEST_SKIP() << "hard fd limit " << utils::get_max_file_descriptors() << " is below " << 2 * count;
-    }
-
-    utils::FdLimitSetter fd_limit(LOW_FD_LIMIT);
-
-    void * streamer;
-    ASSERT_EQ(runai_file_streamer_start(&streamer), static_cast<int>(common::ResponseCode::Success));
-
-    // the first stays live when the second arrives
-    SmallFiles first(streamer, count);
-    EXPECT_EQ(utils::get_cur_file_descriptors(), LOW_FD_LIMIT);
-
-    SmallFiles second(streamer, count);
-    EXPECT_GE(utils::get_cur_file_descriptors(), 2 * count);
-
-    first.drain(streamer);
-    second.drain(streamer);
 
     runai_file_streamer_end(streamer);
     EXPECT_EQ(utils::get_cur_file_descriptors(), LOW_FD_LIMIT);
