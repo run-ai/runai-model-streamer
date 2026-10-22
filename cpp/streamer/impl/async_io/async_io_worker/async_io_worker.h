@@ -174,10 +174,13 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
     // Per workload, kept until its last task is accounted.
     // A batch's descriptor, opened by the first chunk of it that actually issues.
     //
-    // Lazy in, bulk out: nothing is opened at enqueue - a stopped submission does none at all, and a
-    // zero-size batch has no chunks so is never opened - and everything is closed in one place when
-    // the workload ends. A workload is the caller's statement that these files are read in parallel,
-    // so holding a descriptor for as long as its workload lives is the honest lifetime.
+    // Lazy in, early out: nothing is opened at enqueue - a stopped submission does none at all, and a
+    // zero-size batch has no chunks so is never opened - and the descriptor is closed when the last
+    // chunk of its batch is accounted. Holding it until the workload ends would cost one descriptor
+    // per batch, and a workload of many small files runs out of them (EMFILE) while only a window's
+    // worth of reads is ever in use - plus, for a device workload, the chunks whose copy has not yet
+    // landed, which leave the window when the read does but are accounted only when the copy lands.
+    // finalize() still closes whatever is left, for a workload that ends before its chunks do.
     //
     // `error` remembers a failed open so the next chunk of the same batch fails immediately instead of
     // retrying the open, and logging, once per chunk.
@@ -190,6 +193,11 @@ class AsyncIoWorker : public utils::CapacityWorker<Workload, QueuedChunk>
         // must carry this rather than the strategy's wish, or the engine would set IOSQE_ASYNC on a
         // direct read, or skip it on a buffered one.
         bool direct = false;
+
+        // Chunks of this batch not yet accounted. At zero nothing is staged or issued against `fd`,
+        // so it can be closed - not before, or a staged entry would carry a number the next open is
+        // handed back.
+        size_t remaining_chunks = 0;
 
         common::ResponseCode error = common::ResponseCode::Success;
     };
