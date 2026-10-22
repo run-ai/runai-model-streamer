@@ -40,6 +40,14 @@ with SafetensorsStreamer() as streamer:
 
 Our repository is built using devcontainer ([Further reading](https://containers.dev/))
 
+The devcontainer uses a digest-pinned Ubuntu 24.04 C++ development image on AMD64
+and ARM64, with Python 3.12 in `/opt/model-streamer-venv`. The same image builds
+release artifacts. Wheels built from this revision use `manylinux_2_39` and, like
+the C++ SDKs, require glibc 2.39 or newer (for example Ubuntu 24.04). This raises
+the previous `manylinux_2_30` Linux baseline. Older Linux systems must use a
+compatible earlier release. The build interpreter does not change the public
+Python runtime requirements.
+
 The following commands should run inside the dev container
 
 > [!NOTE]

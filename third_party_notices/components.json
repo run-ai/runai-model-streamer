@@ -9,7 +9,7 @@
   {
    "id": "gcc-runtime",
    "name": "GCC runtime libraries (libstdc++, libgcc)",
-   "version": "9.4.0 (Ubuntu 20.04 gcc-9 9.4.0-1ubuntu1~20.04.2)",
+   "version": "13.3.0 (Ubuntu 24.04 gcc-13 13.3.0-6ubuntu2~24.04.1)",
    "url": "https://gcc.gnu.org/",
    "spdx": "GPL-3.0-or-later WITH GCC-exception-3.1",
    "copyright": "Copyright (C) Free Software Foundation, Inc.",
@@ -23,11 +23,11 @@
    "files": [
     {
      "name": "COPYING3",
-     "url": "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-9.4.0/COPYING3"
+     "url": "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-13.3.0/COPYING3"
     },
     {
      "name": "COPYING.RUNTIME",
-     "url": "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-9.4.0/COPYING.RUNTIME"
+     "url": "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-13.3.0/COPYING.RUNTIME"
     }
    ],
    "note": "libstdc++.a is linked statically into every library. libgcc.a is linked statically into libstreamergcs on x86_64 and aarch64, and into the other libraries on aarch64. The GCC Runtime Library Exception permits distribution of the resulting binaries under other terms."
@@ -35,7 +35,7 @@
   {
    "id": "glibc-nonshared",
    "name": "GNU C Library (libc_nonshared.a)",
-   "version": "2.31 (Ubuntu 20.04 libc6-dev 2.31-0ubuntu9.18)",
+   "version": "2.39 (Ubuntu 24.04 libc6-dev 2.39-0ubuntu8.9)",
    "url": "https://www.gnu.org/software/libc/",
    "spdx": "LGPL-2.1-or-later",
    "copyright": "Copyright (C) Free Software Foundation, Inc.",
@@ -49,10 +49,10 @@
    "files": [
     {
      "name": "COPYING.LIB",
-     "url": "https://raw.githubusercontent.com/bminor/glibc/glibc-2.31/COPYING.LIB"
+     "url": "https://raw.githubusercontent.com/bminor/glibc/glibc-2.39/COPYING.LIB"
     }
    ],
-   "note": "Small glibc start-up/compatibility stubs linked statically on x86_64 only; all other glibc use is through the dynamic system libc.so.6 and is not distributed."
+   "note": "Small glibc start-up/compatibility stubs linked statically; all other glibc use is through the dynamic system libc.so.6 and is not distributed."
   },
   {
    "id": "liburing",
