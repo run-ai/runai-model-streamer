@@ -251,6 +251,12 @@ are unchanged.
 
 ### Parallel PR checks
 
+The PR workflow calls `spdx-headers.yml` to test the header checker and verify
+source file headers in parallel with setup. Image preparation and builds require
+both checks to succeed, so an SPDX failure prevents those jobs and the downstream
+integration tests and package assembly from starting. The SPDX workflow runs only
+when called, and its result is required by the final **Test, Build & Push** check.
+
 A setup job computes `PACKAGE_VERSION` once. Separate `build_x86` and `build_arm`
 jobs in `on-pr.yaml` each call `build.yml` for four components: core (`streamer`),
 S3, GCS, and Azure. They pass `x86_64` and `aarch64`, respectively, for eight builds
@@ -315,7 +321,7 @@ All C++ artifacts include public C/C++ headers under
 alongside the core library for the same architecture. Libraries are copied out
 of the container before it stops so the downloads contain real files rather
 than Bazel symlinks. The `Test, Build & Push` required check succeeds
-only when all eight builds (including their C++ and Python tests), integration
+only when the SPDX check, all eight builds (including their C++ and Python tests), integration
 tests on both architectures, package assembly, and any triggered image builds
 succeed. Each architecture's component jobs can start as soon as its own image is
 ready, without waiting for the other image builder.

@@ -16,6 +16,10 @@ defaults:
     shell: bash
 
 jobs:
+  spdx:
+    name: SPDX headers
+    uses: ./.github/workflows/spdx-headers.yml
+
   setup:
     name: Setup
     runs-on: ubuntu-24.04
@@ -103,7 +107,7 @@ jobs:
 
   devcontainer_amd64:
     name: Prepare AMD64 devcontainer
-    needs: setup
+    needs: [spdx, setup]
     if: needs.setup.outputs.devcontainer_changed == 'true'
     uses: ./.github/workflows/devcontainer.yml
     with:
@@ -113,7 +117,7 @@ jobs:
 
   devcontainer_arm64:
     name: Prepare ARM64 devcontainer
-    needs: setup
+    needs: [spdx, setup]
     if: needs.setup.outputs.devcontainer_changed == 'true'
     uses: ./.github/workflows/devcontainer.yml
     with:
@@ -123,10 +127,10 @@ jobs:
 
   build_x86:
     name: Build & tests (${{ matrix.component }}, x86_64)
-    needs: [setup, devcontainer_amd64]
+    needs: [spdx, setup, devcontainer_amd64]
     # The optional image job is skipped when the published image can be reused.
     if: >-
-      ${{ !cancelled() && needs.setup.result == 'success' &&
+      ${{ !cancelled() && needs.spdx.result == 'success' && needs.setup.result == 'success' &&
           (needs.setup.outputs.devcontainer_changed != 'true' || needs.devcontainer_amd64.result == 'success') }}
     strategy:
       fail-fast: false
@@ -143,10 +147,10 @@ jobs:
 
   build_arm:
     name: Build & tests (${{ matrix.component }}, aarch64)
-    needs: [setup, devcontainer_arm64]
+    needs: [spdx, setup, devcontainer_arm64]
     # The optional image job is skipped when the published image can be reused.
     if: >-
-      ${{ !cancelled() && needs.setup.result == 'success' &&
+      ${{ !cancelled() && needs.spdx.result == 'success' && needs.setup.result == 'success' &&
           (needs.setup.outputs.devcontainer_changed != 'true' || needs.devcontainer_arm64.result == 'success') }}
     strategy:
       fail-fast: false
@@ -237,11 +241,12 @@ jobs:
   lifecycle-install-tests:
     name: Test, Build & Push
     if: always()
-    needs: [setup, devcontainer_amd64, devcontainer_arm64, build_x86, build_arm, tests, packages]
+    needs: [spdx, setup, devcontainer_amd64, devcontainer_arm64, build_x86, build_arm, tests, packages]
     runs-on: ubuntu-24.04
     steps:
     - name: Require all builds, tests, and package uploads to succeed
       env:
+        SPDX_RESULT: ${{ needs.spdx.result }}
         X86_RESULT: ${{ needs.build_x86.result }}
         ARM_RESULT: ${{ needs.build_arm.result }}
         TEST_RESULT: ${{ needs.tests.result }}
@@ -250,6 +255,7 @@ jobs:
         AMD64_IMAGE_RESULT: ${{ needs.devcontainer_amd64.result }}
         ARM64_IMAGE_RESULT: ${{ needs.devcontainer_arm64.result }}
       run: |
+        test "$SPDX_RESULT" = success
         test "$X86_RESULT" = success
         test "$ARM_RESULT" = success
         test "$TEST_RESULT" = success
