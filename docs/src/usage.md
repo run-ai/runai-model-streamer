@@ -272,7 +272,7 @@ export AZURE_STORAGE_SAS_TOKEN="sv=2021-08-06&ss=b&srt=co&sp=rl&se=2026-01-01T00
 
 ##### Azure Blob Cache Provider (Experimental)
 
-> **Experimental** — This feature is under active development and may change in future releases.
+> **Alpha integration** — [DACS](https://github.com/Azure/dacs) is open-source cache solution alpha with readiness in Azure, and its Python native client is available as an [alpha release on PyPI](https://pypi.org/project/dacs-client/).
 
 The streamer supports pluggable cache providers for Azure Blob Storage. When a compatible cache provider package is installed (e.g., `dacs-client`), it is auto-discovered and loaded at runtime. All blob reads are then routed through the cache provider instead of the Azure SDK, enabling integration with distributed caches to accelerate model loading.
 
