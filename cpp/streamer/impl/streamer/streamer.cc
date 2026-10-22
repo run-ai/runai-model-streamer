@@ -46,10 +46,6 @@ namespace
 // application's own files.
 constexpr rlim_t FD_LIMIT_HEADROOM = 256;
 
-// The soft limit a filesystem submission raises to when it does not fit under the current one, unless the
-// hard limit is lower. Capped so that an unlimited hard limit does not become an unlimited soft limit.
-constexpr rlim_t FD_LIMIT_CEILING = 65536;
-
 }   // namespace
 
 Streamer::Streamer() : Streamer(Config())
@@ -411,22 +407,23 @@ common::ResponseCode Streamer::async_request(
 
     // A batch keeps its file open until its workload is destroyed, and the workloads of a submission
     // are all alive together, so a filesystem submission holds one descriptor per batch at once (#261).
-    // When this submission does not fit under the soft limit, raise it to FD_LIMIT_CEILING (or the hard
-    // limit, if lower) before anything is dispatched. It goes straight to the ceiling rather than to this
-    // submission's need, so that submissions overlapping in time are covered too. Past the hard limit
-    // this cannot succeed: warn, and let the opens fail as they would have.
+    // When this submission does not fit under the soft limit, raise it to the hard limit before anything is
+    // dispatched. It goes straight to the hard limit rather than to this submission's need, so that
+    // submissions overlapping in time are covered too. The raise is best effort: when the limit stays too
+    // low, warn, and let the opens fail as they would have.
     if (!object_storage)
     {
         const rlim_t needed = live_batches + FD_LIMIT_HEADROOM;
         if (utils::get_cur_file_descriptors() < needed)
         {
-            raise_fd_limit(FD_LIMIT_CEILING);
+            raise_fd_limit(utils::get_max_file_descriptors());
 
             if (utils::get_cur_file_descriptors() < needed)
             {
                 LOG(WARNING) << "Submission " << submission_id << " needs about " << needed
-                             << " file descriptors for " << live_batches << " batches, above the hard limit "
-                             << utils::get_max_file_descriptors() << "; reading may fail with a file access error";
+                             << " file descriptors for " << live_batches << " batches, but the soft limit is "
+                             << utils::get_cur_file_descriptors() << " (hard limit "
+                             << utils::get_max_file_descriptors() << "); reading may fail with a file access error";
             }
         }
     }
@@ -743,13 +740,9 @@ bool Streamer::raise_fd_limit(rlim_t limit)
 
     if (_fd_limit == nullptr)
     {
-        // records the limit to restore on destruction, so created only when a raise is first needed
-        if (utils::get_cur_file_descriptors() >= limit)
-        {
-            return true;
-        }
-        _fd_limit = std::make_unique<utils::FdLimitSetter>(limit);
-        return utils::get_cur_file_descriptors() >= limit;
+        // Created at the current limit, which records it for restoring on destruction; the raise itself is
+        // best effort and is done by raise_to.
+        _fd_limit = std::make_unique<utils::FdLimitSetter>(utils::get_cur_file_descriptors());
     }
 
     return _fd_limit->raise_to(limit);

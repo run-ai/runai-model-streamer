@@ -151,7 +151,8 @@ struct Streamer
     common::s3::S3ClientWrapper::Params handle_s3(unsigned file_index, const std::string & path);
 
     // Raises the soft open files limit to at least `limit`, capped at the hard limit; never lowers it.
-    // Returns whether the limit reaches `limit`. Thread-safe.
+    // Best effort: a failure to raise is logged, not thrown. Returns whether the limit reaches `limit`.
+    // Thread-safe.
     bool raise_fd_limit(rlim_t limit);
 
     // The streamer's credentials (empty Credentials if none set), read via _credentials_state (which locks
