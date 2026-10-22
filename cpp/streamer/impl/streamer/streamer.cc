@@ -42,9 +42,9 @@ namespace runai::llm::streamer::impl
 namespace
 {
 
-// Descriptors the rest of the process needs on top of one per batch: stdio, sockets, libraries, the
-// application's own files.
-constexpr rlim_t FD_LIMIT_HEADROOM = 256;
+// The soft limit a filesystem submission raises to when the hard limit is unlimited, so that an unlimited
+// hard limit does not become an unlimited soft limit.
+constexpr rlim_t FD_LIMIT_CEILING = 65536;
 
 }   // namespace
 
@@ -408,20 +408,20 @@ common::ResponseCode Streamer::async_request(
     // A batch keeps its file open until its workload is destroyed, and the workloads of a submission
     // are all alive together, so a filesystem submission holds one descriptor per batch at once (#261).
     // When this submission does not fit under the soft limit, raise it to the hard limit before anything is
-    // dispatched. It goes straight to the hard limit rather than to this submission's need, so that
-    // submissions overlapping in time are covered too. The raise is best effort: when the limit stays too
-    // low, warn, and let the opens fail as they would have.
+    // dispatched (or to FD_LIMIT_CEILING when the hard limit is unlimited). It goes straight there rather
+    // than to this submission's need, so that submissions overlapping in time are covered too. The raise is
+    // best effort: when the limit stays too low, warn, and let the opens fail as they would have.
     if (!object_storage)
     {
-        const rlim_t needed = live_batches + FD_LIMIT_HEADROOM;
-        if (utils::get_cur_file_descriptors() < needed)
+        if (utils::get_cur_file_descriptors() < live_batches)
         {
-            raise_fd_limit(utils::get_max_file_descriptors());
+            const rlim_t hard_limit = utils::get_max_file_descriptors();
+            raise_fd_limit(hard_limit == RLIM_INFINITY ? FD_LIMIT_CEILING : hard_limit);
 
-            if (utils::get_cur_file_descriptors() < needed)
+            if (utils::get_cur_file_descriptors() < live_batches)
             {
-                LOG(WARNING) << "Submission " << submission_id << " needs about " << needed
-                             << " file descriptors for " << live_batches << " batches, but the soft limit is "
+                LOG(WARNING) << "Submission " << submission_id << " needs about " << live_batches
+                             << " file descriptors, one per batch, but the soft limit is "
                              << utils::get_cur_file_descriptors() << " (hard limit "
                              << utils::get_max_file_descriptors() << "); reading may fail with a file access error";
             }
